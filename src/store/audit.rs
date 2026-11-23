@@ -309,6 +309,10 @@ actions! {
     CatalogUnlockEnded => "catalog.unlock_ended",
     UserLookedUp => "user.looked_up",
     ProvisionerRefused => "provisioner.refused",
+    StoreAdded => "store.added",
+    SettingDefaultStoreChanged => "setting.default_store_changed",
+    TeamStorePinned => "team.store_pinned",
+    TeamStoreUnpinned => "team.store_unpinned",
 }
 
 /// What an entry is about.
@@ -330,6 +334,8 @@ pub enum Target<'a> {
     Setting(&'a str),
     /// An unlock, by id.
     Unlock(i64),
+    /// A catalog store, by name.
+    Store(&'a str),
 }
 
 /// Where a target is stored: its kind, and at most one of a name, a team
@@ -374,6 +380,7 @@ impl<'a> Target<'a> {
             Target::Code(id) => credential("code", id),
             Target::Setting(key) => plain("setting", key.to_string()),
             Target::Unlock(id) => plain("unlock", id.to_string()),
+            Target::Store(name) => plain("store", name.to_string()),
         }
     }
 }

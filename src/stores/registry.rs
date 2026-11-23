@@ -348,6 +348,17 @@ impl Stores {
         };
         #[cfg(test)]
         self.pause_if_gated().await;
+        self.open_row(row).await
+    }
+
+    /// Opens a pool from a row, which need not be stored yet: the part of
+    /// [`Stores::open`] after the row is read, shared with [`Stores::check`].
+    ///
+    /// # Errors
+    /// An [`OpenFailure`]; the detail is logged here, on the local side only.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn open_row(&self, row: StoreRow) -> Result<Arc<OpenStore>, OpenFailure> {
+        let store = &row.name;
         let (base, source) = self.connection_of(&row);
         let pool = self
             .connect_with_credential(store, &base, source.as_deref())
@@ -505,6 +516,32 @@ impl Stores {
         }
     }
 
+    /// Whether a store that has no row yet could be opened: the same open
+    /// path as [`Stores::get`] (connection settings, credential, timeout),
+    /// on a row the caller has not stored. The pool is closed again, its
+    /// credential task ends, and nothing is cached.
+    ///
+    /// # Arguments
+    /// * `row` - the row about to be stored.
+    ///
+    /// # Returns
+    /// `Ok(())` if a connection was made.
+    ///
+    /// # Errors
+    /// [`OkfError::StoreUnavailable`] if it cannot connect within
+    /// `store_connect_timeout` (the error names no host and no credential;
+    /// the cause is logged on the local side only).
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn check(&self, row: StoreRow) -> Result<(), OkfError> {
+        let name = row.name.clone();
+        // Boxed for the same reason as in `get`: the open's state is large.
+        let open = Box::pin(self.open_row(row))
+            .await
+            .map_err(|_failure| OkfError::store_unavailable(&name))?;
+        open.db.executor().close().await;
+        Ok(())
+    }
+
     /// [`Stores::new`] with the environment given and the real AWS clients
     /// (which the tests using this never reach).
     #[cfg(test)]
@@ -512,7 +549,7 @@ impl Stores {
         dylint_lib = "hyp_tracing",
         allow(uninstrumented_fn, reason = "a test constructor")
     )]
-    fn with_environment(
+    pub(crate) fn with_environment(
         accounts: PgPool,
         settings: PoolSettings,
         environment: Environment,

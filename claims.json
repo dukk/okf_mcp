@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 946,
+  "next_claim_seq": 966,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "8c7003e6f4876cf566f0a9c8d09bcaae2f0def8a9af64279cd43350ecf3c9e53"
+    "mac": "cf6c40e2c32130497ba7bf891d9bc0b092658d1ca626f5cd6626bf3c55b0e2d0"
   },
-  "next_evidence_seq": 1328,
+  "next_evidence_seq": 1368,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "a8dba487b5f3fcde01f8d85cdf36cf4106cbff48318e03e36e1d208c8deaba16"
+    "mac": "67032239fccab85b2cc98fc0d7f79fb799b7f2cdb10d523f18add24e9fc75162"
   },
   "claims": [
     {
@@ -725,6 +725,28 @@
             "by": "server",
             "mac": "7e9392057ec8b1725683c416010c91ee6628b9f01163928cc9ee161e5c6eac1c"
           }
+        },
+        {
+          "id": "EVD-1334",
+          "kind": "inspection",
+          "locator": "docs/operations.md:3828-3850 and 2150-2153 against src/http/api/stores.rs, src/store/stores.rs, src/http/mod.rs:145-152",
+          "summary": "The text this PR added inside the claim's range (Catalog stores API section and the audit table rows) matches the code: routes, 403/404/409/201 statuses (Refused is 409, UnknownName 404), view fields, CLI commands, no removal, audit details without host or reference. Rest of the range not re-read; its earlier verdict stands.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 3828,
+                "end": 3850
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:59:18.751307277Z",
+          "seal": {
+            "by": "server",
+            "mac": "40bd4c3d723591987790abf09666b0f1f256662b8457d333b76485d8c57f0eda"
+          }
         }
       ],
       "verdicts": [
@@ -753,13 +775,26 @@
             "by": "server",
             "mac": "916df291a652d1d861859b069fd62923a6c1c4519a464220c771e9b853e29b57"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Earlier verdict stands for the unchanged text; the section this PR added inside the range was checked against the code and matches (scope: the added text only; the remaining lines were not re-read).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1334"
+          ],
+          "recorded_at": "2026-11-23T18:59:31.152885925Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d5b887ab0e03c07ba65293a3ed612e717ed600c60ac82fc0a07f0a15024c470"
+          }
         }
       ],
       "created_at": "2026-11-21T19:04:12.375208519Z",
-      "updated_at": "2026-11-21T21:35:59.506739427Z",
+      "updated_at": "2026-11-23T18:59:31.152885925Z",
       "seal": {
         "by": "server",
-        "mac": "3b2b8cdd3bfc910ed067918db201579083cbe84b428e2ebc95166d3b940493e7"
+        "mac": "bbb4c6a7b84001bcacf81726ee569f0c9b93c78245b90091a2a3c0283f92f74e"
       }
     },
     {
@@ -13927,6 +13962,28 @@
             "by": "server",
             "mac": "d6dcd4f75a3124b69749b121391115dc09eb351a1acae4f9cf4fdd008c6521b9"
           }
+        },
+        {
+          "id": "EVD-1330",
+          "kind": "inspection",
+          "locator": "src/cli.rs at fe75fec: KeyCreateArgs.provisioner (744), CatalogCommand::SetMaintenance (251), UnlockCommand (615, List 636), AuditCommand (689), user List --email (351-352)",
+          "summary": "At head the PR only inserted StoresCommand (new enum, plus Command::Stores) after SettingsCommand; every subcommand and flag the claim lists is still present and unchanged.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli.rs",
+              "lines": {
+                "start": 612,
+                "end": 700
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:59:18.455823661Z",
+          "seal": {
+            "by": "server",
+            "mac": "74abbd08b82be4d279d5b3988784beee5a663b484a32813e5ecf476f64b97a27"
+          }
         }
       ],
       "verdicts": [
@@ -13955,13 +14012,26 @@
             "by": "server",
             "mac": "a0685d848bd6d925b4a6be8d0d704b9963cf09848f16e169ce1e16c11ba68f5f"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at fe75fec: the PR only inserted a new enum; listed subcommands unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1330"
+          ],
+          "recorded_at": "2026-11-23T18:59:30.893475041Z",
+          "seal": {
+            "by": "server",
+            "mac": "9b343ca8c371df02e02e6da407fd9907b544330715fd8036d233f859c0db16a1"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:06.412184286Z",
-      "updated_at": "2026-11-23T10:48:07.001859715Z",
+      "updated_at": "2026-11-23T18:59:30.893475041Z",
       "seal": {
         "by": "server",
-        "mac": "036fcae281093c54b785c12cb445f6ceab498e285e71972272616bf74938092a"
+        "mac": "3b3e93becb26d8ed5e2bac9da8e798730accee6fa128242e8bf632cc08da4992"
       }
     },
     {
@@ -59668,7 +59738,7 @@
           }
         },
         {
-          "id": "EVD-1327",
+          "id": "EVD-1367",
           "kind": "inspection",
           "locator": "src/stores/mod.rs:180-290",
           "summary": "Re-audit on fad8b09: CatalogDb still has new, begin, executor and store(), wrapping a PgPool (plus a new optional auth_failed field and with_auth_failure_signal); AccountDb unchanged.",
@@ -59686,7 +59756,7 @@
           "recorded_at": "2026-11-23T19:00:20.256012024Z",
           "seal": {
             "by": "server",
-            "mac": "2a244b25f2be3492665f6cd1a39e0bcfb90e1ecce457160e50ae36957b89f2c8"
+            "mac": "54d1300bea59310998ec479c36aa247ba7698317f0b180c1b8ef803de6f48f96"
           }
         }
       ],
@@ -59722,12 +59792,12 @@
           "rationale": "Re-audited; methods still present.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1327"
+            "EVD-1367"
           ],
           "recorded_at": "2026-11-23T19:00:29.504392234Z",
           "seal": {
             "by": "server",
-            "mac": "b138d6b1d0d28f52779bfaabdaab03fb3053d4632a7a070506f17050c9940570"
+            "mac": "bd87b8550c3efd6aa4712d4b093433949b52c709276d9477311cd42d2fe352f5"
           }
         }
       ],
@@ -59735,7 +59805,7 @@
       "updated_at": "2026-11-23T19:00:29.504392234Z",
       "seal": {
         "by": "server",
-        "mac": "56911a5ff9936a79a645d22626e82c6db059ee3b8177a45ad0b3427f514abee9"
+        "mac": "581a9e3c4e7ef3b94f78c7cbc7905a0bc8f280753a8f2312ed02d4540db36d30"
       }
     },
     {
@@ -72717,7 +72787,29 @@
           }
         },
         {
-          "id": "EVD-1324",
+          "id": "EVD-1332",
+          "kind": "test",
+          "locator": "src/stores/registry.rs:316-400 at fe75fec; stores::registry::tests::account_database_store_opens_its_own_pool (narrow run, ok)",
+          "summary": "The PR moved the pool-building part of open into open_row (called by open and by the new check); settings (max_connections, min 0, idle, acquire timeout, after_connect search_path) are unchanged and all registry tests pass.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 314,
+                "end": 400
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:59:18.595565486Z",
+          "seal": {
+            "by": "server",
+            "mac": "71171d298fd683579f85deb7e30e25435960172d40b479d28c4f9e56393bf47d"
+          }
+        },
+        {
+          "id": "EVD-1364",
           "kind": "test",
           "locator": "src/stores/registry.rs:234-305,451-475; tests account_database_store_opens_its_own_pool, concurrent_first_use_opens_one_pool (ok in audit-stores.log)",
           "summary": "Re-audit on fad8b09: get/all/forget/forget_all still exist; connect_pool still sets max_connections, min_connections(0), idle_timeout, acquire_timeout and the after_connect search_path to STORE_SEARCH_PATH; the account-database-store test passes.",
@@ -72735,7 +72827,7 @@
           "recorded_at": "2026-11-23T19:00:20.008554028Z",
           "seal": {
             "by": "server",
-            "mac": "ac873e209548718f8be789bf79fc6ee10ca393c43479e46ad800dfe9168b0eb7"
+            "mac": "27cc1add0ece5730eae5df20901ce4108a449be21f32cb353270884afabce1f5"
           }
         }
       ],
@@ -72769,15 +72861,28 @@
         },
         {
           "verdict": "supported",
+          "rationale": "Re-audited at fe75fec: open_row split keeps every pool setting; registry tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1332"
+          ],
+          "recorded_at": "2026-11-23T18:59:31.028053201Z",
+          "seal": {
+            "by": "server",
+            "mac": "e4503b67bba5a6c3ae265011d13c785958c92d67b7e01211167f55681a243fb7"
+          }
+        },
+        {
+          "verdict": "supported",
           "rationale": "Re-audited after registry rewrite; still holds.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1324"
+            "EVD-1364"
           ],
           "recorded_at": "2026-11-23T19:00:29.155813789Z",
           "seal": {
             "by": "server",
-            "mac": "7ed0b3655fa57e75282dd43f21e4c8b168489511481ae7fb6515cc492903094b"
+            "mac": "962dfd953e03d8d6cba4db8cbe5d7a8fdaec68ee2fad9045fa00b6f72aecb0d2"
           }
         }
       ],
@@ -72785,7 +72890,7 @@
       "updated_at": "2026-11-23T19:00:29.155813789Z",
       "seal": {
         "by": "server",
-        "mac": "feebf333f07ff4c72a7d2593655ca08751d11b39f7b73174b06c1d277c837bdc"
+        "mac": "9e812af004e31de48b77bb29555550ba93e78dab456cc6a02b5ef9e8a9cc7dc6"
       }
     },
     {
@@ -73021,7 +73126,7 @@
           }
         },
         {
-          "id": "EVD-1325",
+          "id": "EVD-1365",
           "kind": "test",
           "locator": "src/stores/registry.rs:816-850 forgetting_a_store_lets_a_user_of_the_old_pool_finish (ok)",
           "summary": "Re-audit on fad8b09: test passes; forget now also runs run_pending_tasks, which does not affect a handle already held (CatalogDb owns a pool clone).",
@@ -73039,7 +73144,7 @@
           "recorded_at": "2026-11-23T19:00:20.088065032Z",
           "seal": {
             "by": "server",
-            "mac": "12840f25c7dc5027b599d01c95f24afbcf5cd5a7d163afe399d0727226c01e4d"
+            "mac": "97e3d4359cc1f098fb951ec2b28b7de6527648ea39c1334998555a3a2bc36e3d"
           }
         }
       ],
@@ -73075,12 +73180,12 @@
           "rationale": "Re-audited; test passes.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1325"
+            "EVD-1365"
           ],
           "recorded_at": "2026-11-23T19:00:29.280639552Z",
           "seal": {
             "by": "server",
-            "mac": "795d7225862c0514b89d1bf1101d13ac6fc4436b5b5e3769bfb19f145949ace8"
+            "mac": "54b29533064f8288e752a7f778b6f5b250d020c32ccf06e60af662e8dd50ba93"
           }
         }
       ],
@@ -73088,7 +73193,7 @@
       "updated_at": "2026-11-23T19:00:29.280639552Z",
       "seal": {
         "by": "server",
-        "mac": "7c009966ba51da1e41bc0f532430fc0c8ae7fc32035b21a3fd48e7363f52e37c"
+        "mac": "ee12616cc2c5a52fab1688d556672472d2df8d66b14999bd41314cab9aa8b3ae"
       }
     },
     {
@@ -73261,7 +73366,7 @@
           }
         },
         {
-          "id": "EVD-1320",
+          "id": "EVD-1360",
           "kind": "inspection",
           "locator": "src/stores/credentials.rs:317-330,412-440; src/stores/registry.rs:1225-1268",
           "summary": "The second half of the claim is no longer true on head: Providers::source builds SecretsManagerCredential and IamCredential, and the tests a_secrets_manager_store_opens_and_follows_a_rotated_secret and iam_auth_failure_refreshes_once_and_retries open such stores successfully, not StoreUnavailable. The env half still holds (EnvCredential reads only the named variable, credentials.rs:206-220; env_credential_reads_the_variable_and_keeps_the_base_user).",
@@ -73279,7 +73384,7 @@
           "recorded_at": "2026-11-23T18:58:50.185393274Z",
           "seal": {
             "by": "server",
-            "mac": "2b45316ebd45b71c3faa870415cf4ae90fca600d665c4fb915510f132f1a58c2"
+            "mac": "d36e19c0ee08a856aac219d9cadd74462fa5b0f8691cb94fd46855ac22ddd97e"
           }
         }
       ],
@@ -73303,12 +73408,12 @@
           "rationale": "This change delivers Task 9, so the claim's clause that the iam and secrets-manager kinds are StoreUnavailable until Task 9 is now false on head (the env clause still holds). Fix: retire CLM-0911 and keep a replacement claim limited to the env clause ('a host row with credential kind env takes its password only from the variable named by credential_ref, never the account database's password').",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1320"
+            "EVD-1360"
           ],
           "recorded_at": "2026-11-23T18:59:23.956857710Z",
           "seal": {
             "by": "server",
-            "mac": "ad1d99afd38ba99b87a6cb1962b34c541bf41b0ea289dfdaa61bc87d06c7fe2a"
+            "mac": "e9c3d61403b8debfaee63a9eeb580578170a6e8cf22ff1be0ce521c94941fe9d"
           }
         }
       ],
@@ -73316,7 +73421,7 @@
       "updated_at": "2026-11-23T18:59:29.417039455Z",
       "seal": {
         "by": "server",
-        "mac": "4b1583132401824cf11010d2eb44e500b4c3a7c3f1e2a0fd9cd64516e07dbbbc"
+        "mac": "e8891dac5b54b662afb96a4a618f214611eff7c7697bfebf91b6b115addaaf64"
       }
     },
     {
@@ -73361,6 +73466,28 @@
             "by": "server",
             "mac": "ba41f8d0d91ff03b85404529c2b727cf504fdc352fa779d183a7430b4a5fe22e"
           }
+        },
+        {
+          "id": "EVD-1331",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- stores (51 passed) incl. store::stores::tests::main_is_the_account_database_row",
+          "summary": "At head by_name and names are unchanged; this PR appended summaries, add, insert, set_default and lock_store after them. The reading tests still pass.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 160,
+                "end": 207
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:59:18.529360921Z",
+          "seal": {
+            "by": "server",
+            "mac": "2c824e183bb424f6b5c63b3adbe1368211ef72ff72e37fedc2a4c84f19bb459c"
+          }
         }
       ],
       "verdicts": [
@@ -73376,13 +73503,26 @@
             "by": "server",
             "mac": "9a5cb928722f3b27b9a78b217e04f2f175b8701923f11f383edca0f0f9e74188"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at fe75fec: by_name and names unchanged and tested; the PR only added code after them.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1331"
+          ],
+          "recorded_at": "2026-11-23T18:59:30.965183042Z",
+          "seal": {
+            "by": "server",
+            "mac": "9a7d76f01197f9a44d6d3e910188d5c60620dec15124fe9b131526220c8f6d98"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:40:13.383969606Z",
+      "updated_at": "2026-11-23T18:59:30.965183042Z",
       "seal": {
         "by": "server",
-        "mac": "540ee993f6971f7f1fd500e2eef6b505f6940124955d1d8556b678f3e983e900"
+        "mac": "2b2ed19222564d5e1d5d9c08d0ed7b3e336671d1fa1a0935076ba136734355a8"
       }
     },
     {
@@ -74152,7 +74292,9 @@
         "from-issue:966"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Superseded by issue #968 (Task 10): it described Task 8's state, when nothing wrote a stores row. store::stores::insert now does.",
+        "retired_at": "2026-11-23T19:02:54.333538431Z"
       },
       "evidence": [
         {
@@ -74176,6 +74318,28 @@
             "by": "server",
             "mac": "4a7e4221a8c3e89c3d94001d39dc13f5974f66f4f53b11f1ce6ee703a06debbc"
           }
+        },
+        {
+          "id": "EVD-1333",
+          "kind": "analysis",
+          "locator": "src/store/stores.rs:325-393 (insert), called from add at :308",
+          "summary": "At head non-test code does INSERT INTO stores (store::stores::insert, reached from add, the CLI and POST /api/v1/stores). The claim's clause 'no non-test code inserts into stores' was true for the Task 8 commit and is false after this change; the changelog sentence it quotes was about Task 8's state.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 344,
+                "end": 360
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:59:18.679030773Z",
+          "seal": {
+            "by": "server",
+            "mac": "5b3b24583a2af9157eea833ef33ee81ffab2ef198b594c8d67e925c033ebc6df"
+          }
         }
       ],
       "verdicts": [
@@ -74191,13 +74355,26 @@
             "by": "server",
             "mac": "91da0063fd9d88c321e259b148fdab4ffa89adba92c2ecbee9304b880d26f0d6"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "At head, non-test code inserts into stores (store::stores::insert), so the clause 'no non-test code inserts into stores' no longer holds; it described the Task 8 commit and this PR (Task 10) is what made it false. Fix: retire CLM-0921 as superseded by Task 10 (reason: its sentence described Task 8's state) in the ledger, or leave it recorded as refuted by Task 10.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1333"
+          ],
+          "recorded_at": "2026-11-23T18:59:31.092026446Z",
+          "seal": {
+            "by": "server",
+            "mac": "4bf857f8afe8c5059749191dec12a11b356b0c76faa4124bd840ff5355887383"
+          }
         }
       ],
       "created_at": "2026-11-23T17:42:26.282714045Z",
-      "updated_at": "2026-11-23T17:42:44.479829615Z",
+      "updated_at": "2026-11-23T19:02:54.333538431Z",
       "seal": {
         "by": "server",
-        "mac": "78b1ceb1502ab39d320ded5ba2c99ab57fbed588980e5bc784c3f7e0f71b8234"
+        "mac": "0194196b84f71398b136a1b951b2753ecf9ce401979a5090ce40af03c6dd0497"
       }
     },
     {
@@ -74275,7 +74452,7 @@
           }
         },
         {
-          "id": "EVD-1323",
+          "id": "EVD-1363",
           "kind": "test",
           "locator": "src/stores/mod.rs:259-281 classify; tools/agentic/gate.sh narrow --lib stores:: (audit-stores.log)",
           "summary": "Re-audit on fad8b09: classify keeps the PoolTimedOut, PoolClosed, Io, Tls and WorkerCrashed arms mapping to store_unavailable (a refused-login branch was added before them); begin still maps through classify. classify_turns_connection_failures_into_store_unavailable and an_exhausted_open_pool_is_store_unavailable_without_naming_the_store pass.",
@@ -74293,7 +74470,7 @@
           "recorded_at": "2026-11-23T19:00:19.931948958Z",
           "seal": {
             "by": "server",
-            "mac": "3ba6afc9c89cff4af5fca21864489cff9fb6b91c66c3957f5a959d45ca6471e5"
+            "mac": "df2829fcd219983d83e1e9472fc24c4571d5dbf0f2697e0edc3be71b77f48fc9"
           }
         }
       ],
@@ -74317,12 +74494,12 @@
           "rationale": "Re-audited after the classify change; still holds.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1323"
+            "EVD-1363"
           ],
           "recorded_at": "2026-11-23T19:00:29.060935820Z",
           "seal": {
             "by": "server",
-            "mac": "c89f318b65579f23e79fe6bb445120597b65f6e2305cd394db9f30341c05fa64"
+            "mac": "220c08d6db368758596be5e2b4fbbb7815246318caad6b8379d3c85e40745404"
           }
         }
       ],
@@ -74330,7 +74507,7 @@
       "updated_at": "2026-11-23T19:00:29.060935820Z",
       "seal": {
         "by": "server",
-        "mac": "ed5978184573f6664f0a00df51ba6d946e6dc9bfb1d9918c9f80e528e8ff9801"
+        "mac": "09bccfe2d8bf17140faf44c2cea1260c7aab29d7029d73a0d8c861490ad0ccc2"
       }
     },
     {
@@ -74407,7 +74584,7 @@
           }
         },
         {
-          "id": "EVD-1326",
+          "id": "EVD-1366",
           "kind": "test",
           "locator": "src/stores/registry.rs:739-792 an_open_overtaken_by_a_forget_is_served_but_not_kept, ..._forget_all_... (both ok)",
           "summary": "Re-audit on fad8b09: both tests pass after the open now builds an OpenStore with a credential task; an overtaken open is still served and not kept.",
@@ -74425,7 +74602,7 @@
           "recorded_at": "2026-11-23T19:00:20.168347280Z",
           "seal": {
             "by": "server",
-            "mac": "99df077328244d0e997cc031564e613e11565038751505bc15565ea22aa3f778"
+            "mac": "c98a59792c7ce9b5d67b99b602089238d187f0c3bea9c56089f42b794c9e91b8"
           }
         }
       ],
@@ -74449,12 +74626,12 @@
           "rationale": "Re-audited; both tests pass.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1326"
+            "EVD-1366"
           ],
           "recorded_at": "2026-11-23T19:00:29.391064216Z",
           "seal": {
             "by": "server",
-            "mac": "f42f3cd97d21511b7a746ce6d931f2673a325117cb3f09646aea218e6c95ab89"
+            "mac": "6c5d525616f85e8a5936f7e6af62ff4a66d8472f1b9d4eff746e63f925b3c6e6"
           }
         }
       ],
@@ -74462,11 +74639,1675 @@
       "updated_at": "2026-11-23T19:00:29.391064216Z",
       "seal": {
         "by": "server",
-        "mac": "8379af8abb1e4e63c605c17c880ac81c3532723023f2be87f43994890c9f4ef0"
+        "mac": "32b48deea65e48467001ca8ce2962eeaef9463f04a4353a5d6b23a9aceb93e76"
       }
     },
     {
       "id": "CLM-0924",
+      "statement": "Issue #968 (M21.10) is delivered: placement and the admin surface for catalog stores exist as Task 10 of the catalog stores plan specifies.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/968",
+      "derived_from": [],
+      "artifacts": [
+        "src/stores/placement.rs",
+        "src/store/stores.rs",
+        "src/http/api/stores.rs",
+        "src/cli/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1335",
+          "kind": "analysis",
+          "locator": "children of CLM-0924",
+          "summary": "All behavioural children (placement, add check, audit and invalidation transactions, admin-only routes, no removal, no migration, no transaction across a connect, named tests, CLI, audit actions, docs) are supported. Two children about the PR body's gate results (full test count; fmt, lint, dylint) are not_enough_info because only the producer's logs exist and the gates were not rerun.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T18:59:31.214083366Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d8dd376c8a8bebb869a3a8e164df4909cb565c5b0d9cd7f1493fd222e6e6620"
+          }
+        },
+        {
+          "id": "EVD-1339",
+          "kind": "analysis",
+          "locator": "list_claims tag from-issue:968 (CLM-0925..CLM-0943)",
+          "summary": "All 18 child claims (placement refusal, connect-check, no secret leakage, transactional audit/invalidation, admin-only routes, no removal route, placement choose, no moves, no migration, named tests, CLI, audit actions, docs, test and lint gates) currently carry verdict supported after the re-judgement of CLM-0932, CLM-0942 and CLM-0943.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T19:13:59.386547384Z",
+          "seal": {
+            "by": "server",
+            "mac": "9d13874f7edd4ca0ba045bec904db13c570c8a186764f21c4a985a1fdd1fe86c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Every behavioural child is supported; only the two PR-body gate-result children are undecided. Fix: rerun tools/agentic/gate.sh test, fmt, lint and dylint on the final head and record the results on CLM-0942 and CLM-0943, then re-judge this parent.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [],
+          "recorded_at": "2026-11-23T18:59:35.508658714Z",
+          "seal": {
+            "by": "server",
+            "mac": "375ff0f585c68f59f723d97cb192f530254d75ffacbf3040634448a52f17e30c"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Every child claim is supported with evidence; gates and the previously vacuous provisioner test are now confirmed. Caveat: delivery against the plan's Task 10 is judged via children, not a separate read of the plan.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1339"
+          ],
+          "recorded_at": "2026-11-23T19:14:03.116567002Z",
+          "seal": {
+            "by": "server",
+            "mac": "bf44ab9e5ae8baa4d06b6d20c9c89c49fb7849bd23c7580a2faea5d9e0127dbe"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T19:14:03.116567002Z",
+      "seal": {
+        "by": "server",
+        "mac": "5b59e3cc9ba782f36762267889f5a82a41eced0a6383a818a4580fae0d84e84a"
+      }
+    },
+    {
+      "id": "CLM-0925",
+      "statement": "The refusal of host stores until Task 20 is one function, placement::refuse_host_stores_until_task_20, called from exactly one place (store::stores::add), and it returns OkfError::Refused for a Host location and Ok for the account database.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Issue #968 brief (a); plan Task 10 'The check is one function'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/stores/placement.rs",
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1300",
+          "kind": "inspection",
+          "locator": "src/stores/placement.rs:91; src/store/stores.rs:307",
+          "summary": "refuse_host_stores_until_task_20 matches on location: AccountDatabase Ok, Host Err(Refused \"separate stores are not enabled yet\"). Search shows its only non-test call is stores.rs:307 in add.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "refuse_host_stores_until_task_20\\(",
+              "scope": [
+                "src"
+              ],
+              "hits": 4,
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:23.859418275Z",
+          "seal": {
+            "by": "server",
+            "mac": "69f3bc5114259781a90c84f5dc93207c81b5b0f14cf45e039be70c261154a0be"
+          }
+        },
+        {
+          "id": "EVD-1301",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- stores: stores::placement::tests::only_host_stores_are_refused_until_task_20; store::stores::tests::adding_a_host_store_is_refused_until_enabled",
+          "summary": "Both tests pass (51 passed, 0 failed in the narrow run); the first asserts host Err and AccountDatabase Ok, the second that a reachable host store add is Refused with 'not enabled' and no row written.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/placement.rs",
+              "lines": {
+                "start": 91,
+                "end": 98
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:23.925754047Z",
+          "seal": {
+            "by": "server",
+            "mac": "078c5e74f4bc2a7185dd984bf1393bcf3e909653dbab0d13c7977d462f62b4e6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Single definition, single non-test call site, behaviour tested.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1300",
+            "EVD-1301"
+          ],
+          "recorded_at": "2026-11-23T18:58:11.640477220Z",
+          "seal": {
+            "by": "server",
+            "mac": "515dd4801020f258760ae646b3bf8ea0c54deff565ad2f39057ff7ecf26134ab"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:11.640477220Z",
+      "seal": {
+        "by": "server",
+        "mac": "50066c4a107d34213d778993029de467a81d021bbaaa1c134c2f047236854410"
+      }
+    },
+    {
+      "id": "CLM-0926",
+      "statement": "stores::add checks that the new store can connect through the registry's own open path (Stores::check, which runs open_row, the code shared with Stores::get) before it writes anything, and refuses with OkfError::Refused when it cannot.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #968 brief (b); plan Task 10",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/stores.rs",
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1302",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:289-309; src/stores/registry.rs:316-340,416-424",
+          "summary": "add calls stores.check(row) first; check runs open_row, the same function Stores::open (used by get) calls after reading the row; failure (StoreUnavailable) is mapped to OkfError::Refused before insert. Pool closed afterwards, nothing cached.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 289,
+                "end": 309
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:23.993079065Z",
+          "seal": {
+            "by": "server",
+            "mac": "e0c1cc28a4652c2c3dd07ea4649a00b94d1f430aa2c456dd109f3fbf80dab0bf"
+          }
+        },
+        {
+          "id": "EVD-1303",
+          "kind": "test",
+          "locator": "store::stores::tests::adding_an_unreachable_store_is_refused (narrow --lib -- stores)",
+          "summary": "Passes: add on a closed port returns OkfError::Refused, no store row (only main) and no store.added audit entry.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 599,
+                "end": 626
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:24.058678244Z",
+          "seal": {
+            "by": "server",
+            "mac": "e0421cd2e601ebd28583a8d96793828e2810e15f972de0a074d89022d7233817"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "add runs Stores::check (shared open_row) before insert and maps failure to Refused; test confirms no row written.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1302",
+            "EVD-1303"
+          ],
+          "recorded_at": "2026-11-23T18:58:11.776842908Z",
+          "seal": {
+            "by": "server",
+            "mac": "a094f31e15dd321b8ceab843f208b65f27b396052c1a002325dbb96e203d285a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:11.776842908Z",
+      "seal": {
+        "by": "server",
+        "mac": "4baa21624b303c903d45036654e59dc3ac4eda97bdd2f313bedb15c0d208583a"
+      }
+    },
+    {
+      "id": "CLM-0927",
+      "statement": "The refusal reply for an unreachable store contains no host, port or credential reference (the test asserts none of them appears in the error's JSON).",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #968 brief (b); PR body 'names no host, port or credential'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/stores.rs",
+        "src/http/api/stores.rs",
+        "src/cli/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1304",
+          "kind": "test",
+          "locator": "store::stores::tests::adding_an_unreachable_store_is_refused; http::api::stores::tests::adding_an_unreachable_store_through_the_api_leaks_nothing; cli::stores::tests::adding_a_store_that_cannot_be_reached_is_refused_and_names_no_host",
+          "summary": "All three pass. The store-level test asserts the reply JSON lacks 127.0.0.1, the port and STORE_PASSWORD; the refusal text is a fixed generic string (stores.rs:297-305); the API and CLI tests check the same through their surfaces.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 612,
+                "end": 622
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:24.125922561Z",
+          "seal": {
+            "by": "server",
+            "mac": "9934cfc5d7320d6a286ee1818fc905ef7a6afe80882a4270054e96f27c344c5f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Fixed generic reply text; tests at store, API and CLI level assert host, port and credential ref are absent.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1304"
+          ],
+          "recorded_at": "2026-11-23T18:58:11.860759834Z",
+          "seal": {
+            "by": "server",
+            "mac": "721e9cafa4cdd5af6747e7ffa8e791bf4482954b44701ca0a42837bd9175d337"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:11.860759834Z",
+      "seal": {
+        "by": "server",
+        "mac": "db91b772ca8b09fa9b51772fe655cfe2aa61aa1c0af87747a20f1e212c1a6438"
+      }
+    },
+    {
+      "id": "CLM-0928",
+      "statement": "No credential value is logged by the new code or the connection check: the check's failure path logs only the cause on the local side, the HTTP handlers log only the store name, and the only secret the open path reads (the env password) is never put in a log field or error text.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "Issue #968 brief (b)",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs",
+        "src/http/api/stores.rs",
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1305",
+          "kind": "analysis",
+          "locator": "src/stores/registry.rs:316-324,376-395,440-460; src/http/api/stores.rs:232-237,262-267",
+          "summary": "open_row logs only the connect error and store name (local half of split_event!); the env password is read into a local and only passed to .password(); the only credential text in a message is the variable name ('the variable X is not set'), a reference not a secret. HTTP handlers log store name and key id/actor only. No log carries the password.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 376,
+                "end": 395
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:24.195137879Z",
+          "seal": {
+            "by": "server",
+            "mac": "9fd771805a34e9f4728766410d598951331d1ca4a0458030384f207b2150ea56"
+          }
+        },
+        {
+          "id": "EVD-1306",
+          "kind": "analysis",
+          "locator": "src/stores/registry.rs:448-449 (neutral note)",
+          "summary": "Note: a connect failure's sqlx error text is logged on the local half and may contain host/port; that is local-side only by the registry's existing convention and is not a credential. No test asserts log content, so the claim rests on reading.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 440,
+                "end": 452
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:24.260763958Z",
+          "seal": {
+            "by": "server",
+            "mac": "de13e33c79f664ab4f1a11512bf3cc3f795916d74f5778d241c3f92f9cda49b6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Read of every log site on the open and add paths: none carries the password; only the variable name appears in a local-side message. Rests on reading (no log-capturing test); the neutral note records that local-side logs may show host/port, which is not a credential.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1305"
+          ],
+          "recorded_at": "2026-11-23T18:58:11.968234136Z",
+          "seal": {
+            "by": "server",
+            "mac": "8c3f72e14adf45dcdecf5ff098d2795c400d192ad405749a7bc13765695a64a0"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:11.968234136Z",
+      "seal": {
+        "by": "server",
+        "mac": "8df63d30fb08057db7c166de1f22c2341c2c935b258e9d2229d8cb594e70f0c2"
+      }
+    },
+    {
+      "id": "CLM-0929",
+      "statement": "store::stores::insert writes the stores row, the store.added audit entry and the Invalidation::store invalidation in one transaction, and the audit details name neither the host nor the credential reference.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #968 brief (c); issue comment on #968 (Task 8 note)",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1307",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:344-393",
+          "summary": "insert begins one tx (344), inserts the row, audit::record StoreAdded with details {location, credential_kind} only (no host or ref), invalidate(Invalidation::store) at 390, then tx.commit.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 344,
+                "end": 393
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:43.749874070Z",
+          "seal": {
+            "by": "server",
+            "mac": "c0f4b6c60dfddb4e5b253e9b63c0d6a41e1942397fd1b8b3f93bab89ba430cba"
+          }
+        },
+        {
+          "id": "EVD-1308",
+          "kind": "test",
+          "locator": "store::stores::tests::every_store_change_is_audited; store::stores::tests::a_store_change_reaches_every_replica_through_the_change_feed",
+          "summary": "Both pass: one store.added entry with target_kind store, target shared-1, details exactly {location:host, credential_kind:env}; the NOTIFY feed delivers exactly [Invalidation::store(name)] for the insert.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 689,
+                "end": 742
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:43.838790856Z",
+          "seal": {
+            "by": "server",
+            "mac": "63a6949299aa12df448a351035354a790ce68ea772cd049fe23478a31d62677d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Row, audit and invalidation share the transaction opened at stores.rs:344 and tests check the entry and the feed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1307",
+            "EVD-1308"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.072017835Z",
+          "seal": {
+            "by": "server",
+            "mac": "741a4e6f749ee00ef8e52e356aacfa68d2cc2fb45ef114da8a2d17e2d83262d8"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.072017835Z",
+      "seal": {
+        "by": "server",
+        "mac": "55fddfb40231b85de35b75bc604bfc50fbe280c8f1e5cb7f91d5b96ae4d294ed"
+      }
+    },
+    {
+      "id": "CLM-0930",
+      "statement": "stores::set_default changes the default_store setting, writes the setting.default_store_changed audit entry and sends Invalidation::Settings in one transaction, and a change to the value it already has writes, audits and sends nothing.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #968 brief (c); PR body 'An unchanged default or pin records and sends nothing'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1309",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:419-475",
+          "summary": "set_default: one tx; lock_store; invalidate(Settings) in the tx; if the existing value equals the new one it returns early (tx dropped, rolling back the generation bump and NOTIFY); otherwise upserts the setting and records SettingDefaultStoreChanged in the same tx before commit.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 419,
+                "end": 475
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:43.907196069Z",
+          "seal": {
+            "by": "server",
+            "mac": "60864dc58e09e607d793736bea37c662ef5074fd933fca1c73da40ab7525ce4d"
+          }
+        },
+        {
+          "id": "EVD-1310",
+          "kind": "test",
+          "locator": "store::stores::tests::an_unchanged_default_or_pin_records_and_sends_nothing; every_store_change_is_audited; a_store_change_reaches_every_replica_through_the_change_feed",
+          "summary": "All pass: changing default main->shared-1 records one entry with details {from main,to shared-1} and sends exactly [Settings]; set_default to main again sends no invalidation and records no entry.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 779,
+                "end": 806
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:43.971051439Z",
+          "seal": {
+            "by": "server",
+            "mac": "9dadf675e1b0088143b6a3d55979b9cb23f87fb7da954f278cad7aacbbc4e5e4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and tests show the audit, setting write and Settings invalidation in one tx, and the no-change path sends and records nothing.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1309",
+            "EVD-1310"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.217312385Z",
+          "seal": {
+            "by": "server",
+            "mac": "3584e85ddb33721081be3695aecceb9a6e855cc9f7877ab61518fd372d33ccae"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.217312385Z",
+      "seal": {
+        "by": "server",
+        "mac": "1d11984b87065cdb8175a8a9f52f2f1973da925ee656d8b2899f80fc6b8347cb"
+      }
+    },
+    {
+      "id": "CLM-0931",
+      "statement": "teams::set_store pins or unpins a team, writes the team.store_pinned or team.store_unpinned audit entry and sends Invalidation::team in one transaction, and pinning to the store it is on (or unpinning an unpinned team) writes, audits and sends nothing.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #968 brief (c); PR body",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/teams.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1311",
+          "kind": "inspection",
+          "locator": "src/store/teams.rs:763-822",
+          "summary": "set_store: one tx; returns Ok(false) before any write when previous == requested; otherwise updates teams.store, record_team with TeamStorePinned or TeamStoreUnpinned (from/to details), invalidate(Invalidation::team(&team_id)), then commit.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/teams.rs",
+              "lines": {
+                "start": 763,
+                "end": 822
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:44.037486683Z",
+          "seal": {
+            "by": "server",
+            "mac": "b9973a2a05e378f71d2e2a6ffd210b4bdb04de156b07178f48018b24e155eb94"
+          }
+        },
+        {
+          "id": "EVD-1312",
+          "kind": "test",
+          "locator": "store::stores::tests::every_store_change_is_audited; a_store_change_reaches_every_replica_through_the_change_feed; an_unchanged_default_or_pin_records_and_sends_nothing",
+          "summary": "All pass: pin records team.store_pinned {from null,to shared-1}, unpin team.store_unpinned {from shared-1,to null}; a pin sends exactly one Invalidation::Team; unpinning an unpinned team returns false with no entry and no invalidation.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 743,
+                "end": 806
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:44.103320773Z",
+          "seal": {
+            "by": "server",
+            "mac": "d931176ae52fe1b0a1258dc9ce5e81a7cce482d63eb1896eb9b2a44c0d20afe9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "set_store does update, audit and Team invalidation in one tx; unchanged returns early; tests cover pin, unpin and no-op.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1311",
+            "EVD-1312"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.347282129Z",
+          "seal": {
+            "by": "server",
+            "mac": "8675fc4d466ec42b70e4cd1b67541ef8d9059997a239eb1c6b395d0da6776959"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.347282129Z",
+      "seal": {
+        "by": "server",
+        "mac": "99f709da44d77d8ab835e9f38a1822cec7b84e21acd637fbd954126a73228b9f"
+      }
+    },
+    {
+      "id": "CLM-0932",
+      "statement": "GET /api/v1/stores needs an admin key, and the POST /stores, PUT /settings/default_store and PUT/DELETE /teams/{team}/store routes need an admin key reaching every catalog; non-admin keys get 403 and none of these routes is in PROVISIONER_ROUTES (a provisioner key is refused).",
+      "kind": "security",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #968 brief (d); PR body 'Reads need an admin; changes need an admin reaching every catalog; none is a provisioner route'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/http/api/stores.rs",
+        "src/http/api/mod.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1313",
+          "kind": "inspection",
+          "locator": "src/http/api/stores.rs:171-176,196-200,235-241 and handlers; src/http/api/mod.rs:205-234,272-300",
+          "summary": "list_stores calls require_admin; add_store, set_default_store, pin_team and unpin_team call require_every_catalog (admin + Reach::All). The routes are merged at mod.rs:95; none of /stores, /settings/default_store or /teams/{name}/store appears in PROVISIONER_ROUTES.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/stores.rs",
+              "lines": {
+                "start": 168,
+                "end": 200
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:44.169762006Z",
+          "seal": {
+            "by": "server",
+            "mac": "51174495caf7a02f8c266700406ca1b358bb02f633f4dfd562c4090c141d9c93"
+          }
+        },
+        {
+          "id": "EVD-1314",
+          "kind": "test",
+          "locator": "http::api::stores::tests::store_admin_endpoints_refuse_non_admin_credentials; a_provisioner_key_reaches_none_of_the_store_routes",
+          "summary": "Both pass: the matrix test checks every store route per credential tier (admin on one catalog gets 403 for writes, every-catalog admin 200) and the provisioner test checks a provisioner key is refused on all routes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/stores.rs",
+              "lines": {
+                "start": 343,
+                "end": 436
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:44.236676822Z",
+          "seal": {
+            "by": "server",
+            "mac": "5f1c87b1d81cb7f3752f5e6b8b3c307494567b5103d837adcae20990e55540be"
+          }
+        },
+        {
+          "id": "EVD-1315",
+          "kind": "analysis",
+          "locator": "git grep PROVISIONER_ROUTES allow-list for store routes",
+          "summary": "Zero lines of src/http/api/mod.rs contain /stores, default_store or '/store\"' in the PROVISIONER_ROUTES list (the allow-list names only users, teams and related routes); so the provisioner gate refuses the new routes.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "\"/api/v1/(stores|settings/default_store|teams/\\{[a-z]+\\}/store)",
+              "scope": [
+                "src/http/api/mod.rs"
+              ],
+              "hits": 0,
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:05.116725824Z",
+          "seal": {
+            "by": "server",
+            "mac": "2068acd328d1c49d59fe28d50656d6b86895f3ef9a2cd9a25e688b18818409d7"
+          }
+        },
+        {
+          "id": "EVD-1338",
+          "kind": "test",
+          "locator": "src/http/api/stores.rs:392-429 a_provisioner_key_reaches_none_of_the_store_routes; gate.sh narrow --lib (both tests)",
+          "summary": "Supersedes EVD-1314's summary for the provisioner test (that text predates the fix, when the test returned before asserting). Now the test asserts key creation returns 200, takes created[\"secret\"], and asserts 403 on five routes: GET and POST /stores, PUT /settings/default_store, PUT and DELETE /teams/main/store. I ran it and store_admin_endpoints_refuse_non_admin_credentials: each 1 passed, 0 failed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/stores.rs",
+              "lines": {
+                "start": 392,
+                "end": 429
+              },
+              "commit": "53e227b85a0d38b0e2d3c88fad035e72235b47d7"
+            }
+          },
+          "recorded_at": "2026-11-23T19:13:49.872109878Z",
+          "seal": {
+            "by": "server",
+            "mac": "6a0507df6850de15c3c0fdec0f1712ce2e8241f3db29dc3d7ee36c9b79abbfaf"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Handlers use require_admin or require_every_catalog, the routes are absent from PROVISIONER_ROUTES, and the matrix and provisioner tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1313",
+            "EVD-1314",
+            "EVD-1315"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.424589151Z",
+          "seal": {
+            "by": "server",
+            "mac": "cc961d691d29085869837b27279c4da660b2db03efb24d9c21ab428e9824ddba"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Handlers gate on require_admin/require_every_catalog (EVD-1313), routes absent from PROVISIONER_ROUTES (EVD-1315), and the fixed provisioner test now genuinely asserts 403 on five routes and passes (EVD-1338). EVD-1314 summary is stale.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1313",
+            "EVD-1315",
+            "EVD-1338"
+          ],
+          "recorded_at": "2026-11-23T19:13:55.116786106Z",
+          "seal": {
+            "by": "server",
+            "mac": "85b73992262267f72cf54886fd06f99a6592fa4897ae77994bea037049d1ecde"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T19:13:55.116786106Z",
+      "seal": {
+        "by": "server",
+        "mac": "4e288a1396ceb01ad14a665364f1f26860934cf66a089a2410c6b8b4abae831f"
+      }
+    },
+    {
+      "id": "CLM-0933",
+      "statement": "No removal route or command for a store exists: no DELETE /stores route, and the stores CLI has only list, add, set-default, pin and unpin.",
+      "kind": "constraint",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #968 brief (d); plan Task 10 'no removal endpoint is built'; PR body 'No removal route or command'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/http/api/stores.rs",
+        "src/cli.rs",
+        "src/cli/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1316",
+          "kind": "inspection",
+          "locator": "src/http/api/stores.rs:171-175; src/cli.rs StoresCommand; src/cli/stores.rs:40-80",
+          "summary": "Routes are only GET/POST /stores, PUT /settings/default_store, PUT/DELETE /teams/{team}/store (the DELETE removes a pin, not a store). StoresCommand has List, Add, SetDefault, Pin, Unpin; no store-removal function exists in store/stores.rs.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/stores.rs",
+              "lines": {
+                "start": 171,
+                "end": 175
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:05.203458012Z",
+          "seal": {
+            "by": "server",
+            "mac": "4652dd3c1e055b92ccbb6670a24ae4638866ae9270afe6495edc265d7c2edf90"
+          }
+        },
+        {
+          "id": "EVD-1317",
+          "kind": "analysis",
+          "locator": "git grep removal of a stores row",
+          "summary": "No DELETE FROM stores, delete_store/remove_store or remove/delete store subcommand exists in the stores API, CLI or store module.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "DELETE FROM stores|delete_store|remove_store|StoresCommand::(Remove|Delete)",
+              "case_insensitive": true,
+              "scope": [
+                "src/cli",
+                "src/cli.rs",
+                "src/http/api/stores.rs",
+                "src/store/stores.rs"
+              ],
+              "hits": 0,
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:05.305782642Z",
+          "seal": {
+            "by": "server",
+            "mac": "f0e7d7100ddd59cd4aa0dc2897f8f58e25fd01e8413b3e1fa37d15ef9b59f389"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Routes and CLI list show no store removal; zero-hit search confirms; the only DELETE route removes a team pin.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1316",
+            "EVD-1317"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.509897312Z",
+          "seal": {
+            "by": "server",
+            "mac": "e391b43a8e21d9508dc35db94f4f65ac1624599e50ed36cb797fe9e5ebe8afdb"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.509897312Z",
+      "seal": {
+        "by": "server",
+        "mac": "946aa7f82bbcc1f66a261a3368c9cc9be891d0dbf4079247a321c45c8169f882"
+      }
+    },
+    {
+      "id": "CLM-0934",
+      "statement": "catalogs::create calls placement::choose on its own transaction connection and inserts the result into catalogs.store (with provisioned_at set), and placement::choose returns the owner team's pin if set, else the default_store setting.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #968 brief (e); plan Task 10",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/catalogs.rs",
+        "src/stores/placement.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1318",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:150-176; src/stores/placement.rs:34-47",
+          "summary": "create calls placement::choose(&mut tx, owner_team) on its own transaction and binds the store as $7 into INSERT INTO catalogs (..., store, provisioned_at) with provisioned_at = $3 (creation time). choose reads teams.store for the owner and falls back to default_store.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 150,
+                "end": 176
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:05.384145896Z",
+          "seal": {
+            "by": "server",
+            "mac": "6354dc67e6d666a16cd984a7e95fbc21052defe84380b7f2bda592bb11e302d1"
+          }
+        },
+        {
+          "id": "EVD-1319",
+          "kind": "test",
+          "locator": "stores::placement::tests::a_new_catalog_lands_on_the_default_store; a_team_pin_wins_over_the_default; a_missing_default_setting_falls_back_to_main",
+          "summary": "All pass; they create catalogs through catalogs::create and read catalogs.store back (default store, then pinned team's store winning over a different default).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/placement.rs",
+              "lines": {
+                "start": 147,
+                "end": 190
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:05.466704087Z",
+          "seal": {
+            "by": "server",
+            "mac": "36d6a883fdc4afb165ffc487f48bc2d4cf2746279b9d13d4285cf9e07a276a33"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "create calls choose on its tx and writes store and provisioned_at; tests read catalogs.store for default and pin cases.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1318",
+            "EVD-1319"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.583438870Z",
+          "seal": {
+            "by": "server",
+            "mac": "0bfb6d1b2d1d613f606b8aca967a9b2b36a99f036f30f62a89c99f03eadcb433"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.583438870Z",
+      "seal": {
+        "by": "server",
+        "mac": "5d39013950e2f06bebdc55fbc0edee0afd8482daaa3d1c94f4a8a084dad01ce6"
+      }
+    },
+    {
+      "id": "CLM-0935",
+      "statement": "Existing catalogs never move: no code updates catalogs.store after creation, and a test shows changing the default store leaves existing catalogs where they were and affects only new ones.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #968 brief (e); named test changing_the_default_moves_new_catalogs_only",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/stores/placement.rs",
+        "src/store/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1320",
+          "kind": "test",
+          "locator": "stores::placement::tests::changing_the_default_moves_new_catalogs_only",
+          "summary": "Passes: after set_default to a new store, the earlier catalog still records its old store and the next new catalog records the new one.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/placement.rs",
+              "lines": {
+                "start": 191,
+                "end": 230
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:05.538941757Z",
+          "seal": {
+            "by": "server",
+            "mac": "fb6d1bc73c5d949e8e1af0b82903e975a5e255d7cf2dc0464ad6704c4a0c4ee9"
+          }
+        },
+        {
+          "id": "EVD-1321",
+          "kind": "analysis",
+          "locator": "git grep UPDATE catalogs SET store in src",
+          "summary": "No statement updates catalogs.store anywhere in src (only INSERT in catalogs::create); the two 'SET store' hits are on teams.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "UPDATE catalogs SET[^;\"]*store",
+              "case_insensitive": true,
+              "scope": [
+                "src"
+              ],
+              "hits": 0,
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:05.642809983Z",
+          "seal": {
+            "by": "server",
+            "mac": "e33cbce6dfa9e2522cc6b73c2634864a6a4ea1560e2fd9c1e1c44b455af38bbc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test shows old catalogs stay; zero-hit search shows nothing updates catalogs.store.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1320",
+            "EVD-1321"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.656682868Z",
+          "seal": {
+            "by": "server",
+            "mac": "d44c4515907aeb8b0b69a8fd178cc915786b562555f9307196f2012d026c423a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.656682868Z",
+      "seal": {
+        "by": "server",
+        "mac": "d2b5f3e30c3e8c637ba68480e9f16c7204d76bbb2196ffc02e338964cc1bc8b0"
+      }
+    },
+    {
+      "id": "CLM-0936",
+      "statement": "The change adds no migration: no file under migrations/ is added or changed in the commit range.",
+      "kind": "constraint",
+      "level": "software",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #968 brief (f); PR body 'No migration'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "migrations"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1322",
+          "kind": "log",
+          "locator": "git diff --name-status origin/milestone/958-catalog-stores..HEAD | grep -i migr",
+          "summary": "No output: of the 15 files in the range none is under migrations/; the latest migration at head is 0040_catalogs_unprovisioned_index.sql, from before this range.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T18:57:22.196407740Z",
+          "seal": {
+            "by": "server",
+            "mac": "8b540c963a3ff89d6c62e7253b6e3e9e4e4266d792c0ce7788531830f98f9721"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The diff name list over the range contains no migrations path.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1322"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.723948253Z",
+          "seal": {
+            "by": "server",
+            "mac": "39263f5fc826c5567f1c717cd45f3002bb84f3fdcd20280d8f1cfaf217f53e9d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.723948253Z",
+      "seal": {
+        "by": "server",
+        "mac": "9c9a10c611f2eb9c9dd598e594f0f3bd2e7a1b7c6da691c907002fb7ba19972c"
+      }
+    },
+    {
+      "id": "CLM-0937",
+      "statement": "No account-database transaction is held while a store pool connects: stores::add runs Stores::check before any begin on the account pool, and the CLI and HTTP handlers call add without opening a transaction.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #968 brief (g); PR body 'holding no transaction'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/stores.rs",
+        "src/http/api/stores.rs",
+        "src/cli/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1323",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:289-309; src/cli/stores.rs:64; src/http/api/stores.rs:221-228",
+          "summary": "add awaits stores.check(...) (the only code that connects a store pool) as its first statement, with no begin in scope; pool.begin occurs only in insert (line 344), after the check returns. The CLI and HTTP handlers pass the pool and registry to add and open no transaction themselves. check also holds no account connection (open_row reads none).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 289,
+                "end": 309
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:22.896605108Z",
+          "seal": {
+            "by": "server",
+            "mac": "0f92dc4459b1e6d8cb7e1a4ff9b84d446ebeba713d4cba2bc4b51bb0b774f0c0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Connect check precedes the only begin; callers open no transaction.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1323"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.796621958Z",
+          "seal": {
+            "by": "server",
+            "mac": "a084f93bcd278ae19e54e7097d742674d7186e00ee471ea1957f405c90c0aa52"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.796621958Z",
+      "seal": {
+        "by": "server",
+        "mac": "76df95e602c3520deb19142c95b843f99e406fe0b1dfaed40554948a77be3b45"
+      }
+    },
+    {
+      "id": "CLM-0938",
+      "statement": "The seven tests the issue names (a_new_catalog_lands_on_the_default_store, a_team_pin_wins_over_the_default, changing_the_default_moves_new_catalogs_only, adding_an_unreachable_store_is_refused, adding_a_host_store_is_refused_until_enabled, store_admin_endpoints_refuse_non_admin_credentials, every_store_change_is_audited) exist and pass at head.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/968 (Validation)",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/stores/placement.rs",
+        "src/store/stores.rs",
+        "src/http/api/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1324",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- stores",
+          "summary": "Run on head: 'test result: ok. 51 passed; 0 failed; 0 ignored'. Output lists each of the seven named tests as ok (placement: a_new_catalog_lands_on_the_default_store, a_team_pin_wins_over_the_default, changing_the_default_moves_new_catalogs_only; store::stores: adding_an_unreachable_store_is_refused, adding_a_host_store_is_refused_until_enabled, every_store_change_is_audited; http::api::stores: store_admin_endpoints_refuse_non_admin_credentials).",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "async fn (a_new_catalog_lands_on_the_default_store|a_team_pin_wins_over_the_default|changing_the_default_moves_new_catalogs_only|adding_an_unreachable_store_is_refused|adding_a_host_store_is_refused_until_enabled|store_admin_endpoints_refuse_non_admin_credentials|every_store_change_is_audited)",
+              "scope": [
+                "src"
+              ],
+              "hits": 7,
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:24.458034815Z",
+          "seal": {
+            "by": "server",
+            "mac": "5bb4f3ff0d6f770927fad2eb4be4a4b4effb2c9424faeba8ade92454a5bbfc02"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All seven named tests exist (search anchor: 7 definitions) and passed in my narrow run on head.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1324"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.866230472Z",
+          "seal": {
+            "by": "server",
+            "mac": "8928779627165b1ed3e4a172df37d72a0f034c0080eeb4f1ea4fff298447c1f6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.866230472Z",
+      "seal": {
+        "by": "server",
+        "mac": "86a59f82637e235747643e47eab1cc5e31c8f716b16d1128965e11c7c17b7bc1"
+      }
+    },
+    {
+      "id": "CLM-0939",
+      "statement": "The okf-mcp CLI has `stores list|add|set-default|pin|unpin` commands that call the same store functions as the API.",
+      "kind": "interface",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Issue #968 / plan Task 10 'The CLI has the same commands under okf-mcp stores'; PR body",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/cli.rs",
+        "src/cli/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1325",
+          "kind": "test",
+          "locator": "cli::stores::tests::the_commands_list_set_default_pin_and_unpin; adding_a_store_that_cannot_be_reached_is_refused_and_names_no_host",
+          "summary": "Both pass (narrow run). src/cli/stores.rs:31-80 dispatches List to stores::summaries, Add to stores::add, SetDefault to stores::set_default, Pin/Unpin to teams::set_store: the same functions the HTTP handlers call; src/cli.rs wires Command::Stores.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli/stores.rs",
+              "lines": {
+                "start": 31,
+                "end": 80
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:26.883569460Z",
+          "seal": {
+            "by": "server",
+            "mac": "07c35881d4f103560d6f1ed9f33432e330618e5f0edd00af923969b866f573bf"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "CLI dispatches to the same store functions and its tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1325"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.930844368Z",
+          "seal": {
+            "by": "server",
+            "mac": "37b44f8663aa0b75507dfeb021e2e556dbbd7ed1a9e0e09a202b586581521442"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.930844368Z",
+      "seal": {
+        "by": "server",
+        "mac": "89c816cdb787dc094d756741c448bf05e6e3e6f40b28cccb82c07a5084bff1ba"
+      }
+    },
+    {
+      "id": "CLM-0940",
+      "statement": "The new audit actions store.added, setting.default_store_changed, team.store_pinned and team.store_unpinned exist, and Target::Store records target kind store with the store name as target_name.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #968 / plan Task 10 audit actions",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/audit.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1326",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:312-315,337-338,383",
+          "summary": "Four Action variants with the exact strings, Target::Store(&str) mapped to plain('store', name). Test every_store_change_is_audited passes and reads target_kind 'store' and target 'shared-1' for store.added from the database (the 0038 CHECK admits it).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 309,
+                "end": 316
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:28.514740494Z",
+          "seal": {
+            "by": "server",
+            "mac": "b817442f38c5a84b188d7239d6ad8d7a37d2b8e25d8f09f792260fdc331d7969"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Actions and target exist; the audited test reads them back from the database.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1326"
+          ],
+          "recorded_at": "2026-11-23T18:58:13.064145384Z",
+          "seal": {
+            "by": "server",
+            "mac": "ec7eae1b76fb57ebfa7731ebbfa84aa4cbe424021c45fac8ab515e11b9b87d02"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:13.064145384Z",
+      "seal": {
+        "by": "server",
+        "mac": "bdec8f99938e2dc084ef080e30651b7c835483ebfbf4db430ed048497f760a84"
+      }
+    },
+    {
+      "id": "CLM-0941",
+      "statement": "The PR adds a changelog entry, docs/operations.md 'Catalog stores API' section, a dated Corrected note on plan Task 10, a changed Task 20 step naming the one function, and comments on #969 and #979.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body 'Plan: dated correction note on Task 10, changed Task 20 step, comments on #969 and #979. Docs in docs/operations.md; changelog entry.'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "changelog"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1327",
+          "kind": "inspection",
+          "locator": "git diff range; gh issue view 969 / 979 --comments",
+          "summary": "Range adds changelog/2026-11-23T18-31-46Z-m21-task-10-placement-and-admin-surface.md, docs/operations.md 'Catalog stores API' (line 3828), the plan's '> Corrected (issue #968, 2026-11-23)' note on Task 10, and rewrites the Task 20 step to name placement::refuse_host_stores_until_task_20. Issues #969 and #979 each carry a 'From #968 (Task 10)' comment (the #969 one on placement::choose's signature, the #979 one on the P8 function).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 3828,
+                "end": 3850
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:29.721901079Z",
+          "seal": {
+            "by": "server",
+            "mac": "b12ddd9a207f38b4e8cfdbae4ad0a63b937911609a57f8a6a595194eb9e0eb1c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Each listed item is present in the diff or on the named issues.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1327"
+          ],
+          "recorded_at": "2026-11-23T18:58:13.157748756Z",
+          "seal": {
+            "by": "server",
+            "mac": "162f5c406211a1ef9e5a6c121546fda70c8e187c18e91b356040f93c35514e02"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:13.157748756Z",
+      "seal": {
+        "by": "server",
+        "mac": "60b9bc8380c2ea1cd2bb9aa3cd4fe6c8776adedacde4958f445cbbc6ee375ce1"
+      }
+    },
+    {
+      "id": "CLM-0942",
+      "statement": "tools/agentic/gate.sh test passes with 3444 passed, 0 failed, 21 ignored across all test binaries at head.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'tools/agentic/gate.sh test: pass (3444 passed, 0 failed, 21 ignored across all test binaries)'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "target/i968-logs/test.log"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1328",
+          "kind": "log",
+          "locator": "target/i968-logs/test.log",
+          "summary": "The author's log (written 13:44, after the last edit to a changed file at 13:38 and before the 13:53 commit) sums its 'test result' lines to 3444 passed, 0 failed, 21 ignored. I did not rerun the full gate (forbidden here), so the count is the producer's log, not my own run; the stores-filtered subset I ran passes (51).",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T18:57:37.320731757Z",
+          "seal": {
+            "by": "server",
+            "mac": "463b2449b6d57ad73ba03d67c447c76834624d256224de5a7f973f5bbf64f784"
+          }
+        },
+        {
+          "id": "EVD-1336",
+          "kind": "log",
+          "locator": "target/i968-logs/test3.log (mtime 14:11:42, no source file newer; git status clean at 53e227b)",
+          "summary": "awk sum over 28 'test result:' lines: 3444 passed, 0 failed, 21 ignored; no 'FAILED' line; log ends with test=0.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T19:13:49.729968642Z",
+          "seal": {
+            "by": "server",
+            "mac": "ebc80d7ae025520c3882f006b3b1fb57ac741acb2e3f1b106f0c999c064f7e10"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Only the author's log backs the 3444/0/21 count; the full gate was not rerun in this audit. Fix: have the author or CI rerun `tools/agentic/gate.sh test` on the final head and quote its printed totals.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1328"
+          ],
+          "recorded_at": "2026-11-23T18:58:13.243648229Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa1f6254a3c347fad154cc66b491c0625d3a29e7c4ce3d5dacb396c6543aac82"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Independent sum of test3.log equals the claim; exit line test=0; tree unchanged since.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1336"
+          ],
+          "recorded_at": "2026-11-23T19:13:54.978792091Z",
+          "seal": {
+            "by": "server",
+            "mac": "4c6a58f24b1a891b4a0f5b84a54d0a2be8b57f60d12fae415264f10a49f2bd56"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T19:13:54.978792091Z",
+      "seal": {
+        "by": "server",
+        "mac": "0ed70bd43b4aba6ee9cee79d8878991a0bc68e3cad369fb214770d0eb62162e5"
+      }
+    },
+    {
+      "id": "CLM-0943",
+      "statement": "tools/agentic/gate.sh fmt, lint and dylint pass at head.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'tools/agentic/gate.sh fmt, lint, dylint: pass'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1329",
+          "kind": "log",
+          "locator": "target/i968-logs/{fmt,lint,lint2,dylint,status}.log",
+          "summary": "Producer logs only: status.log shows lint=101 (first run failed in cargo doc), lint2=0, dylint=0, test=0; fmt.log (13:36) predates the last edit to src/store/stores.rs (13:38:42) and records no exit status. I did not rerun these gates.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T18:57:37.806562944Z",
+          "seal": {
+            "by": "server",
+            "mac": "3a14c360ade4f339e1dc635b69a04e63b735fd1858698e9dfd57d610158cad61"
+          }
+        },
+        {
+          "id": "EVD-1337",
+          "kind": "log",
+          "locator": "target/i968-logs/fmt3.log, lint3.log, dylint3.log",
+          "summary": "lint3.log: clippy -D warnings Finished, cargo doc -D warnings Finished, ends lint=0. dylint3.log: cargo dylint uninstrumented_fn Finished, ends dylint=0, no warnings/errors. fmt3.log: 'cargo fmt --all --check' with no diff output and no exit-status line (clean by empty output; exit 0 reported by author, not recorded in log). Logs postdate last source edit.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T19:13:49.801411092Z",
+          "seal": {
+            "by": "server",
+            "mac": "57bf853ee38f6aac4c9dec236b512484f29945afc4c31d7dcc12fd97129492a9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Only producer logs exist (lint failed once then passed; fmt log predates the last source edit and has no exit status); gates not rerun here. Fix: rerun `tools/agentic/gate.sh fmt`, `lint` and `dylint` on the final head and record their exit codes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1329"
+          ],
+          "recorded_at": "2026-11-23T18:58:13.327083014Z",
+          "seal": {
+            "by": "server",
+            "mac": "6540c23c184fd14b33ead5db5c9877b419c8e0c6fd31e44f5ddc4396f82bcad0"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "lint (clippy+doc) and dylint logs show clean Finished and exit 0; fmt log is empty after a --check run (no diff), though it carries no explicit exit line.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1337"
+          ],
+          "recorded_at": "2026-11-23T19:13:55.047939859Z",
+          "seal": {
+            "by": "server",
+            "mac": "d39b13e73856a7adeb3f01e7e08528a1c0b843fe2458b9a4ee0dd97d9527ecec"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T19:13:55.047939859Z",
+      "seal": {
+        "by": "server",
+        "mac": "3cb5a1ee1e5161fb01cda9888f9d5a763b8c9744e999d7813aa5c432f829a663"
+      }
+    },
+    {
+      "id": "CLM-0944",
       "statement": "Issue #967 (M21.09) is delivered: credential kinds env, secrets-manager and iam are implemented for catalog stores, with the IAM token refreshed in the pool's connect options before it expires and no credential reaching logs or errors.",
       "kind": "functional",
       "level": "system",
@@ -74487,7 +76328,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1322",
+          "id": "EVD-1362",
           "kind": "analysis",
           "locator": "children of CLM-0924",
           "summary": "Every child is supported: the three kinds exist behind a trait with mocked AWS clients, the refresh task and its tests cover token expiry, retry and forget, secrecy is tested by sentinel, the plan/changelog/migration requirements are met, and the stores:: tests pass. Caveats: the SES chain is reused as a call-site duplicate, and the one pre-existing claim made false by this change (CLM-0911) was retired and replaced.",
@@ -74495,7 +76336,7 @@
           "recorded_at": "2026-11-23T18:59:38.625681137Z",
           "seal": {
             "by": "server",
-            "mac": "fd3a3e0bb4cfd90f97e2b106da6af199b7f672dbc2dcff6981ad6fe2f286945e"
+            "mac": "482c3ed8dfa85d83ba5251faa5e8e7e61cd909999dadc67af74e133f4f66a111"
           }
         }
       ],
@@ -74505,12 +76346,12 @@
           "rationale": "All active children supported; see evidence.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1322"
+            "EVD-1362"
           ],
           "recorded_at": "2026-11-23T18:59:42.683957060Z",
           "seal": {
             "by": "server",
-            "mac": "59b7498f4b7dcaba3be552e314b44393cbefb9cf50e6f5f02c11f3b712a53b30"
+            "mac": "b8310bd2b61d3a30c1e6adf09264831bee5d6d23e0af18e5b47b00b9e3166f29"
           }
         }
       ],
@@ -74518,11 +76359,11 @@
       "updated_at": "2026-11-23T18:59:42.683957060Z",
       "seal": {
         "by": "server",
-        "mac": "eb73139ba57d4b58ffcb84c77a2520c26f748d6920908be8a08a2e26c6a921fb"
+        "mac": "44a5f3fa01096cd7ef8538a87aaf62dc2b5bc106b0d38662d851204fcb472e4d"
       }
     },
     {
-      "id": "CLM-0925",
+      "id": "CLM-0945",
       "statement": "src/stores/credentials.rs defines a CredentialSource trait (fetch, refresh) with exactly three implementations: EnvCredential, SecretsManagerCredential and IamCredential.",
       "kind": "interface",
       "level": "component",
@@ -74530,7 +76371,7 @@
       "verification_method": "inspection",
       "source": "issue #967 work order: 'credential resolution moved out of registry.rs into credentials.rs behind a trait with three implementations'; PR body: 'behind a CredentialSource trait with three implementations'",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/credentials.rs"
@@ -74543,7 +76384,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1300",
+          "id": "EVD-1340",
           "kind": "inspection",
           "locator": "src/stores/credentials.rs:172-181,206,266,317",
           "summary": "trait CredentialSource has fetch and refresh (177,180); impls at 206 (EnvCredential), 266 (SecretsManagerCredential), 317 (IamCredential). The only other implementation is a test double Counting in the tests module.",
@@ -74561,7 +76402,7 @@
           "recorded_at": "2026-11-23T18:57:38.348733291Z",
           "seal": {
             "by": "server",
-            "mac": "70c74c418dc8eaa2084733bc1d9d1215cd5122fd5052d3aadf252e3b3bd52335"
+            "mac": "ca7d0ecb9738367515b512e5cbcf6bdc686c4a9bb5eecadb7d86294facaf780c"
           }
         }
       ],
@@ -74571,12 +76412,12 @@
           "rationale": "Trait with fetch/refresh and three production impls found by search (4th hit is a test double).",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1300"
+            "EVD-1340"
           ],
           "recorded_at": "2026-11-23T18:59:22.644272684Z",
           "seal": {
             "by": "server",
-            "mac": "92a375d9b2d59a6d26366afa3cc3b2f03cb97e1dfb5184622277b08735112cd2"
+            "mac": "47429441d982a7d896f2371aac8f73f892f6579b954a0dad7c6ab95cf601f1e9"
           }
         }
       ],
@@ -74584,11 +76425,11 @@
       "updated_at": "2026-11-23T18:59:22.644272684Z",
       "seal": {
         "by": "server",
-        "mac": "189090779de7abf93ce07f5d8773750a990836ab3b10ffeab6cc0f38ca18c76f"
+        "mac": "2c53aec1ec2b100c96f6540682950522667d0db5fde62f38449968cf3014a253"
       }
     },
     {
-      "id": "CLM-0926",
+      "id": "CLM-0946",
       "statement": "src/stores/registry.rs no longer resolves credentials itself: it reads no environment variable directly except to build the real Providers, and gets a login only through a CredentialSource.",
       "kind": "constraint",
       "level": "component",
@@ -74596,7 +76437,7 @@
       "verification_method": "analysis",
       "source": "issue #967 work order: credential resolution moved out of registry.rs",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/registry.rs"
@@ -74609,7 +76450,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1301",
+          "id": "EVD-1341",
           "kind": "inspection",
           "locator": "src/stores/registry.rs:181,414-446,530-540; git show origin/milestone/958-catalog-stores:src/stores/registry.rs",
           "summary": "The only std::env::var in registry.rs is at line 181, building Providers::aws. connection_of (line ~370) gets a source from providers.source(...), and connect_with_credential fetches through CredentialSource::fetch. The base branch had connect_options(row) resolving the credential in registry.rs; that is gone.",
@@ -74627,7 +76468,7 @@
           "recorded_at": "2026-11-23T18:57:39.037836419Z",
           "seal": {
             "by": "server",
-            "mac": "18dfd5a5b716f1bc25a3001e5c7edfd37215cda26766e9e70f1a93103e981756"
+            "mac": "9207ba5415e30cd983b9f7659eb275852b9a36c4cd152473791e9da48700128d"
           }
         }
       ],
@@ -74637,12 +76478,12 @@
           "rationale": "Only env::var left in registry.rs builds the real Providers; fetching goes through CredentialSource.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1301"
+            "EVD-1341"
           ],
           "recorded_at": "2026-11-23T18:59:22.710170537Z",
           "seal": {
             "by": "server",
-            "mac": "e6958dd70daf97c4a99731cc13852b774db2f2ccb74b87de7137c207bb801d76"
+            "mac": "2c87d9098cb8f9ce6a09050161e6ddd5d1d5b36f1e381595a70bd6c646096521"
           }
         }
       ],
@@ -74650,11 +76491,11 @@
       "updated_at": "2026-11-23T18:59:22.710170537Z",
       "seal": {
         "by": "server",
-        "mac": "ed7cf5c2eea5437231e5f3f3e1f689c7ebe971971518bc66ddf843692bb51719"
+        "mac": "3284393fc5ba9899d002079e12ee9a7a91ebe0fd22755b1b43e9dd3a3479eb5c"
       }
     },
     {
-      "id": "CLM-0927",
+      "id": "CLM-0947",
       "statement": "The AWS clients sit behind the SecretReader and TokenSigner traits, and the tests of the credential kinds use mocks of those traits, not the real AWS clients.",
       "kind": "interface",
       "level": "component",
@@ -74662,7 +76503,7 @@
       "verification_method": "inspection",
       "source": "issue #967: 'AWS clients mocked behind a trait in tests'; PR body: 'The AWS clients are behind the SecretReader and TokenSigner traits and mocked in tests'",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/credentials.rs",
@@ -74676,7 +76517,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1302",
+          "id": "EVD-1342",
           "kind": "inspection",
           "locator": "src/stores/credentials.rs:237,294 (traits); src/stores/registry.rs:857-940 (MockSecrets, ClockSigner)",
           "summary": "SecretReader and TokenSigner are traits; AwsSecretReader/AwsTokenSigner (627,690) are the real ones. Registry tests inject ClockSigner and MockSecrets through Providers::new; credentials tests use FixedSecret and a signer mock. No test constructs Providers::aws for the AWS kinds (with_environment is used only by env tests, which never reach AWS).",
@@ -74694,7 +76535,7 @@
           "recorded_at": "2026-11-23T18:57:40.243461506Z",
           "seal": {
             "by": "server",
-            "mac": "61ed7c61e5413abd442a5fd85d6f431343add0475bc041e37f0a6a8d4422b8cd"
+            "mac": "50c9a51afd2c737303a7f957ef9ff0ca0f122c7039af919a7c4cd0850327aa28"
           }
         }
       ],
@@ -74704,12 +76545,12 @@
           "rationale": "Traits exist and every test of the AWS kinds injects mocks via Providers::new.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1302"
+            "EVD-1342"
           ],
           "recorded_at": "2026-11-23T18:59:22.773660349Z",
           "seal": {
             "by": "server",
-            "mac": "63ecc9f8329ad23bdc1aa49f7b2b2c3387e0f421a8c44916d401f31fb2d24aa3"
+            "mac": "531274e541240e5a301050b38f97a2710c9332715ead282e8efc4ad7d07f51cf"
           }
         }
       ],
@@ -74717,11 +76558,11 @@
       "updated_at": "2026-11-23T18:59:22.773660349Z",
       "seal": {
         "by": "server",
-        "mac": "4f408bef032e8ffe7dbd87e6169db4026540e9dc9e5636a852bcc18db2c15f7c"
+        "mac": "33f88081e40a93103e666b442966d401a19409302130580c783c8a250e4470e2"
       }
     },
     {
-      "id": "CLM-0928",
+      "id": "CLM-0948",
       "statement": "The real AWS clients load one aws_config::defaults(BehaviorVersion::latest()) chain, the same default chain the SES mailer loads, and no other AWS configuration path (profile, region or credential provider of their own) is added.",
       "kind": "constraint",
       "level": "component",
@@ -74729,7 +76570,7 @@
       "verification_method": "analysis",
       "source": "issue #967: 'reuse the aws-config chain the server already uses for SES (no second AWS config path)'; PR body: 'the default chain the SES mailer also uses, and no other AWS config path was added'",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/credentials.rs",
@@ -74743,7 +76584,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1303",
+          "id": "EVD-1343",
           "kind": "inspection",
           "locator": "src/stores/credentials.rs:603-615 vs src/mail/ses.rs:76-88",
           "summary": "LazySdk::get calls aws_config::defaults(BehaviorVersion::latest()).load(), once, shared by both clients (Providers::aws, lines 354-365). SES calls the same aws_config::defaults(BehaviorVersion::latest()) with an explicit .region(...) from the default region provider. The only aws_config entry points in src are these two; the store side uses the chain's own region, falling back to the RDS host's or the ARN's region. It is a second call site of the same defaults chain (not a shared instance), with no extra profile/provider config.",
@@ -74761,7 +76602,7 @@
           "recorded_at": "2026-11-23T18:57:41.968331746Z",
           "seal": {
             "by": "server",
-            "mac": "c9b506370b9ca3621c32c70d694d5bab7ff7635066b1661b4aead25623ec44d9"
+            "mac": "dad0e893de5428711d4d4e02286825ef793c8df2789e6810c1df04815e2790f4"
           }
         }
       ],
@@ -74771,12 +76612,12 @@
           "rationale": "Same aws_config::defaults(BehaviorVersion::latest()) chain as SES; no profile or provider overrides added. It is a second load() call site (lazy, once per Stores), not a shared SdkConfig with SES; the evidence treats 'no second AWS config path' as 'no different chain'.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1303"
+            "EVD-1343"
           ],
           "recorded_at": "2026-11-23T18:59:22.835668374Z",
           "seal": {
             "by": "server",
-            "mac": "742ae2d01bec4a4c5c919c6dd335ab99a37fd791d9a6214ed54b9cabdc69535d"
+            "mac": "1a64f8df3e0b874563488f27653e2912c5a988f3cdff86f4090e226878c47aa9"
           }
         }
       ],
@@ -74784,11 +76625,11 @@
       "updated_at": "2026-11-23T18:59:22.835668374Z",
       "seal": {
         "by": "server",
-        "mac": "6ce0ccf4cc7d4f3ed928e44e221fdbee51b555c101bdbca614660e5833facbc5"
+        "mac": "930053cdb60e711f6db60b1e9cfa9c2eea54badad2c356597139ad9277853d87"
       }
     },
     {
-      "id": "CLM-0929",
+      "id": "CLM-0949",
       "statement": "Test secrets_manager_credential_is_read_from_the_secret_json passes and asserts that the secret's JSON username and password become the login (extra keys ignored).",
       "kind": "functional",
       "level": "artifact",
@@ -74796,7 +76637,7 @@
       "verification_method": "test",
       "source": "issue #967 named test",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/credentials.rs"
@@ -74809,7 +76650,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1304",
+          "id": "EVD-1344",
           "kind": "test",
           "locator": "tools/agentic/gate.sh narrow --lib stores:: ; src/stores/credentials.rs:902-924",
           "summary": "Test passes in the 33-test run (target/i967-logs/audit-stores.log). It feeds a secret JSON with username, password and extra keys engine and port, asserts fetch yields Credential(Some(okf_app), pw-1), apply sets the username, refresh is OnAuthFailure, and Debug does not print the password.",
@@ -74827,7 +76668,7 @@
           "recorded_at": "2026-11-23T18:57:44.419333298Z",
           "seal": {
             "by": "server",
-            "mac": "d682b174928924eff0552db4461f6275a967dbd99e4fdbf7845a277ad136a25a"
+            "mac": "ffeaa3a497550b023705bd52fd91090446189fb2ef49ba09f402d319cd79c4d9"
           }
         }
       ],
@@ -74837,12 +76678,12 @@
           "rationale": "Test passes and asserts the JSON fields become the login.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1304"
+            "EVD-1344"
           ],
           "recorded_at": "2026-11-23T18:59:22.899750819Z",
           "seal": {
             "by": "server",
-            "mac": "c8477c557d4f82f16b67447327f097c1332f5c4fb567550ea46a78380e7a7b66"
+            "mac": "3af866be8d6bf37a93045c80635889802cd2eba277c028d2120a66936c8030b6"
           }
         }
       ],
@@ -74850,11 +76691,11 @@
       "updated_at": "2026-11-23T18:59:22.899750819Z",
       "seal": {
         "by": "server",
-        "mac": "dc116335ad7c30ffe2ef90954e2189b347f11999b6c93f91ddbb454389f66169"
+        "mac": "c5f596c5f93d5f1cb20057d5ca9b50bd5d40d2c5192e03ec13d72aca3ff3e6f8"
       }
     },
     {
-      "id": "CLM-0930",
+      "id": "CLM-0950",
       "statement": "The iam kind signs the token with aws-sigv4 as a presigned GET of https://HOST:PORT/?Action=connect&DBUser=USER for service rds-db, valid 900 seconds, without the scheme; credential_ref is the database user; aws-sdk-rds is not a dependency.",
       "kind": "functional",
       "level": "unit",
@@ -74862,7 +76703,7 @@
       "verification_method": "test",
       "source": "PR body: 'an RDS IAM token signed with aws-sigv4 (a presigned Action=connect URL for rds-db, 900 seconds); the reference is the database user. aws-sdk-rds is not used.'",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/credentials.rs",
@@ -74876,7 +76717,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1305",
+          "id": "EVD-1345",
           "kind": "test",
           "locator": "src/stores/credentials.rs:1006-1050 an_iam_token_is_a_presigned_connect_url_for_the_user; src/stores/credentials.rs:801-850",
           "summary": "Test passes. It asserts the token starts with HOST:PORT/?Action=connect&DBUser=<encoded user>&, has X-Amz-Expires=900, AWS4-HMAC-SHA256, the rds-db credential scope and a signature, no scheme, and that the secret key is absent. presign_token uses aws_sigv4 v4 signing with name rds-db. git grep for aws-sdk-rds finds only a Cargo.toml comment.",
@@ -74894,7 +76735,7 @@
           "recorded_at": "2026-11-23T18:57:45.112729187Z",
           "seal": {
             "by": "server",
-            "mac": "c9fbde722ffbeec58a23cdb80876e2a92ca24283c44a9a0197d635c1727f209b"
+            "mac": "9462e2edcdbb89eeb016540bf858d152392224003356e40d447c2cb82302b0d1"
           }
         }
       ],
@@ -74904,12 +76745,12 @@
           "rationale": "Token-shape test passes with the asserted URL, 900s expiry and rds-db scope; no aws-sdk-rds dependency.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1305"
+            "EVD-1345"
           ],
           "recorded_at": "2026-11-23T18:59:22.963336392Z",
           "seal": {
             "by": "server",
-            "mac": "8b1118d48febab7784ddec03ac4a23890dfbd5358faed1f40f74979bf37dc758"
+            "mac": "a97df160db1009642a0d1e2d9b37a9c9d4a5a9397076aeb2065b84b070bc2326"
           }
         }
       ],
@@ -74917,11 +76758,11 @@
       "updated_at": "2026-11-23T18:59:22.963336392Z",
       "seal": {
         "by": "server",
-        "mac": "5724e0577af81d86829b40f385194efc0ab39e1202d40ea52a3771abc5bd8cdc"
+        "mac": "31eb2039192dc9ac3e9eb406941ec4451b49a82483a2e93b66bef40681e604ae"
       }
     },
     {
-      "id": "CLM-0931",
+      "id": "CLM-0951",
       "statement": "After a store opens, one task per pool whose credential can change replaces the pool's options through Pool::set_connect_options: every 10 minutes for iam, and for iam and secrets-manager when CatalogDb::classify sees a refused login on that pool, at most once per 10 seconds.",
       "kind": "functional",
       "level": "component",
@@ -74929,7 +76770,7 @@
       "verification_method": "test",
       "source": "PR body: 'one task per pool whose credential can change replaces the pool's connect options with Pool::set_connect_options ... every 10 minutes (iam), and when CatalogDb::classify sees a refused login on that pool (at most once per 10 seconds)'",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/credentials.rs",
@@ -74943,7 +76784,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1306",
+          "id": "EVD-1346",
           "kind": "test",
           "locator": "src/stores/credentials.rs:473-600 (spawn_keeper, keep_current); src/stores/mod.rs:259-270 (classify); tests the_keeper_replaces_the_login_on_its_timer..., an_auth_failure_refreshes_once_however_many_attempts_failed (paused clock); registry a_refused_login_on_an_open_pool_fetches_a_fresh_one...",
           "summary": "spawn_keeper applies credential.apply(base) through pool.set_connect_options (credentials.rs ~519-521); refresh Every(10 min)=IAM_REFRESH_EVERY (line 56), OnAuthFailure for secrets-manager, none for env; classify raises the Notify on SQLSTATE 28 (mod.rs:259-270); keep_current sleeps MIN_REFRESH_GAP=10s after each refresh (line 596). Paused-clock tests assert timer at 600s and one refresh for three signals plus gap; registry tests assert the refused connection, the single extra signature, and a successful next begin. All pass in the 33-test run.",
@@ -74961,7 +76802,7 @@
           "recorded_at": "2026-11-23T18:58:08.202854008Z",
           "seal": {
             "by": "server",
-            "mac": "a10947ce852692ec280a3ba52132a1f45a360f5132a79a380289021290e1bf05"
+            "mac": "6d66eaa0ac4f944a35ed6835988870656ceeac85346f33e4b553e0057945258e"
           }
         }
       ],
@@ -74971,12 +76812,12 @@
           "rationale": "Code and passing tests show the 10-minute timer, the auth-failure trigger through classify, the 10-second gap and set_connect_options use.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1306"
+            "EVD-1346"
           ],
           "recorded_at": "2026-11-23T18:59:23.027250756Z",
           "seal": {
             "by": "server",
-            "mac": "bb1c418dde4daf69473e57ecb4574ee1c0fe28d3b826b9dc6f8dc53d6261e853"
+            "mac": "53e306de6f20ee42dd8c7cc0f40cda1497e7de42eb2a56c36cfe1249b27021ad"
           }
         }
       ],
@@ -74984,11 +76825,11 @@
       "updated_at": "2026-11-23T18:59:23.027250756Z",
       "seal": {
         "by": "server",
-        "mac": "1fa7e22a3c814febafbb582778959224d7dadf525a5ce63f8347df7a3d43c164"
+        "mac": "55cf6289ce3066de117c1e06efc66b2767be1b8921f54ab93c079e41d12f5b4c"
       }
     },
     {
-      "id": "CLM-0932",
+      "id": "CLM-0952",
       "statement": "Test iam_replacement_connection_after_the_first_token_expires_uses_a_fresh_token passes and asserts that a new physical connection opened after the first token expired (while the first is still held) authenticates with the fresh token, while the old token is refused by the database.",
       "kind": "functional",
       "level": "artifact",
@@ -74996,7 +76837,7 @@
       "verification_method": "test",
       "source": "issue #967 named test; plan Task 9",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/registry.rs"
@@ -75009,7 +76850,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1307",
+          "id": "EVD-1347",
           "kind": "test",
           "locator": "src/stores/registry.rs:1044-1105 iam_replacement_connection_after_the_first_token_expires_uses_a_fresh_token",
           "summary": "Test passes (15.29s run). Opens a store as a role with password token-0, holds the first connection, moves the test clock past 900 and sets the role password to token-1, waits for two further refreshes, acquires a second physical connection and asserts current_user == role, then connects directly with token-0 and asserts is_auth_failure. Waits on the refresh counter, not a sleep; the real 10s MIN_REFRESH_GAP makes it take ~10s+.",
@@ -75027,7 +76868,7 @@
           "recorded_at": "2026-11-23T18:58:10.620937700Z",
           "seal": {
             "by": "server",
-            "mac": "caf2954d498cf0b586ab86b3519ad38f2511fe0740eda41d045463e9229cbdc4"
+            "mac": "5090a1edf1ea9de112e508acc293654f734bae2e77567497096e19c17d5c6eb7"
           }
         }
       ],
@@ -75037,12 +76878,12 @@
           "rationale": "Test asserts a second physical connection authenticates after expiry and the old token is refused.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1307"
+            "EVD-1347"
           ],
           "recorded_at": "2026-11-23T18:59:23.094464216Z",
           "seal": {
             "by": "server",
-            "mac": "19603260da0fb5f52621d8cfe29c828512e2579d08440adc91aed72c3dac4537"
+            "mac": "641b7f0d41721f4e0028349cfb295b75a8da2f072afd2e63688f0e3bc210dc52"
           }
         }
       ],
@@ -75050,11 +76891,11 @@
       "updated_at": "2026-11-23T18:59:23.094464216Z",
       "seal": {
         "by": "server",
-        "mac": "e57acd5ce391fcf421919673b17e7f79a19db8eb7a97e6a4aebe44befe2599dc"
+        "mac": "9e77b3c9b5e4b2a1b3fca89dba055a292bb7ccd79df58b602ac60b188705fcc4"
       }
     },
     {
-      "id": "CLM-0933",
+      "id": "CLM-0953",
       "statement": "Test iam_auth_failure_refreshes_once_and_retries passes and asserts that a refused first token causes exactly one more signature and one retry, after which the pool works.",
       "kind": "functional",
       "level": "artifact",
@@ -75062,7 +76903,7 @@
       "verification_method": "test",
       "source": "issue #967 named test",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/registry.rs"
@@ -75075,7 +76916,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1308",
+          "id": "EVD-1348",
           "kind": "test",
           "locator": "src/stores/registry.rs:1107-1136 iam_auth_failure_refreshes_once_and_retries",
           "summary": "Test passes. Signer returns a stale token on call 0; the open succeeds, asserts signer.calls == 2, SELECT 1 works through the pool, pools_opened == 1.",
@@ -75093,7 +76934,7 @@
           "recorded_at": "2026-11-23T18:58:10.827332393Z",
           "seal": {
             "by": "server",
-            "mac": "39337b0a91aba22b6920bd80d55e1e0d93531390f9174e6e5628a90cc67b9713"
+            "mac": "9e6ea082d8ff416238add71f7f1a5ff9ac05df73c50a92c8ddbbc4adb6d730e7"
           }
         }
       ],
@@ -75103,12 +76944,12 @@
           "rationale": "Test asserts exactly 2 signatures and a working pool.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1308"
+            "EVD-1348"
           ],
           "recorded_at": "2026-11-23T18:59:23.165551204Z",
           "seal": {
             "by": "server",
-            "mac": "b7b61f90da69ec7582e53bf4cf27d2d36d70950d7b92942b3bdbd161ccebaec3"
+            "mac": "3002bc12aeadb4f365e68135758ea6ca5682ddb1b1d06ae8bcb2f62c52ef34ae"
           }
         }
       ],
@@ -75116,11 +76957,11 @@
       "updated_at": "2026-11-23T18:59:23.165551204Z",
       "seal": {
         "by": "server",
-        "mac": "8a4374f05d009769ccb2ce3a3ac3b34f41235cddeba433eb948cefe6cb0b4002"
+        "mac": "bc881b9888da0c4720c0b90b1c7c9de3e3e69e5b79dd5c66273516876729ccbf"
       }
     },
     {
-      "id": "CLM-0934",
+      "id": "CLM-0954",
       "statement": "Test a_credential_never_appears_in_logs_or_errors passes and asserts that, across failed opens of env, secrets-manager and iam stores, no password, token, secret JSON value, secret ARN or account id appears in the captured tracing output or in the error's Display, Debug or JSON.",
       "kind": "security",
       "level": "artifact",
@@ -75128,7 +76969,7 @@
       "verification_method": "test",
       "source": "issue #967 named test: 'No credential ever reaches logs or errors'",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/registry.rs",
@@ -75142,7 +76983,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1309",
+          "id": "EVD-1349",
           "kind": "test",
           "locator": "src/stores/registry.rs:1345-1455 a_credential_never_appears_in_logs_or_errors",
           "summary": "Test passes. Five failing cases (env, secrets-manager AccessDenied, valid JSON for a nonexistent user, non-JSON, iam), two rounds with a TRACE-level capture subscriber; asserts each failure is StoreUnavailable, and that neither the log nor Display/Debug/JSON of the error contains the password, token, JSON password, ARN, ARN suffix or account id; round two asserts the capture works (log contains 'could not'). Code side: Credential Debug is [redacted], CredentialError holds fixed text/AWS codes only (credentials.rs:79-88,125-150), serde and SDK error text dropped (268-275, 655-672).",
@@ -75160,7 +77001,7 @@
           "recorded_at": "2026-11-23T18:58:10.922020889Z",
           "seal": {
             "by": "server",
-            "mac": "3242365cab5cddc9fadbf99d708d277f291a89782fdf7b0e67e6845c462067d9"
+            "mac": "4f54ae15247ed6959810fb5981edfddb2962441dd2f3b3dff3574606b727f305"
           }
         }
       ],
@@ -75170,12 +77011,12 @@
           "rationale": "Test passes with sentinel checks over logs and replies for five failure cases, and proves the capture works.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1309"
+            "EVD-1349"
           ],
           "recorded_at": "2026-11-23T18:59:23.229994391Z",
           "seal": {
             "by": "server",
-            "mac": "9ff63f77a5460aee463f3af00b97eeb6d2767ebeb20ff274b9ed24289f5eef17"
+            "mac": "83575aebf12b3ae59d4c9c5d3e6308346506daf49c2ef2ccad6e3c06a4950bd8"
           }
         }
       ],
@@ -75183,11 +77024,11 @@
       "updated_at": "2026-11-23T18:59:23.229994391Z",
       "seal": {
         "by": "server",
-        "mac": "198a14df36d429471ca8a4de6b202a5353fa254ea15a2bea6e5531b331d4808c"
+        "mac": "b44254db0d8bbbbacf5ccac53df3f09a67b3c540c95d30ad430f6372399b4860"
       }
     },
     {
-      "id": "CLM-0935",
+      "id": "CLM-0955",
       "statement": "Every connection path keeps Task 8's guarantees: a failed open or a refused login on an open pool yields OkfError::StoreUnavailable, whose message and JSON name neither the store nor the host, port or secret.",
       "kind": "security",
       "level": "component",
@@ -75195,7 +77036,7 @@
       "verification_method": "test",
       "source": "issue #967: 'every connection path keeps Task 8's guarantees (failures are OkfError::StoreUnavailable; the client reply names neither the store nor host/port/secret)'",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/registry.rs",
@@ -75210,7 +77051,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1310",
+          "id": "EVD-1350",
           "kind": "test",
           "locator": "src/stores/registry.rs:335-356,414-446 (open failures -> OpenFailure::Unreachable); src/stores/mod.rs:259-270 (classify); src/error.rs:240-247,330-350; tests a_login_that_stays_refused..., a_refused_login_on_an_open_pool..., a_credential_never_appears...",
           "summary": "Every credential fetch or connect failure in open maps to OpenFailure::Unreachable (store name and detail logged on the local side only); classify maps SQLSTATE 28 on an open pool to OkfError::store_unavailable, whose Display is fixed text without the store. Tests assert matches!(.., StoreUnavailable) for a stays-refused iam open, an env open, and a refused begin on an open pool; the sentinel test checks replies (to_json, Display, Debug) lack credential strings. No test asserts the refused-login reply lacks the store name or host/port specifically; that follows from the variant's fixed message (error.rs:243) and the earlier unreachable-store test (CLM-0910's).",
@@ -75228,7 +77069,7 @@
           "recorded_at": "2026-11-23T18:58:11.018225560Z",
           "seal": {
             "by": "server",
-            "mac": "ab4093b544daaafe171798d780a1f458d1992a07e75cc420d97f09a760966220"
+            "mac": "7a9159354862e3afd396ecd6c7f4010e1d874371ae9845bd57015d1d26fbc02a"
           }
         }
       ],
@@ -75238,12 +77079,12 @@
           "rationale": "All failure paths map to StoreUnavailable with fixed client text; tests assert the variant. Name-absence for the refused-login reply is by construction of the variant rather than a dedicated assertion.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1310"
+            "EVD-1350"
           ],
           "recorded_at": "2026-11-23T18:59:23.294074546Z",
           "seal": {
             "by": "server",
-            "mac": "e953952bd2425cc4e99c820234b182ef6d277e56921db3d01bd1b85b220fe441"
+            "mac": "0dac8ecedf335c8e4148b7cde727b5c6d7c4a3d794c7824460bd6787aa5664cc"
           }
         }
       ],
@@ -75251,11 +77092,11 @@
       "updated_at": "2026-11-23T18:59:23.294074546Z",
       "seal": {
         "by": "server",
-        "mac": "7488da975cb73bcf0ed106c0c71ebdb9a6cd160fc62c81f23ad495ae36e11dc5"
+        "mac": "d459609ac77280b3e5938dbf46df4647f8581c78d2dd3a742ff2614670a47df7"
       }
     },
     {
-      "id": "CLM-0936",
+      "id": "CLM-0956",
       "statement": "The per-store credential task stops when Stores::forget or Stores::forget_all drops the store's registry entry, and a test asserts it for both.",
       "kind": "functional",
       "level": "unit",
@@ -75263,7 +77104,7 @@
       "verification_method": "test",
       "source": "issue #967: 'the per-store IAM refresh task must stop when the store's pool is forgotten'; PR body: 'The task ends when Stores::forget or forget_all drops the registry entry.'",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/registry.rs",
@@ -75277,7 +77118,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1311",
+          "id": "EVD-1351",
           "kind": "test",
           "locator": "src/stores/registry.rs:1270-1310 forgetting_a_store_ends_its_credential_task, forgetting_every_store_ends_their_credential_tasks; src/stores/registry.rs:287-306 (forget settles moka); src/stores/credentials.rs:473-545 (Keeper._stop)",
           "summary": "Both tests pass. The keeper (and its oneshot sender) is owned by OpenStore in the cache; forget/forget_all invalidate and run_pending_tasks, dropping the entry, which closes the stop channel and ends keep_current. Tests open an iam store, assert the watch channel is live, forget (one / all), and wait for the channel to close (30s guard timeout only). CatalogDb holds only the Notify, not the keeper, so a held handle does not keep the task alive.",
@@ -75295,7 +77136,7 @@
           "recorded_at": "2026-11-23T18:58:11.112346763Z",
           "seal": {
             "by": "server",
-            "mac": "e197271b62a7818f6cb6cbd8161912204ca352b4ae733956bbd1dcc9f7c59e60"
+            "mac": "93cfba1751195ef4d85db2e84ec1fa1ae16fd685a12a2976990795724dd13e16"
           }
         }
       ],
@@ -75305,12 +77146,12 @@
           "rationale": "Ownership by the cache entry plus two passing tests for forget and forget_all.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1311"
+            "EVD-1351"
           ],
           "recorded_at": "2026-11-23T18:59:23.358682423Z",
           "seal": {
             "by": "server",
-            "mac": "be728ae62da22921f0e08ef471ec7478f69319cb8d8bb5600a9cf165e1b14c6f"
+            "mac": "3d706a591a62f186d2f1f9a4cf48e8ba8396eb7b890685150f7b3b250fde49b8"
           }
         }
       ],
@@ -75318,11 +77159,11 @@
       "updated_at": "2026-11-23T18:59:23.358682423Z",
       "seal": {
         "by": "server",
-        "mac": "6990ec98fea9181e2642a79dfc71f55073cc7e27984be690f089bfa1bac18192"
+        "mac": "289e0012c47c04804f8dae6b23f5fcdf477b5793ba8b626f6197f9c924d65e2d"
       }
     },
     {
-      "id": "CLM-0937",
+      "id": "CLM-0957",
       "statement": "A login refused (SQLSTATE class 28) while a store opens is fetched again and tried once more, so an iam or secrets-manager store is tried at most twice, and an env credential once.",
       "kind": "functional",
       "level": "unit",
@@ -75330,7 +77171,7 @@
       "verification_method": "test",
       "source": "PR body: 'A login refused while a store opens (SQLSTATE class 28) is fetched again and tried once more; an env credential is tried once.'",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/registry.rs"
@@ -75343,7 +77184,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1312",
+          "id": "EVD-1352",
           "kind": "test",
           "locator": "src/stores/registry.rs:414-446 connect_with_credential; test a_login_that_stays_refused_is_tried_twice_and_no_more (1138-1183)",
           "summary": "attempts_left is 1 for no source or Refresh::Never, else 2; a LoginRefused outcome loops only while attempts remain. Test passes: an always-wrong iam signer is called exactly 2 times, an env credential read exactly 1 time, both opens StoreUnavailable, no pool opened. secrets-manager shares the 2-attempt arm (OnAuthFailure) and is covered by code reading plus the rotated-secret test, not a stays-refused test.",
@@ -75361,7 +77202,7 @@
           "recorded_at": "2026-11-23T18:58:11.190213457Z",
           "seal": {
             "by": "server",
-            "mac": "804cb867ca2009953535d2db0c1f35a8bf81051198d8b82f79b910619625d15e"
+            "mac": "b70df1d56ab408b021aa9e0628e617ffe7939e02f5cf61cd5a42c40e4d6e6e21"
           }
         }
       ],
@@ -75371,12 +77212,12 @@
           "rationale": "Loop logic and passing test show two tries for iam and one for env.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1312"
+            "EVD-1352"
           ],
           "recorded_at": "2026-11-23T18:59:23.435475389Z",
           "seal": {
             "by": "server",
-            "mac": "b3603ba9ecb09c70e962821a9cb95cce5627c70846681148bd44211dd43cc35f"
+            "mac": "6a1e5dfbeaf6ad5ccdcf880f9a28bd90560af233a2c2fa1352c0cd281a803201"
           }
         }
       ],
@@ -75384,11 +77225,11 @@
       "updated_at": "2026-11-23T18:59:23.435475389Z",
       "seal": {
         "by": "server",
-        "mac": "b53572bd80a31bcbbba6c84519afc6347201a57240dfe50f5aa7ba2f4929c29b"
+        "mac": "9bcbdc9dc486b86e7be3a65fa9a9bd6a189c095a13c748adc957764efa14e27c"
       }
     },
     {
-      "id": "CLM-0938",
+      "id": "CLM-0958",
       "statement": "Pool::set_connect_options exists in sqlx-core 0.9.0 at src/pool/mod.rs:555, and the plan note records that location.",
       "kind": "documentation",
       "level": "unit",
@@ -75396,7 +77237,7 @@
       "verification_method": "inspection",
       "source": "issue #967: 'sqlx 0.9 Pool::set_connect_options confirmed and its file:line recorded in the plan note'; PR body",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
@@ -75409,7 +77250,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1313",
+          "id": "EVD-1353",
           "kind": "inspection",
           "locator": "sqlx-core-0.9.0/src/pool/mod.rs:555 (pub fn set_connect_options); docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:342",
           "summary": "In the vendored sqlx-core 0.9.0 (~/.cargo/registry), `pub fn set_connect_options` is at src/pool/mod.rs:555 and connect_options() at :545; pool/inner.rs:342-350 reads the RwLock<Arc<options>> for each new physical connection. The plan note (line 342) cites exactly mod.rs:555, :545 and inner.rs:342-350. Cargo.lock pins sqlx-core 0.9.0.",
@@ -75427,7 +77268,7 @@
           "recorded_at": "2026-11-23T18:58:49.292560333Z",
           "seal": {
             "by": "server",
-            "mac": "2f079bfbd7761b1cc5f77fe4a9bcae6267d7a99f6e69e0f7a1edc9afb46891b5"
+            "mac": "0326bfaab65cc0c99a69a7215b4b42872dec765bbda3e89fe5dba3f17dce2277"
           }
         }
       ],
@@ -75437,12 +77278,12 @@
           "rationale": "Location verified in the vendored crate and recorded in the plan.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1313"
+            "EVD-1353"
           ],
           "recorded_at": "2026-11-23T18:59:23.501061061Z",
           "seal": {
             "by": "server",
-            "mac": "62666baf47e47179d7c767a585856fb7581c97a93ca0897090b60fb1f6f93066"
+            "mac": "fba694a61687ca59d7f314c02664ba4d8675cc41bc6d2190281672b75eaedea7"
           }
         }
       ],
@@ -75450,11 +77291,11 @@
       "updated_at": "2026-11-23T18:59:23.501061061Z",
       "seal": {
         "by": "server",
-        "mac": "9a5936f269d77a6b284ae6366f6e3dbe7c28dfc784c4861b719b59c4e2c3e742"
+        "mac": "94b73d6ebbceec75fa9bab6d59c35894289bfb733cff29f3995c00511b68e238"
       }
     },
     {
-      "id": "CLM-0939",
+      "id": "CLM-0959",
       "statement": "The database user's row shape is decided and recorded in the plan (no user column; env uses the account pool's user, secrets-manager the secret's username, iam the credential_ref), and no migration is added, so Task 11 stays 0041 and Task 12 stays 0042.",
       "kind": "documentation",
       "level": "unit",
@@ -75462,7 +77303,7 @@
       "verification_method": "analysis",
       "source": "issue #967: 'the database user's row shape decided and recorded in the plan; no migration unless needed'; PR body: 'No migration is added'",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
@@ -75476,7 +77317,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1314",
+          "id": "EVD-1354",
           "kind": "analysis",
           "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:340,631; git diff --name-status origin/milestone/958-catalog-stores..HEAD; ls migrations/accounts",
           "summary": "Plan line 340 records the user's place per kind and 'Task 11 stays 0041 and Task 12 stays 0042'; the diff adds no file under migrations/ (only the changelog and credentials.rs added; migrations/accounts ends at 0040). The code matches: EnvCredential gives Credential(None,...) keeping the base user, SecretsManager gives secret.username, Iam gives the row reference as user (credentials.rs:206-330).",
@@ -75494,7 +77335,7 @@
           "recorded_at": "2026-11-23T18:58:49.430964736Z",
           "seal": {
             "by": "server",
-            "mac": "9aeed6298be6dcee4b60e5a79f796887a8d23575e6650ffa758bd54d045a7e7c"
+            "mac": "5776414635c19e8b53933039ef5f89ed3772344c4750a2801ab79133ca8e22cb"
           }
         }
       ],
@@ -75504,12 +77345,12 @@
           "rationale": "Shape recorded, matches the code, no migration added.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1314"
+            "EVD-1354"
           ],
           "recorded_at": "2026-11-23T18:59:23.563937150Z",
           "seal": {
             "by": "server",
-            "mac": "791bd66feec0f1e3bbdc14fa658df1533db3dc659d02f4b1b131e36d1028e679"
+            "mac": "e1a5046987b77ffcc9bbea5f625458318d9016f9d093a17bc31e280ee425c5af"
           }
         }
       ],
@@ -75517,11 +77358,11 @@
       "updated_at": "2026-11-23T18:59:23.563937150Z",
       "seal": {
         "by": "server",
-        "mac": "91835be89fc8fa50f52e1a5caf43c0d92494a105a899aab8c44cd6eb43e5c7fe"
+        "mac": "313925108b2fa8ea00bb3dd4f44834df47aead1a9c53960c6562da6557f239ef"
       }
     },
     {
-      "id": "CLM-0940",
+      "id": "CLM-0960",
       "statement": "The plan carries a dated '> **Corrected (issue #967, 2026-11-23).**' note under Task 9, and no later task of the plan still describes the changed symbols or the user/token mechanism in a contradicting way.",
       "kind": "documentation",
       "level": "artifact",
@@ -75529,7 +77370,7 @@
       "verification_method": "analysis",
       "source": "issue #967: 'plan corrected in the same PR with a dated note and later tasks grepped for changed symbols'",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
@@ -75542,7 +77383,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1315",
+          "id": "EVD-1355",
           "kind": "analysis",
           "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:338-345; grep for with_environment|Task 9|until Task 9|set_connect_options|aws-sdk-rds across the plan",
           "summary": "The note at 338 is headed '> **Corrected (issue #967, 2026-11-23).**'. The Tech Stack line (16) and the Placeholders line (631) were updated. Remaining mentions: line 318 ('credential from Task 9 (env only until then)') and the #966 note at 327 ('Task 9 decides the user's place ... secrets-manager and iam, which are StoreUnavailable until then') are historical and remain true as chronology; nothing later references with_environment, aws-sdk-rds or a user column. Tasks 10 and 19 are told in the note how to describe credential_ref.",
@@ -75560,7 +77401,7 @@
           "recorded_at": "2026-11-23T18:58:49.540175507Z",
           "seal": {
             "by": "server",
-            "mac": "2958d5cbd24d5d06e8b6164001f4e98a507d7738046cc13d3e402bf83fcdbc6e"
+            "mac": "fc6f04e640d23236ea749e099ce2ad9db709cf6d1037343427108797d8475d0f"
           }
         }
       ],
@@ -75570,12 +77411,12 @@
           "rationale": "Dated note present; later-task greps find no contradiction (remaining 'until then' mentions are historical).",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1315"
+            "EVD-1355"
           ],
           "recorded_at": "2026-11-23T18:59:23.628613258Z",
           "seal": {
             "by": "server",
-            "mac": "13839e6df685e71e36e60c14072958f76f6213deaec4e8e8c06a9ac24fc6ad47"
+            "mac": "30cc86cf5fcfafebfe8a720e66c245fec03c00148abf6092f3c13d6e9e88a1bb"
           }
         }
       ],
@@ -75583,11 +77424,11 @@
       "updated_at": "2026-11-23T18:59:23.628613258Z",
       "seal": {
         "by": "server",
-        "mac": "e85c4ecfc9391d648b1fc59a390fae7006f75c6eb82feab2ec66c49d7d01574e"
+        "mac": "8b54a0f2f80625ea5ada9763834a34b5e6abca2b0e3416cf96e5e29361642c06"
       }
     },
     {
-      "id": "CLM-0941",
+      "id": "CLM-0961",
       "statement": "Exactly one changelog entry is added under changelog/ for this change.",
       "kind": "documentation",
       "level": "artifact",
@@ -75595,7 +77436,7 @@
       "verification_method": "inspection",
       "source": "issue #967: 'one changelog entry under changelog/'",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "changelog"
@@ -75608,7 +77449,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1316",
+          "id": "EVD-1356",
           "kind": "inspection",
           "locator": "git diff --name-status origin/milestone/958-catalog-stores..HEAD",
           "summary": "Exactly one added file under changelog/: changelog/2026-11-23T18-40-00Z-m21-task-09-store-credential-kinds.md (20 lines, timestamped name).",
@@ -75622,7 +77463,7 @@
           "recorded_at": "2026-11-23T18:58:49.628168695Z",
           "seal": {
             "by": "server",
-            "mac": "95dd15f0eaab256a0bb673a74cb3c57d996d99b83c98a39294dcd3266d7de527"
+            "mac": "c201cc4a9c8c3fd45c100e2cddc29bf89dd4b95d5646bef02b97a518dd66fca2"
           }
         }
       ],
@@ -75632,12 +77473,12 @@
           "rationale": "One changelog file added.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1316"
+            "EVD-1356"
           ],
           "recorded_at": "2026-11-23T18:59:23.697178534Z",
           "seal": {
             "by": "server",
-            "mac": "245d8e9012abd14b2e974a205061e306634f41ca475d8323f86361c5f2911a50"
+            "mac": "a24f9d7257b8cf917848df1c1706152c58efdefde91305cc2040f4b23d5b7d66"
           }
         }
       ],
@@ -75645,11 +77486,11 @@
       "updated_at": "2026-11-23T18:59:23.697178534Z",
       "seal": {
         "by": "server",
-        "mac": "7e607f9c48a6aa9fce1fc6971de5fe4cf3c0f41f9b412cc570d773f82a83e6bd"
+        "mac": "5bc98f73caf1be87530688141adaadea150419c8bbaa93205c2f56f6c34cd837"
       }
     },
     {
-      "id": "CLM-0942",
+      "id": "CLM-0962",
       "statement": "No file in the change names a real hostname, domain, account id or ARN; only placeholders (example names, the 123456789012 documentation account id) appear.",
       "kind": "constraint",
       "level": "artifact",
@@ -75657,7 +77498,7 @@
       "verification_method": "analysis",
       "source": "issue #967: 'no real hostnames, domains, account ids or ARNs in files (placeholders only)'",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores",
@@ -75672,7 +77513,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1317",
+          "id": "EVD-1357",
           "kind": "analysis",
           "locator": "git diff origin/milestone/958-catalog-stores..HEAD | grep -E 'arn:aws|amazonaws|[0-9]{12}|\\.com|\\.me'",
           "summary": "Hits are only: shape comments with REGION placeholders, the AWS documentation account id 123456789012 and 'example'/'sentinel' ARNs, example.abcdefgh.us-east-1.rds.amazonaws.com and db.example.internal in tests, the Cargo.lock registry URL, and AKIDEXAMPLE. No real host, domain, account or ARN.",
@@ -75692,7 +77533,7 @@
           "recorded_at": "2026-11-23T18:58:49.800033801Z",
           "seal": {
             "by": "server",
-            "mac": "f560d8bbb2453e48163cb4791b82095c72c27f8a6d5ad41e6ecc0027a1e36fe9"
+            "mac": "57308e5e9c9ddcfc44304a700311fe401676ec1147ffaa8a1c7233da61052d14"
           }
         }
       ],
@@ -75702,12 +77543,12 @@
           "rationale": "Only placeholders found.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1317"
+            "EVD-1357"
           ],
           "recorded_at": "2026-11-23T18:59:23.767671669Z",
           "seal": {
             "by": "server",
-            "mac": "d06da6ddd192eed94f2bb7a0dc6388139f744a33cd11366eb34edf8e88a9f828"
+            "mac": "13bdd26a643dd78e7164c939d049b6a645e229bcf7c8a7958a3320eda0fbae2f"
           }
         }
       ],
@@ -75715,11 +77556,11 @@
       "updated_at": "2026-11-23T18:59:23.767671669Z",
       "seal": {
         "by": "server",
-        "mac": "7eed3ecae5caf4864a57d91607e9706c7fe42554ef690bdc9eb50936d9bfdb9f"
+        "mac": "b338d6e07e4c0eac8415d50f3096d129d491147648e9c6b217aa026d41573106"
       }
     },
     {
-      "id": "CLM-0943",
+      "id": "CLM-0963",
       "statement": "The new tests are deterministic: no test in the change races a real sleep against an event; the keeper's timers are tested on a paused clock and the registry tests wait on a refresh counter.",
       "kind": "non_functional",
       "level": "artifact",
@@ -75727,7 +77568,7 @@
       "verification_method": "analysis",
       "source": "issue #967: 'tests deterministic (no racing sleeps)'",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/credentials.rs",
@@ -75741,7 +77582,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1318",
+          "id": "EVD-1358",
           "kind": "analysis",
           "locator": "src/stores/credentials.rs:1137,1150,1169 (start_paused); src/stores/registry.rs:1074,1209,1258 (wait_for on the refresh counter)",
           "summary": "The keeper's timer and gap tests use #[tokio::test(start_paused = true)]. Registry tests contain no sleep call; they wait on a watch counter (wait_for) or a closed channel (30s guard only) and drive token expiry by a test-controlled clock value. The iam replacement test waits two refreshes through the real 10s MIN_REFRESH_GAP, so it is slow (~10-20s) but not racy: it asserts only after the counter shows a post-expiry refresh. Residual risk: the 20 ms timer test needs the 'seen+2' refresh to begin after the clock moved, which the comment explains.",
@@ -75759,7 +77600,7 @@
           "recorded_at": "2026-11-23T18:58:49.931411680Z",
           "seal": {
             "by": "server",
-            "mac": "9b757b903485c065052fc2bb8a571dd0b4a60f1f69f726edcb9868a5f58f9fb0"
+            "mac": "6f1e28ac9d0379d2bd1b7de989ea5f766f82551ad15539aa06a14032e842d17c"
           }
         }
       ],
@@ -75769,12 +77610,12 @@
           "rationale": "No sleep in registry tests; paused clock for timers; counter-based waits. Slowness (about 10s in one test from the real gap) is noted, not a race.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1318"
+            "EVD-1358"
           ],
           "recorded_at": "2026-11-23T18:59:23.829657075Z",
           "seal": {
             "by": "server",
-            "mac": "11d803d0e60bdce1fc4a6739f2e9ecf5d23a3d3d7db0202f2f20c1e217b233df"
+            "mac": "7bc057dfb44592143e84cf9ab781feb0c57c65520d28ab559866849b48fcd579"
           }
         }
       ],
@@ -75782,11 +77623,11 @@
       "updated_at": "2026-11-23T18:59:23.829657075Z",
       "seal": {
         "by": "server",
-        "mac": "c0e102afa49ce2085088cd9d80640e6303e119a6918fbd7fa55c1f27ffa724a5"
+        "mac": "0a1ade480c92d053b5e75f5a3775c8f651b1ae4f5d69a680aa79d5ce5ba1d098"
       }
     },
     {
-      "id": "CLM-0944",
+      "id": "CLM-0964",
       "statement": "The stores:: unit tests pass on the head commit: tools/agentic/gate.sh narrow --lib stores:: reports 33 passed, 0 failed.",
       "kind": "functional",
       "level": "artifact",
@@ -75794,7 +77635,7 @@
       "verification_method": "test",
       "source": "issue #967 work order (tests named); PR body Validation",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores"
@@ -75807,7 +77648,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1319",
+          "id": "EVD-1359",
           "kind": "log",
           "locator": "tools/agentic/gate.sh narrow --lib stores:: > target/i967-logs/audit-stores.log",
           "summary": "Log ends 'test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 2905 filtered out; finished in 15.29s'; the four named tests and the forgetting/rotation tests show ok.",
@@ -75815,7 +77656,7 @@
           "recorded_at": "2026-11-23T18:58:50.045641555Z",
           "seal": {
             "by": "server",
-            "mac": "f1c0f34c58786990e8d2712af568e48a3b5198326ad6a5dd026a2355f97d3ab5"
+            "mac": "77a1e761bd71dbfce566c1d07ace8e80540f1e1b56a40eb4f7d5540f9d097688"
           }
         }
       ],
@@ -75825,12 +77666,12 @@
           "rationale": "Gate run on head printed 33 passed, 0 failed.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1319"
+            "EVD-1359"
           ],
           "recorded_at": "2026-11-23T18:59:23.894451063Z",
           "seal": {
             "by": "server",
-            "mac": "1867a56a9b044e54fc76c0e442d5122f81ea585877d1f4376ee41b72c086c63f"
+            "mac": "b4ca5719f4e16b4c8105c544a7a38a39b583b61c6da682a66761e1658d79883a"
           }
         }
       ],
@@ -75838,11 +77679,11 @@
       "updated_at": "2026-11-23T18:59:23.894451063Z",
       "seal": {
         "by": "server",
-        "mac": "154c8ce4ab88fc5789feeb233fe8d411af5d376fb15a8427f77ae585f45f62c0"
+        "mac": "e03d29343c1568a1f31d50906f77c7235440f08702cec4c3e54c02d04d492f13"
       }
     },
     {
-      "id": "CLM-0945",
+      "id": "CLM-0965",
       "statement": "A host row with credential kind env takes its password only from the environment variable named by credential_ref (never the account database's password), and an unset variable makes the store StoreUnavailable.",
       "kind": "security",
       "level": "unit",
@@ -75850,7 +77691,7 @@
       "verification_method": "test",
       "source": "Replaces CLM-0911's env clause after issue #967 moved credential resolution to src/stores/credentials.rs",
       "derived_from": [
-        "CLM-0924"
+        "CLM-0944"
       ],
       "artifacts": [
         "src/stores/credentials.rs",
@@ -75864,7 +77705,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1321",
+          "id": "EVD-1361",
           "kind": "test",
           "locator": "src/stores/credentials.rs:206-220,953-990 env_credential_reads_the_variable_and_keeps_the_base_user; registry a_store_with_no_row_is_not_found_and_an_unset_credential_is_unavailable (794-815)",
           "summary": "EnvCredential::fetch reads only the variable named by credential_ref and errors EnvUnset when absent; the comment states the account password is never sent to another host. Both tests pass in the 33-test run; the registry test asserts an unset variable gives StoreUnavailable.",
@@ -75882,7 +77723,7 @@
           "recorded_at": "2026-11-23T18:59:33.288727289Z",
           "seal": {
             "by": "server",
-            "mac": "1f4c50bb4fae22adf89b78403553d3cea741ebfe3d77bab6a4bcdd231d1db25d"
+            "mac": "cd6657a16bf5f8a06925abd3039eb1c9ad85bbd5d797a5145708e7ac36a9d35c"
           }
         }
       ],
@@ -75892,12 +77733,12 @@
           "rationale": "fetch reads the named variable only and the password is applied over the base options' password; unset variable test passes.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1321"
+            "EVD-1361"
           ],
           "recorded_at": "2026-11-23T18:59:38.563115280Z",
           "seal": {
             "by": "server",
-            "mac": "c7d2b2f257437ca73219e3e613029c29b520318d3f237f78d2d5f159e0fe570e"
+            "mac": "479e4014c461d6347e9e5d473602fcd1147a180c6b79909abc35f0d09528381c"
           }
         }
       ],
@@ -75905,7 +77746,7 @@
       "updated_at": "2026-11-23T18:59:38.563115280Z",
       "seal": {
         "by": "server",
-        "mac": "b915ec5c34c13a0667822e300666ab54751d60975eba52b7089df10f6c9c485b"
+        "mac": "c3d11bf1f05c410b8ddc6d85cdb41cbc00cd53f66f491ed6e2b91f3437de64e4"
       }
     }
   ]

@@ -13,6 +13,7 @@ use sqlx::postgres::PgPool;
 use sqlx::{Postgres, Transaction};
 
 mod credentials;
+pub mod placement;
 mod registry;
 
 pub(crate) use credentials::{is_auth_failure, signal_auth_refused};
