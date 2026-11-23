@@ -25,7 +25,10 @@ const MAX_STORE_NAME_LEN: usize = 63;
 /// hyphens (`^[a-z0-9-]+$`), 1 to 63 characters.
 // The field is private (no `pub`), so the only way to make one is `parse`
 // or `main`: a `StoreName` in hand is always valid.
+// `try_from = "String"` makes serde read a string and then call `TryFrom<String>`
+// (below), so deserializing goes through `parse` like any other constructor.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String")]
 pub struct StoreName(String);
 
 impl StoreName {
@@ -75,6 +78,28 @@ impl StoreName {
     )]
     pub fn main() -> Self {
         Self(MAIN_STORE.to_string())
+    }
+}
+
+impl TryFrom<String> for StoreName {
+    type Error = OkfError;
+
+    /// [`StoreName::parse`] for an owned string, so deserialization validates.
+    ///
+    /// # Arguments
+    /// * `name` - the text to check.
+    ///
+    /// # Returns
+    /// The name, if valid.
+    ///
+    /// # Errors
+    /// [`OkfError::Refused`], as [`StoreName::parse`].
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "delegates to the instrumented `parse`")
+    )]
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        Self::parse(&name)
     }
 }
 
@@ -224,6 +249,29 @@ mod tests {
         }
         assert_eq!(StoreName::main().as_str(), "main");
         assert_eq!(StoreName::main().to_string(), "main");
+    }
+
+    #[test]
+    fn store_name_deserialize_validates_like_parse() {
+        let too_long = format!("\"{}\"", "a".repeat(64));
+        for bad in [
+            r#""Main/invalid""#,
+            r#""""#,
+            r#""shared_1""#,
+            too_long.as_str(),
+            "5",
+            "null",
+        ] {
+            assert!(serde_json::from_str::<StoreName>(bad).is_err(), "{bad}");
+        }
+        // The refusal is the fixed message: it does not echo the input.
+        let error = serde_json::from_str::<StoreName>(r#""Main/invalid""#).unwrap_err();
+        assert!(!error.to_string().contains("Main/invalid"));
+
+        let name = StoreName::parse("shared-1").unwrap();
+        let json = serde_json::to_string(&name).unwrap();
+        assert_eq!(json, r#""shared-1""#);
+        assert_eq!(serde_json::from_str::<StoreName>(&json).unwrap(), name);
     }
 
     #[tokio::test]
