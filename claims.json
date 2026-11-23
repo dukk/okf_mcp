@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 724,
+  "next_claim_seq": 729,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "43ede50592975ad32e73b580e9946b226bc831c69894e49502f69062131eb8f9"
+    "mac": "4833e2e9ab729b48904addf0e9916c68879df6007e8a4a9de5c2a02e9695ff28"
   },
-  "next_evidence_seq": 965,
+  "next_evidence_seq": 977,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "14bf0fd8d7126886c4b417eb3818025823a0ee6aa487dac8db344386be97ac6e"
+    "mac": "65d8ea74f12cb6ec4164d80f752235903adb959fb0bd40dedc89295332b15b18"
   },
   "claims": [
     {
@@ -56130,6 +56130,28 @@
             "by": "server",
             "mac": "ab98dabf9fe890dc88d3d8611e7b35c3e66cd99ddd55dffd1ebda2dbb61e54a1"
           }
+        },
+        {
+          "id": "EVD-0974",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib mail::feedback on ac3e052 (15 passed); src/store/users.rs:1421-1440",
+          "summary": "ac3e052 only rewrote the comment above the DELETE; the SQL (const DELETE_UNDELIVERED_FEEDBACK) still runs on &mut *tx in delete_checked, before the user row delete. The new test deletes alice with a pending row in flight and finds count(*)==0 afterwards.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 1421,
+                "end": 1440
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:44.123923646Z",
+          "seal": {
+            "by": "server",
+            "mac": "a5872a742059eaa96b85c400d489d92c0462533b847935f9af32a5b2f6b569c8"
+          }
         }
       ],
       "verdicts": [
@@ -56193,13 +56215,27 @@
             "by": "server",
             "mac": "e0c9d70e2ba155dc3ba5be7e585cac3e4b1840accbf9b6d68a1d23615b5affbe"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at ac3e052: old anchor lines changed only because the comment was rewritten; the DELETE is unchanged, same tx, tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0974",
+            "EVD-0924"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.725962943Z",
+          "seal": {
+            "by": "server",
+            "mac": "5997f6b9ff27b4a7e00fd92244df688db1d979e68b3bd109e53f48869af0a57d"
+          }
         }
       ],
       "created_at": "2026-11-23T10:45:51.402016283Z",
-      "updated_at": "2026-11-23T11:15:56.163281790Z",
+      "updated_at": "2026-11-23T11:29:59.725962943Z",
       "seal": {
         "by": "server",
-        "mac": "4c557bc3ddfb34b5853307425add6553305946c254b8e40203d69d253bd83f67"
+        "mac": "bd3017db186a9a9aa03c48fe6ea2c7e559bc0ad21cab83c17c696bb4a30f54e5"
       }
     },
     {
@@ -56396,6 +56432,28 @@
             "by": "server",
             "mac": "c1f3074c00a0ad7324e18b960e05eac2db131afbd91ae94b2cfbee772db8f6f4"
           }
+        },
+        {
+          "id": "EVD-0975",
+          "kind": "inspection",
+          "locator": "src/store/users.rs:963-964, 1435-1438 at ac3e052",
+          "summary": "The DELETE text (user_slug = $1 AND status IN ('pending','failed')) is unchanged by ac3e052, which only edited the comment above it; the sent-row and other-user filters therefore still hold. The survivor test is outside this commit's hunks.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 960,
+                "end": 964
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:44.166048393Z",
+          "seal": {
+            "by": "server",
+            "mac": "08c87a57f80705a5ddd5655bba2c626260a3d571f5758be8fc33541195ce655f"
+          }
         }
       ],
       "verdicts": [
@@ -56438,13 +56496,27 @@
             "by": "server",
             "mac": "279b1b4af1204823e8ce8858345145d9e0650de902f8af8aa84e77c71e707670"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at ac3e052: the anchor changed only by the comment rewrite; the DELETE's sent and user_slug filters are unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0975",
+            "EVD-0964"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.792350537Z",
+          "seal": {
+            "by": "server",
+            "mac": "b2d07595156e77122566154deec5ed60b06cccc5115491a5606096f6621b20c9"
+          }
         }
       ],
       "created_at": "2026-11-23T10:45:51.402016283Z",
-      "updated_at": "2026-11-23T11:15:56.121718402Z",
+      "updated_at": "2026-11-23T11:29:59.792350537Z",
       "seal": {
         "by": "server",
-        "mac": "db292879e467866aa5ec61c43d9d671c45ddb4f0a2bc623cbaeac58a31b1645c"
+        "mac": "ea1e53b416464914c01810dc7c2554ac587485239419ad8055f619dc2902ee3a"
       }
     },
     {
@@ -56489,6 +56561,28 @@
             "by": "server",
             "mac": "bcb6132c4acd93ba507f3032f2a58e09c6db033c5b4f94d9e104681d913904ef"
           }
+        },
+        {
+          "id": "EVD-0973",
+          "kind": "test",
+          "locator": "cargo gate narrow --lib mail::feedback: a_delivery_in_flight_is_not_cancelled_by_user_deletion_and_never_retried ... ok",
+          "summary": "After user deletion removed the row, the job's next forward() returned \\\"skipped\\\" and the mock Forminit saw no further post, for both the 200 and the 503 first answer.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 2046,
+                "end": 2054
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:08.498835979Z",
+          "seal": {
+            "by": "server",
+            "mac": "77fe7b4147c98c504bdae1331ae27c33ffbecd8806ce7054cb4648899fe5a2bd"
+          }
         }
       ],
       "verdicts": [
@@ -56504,13 +56598,27 @@
             "by": "server",
             "mac": "1552c2ef983099eb7dec1c230f7d6e423ad1247291cde3ea00dadc631c75f996"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Now backed by a test as well as code reading: after deletion the next try returned skipped with no post, for 200 and 503 first answers.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0927",
+            "EVD-0973"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.673947727Z",
+          "seal": {
+            "by": "server",
+            "mac": "d3277a4cba9dd5dcd20cab0555de11c672bf8a6ac2f03b3a5cd766b54222b14c"
+          }
         }
       ],
       "created_at": "2026-11-23T10:45:51.402016283Z",
-      "updated_at": "2026-11-23T10:47:09.487470923Z",
+      "updated_at": "2026-11-23T11:29:59.673947727Z",
       "seal": {
         "by": "server",
-        "mac": "118d5c031928bb1e35a2269ba67f929a9ba0a95ede0af6d6c6a7047e030f0c8c"
+        "mac": "3c622da76b5e66c6f4666fe24d80608568dbb1420fdb5acc07f24cc1f318a5d8"
       }
     },
     {
@@ -56643,6 +56751,28 @@
             "by": "server",
             "mac": "363dacd6830467f4280c46a9c110d390dc436ba656484f60c0102e6e5d165049"
           }
+        },
+        {
+          "id": "EVD-0976",
+          "kind": "inspection",
+          "locator": "docs/operations.md:2783-2805 at ac3e052",
+          "summary": "The Feedback section still shows feedback list and retry, the warning log, the failed-row prune and user deletion; ac3e052 adds the sentences on a post in flight. Retention row (line 158) still says failed feedback is pruned after the same time. Nothing says failed feedback is kept.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2783,
+                "end": 2805
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:44.234412802Z",
+          "seal": {
+            "by": "server",
+            "mac": "80922a18c2720f71def1ce0ca3a69f71b42e073a35a06f87bba98c1c486b9b22"
+          }
         }
       ],
       "verdicts": [
@@ -56671,13 +56801,27 @@
             "by": "server",
             "mac": "67128b7bfe4813bb75740ad9c70b35e0ce95b30c421c4b12d85eb2129cc9fd77"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at ac3e052: the section changed only by the added in-flight sentences; list/retry, prune and deletion statements remain and nothing says failed feedback is kept.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0976",
+            "EVD-0955"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.849906965Z",
+          "seal": {
+            "by": "server",
+            "mac": "cde3514374bf450d55c6383b08b951fd988cd0f8c8d8985fd5e84ed135225bad"
+          }
         }
       ],
       "created_at": "2026-11-23T10:45:51.402016283Z",
-      "updated_at": "2026-11-23T11:03:20.030273852Z",
+      "updated_at": "2026-11-23T11:29:59.849906965Z",
       "seal": {
         "by": "server",
-        "mac": "49ae82f5293c0d01a95726bda4f57a3e5e2e7b28df76a0b4dd71f624c4704314"
+        "mac": "db6e2f2d4b1bf6c6ffa7077d0cc932e19ba2e6b98080d70bfc5f480ed241eb48"
       }
     },
     {
@@ -57177,6 +57321,439 @@
       "seal": {
         "by": "server",
         "mac": "bd8e9c715c31120b8a684772d0d383f21090a168d98f9506acf5eec20d2f3fbb"
+      }
+    },
+    {
+      "id": "CLM-0724",
+      "statement": "User deletion (`store::users::delete`, `delete_checked`) does not wait for, or cancel, a feedback post the worker already claimed with `take`: no lock on the user or feedback row is held across `Forminit::post`, so such a post can still reach Forminit after the deletion commits.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Commit ac3e052 message and changelog: 'A post the worker claimed before the deletion is not cancelled and can still reach Forminit ... the deletion does not wait for it'",
+      "source_anchor": {
+        "path": "src/store/users.rs",
+        "lines": {
+          "start": 1422,
+          "end": 1440
+        },
+        "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/mail/feedback.rs",
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0965",
+          "kind": "inspection",
+          "locator": "src/mail/feedback.rs:993-1005, 1067-1080",
+          "summary": "take is a single autocommit UPDATE on the pool (no transaction, no SELECT FOR UPDATE); forward then awaits Forminit::post holding no connection, row lock or user lock. delete_checked's DELETE runs in its own tx and never references the worker.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1067,
+                "end": 1082
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.450866066Z",
+          "seal": {
+            "by": "server",
+            "mac": "7a365b81c87b92922bcf753492c81740773b05d53ac9355a5c76a07ea90311b7"
+          }
+        },
+        {
+          "id": "EVD-0966",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib mail::feedback (15 passed; 0 failed), log target/i698-logs/audit-narrow.log",
+          "summary": "The test holds the mock post after take, then runs delete() under a 30 s timeout whose expect would fail if the deletion waited on the post; it completes, then the held post is released and still reaches the mock (mock.seen().len()==1). Passed for both answers.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1989,
+                "end": 2055
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.543880025Z",
+          "seal": {
+            "by": "server",
+            "mac": "db5c00a7560f8fa7f3bd3abc068a5de584d25c667ad01eb28ab801c57ff85c97"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "take is an autocommit UPDATE and post runs with no lock held; the passing test shows the deletion completes within the timeout while the post is held and the held post still reaches Forminit.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0965",
+            "EVD-0966"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.349426765Z",
+          "seal": {
+            "by": "server",
+            "mac": "68b1d124d7c6504ae8ab132fe741c57b240247a76b11ec2c8d98c2a83817786b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:28:43.582166763Z",
+      "updated_at": "2026-11-23T11:29:59.349426765Z",
+      "seal": {
+        "by": "server",
+        "mac": "fa86918a999b85447a67de5a28523f4c9ad783300bf2c1e55d4c727ca14e0aa2"
+      }
+    },
+    {
+      "id": "CLM-0725",
+      "statement": "Every feedback worker try either claims its row (`take`) before the user deletion commits or, if it claims after, finds no row and ends as \"skipped\" with no post, because take's UPDATE and the deletion's DELETE contend on the same row.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "Commit ac3e052: 'no try that claims its row after the deletion commits posts it'",
+      "source_anchor": {
+        "path": "src/mail/feedback.rs",
+        "lines": {
+          "start": 22,
+          "end": 29
+        },
+        "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/mail/feedback.rs",
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0967",
+          "kind": "analysis",
+          "locator": "src/mail/feedback.rs:993-1005 (take), src/store/users.rs:963-964, 1435-1438 (DELETE)",
+          "summary": "take is UPDATE ... WHERE id=$1 AND status='pending' RETURNING; the deletion is DELETE ... WHERE user_slug=$1 AND status IN ('pending','failed'). Both write the same row, so Postgres serialises them: if the DELETE commits first, the UPDATE matches no row, fetch_optional gives None and forward returns (Ok, \\\"skipped\\\") before any post (feedback.rs:1074). If take commits first the row was claimed. No third path.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 993,
+                "end": 1005
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.594132380Z",
+          "seal": {
+            "by": "server",
+            "mac": "d3bdc9b9186df7447a5cb5a131c0bb9e409ebfaebd1b2ff3108255a7bfca20a2"
+          }
+        },
+        {
+          "id": "EVD-0968",
+          "kind": "test",
+          "locator": "mail::feedback::tests::a_delivery_in_flight_is_not_cancelled_by_user_deletion_and_never_retried (passed)",
+          "summary": "Covers only the sequential 'after' side: a take after the deletion returns skipped and posts nothing (mock.seen stays 1). The test does not run take concurrently with an uncommitted DELETE, so the lock-contention part rests on Postgres semantics, not a test.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 2046,
+                "end": 2054
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.638360800Z",
+          "seal": {
+            "by": "server",
+            "mac": "9e4fc2d1f982a3d76018b61bc8f2581b61a1871f9f0f651fa3aa8217a25536af"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "take's UPDATE and the deletion's DELETE write the same row, so Postgres orders them; a take after the commit matches no row and forward returns skipped before any post (the sequential case is also tested). The truly concurrent interleaving (take blocked on an uncommitted DELETE) rests on Postgres row-lock semantics and is not exercised by a test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0967"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.417693427Z",
+          "seal": {
+            "by": "server",
+            "mac": "e47bb8db0a484b38e000c2e88135f81cf6582f2974cf7d65fac8ae46110555be"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:28:43.582166763Z",
+      "updated_at": "2026-11-23T11:29:59.417693427Z",
+      "seal": {
+        "by": "server",
+        "mac": "d7af6e0311c9e12741aa8395967f16f5d714c877be5cb06569a335c395140f58"
+      }
+    },
+    {
+      "id": "CLM-0726",
+      "statement": "After the user deletion, the in-flight try's outcome (sent via settle, or a retryable failure via settle 'pending') updates no row, so the deleted row is not recreated and later tries do not post it again.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Commit ac3e052: 'the in-flight try's outcome updates no row, so it is not posted again'",
+      "source_anchor": {
+        "path": "src/mail/feedback.rs",
+        "lines": {
+          "start": 22,
+          "end": 29
+        },
+        "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0969",
+          "kind": "inspection",
+          "locator": "src/mail/feedback.rs:1014-1036 (settle), 1083-1160 (forward)",
+          "summary": "settle is UPDATE feedback ... WHERE id=$1 only (no insert/upsert), so on a deleted row it affects 0 rows and returns Ok. Both the 'sent' and the retryable 'pending' paths use it; the retry path only reschedules the apalis job, which on its next take finds no row.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1014,
+                "end": 1036
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.686692217Z",
+          "seal": {
+            "by": "server",
+            "mac": "c77b743e3ea0c3601d0f73e2844d79a8ee3b20e60eb4e7b59a3b22294664b718"
+          }
+        },
+        {
+          "id": "EVD-0970",
+          "kind": "test",
+          "locator": "cargo gate narrow --lib mail::feedback: a_delivery_in_flight_is_not_cancelled_by_user_deletion_and_never_retried ... ok",
+          "summary": "For the 200 case (first == \\\"sent\\\") and the 503 case (first == \\\"retry\\\") the test asserts SELECT count(*) FROM feedback == 0 after the in-flight try settled, then a later forward() returns \\\"skipped\\\" and the mock still saw 1 post.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 2038,
+                "end": 2054
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.734946774Z",
+          "seal": {
+            "by": "server",
+            "mac": "474cc94c02caf39325633a66743f21f60c79bbec78c0a2819681fc039b8c3d91"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "settle is a plain UPDATE by id, a no-op on a deleted row; the test checks zero rows after both a sent and a retry outcome and a skipped later try with no extra post.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0969",
+            "EVD-0970"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.486619962Z",
+          "seal": {
+            "by": "server",
+            "mac": "ea2c72bef284ebf572b517dc598523074608df045b59ce428ae3c0a434346d5b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:28:43.582166763Z",
+      "updated_at": "2026-11-23T11:29:59.486619962Z",
+      "seal": {
+        "by": "server",
+        "mac": "a22a8031f8ef317fd6d63752569fa9b1faa84ead8435e2a4243e620645b6095f"
+      }
+    },
+    {
+      "id": "CLM-0727",
+      "statement": "The test `mail::feedback::tests::a_delivery_in_flight_is_not_cancelled_by_user_deletion_and_never_retried` deterministically (no sleeps; Notify signals in the mock Forminit) holds the post after take, deletes the user meanwhile, and checks that the deletion does not wait, the held post goes out once, the row is not recreated and the next try is skipped, for both a 200 and a 503 answer.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Commit ac3e052 message: 'A test holds the mock post after the claim, deletes the user meanwhile...'",
+      "source_anchor": {
+        "path": "src/mail/feedback.rs",
+        "lines": {
+          "start": 1989,
+          "end": 2055
+        },
+        "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0971",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib mail::feedback: 15 passed, 0 failed",
+          "summary": "The named test passes. Reading it: holds via Hold.arrived/release Notify (notify_one keeps a permit), waits on hold.arrived before deleting, delete under a 30 s timeout, loops over (200,sent) and (503,retry), asserts outcome, seen()==1, row count 0, later=='skipped', seen()==1. No sleep in the test or in the new hold code (the sleeps at feedback.rs:1338 etc. are in other helpers).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1989,
+                "end": 2055
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.783463832Z",
+          "seal": {
+            "by": "server",
+            "mac": "f7b7b564653dc1dd1a38210508a32cf8d6b91866c8dfb490a6d057a66ea6b1c5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test ran and passed (15 passed, 0 failed); it uses Notify handshakes and a timeout, no sleeps, and asserts each listed property for both answers.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0971"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.549425232Z",
+          "seal": {
+            "by": "server",
+            "mac": "aa56bd2fdb152612b06ecfc910d66ed99bb0f71a17695292bcc1599f8966f411"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:28:43.582166763Z",
+      "updated_at": "2026-11-23T11:29:59.549425232Z",
+      "seal": {
+        "by": "server",
+        "mac": "5ebcd826fe617f944c7583806dd3aac30cd9268e103ea729ccd8faf741038a5c"
+      }
+    },
+    {
+      "id": "CLM-0728",
+      "statement": "The changelog, docs/operations.md (Feedback section), the module doc of src/mail/feedback.rs (item 5) and the comment in delete_checked state that no try claiming after the deletion commits posts, that an in-flight post is not cancelled and can reach Forminit, and that its outcome updates no row; none still claims a deleted user's undelivered feedback is never forwarded.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Commit ac3e052 diff of those four files",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 2795,
+          "end": 2805
+        },
+        "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "changelog/2026-11-23T10-38-41Z-issue-698-feedback-failed-rows.md",
+        "docs/operations.md",
+        "src/mail/feedback.rs",
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0972",
+          "kind": "inspection",
+          "locator": "docs/operations.md:2796-2805; changelog ...issue-698...md:16-24; src/mail/feedback.rs:25-29; src/store/users.rs:1422-1434",
+          "summary": "All four texts state: no try that claims/starts after the commit sends; a post already claimed is not cancelled and can still reach Forminit; its outcome updates no row so it is not sent again. Repo-wide grep for 'never forwarded|not forwarded|outlive its sender' finds only migrations/0022_feedback.sql:6 (about the rate-limit table, unrelated) and the delete_checked comment explaining why the rows go; no remaining blanket promise.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2795,
+                "end": 2805
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.830900495Z",
+          "seal": {
+            "by": "server",
+            "mac": "a169d77ad79451cfbc83c33e62e374080ab6d498ada0eb4ea73b1e56413d959e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All four texts carry the narrowed guarantee and a repo-wide search finds no remaining blanket never-forwarded promise.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0972"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.609435090Z",
+          "seal": {
+            "by": "server",
+            "mac": "e9bbe7c5829e3e6dcc62719d19d7e1421838cb31f56e9a712181deffe17d8799"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:28:43.582166763Z",
+      "updated_at": "2026-11-23T11:29:59.609435090Z",
+      "seal": {
+        "by": "server",
+        "mac": "3676f3144aa5918626372b6e84c0d2ae69d06ca023e831df0b6e4f544a402412"
       }
     }
   ]
