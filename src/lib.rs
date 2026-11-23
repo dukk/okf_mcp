@@ -5,7 +5,8 @@
 //! snapshots (`catalog`) and the per-connection overlays (`overlay`), the
 //! database (`db`), API keys (`keys`) and the requests they authenticate
 //! (`auth`), which catalogs a call acts on (`selection`), the catalog store
-//! (`store`), the write path every write tool goes through (`write`), the
+//! (`store`), the database handles that tell the account database from a
+//! catalog store (`stores`), the write path every write tool goes through (`write`), the
 //! configuration file (`config`), the server's shared state and change-feed handlers
 //! (`app`), the bounded caches (`cache`), per-changeset async locks
 //! (`keyed_lock`), outgoing mail and its
@@ -19,6 +20,10 @@
 // toolchain `cargo dylint` builds with overflows its default query depth (128)
 // when it computes the layout of `app::load`'s future.
 #![recursion_limit = "256"]
+// `App::pool()` is deprecated from release 1 of the catalog stores milestone;
+// its ~200 callers move to `accounts()` or a `CatalogDb` in tasks 2 to 6, and
+// task 6 removes this allow with the method.
+#![allow(deprecated)]
 
 pub mod app;
 pub mod archive;
@@ -65,6 +70,7 @@ pub(crate) mod rows_returned;
 pub mod selection;
 pub mod shared;
 pub mod store;
+pub mod stores;
 pub mod telemetry;
 #[cfg(test)]
 pub(crate) mod test_locks;

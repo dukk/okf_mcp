@@ -28,7 +28,7 @@
 - **Code style.** Comments explain Rust-specific constructs for a Python-expert, Rust-novice reader, as in the existing code.
   - Every public item gets a doc comment with `# Arguments`, `# Returns` and `# Errors`.
   - No `.unwrap()` outside tests.
-  - Errors are existing `OkfError` variants where one fits; a new `OkfError::StoreUnavailable { store }` (503) is added in Task 6.
+  - Errors are existing `OkfError` variants where one fits; a new `OkfError::StoreUnavailable { store }` (503) is added in Task 1.
   - Every new function has `#[tracing::instrument(.., skip_all)]` or a reason-bearing `uninstrumented_fn` allow.
 - **Privacy rules** (review checklist items for every task):
   - the `stores` table never holds a credential, and no code path logs one (a connection URL is logged with its password removed, or not at all);
@@ -197,6 +197,8 @@ impl App {
     pub async fn catalog_db(&self, row: &CatalogRow) -> Result<CatalogDb, OkfError>;
 }
 ```
+
+> **Corrected (issue #959, 2026-11-23).** Shipped in Task 1: `CatalogDb::new(store, pool)` is `pub(crate)` (only `Stores` and `App` build one), `StoreName` also implements `Display` and refuses names over 63 characters, `AccountDb::new` is `pub`, and `OkfError::store_unavailable(&StoreName)` is the constructor that logs the store name (local half only); build the error through it, not the bare variant. `App::main_store()` returns `&CatalogDb`, not an owned `CatalogDb`; clone it where an owned handle is needed.
 
 Config keys (`src/config.rs`): `store_max_connections` (u32, default 8, must be > 0), `store_idle_timeout` (humantime, default `10m`), and `store_connect_timeout` (humantime, default `5s`, the time after which `Stores::get` returns `StoreUnavailable`).
 
