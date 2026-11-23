@@ -148,6 +148,7 @@ async fn send(
     let sender = Sender {
         credential: &credential,
         user_slug,
+        registered: true,
         client: CONSOLE_CLIENT,
         credential_kind: "session",
     };
