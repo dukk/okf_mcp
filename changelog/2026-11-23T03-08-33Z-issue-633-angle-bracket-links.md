@@ -5,7 +5,7 @@
   destination, `[x](<a b.md>)` and `[x](<a b.md> "title")`. The destination may
   hold spaces and `)`; it may not hold a line break, `<`, `>` or the
   `\x1c-\x1f` control bytes (the same bytes the plain form excludes), and
-  `[x](<>)` is not a link. `[x](<a)` is still the plain destination `<a`. The
+  `[x](<>)` and `[x](<a)` still read as the plain destinations `<>` and `<a`, as before. The
   new alternative is one more branch of a linear-time `regex` pattern, so
   nothing can backtrack; a test feeds it a 400 KB unclosed `(<`.
 - `LinkMatch::target` and `target_range` exclude the brackets. Every consumer

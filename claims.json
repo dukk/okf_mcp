@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 583,
+  "next_claim_seq": 601,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "ba193a918259a71537052d0889d91b719c6e8a273e6dd1f903bb98b807d4bea8"
+    "mac": "8f7cf5238a869737082a495f1876d4454e6f1ad2721cae34c51b524d700cff89"
   },
-  "next_evidence_seq": 748,
+  "next_evidence_seq": 767,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "d6f58b2da3280fa96103851c6dabbe48d713ed4a30aa2c479286b5e56052fd5d"
+    "mac": "4d8810006973c852852d62e1617514e04f639856906989407edd9cf5907fea0b"
   },
   "claims": [
     {
@@ -46134,6 +46134,1173 @@
       "seal": {
         "by": "server",
         "mac": "c0b252d803ff9443bfa91f82a58834f85fb544f3e1af678d232d5e91f47e2ad3"
+      }
+    },
+    {
+      "id": "CLM-0583",
+      "statement": "Issue #633 is delivered: LINK recognises angle-bracket link destinations and every consumer of find_links picks the form up",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/633",
+      "derived_from": [],
+      "artifacts": [
+        "src/okf/markdown.rs"
+      ],
+      "tags": [
+        "from-issue:633"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0766",
+          "kind": "analysis",
+          "locator": "children of CLM-0583",
+          "summary": "All eight children are supported: find_links and resolve behavior, move, relink, delete (via links_to), snapshot backlinks, links_report and the renderer. Every consumer in the issue goes through find_links except the renderer (pulldown-cmark), which has its own test. Gaps: no delete test and no direct lint test, both reached through find_links.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T03:38:31.823030284Z",
+          "seal": {
+            "by": "server",
+            "mac": "ccf51e7db50df0ed5473f82639ccf3ed4f3f77650c5f3529fad0c9b54568c37c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All child claims are supported; together they cover the issue's requirements.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0766"
+          ],
+          "recorded_at": "2026-11-23T03:38:37.857793920Z",
+          "seal": {
+            "by": "server",
+            "mac": "93a98b8a73799d2959838d511013accdb4eb7e17e1b05a24d20a117f00b32068"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:37.857793920Z",
+      "seal": {
+        "by": "server",
+        "mac": "5bb2bfb5a40eeee393bd9b09eb8136d3b5fba67cc8364daa2b30e9039b17aee5"
+      }
+    },
+    {
+      "id": "CLM-0584",
+      "statement": "find_links returns, for `[x](<a b.md>)` and `[x](<a b.md> \"title\")`, the target `a b.md` without the angle brackets",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #633: 'accept (<...>) destinations, with an optional title, and strip the brackets before resolve_link'",
+      "derived_from": [
+        "CLM-0583"
+      ],
+      "artifacts": [
+        "src/okf/markdown.rs"
+      ],
+      "tags": [
+        "from-issue:633"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0748",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- angle: okf::markdown::tests::find_links_reads_angle_bracket_destinations (ok)",
+          "summary": "Test asserts targets [\"a b.md\",\"a b.md\",\"a(1).md\",\"q)r.md#h\"] for plain and titled angle links, target_range inside brackets, range spanning them. Passed on head; fails when the angle branch of LINK is disabled (scratch copy).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/markdown.rs",
+              "lines": {
+                "start": 634,
+                "end": 645
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:34:47.690631600Z",
+          "seal": {
+            "by": "server",
+            "mac": "8e79a76b24ab66b4989bc7312bce35fd9f0a55591177450dbceeef1f7ed121db"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test asserts exact stripped targets for plain and titled forms and passes; fails when the angle branch is disabled.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0748"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.056993713Z",
+          "seal": {
+            "by": "server",
+            "mac": "b6dad755544f8afc4c983ee3f216839e47c4f8dd39f8fb7c57adc2401822efe5"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.056993713Z",
+      "seal": {
+        "by": "server",
+        "mac": "19737354c6f59d68ab55a4fa62f48c8376d0f2f9ba886e59d5701128e9467242"
+      }
+    },
+    {
+      "id": "CLM-0585",
+      "statement": "resolve_link resolves the targets of `[x](<a b.md>)` and `[x](<a b.md> \"title\")` to the existing file `a b.md`, with a test row for each",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #633: 'find_links and resolve_link_cases rows for [x](<a b.md>) and [x](<a b.md> \"title\")'",
+      "derived_from": [
+        "CLM-0583"
+      ],
+      "artifacts": [
+        "src/okf/markdown.rs"
+      ],
+      "tags": [
+        "from-issue:633"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0749",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- angle: okf::markdown::tests::an_angle_bracket_destination_resolves_like_its_plain_form (ok)",
+          "summary": "Test runs find_links then resolve_link on `[x](<a b.md>)` and `[x](<a b.md> \"title\")`, asserting both give Some(\"infra/a b.md\"); also %20, parenthesised and URL cases. Passed; fails with the angle branch disabled. Note: it is a new test, not a row added to the existing resolve_link_cases table the issue named.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/markdown.rs",
+              "lines": {
+                "start": 681,
+                "end": 691
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:34:47.849420135Z",
+          "seal": {
+            "by": "server",
+            "mac": "d39b3b30fa1d1deb046de2e8f6fce0c7e65820620a19b6cf3217bf71a05a3eec"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test resolves both forms to infra/a b.md through find_links+resolve_link; passes, fails when disabled.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0749"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.114504299Z",
+          "seal": {
+            "by": "server",
+            "mac": "5b044a7a86da8636d882a09ac4c90f9f40426ad4d5ef94efabb3f8a856e0480f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.114504299Z",
+      "seal": {
+        "by": "server",
+        "mac": "956cd611608262865cecd11684c3f98cc033a4c3e7b0162dfa2f40a32f1c05f8"
+      }
+    },
+    {
+      "id": "CLM-0586",
+      "statement": "move_concept rewrites an angle-bracket link to the moved file, with a test that asserts the rewritten text",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #633: 'a move test showing such a link is rewritten'",
+      "derived_from": [
+        "CLM-0583"
+      ],
+      "artifacts": [
+        "src/okf/ops/moves.rs"
+      ],
+      "tags": [
+        "from-issue:633"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0750",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- angle: okf::ops::moves::tests::a_move_rewrites_angle_bracket_links_and_keeps_their_brackets (ok)",
+          "summary": "Test moves infra/time.md to infra/wall clock.md and asserts exact output text: `[t](</infra/wall%20clock.md#ports>)`, `[u](<wall%20clock.md> \"title\")` and the index bullet `[Time](<wall%20clock.md>)`. Passed; fails with the angle branch disabled.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/ops/moves.rs",
+              "lines": {
+                "start": 296,
+                "end": 316
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:34:47.916939410Z",
+          "seal": {
+            "by": "server",
+            "mac": "a69ff382f8d26b2dc5661de6dfbbd2f119866328ef1323fa432e2be2a85aeb0c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Move test asserts the exact rewritten text of angle links in a document and an index bullet.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0750"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.149240092Z",
+          "seal": {
+            "by": "server",
+            "mac": "28b41aaf698d3c4d7cf724da063145927eb5481e131da01d5b6d9d2904814b6b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.149240092Z",
+      "seal": {
+        "by": "server",
+        "mac": "879396f13831cf37d8f8c222dd30a0ce75da83cebddcb469ea84ee8e9a4df515"
+      }
+    },
+    {
+      "id": "CLM-0587",
+      "statement": "relink (rewrite_links) redirects an angle-bracket link to a moved file, with a test",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #633: consumers 'move_concept/relink/delete' pick the form up",
+      "derived_from": [
+        "CLM-0583"
+      ],
+      "artifacts": [
+        "src/okf/ops/relink.rs"
+      ],
+      "tags": [
+        "from-issue:633"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0751",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- angle: okf::ops::relink::tests::an_angle_bracket_link_to_the_moved_file_is_redirected_and_keeps_its_brackets (ok)",
+          "summary": "Asserts `[x](<a b.md#h> \"t\") [y](</moves/a b.md>)` becomes `[x](<c%20d.md#h> \"t\") [y](</moves/c%20d.md>)`. Passed; fails with the angle branch disabled. rewrite_line replaces target_range (relink.rs:190-192).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/ops/relink.rs",
+              "lines": {
+                "start": 508,
+                "end": 524
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:34:48.013515742Z",
+          "seal": {
+            "by": "server",
+            "mac": "a6a615293e8a1a2cbb73723c1d88fed6a669c2a80665fee6601ea71b5c633a40"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Relink test asserts exact redirected output and passes; fails when disabled.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0751"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.183459822Z",
+          "seal": {
+            "by": "server",
+            "mac": "f4e5bbf75e450cc8fac8c47a9cdabab300d41d6111b619597996cb95e04002a1"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.183459822Z",
+      "seal": {
+        "by": "server",
+        "mac": "f1f2646751bf3a93bd7651bfc0930aab69abce1c0b344258aa9f2304568bc4a7"
+      }
+    },
+    {
+      "id": "CLM-0588",
+      "statement": "delete_concept sees angle-bracket links (it finds links via find_links and has no independent link parser)",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #633: consumers 'move_concept/relink/delete' pick the form up",
+      "derived_from": [
+        "CLM-0583"
+      ],
+      "artifacts": [
+        "src/okf/ops/delete.rs"
+      ],
+      "tags": [
+        "from-issue:633"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0752",
+          "kind": "analysis",
+          "locator": "src/okf/ops/delete.rs:141 -> src/okf/ops/relink.rs:284-296 (links_to) -> find_links",
+          "summary": "delete_concept's links_into counts incoming links with relink::links_to, whose only link parser is find_links, so angle links are counted and refuse a delete. delete.rs has no parser of its own. No delete test uses an angle-bracket link (grep of delete.rs for `(<` finds none), so this rests on analysis.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/ops/relink.rs",
+              "lines": {
+                "start": 284,
+                "end": 296
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:34:48.081017126Z",
+          "seal": {
+            "by": "server",
+            "mac": "e0a726946d4966b9bf27b5a040ba40d706728c33292034af57e14cf396da3107"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code path delete -> links_into -> links_to -> find_links has no other parser, so delete sees angle links. No delete-specific test exists; that is a coverage note, not a refutation.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0752"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.217345181Z",
+          "seal": {
+            "by": "server",
+            "mac": "843f270d0a187cc9e12ba1d4898bf76b406e2e7749a62e1ff680891f47712ec8"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.217345181Z",
+      "seal": {
+        "by": "server",
+        "mac": "dff6b2c295f4b2c5cfdb5a8f41d6348cc8f66b41045d0f27a278dfe92effcea9"
+      }
+    },
+    {
+      "id": "CLM-0589",
+      "statement": "The snapshot link graph and backlinks include an angle-bracket link",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #633: 'snapshot link graph, backlinks'",
+      "derived_from": [
+        "CLM-0583"
+      ],
+      "artifacts": [
+        "src/okf/snapshot.rs"
+      ],
+      "tags": [
+        "from-issue:633"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0753",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- angle: okf::snapshot::tests::an_angle_bracket_link_is_a_backlink (ok)",
+          "summary": "Builds a Snapshot with `* [A B](<a b.md>)` in infra/index.md and asserts backlinks(\"infra/a b.md\") sources == [\"infra/index.md\"]. Snapshot builds its graph through find_links (snapshot.rs:594). Passed; fails with the angle branch disabled.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/snapshot.rs",
+              "lines": {
+                "start": 1048,
+                "end": 1064
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:34:48.244945822Z",
+          "seal": {
+            "by": "server",
+            "mac": "3d5b2bf2223c7a65b9f74e73bef58e460fc277132c62e70e6d8232cceee46572"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Backlink test builds a real Snapshot and asserts the angle link is a backlink; fails when disabled.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0753"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.251395401Z",
+          "seal": {
+            "by": "server",
+            "mac": "f7e02ff24380f95c6db0ac7c3223222279337be6f5c4d30ae8a852c6ae941fc3"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.251395401Z",
+      "seal": {
+        "by": "server",
+        "mac": "dc469758416d377c12b58a0ec87a80a3404e9ce57d340a726f21a9e73568c1f0"
+      }
+    },
+    {
+      "id": "CLM-0590",
+      "statement": "lint and links_report treat an angle-bracket link as a link: a missing target is counted broken and an existing one is not",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #633: 'lint, links_report'",
+      "derived_from": [
+        "CLM-0583"
+      ],
+      "artifacts": [
+        "src/okf/analysis/links.rs"
+      ],
+      "tags": [
+        "from-issue:633"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0754",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- angle: okf::analysis::links::tests::an_angle_bracket_link_is_checked_like_any_other (ok)",
+          "summary": "links_report over a catalog with an existing `<a b.md>` link and a missing `<gone x.md> \"t\"` link asserts summary.broken == 1. Passed; fails with the angle branch disabled. links.rs:564 uses find_links. Lint's own path was not separately tested (it shares the snapshot graph).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/analysis/links.rs",
+              "lines": {
+                "start": 701,
+                "end": 714
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:34:48.304908146Z",
+          "seal": {
+            "by": "server",
+            "mac": "a3e1991b0f6619997a2383a07479c0ed24d0681e2528f9b557ebe9d32703080c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "links_report test distinguishes existing from missing angle links (broken == 1); fails when disabled. Lint shares the snapshot graph; no lint-specific test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0754"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.285378101Z",
+          "seal": {
+            "by": "server",
+            "mac": "28363ed621f84695fc4f1f4cb13b772238c4265a25c92ad6a0b5c9f97aacb25b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.285378101Z",
+      "seal": {
+        "by": "server",
+        "mac": "eeede6fafe303975425a1c3050938e0006201877dbd54c3400d879aa49568e46"
+      }
+    },
+    {
+      "id": "CLM-0591",
+      "statement": "The console renderer resolves angle-bracket destinations like the catalog does, with a test",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Issue #633: 'console renderer'",
+      "derived_from": [
+        "CLM-0583"
+      ],
+      "artifacts": [
+        "src/render.rs"
+      ],
+      "tags": [
+        "from-issue:633"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0755",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- angle: render::tests::angle_bracket_destinations_resolve_like_the_catalog_reads_them (ok)",
+          "summary": "Asserts two of three angle links render href `#/browse/main/systems/a%20b.md` and the missing one gets BROKEN_LINK_TITLE once. Passed. It also passes with the angle branch disabled (renderer uses pulldown-cmark), so it pins existing behavior, as the PR says.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/render.rs",
+              "lines": {
+                "start": 818,
+                "end": 836
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:34:48.447946567Z",
+          "seal": {
+            "by": "server",
+            "mac": "5845ad7c86c961655bd150694a06f7c8fca4f9d5177ac158e7fc53f81011e902"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Render test asserts hrefs and broken marker for angle destinations and passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0755"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.319616741Z",
+          "seal": {
+            "by": "server",
+            "mac": "5accaf363fb339c77b2560ca834fef22f938193853cc7c9053c028d30330129f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.319616741Z",
+      "seal": {
+        "by": "server",
+        "mac": "6243fa573a0641736030f72caeebf785748c79083275630e7b62bd876285417b"
+      }
+    },
+    {
+      "id": "CLM-0592",
+      "statement": "PR body: the angle alternative of LINK matches any characters except line breaks, `<`, `>` and the \\x1c-\\x1f control bytes, so spaces and `)` are allowed; `[x](<>)` is not a link and `[x](<a)` is still the plain destination `<a`",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'LINK gains an angle-bracket alternative: any characters except line breaks, <, > and the \\x1c-\\x1f control bytes ... [x](<>) is not a link and [x](<a) is still the plain destination <a'",
+      "derived_from": [],
+      "artifacts": [
+        "src/okf/markdown.rs"
+      ],
+      "tags": [
+        "from-issue:633",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0756",
+          "kind": "demonstration",
+          "locator": "scratch example run (cargo run --example probe on an archive of HEAD): find_links(\"[x](<>)\")",
+          "summary": "find_links(\"[x](<>)\") returns one link with target \"<>\" (the plain alternative matches it), so `[x](<>)` IS a link, with literal destination `<>`. The PR says it is not a link; the test only asserts no empty target. Same as before the change, but the description is wrong. `[x](<a)` gives \"<a\" as claimed.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/okf/markdown.rs",
+              "lines": {
+                "start": 49,
+                "end": 56
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:37:59.509845039Z",
+          "seal": {
+            "by": "server",
+            "mac": "95f34898a7122cc99f50e8677d5664dd2ac768157fa818be82b4b7c8bf945953"
+          }
+        },
+        {
+          "id": "EVD-0757",
+          "kind": "inspection",
+          "locator": "src/okf/markdown.rs:53 (LINK regex)",
+          "summary": "The angle alternative is `<([^<>\\n\\r\\x1c-\\x1f]+)>`: excludes line breaks, `<`, `>` and \\x1c-\\x1f, allows spaces and `)`. Matches the first half of the claim; find_links_rejects_malformed_angle_bracket_destinations covers it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/markdown.rs",
+              "lines": {
+                "start": 49,
+                "end": 56
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:37:59.580803140Z",
+          "seal": {
+            "by": "server",
+            "mac": "9d71c6c114ae25922a6217456cfce176edf92b13ad77656562d91b9749c36b43"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "find_links(\"[x](<>)\") returns a link with target \"<>\", so the description's \"`[x](<>)` is not a link\" is wrong (the character-class half is right, EVD-0757). Behavior is unchanged from before and harmless, the text is what is wrong. Fix: in the PR body, replace \"`[x](<>)` is not a link\" with \"`[x](<>)` still reads as the plain destination `<>`\" (or add a test asserting that).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0756"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.612143152Z",
+          "seal": {
+            "by": "server",
+            "mac": "405c60dc61f94f09c1a7a7e23d8e0703dd0e07de84d4df5d61ea49513121a675"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.612143152Z",
+      "seal": {
+        "by": "server",
+        "mac": "0a22c9a22c0c4ee9919baa6391eec824091b56faa3940e64055a185ffb207763"
+      }
+    },
+    {
+      "id": "CLM-0593",
+      "statement": "PR body: LinkMatch::target and target_range exclude the angle brackets",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'LinkMatch::target and target_range exclude the brackets'",
+      "derived_from": [],
+      "artifacts": [
+        "src/okf/markdown.rs"
+      ],
+      "tags": [
+        "from-issue:633",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0758",
+          "kind": "test",
+          "locator": "okf::markdown::tests::find_links_reads_angle_bracket_destinations (ok)",
+          "summary": "Asserts &line[target_range] == \"a b.md\" and target == \"a b.md\" while range includes `<`/`>` (`[x](<a b.md>)`).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/markdown.rs",
+              "lines": {
+                "start": 634,
+                "end": 645
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:37:59.622635002Z",
+          "seal": {
+            "by": "server",
+            "mac": "7b044991ce873aa315f48279647f9b8e460ccd4314b9a321273f8463eaed6b89"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test asserts target and target_range exclude the brackets.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0758"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.355513069Z",
+          "seal": {
+            "by": "server",
+            "mac": "f07f1cf6a35c685cadf69c27b60bfcdf33191eaf08afc520c9199589bd2e9952"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.355513069Z",
+      "seal": {
+        "by": "server",
+        "mac": "119a5b75594f15be7f30ef29579d9c68442ffa5c88559995c37933a0cacd3e8b"
+      }
+    },
+    {
+      "id": "CLM-0594",
+      "statement": "PR body: relinked_bullet now replaces target_range instead of the text `(<target>`, so a link whose text repeats its destination no longer has the text edited",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'relinked_bullet (moves.rs) ... now replaces target_range ... a link whose text repeats its destination no longer has the text edited'",
+      "derived_from": [],
+      "artifacts": [
+        "src/okf/ops/moves.rs"
+      ],
+      "tags": [
+        "from-issue:633",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0759",
+          "kind": "inspection",
+          "locator": "src/okf/ops/moves.rs:158-175 (relinked_bullet)",
+          "summary": "relinked_bullet now copies up to link.target_range.start, writes encode_link_path(name)+fragment, resumes at target_range.end; the old `replacen(\"(<target>\")` on the whole link text is gone, so link text is never touched. No test pins the repeated-text case (the new moves test does not repeat the destination in the text), so this rests on reading the code.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/ops/moves.rs",
+              "lines": {
+                "start": 144,
+                "end": 177
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:37:59.663553680Z",
+          "seal": {
+            "by": "server",
+            "mac": "c82d92ed74c09a1b908966e90c5a985894656d1cbc6c0d5662125c9b6c129ab4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Diff shows the text replacement replaced by a target_range splice; by construction link text is untouched. Untested for the repeated-text case.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0759"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.392460330Z",
+          "seal": {
+            "by": "server",
+            "mac": "ab5fbac0babd5f78261fb31170e88a7b48743293a84b7548fc375338df163cec"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.392460330Z",
+      "seal": {
+        "by": "server",
+        "mac": "2ea7ec2e7d9d2d543fb77e4e027aabfb60858a4909eaea96f7c3b58674a83d43"
+      }
+    },
+    {
+      "id": "CLM-0595",
+      "statement": "PR body: rewrites preserve the author's angle brackets and write the destination with encode_link_path (`[x](<wall%20clock.md>)`)",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'rewrites preserve the author's brackets and replace only the destination, written with encode_link_path as before'",
+      "derived_from": [],
+      "artifacts": [
+        "src/okf/ops/moves.rs",
+        "src/okf/ops/relink.rs"
+      ],
+      "tags": [
+        "from-issue:633",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0760",
+          "kind": "test",
+          "locator": "moves::tests::a_move_rewrites_angle_bracket_links_and_keeps_their_brackets; relink::tests::an_angle_bracket_link_to_the_moved_file_is_redirected_and_keeps_its_brackets (both ok)",
+          "summary": "Both assert exact output with brackets kept and a percent-encoded destination, e.g. `[Time](<wall%20clock.md>)` and `<c%20d.md#h> \"t\"`.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/ops/moves.rs",
+              "lines": {
+                "start": 296,
+                "end": 316
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:37:59.719916401Z",
+          "seal": {
+            "by": "server",
+            "mac": "48ce50ed16d45c67d7a5aa77e8057e588b4d003dccfff80ed424b556b09e9350"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Two tests assert exact bracket-preserving, percent-encoded output.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0760"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.429092191Z",
+          "seal": {
+            "by": "server",
+            "mac": "7d95a395853551576bf29a60151824744cacdbadc4fda60f69ed9e4f165e1d92"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.429092191Z",
+      "seal": {
+        "by": "server",
+        "mac": "d798e81f6f4566638399d42d64658319959148a3812d8aece76071cf0a562969"
+      }
+    },
+    {
+      "id": "CLM-0596",
+      "statement": "PR body: encode_link_path encodes `<` and `>`",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'encode_link_path encodes < and >, so the brackets stay valid'",
+      "derived_from": [],
+      "artifacts": [
+        "src/okf/markdown.rs"
+      ],
+      "tags": [
+        "from-issue:633",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0761",
+          "kind": "inspection",
+          "locator": "src/okf/markdown.rs:550-557 (encode_link_path `needs` set)",
+          "summary": "The percent-encode set includes '<' and '>' (also covered by the round-trip test with \"caf\\u{e9} <q>.md\").",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/markdown.rs",
+              "lines": {
+                "start": 548,
+                "end": 560
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:37:59.760943840Z",
+          "seal": {
+            "by": "server",
+            "mac": "9aea7afd523c61370d6ada26038ef283e314a86cd8764122f025930fa4ec4e7f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "'<' and '>' are in the encode set at markdown.rs:555.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0761"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.465578120Z",
+          "seal": {
+            "by": "server",
+            "mac": "53018c81af49acca2901a6f7b7e011d423f252f3100cdbed3e4e296f8137a3cd"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.465578120Z",
+      "seal": {
+        "by": "server",
+        "mac": "ec6d8e118bbfe7448eaf255488ab901dc9397f050eb6b6197a0f14aac92e48b3"
+      }
+    },
+    {
+      "id": "CLM-0597",
+      "statement": "PR body: a test feeds find_links a 400 KB unclosed `(<` and the result is empty",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'a test feeds a 400 KB unclosed (<'",
+      "derived_from": [],
+      "artifacts": [
+        "src/okf/markdown.rs"
+      ],
+      "tags": [
+        "from-issue:633",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0762",
+          "kind": "test",
+          "locator": "okf::markdown::tests::find_links_stays_linear_on_unclosed_angle_brackets (ok, 0.02s run)",
+          "summary": "Builds `[x](<` + \"a \".repeat(200_000) (400,000 bytes after the prefix) and asserts find_links is empty. Passed in the 0.02 s run of the 10 angle tests.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/markdown.rs",
+              "lines": {
+                "start": 670,
+                "end": 674
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:37:59.798081973Z",
+          "seal": {
+            "by": "server",
+            "mac": "c83471bc41a6fd16a15f4d80f84eaa5683df10f057d3101002927656ded956b4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test exists with a 400 KB input, asserts empty, passes quickly.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0762"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.502374701Z",
+          "seal": {
+            "by": "server",
+            "mac": "b8d480a5689d12e092c97c70c00b475d57aa706f00c52df73b2fe0aa04f55c63"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.502374701Z",
+      "seal": {
+        "by": "server",
+        "mac": "5e2a5813999031b132f5da9b3a439e2699f4cf536445c4c03fc8cd7b1ca65154"
+      }
+    },
+    {
+      "id": "CLM-0598",
+      "statement": "PR body: tools/agentic/gate.sh lib tests pass (2845 passed) on head",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'gate.sh fmt, lint, dylint, test all green (2845 lib tests passed)'",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:633",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0763",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib (head c29e611): test result: ok. 2845 passed; 0 failed; 2 ignored",
+          "summary": "Reran the whole lib test target on head: 2845 passed, 0 failed, 2 ignored. cargo fmt --check exits 0. The PR also claims lint and dylint gates green; I did not rerun those (only the author's logs exist), and the claim as scoped covers the lib tests only. Note the full `test` gate also runs other targets I did not rerun.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T03:37:59.839328622Z",
+          "seal": {
+            "by": "server",
+            "mac": "d6f8b17a3f74f8e8b48283a76f1a1f8a77aaf84378840e2fcd4fd79e0ad32cd7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reran lib tests on head: 2845 passed, 0 failed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0763"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.539969596Z",
+          "seal": {
+            "by": "server",
+            "mac": "f15e0137c88889f72d69933d94cedd04d772a1dbe4149d571c1d82ffb27559b1"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.539969596Z",
+      "seal": {
+        "by": "server",
+        "mac": "e4bf5f65fc5453032ca79986dc415d07a0115184ba3937d62f97608af72fd738"
+      }
+    },
+    {
+      "id": "CLM-0599",
+      "statement": "PR body: with the angle branch of LINK disabled, 5 of the new tests fail",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'with the angle branch of LINK disabled, 5 of the new tests fail (...: 6 in all with the render test excepted)'",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:633",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0764",
+          "kind": "test",
+          "locator": "cargo test --lib -- angle in an archive of HEAD with the angle alternative of LINK replaced by a never-matching one ([^\\s\\S])",
+          "summary": "6 of the 10 angle tests failed: relink, resolves_like_its_plain_form, find_links_reads, moves, backlink, links report. 4 passed (render, malformed-rejects, linear, an unrelated http::read test). So the count is 6 new tests, not 5; the PR's parenthesis (\"6 in all with the render test excepted\") is self-contradictory with the \"5\".",
+          "stance": "refutes",
+          "recorded_at": "2026-11-23T03:37:59.876457754Z",
+          "seal": {
+            "by": "server",
+            "mac": "7a30bf396200f970389e272206f312b6e2475e5b0410af2fcc0c84ae7a6a79d5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "With the angle branch disabled, 6 new tests fail (find_links, resolve, move, relink, backlink, links report), not 5; the render test passes. Fix: in the PR body change the revert-check line to \"6 of the new tests fail (find_links, resolve, move, relink, backlink, links report); the render test pins existing pulldown-cmark behavior and passes either way\".",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0764"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.646630184Z",
+          "seal": {
+            "by": "server",
+            "mac": "101bafbe89a6381becd8d3edabcd42eefbe9ae999cb5ead514387969c123a3af"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.646630184Z",
+      "seal": {
+        "by": "server",
+        "mac": "654f8d85379bd65199effd3c9eccad3371d2fc4a55b7b2bb910f06f887479d2e"
+      }
+    },
+    {
+      "id": "CLM-0600",
+      "statement": "PR body: the README gains a note on angle-bracket destinations and a changelog entry is added",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: 'README note, changelog entry'",
+      "derived_from": [],
+      "artifacts": [
+        "README.md",
+        "changelog/2026-11-23T03-08-33Z-issue-633-angle-bracket-links.md"
+      ],
+      "tags": [
+        "from-issue:633",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0765",
+          "kind": "inspection",
+          "locator": "git diff origin/main..HEAD -- README.md; changelog/2026-11-23T03-08-33Z-issue-633-angle-bracket-links.md",
+          "summary": "README.md gains a sentence on `* [A](<a b.md>) - x` and the `[x](<a b.md> \"title\")` form; a 25-line dated changelog file is added.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "README.md",
+              "lines": {
+                "start": 541,
+                "end": 548
+              },
+              "commit": "c29e6115209352176a40af710d52a730f4afba67"
+            }
+          },
+          "recorded_at": "2026-11-23T03:37:59.917421112Z",
+          "seal": {
+            "by": "server",
+            "mac": "f933810aac3733efef1d0f73f59ecb31499850f2b19276eb2b16adcbeab7b4c1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both files are in the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0765"
+          ],
+          "recorded_at": "2026-11-23T03:38:27.576970748Z",
+          "seal": {
+            "by": "server",
+            "mac": "5830330ea665a839563be232d05873344dd3dc82483cc6458a524ecb7fbf862e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T03:31:16.042630208Z",
+      "updated_at": "2026-11-23T03:38:27.576970748Z",
+      "seal": {
+        "by": "server",
+        "mac": "c36911362d5485762c287433af13e00a4dfb73845cbf9562cab69475bffb68db"
       }
     }
   ]
