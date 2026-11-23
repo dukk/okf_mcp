@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 756,
+  "next_claim_seq": 760,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "1ae8a1b489ec2f95abce762e34aec881494ba1f4950ddeb99281ba7bbabbe8d6"
+    "mac": "12842eccb66253ddd14ad24047b21047b98a5d1cf7114e90b02b4d6c2cf5fbf2"
   },
-  "next_evidence_seq": 1018,
+  "next_evidence_seq": 1029,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "93d6a056d1f5c7c7c8bfda472a79ff2c55dffa925918b52181cd5d0d4182b6e0"
+    "mac": "13cb7c805b0b9d3f3494c3bc53f17c0e6a8f0e823aa02cc753d9d5ca1dcad9fe"
   },
   "claims": [
     {
@@ -58892,6 +58892,28 @@
             "by": "server",
             "mac": "a8fc061bd04123e7cb48ca73571b63640efd3f6f166d5a6f76a2450387a434d6"
           }
+        },
+        {
+          "id": "EVD-1027",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/search.js at 99f477c; children CLM-0756..0759",
+          "summary": "Rechecked at HEAD: console still names catalogs only when choosing past the cap (search.js:68,105), and the review fix keeps an empty choice, disables Search, and sends no request when nothing is chosen (new children CLM-0756..0759 supported). Core claim unaffected.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/search.js",
+              "lines": {
+                "start": 66,
+                "end": 68
+              },
+              "commit": "99f477cb840b0312b78516497f08fe5134df926e"
+            }
+          },
+          "recorded_at": "2026-11-23T13:26:53.979199724Z",
+          "seal": {
+            "by": "server",
+            "mac": "3786bddd94d3c1407f219615280fb22dbef5fd51b9fced67427e10b232e23f9d"
+          }
         }
       ],
       "verdicts": [
@@ -58933,13 +58955,26 @@
             "by": "server",
             "mac": "b1963cefedf8436fed5d7345df220892e9fa8de2f6825d3098467d4dddb9d233"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Unchanged by the review fix; the console names catalogs only when choosing past the cap, and the new children are supported.",
+          "auditor": "claude-sonnet-5-5-reaudit2",
+          "evidence_ids": [
+            "EVD-1027"
+          ],
+          "recorded_at": "2026-11-23T13:27:05.498368308Z",
+          "seal": {
+            "by": "server",
+            "mac": "d8146ca9d5307903b12379496a471f2405cd5c6991ac97b6ec77af6e8a2430b4"
+          }
         }
       ],
       "created_at": "2026-11-23T12:35:04.533848494Z",
-      "updated_at": "2026-11-23T12:48:57.610550881Z",
+      "updated_at": "2026-11-23T13:27:05.498368308Z",
       "seal": {
         "by": "server",
-        "mac": "1fd17bb42640e0da43c2c4d6156d82771abf27556942e3d5a63704759a9a2d43"
+        "mac": "05c2f5ccc86a84a042e002b9c6705c458b696d5b0e3f2829993266ff99df4d9a"
       }
     },
     {
@@ -59405,6 +59440,28 @@
             "by": "server",
             "mac": "d54269d7deaafb202c9a5c9833823a513259bee1a385d70a3bfc2590ddaa36a9"
           }
+        },
+        {
+          "id": "EVD-1025",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/search.js:22-53,105; tests/ui_e2e/browse.rs:232-262; target/i725-logs/test.log:3401 (ok)",
+          "summary": "At HEAD refresh() still disables unchecked boxes once picked.size >= cap (47), initialChoice slices to cap (23,25), and the request names only chosen via &catalogs=chosen (105). The e2e journey search_past_the_cap_asks_for_a_choice_and_limits_it asserts chooser visible, '2 of at most 2', enabled boxes == [one,three], then 1 hit from three; gate log records it ok. The empty-choice change does not disturb this.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/search.js",
+              "lines": {
+                "start": 28,
+                "end": 61
+              },
+              "commit": "99f477cb840b0312b78516497f08fe5134df926e"
+            }
+          },
+          "recorded_at": "2026-11-23T13:26:53.877187261Z",
+          "seal": {
+            "by": "server",
+            "mac": "bcb0bca97b027a9965d9eb3a7a7c4fbb407f978dd6301000999e03fff90fd60e"
+          }
         }
       ],
       "verdicts": [
@@ -59420,13 +59477,26 @@
             "by": "server",
             "mac": "c5bcff3f8f195f347c3b2bf1f22267bdfa1a69cf4a825787be4ae0f5989e2581"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "At HEAD the cap-disabling and chosen-only request are intact and the e2e journey passes in the gate log.",
+          "auditor": "claude-sonnet-5-5-reaudit2",
+          "evidence_ids": [
+            "EVD-1025"
+          ],
+          "recorded_at": "2026-11-23T13:27:05.347385382Z",
+          "seal": {
+            "by": "server",
+            "mac": "955845037311f74c030dec6aa664329e9ff906e3d96d058ddd37575584007dd0"
+          }
         }
       ],
       "created_at": "2026-11-23T12:35:04.533848494Z",
-      "updated_at": "2026-11-23T12:36:36.036686339Z",
+      "updated_at": "2026-11-23T13:27:05.347385382Z",
       "seal": {
         "by": "server",
-        "mac": "42493ae886d900249b6fcb3012f0e8c0735c9f1c21b10484f79261c207b2118d"
+        "mac": "6b1ca3ba0cc40940e0982c54ce82181c5bbc9bd948c559d757e948bffb910e4b"
       }
     },
     {
@@ -59505,6 +59575,28 @@
             "by": "server",
             "mac": "e5e161d28a1ed1671d5ec4393d5d4650ad9cd4324e5ab5435ad4a09e7d6c731a"
           }
+        },
+        {
+          "id": "EVD-1026",
+          "kind": "inspection",
+          "locator": "tests/ui_e2e/browse.rs:208-221; src/http/ui/js/pages/search.js:68,105; target/i725-logs/test.log:3404 (ok)",
+          "summary": "At HEAD (99f477c) the within-cap test (cap 3, 3 catalogs) still asserts '3 hits', no chooser, exactly one /api/v1/search resource entry, and that its URL lacks 'catalogs='. choosing is false when count <= cap so named is '' (search.js:68,105); a console naming all three would add catalogs= and fail the assertion. Gate log records it ok.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/browse.rs",
+              "lines": {
+                "start": 208,
+                "end": 221
+              },
+              "commit": "99f477cb840b0312b78516497f08fe5134df926e"
+            }
+          },
+          "recorded_at": "2026-11-23T13:26:53.932090015Z",
+          "seal": {
+            "by": "server",
+            "mac": "429db3639cb6d6df69ace80cc78edc5f4f90ec4143273b9b165eb284513aa7bb"
+          }
         }
       ],
       "verdicts": [
@@ -59546,13 +59638,26 @@
             "by": "server",
             "mac": "d8d30d703da546b1f15e8fa691c616cec5b716ac2185622bee74b8a147cb0b0e"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The within-cap journey asserts one search request without catalogs=; it would fail if the console named every catalog; passes in the gate log.",
+          "auditor": "claude-sonnet-5-5-reaudit2",
+          "evidence_ids": [
+            "EVD-1026"
+          ],
+          "recorded_at": "2026-11-23T13:27:05.420894951Z",
+          "seal": {
+            "by": "server",
+            "mac": "5e0c19e9cba1619b0fba5fa1ca4d99752a3f66c0235d57b7f732f6548d4399e3"
+          }
         }
       ],
       "created_at": "2026-11-23T12:35:04.533848494Z",
-      "updated_at": "2026-11-23T12:48:54.254300331Z",
+      "updated_at": "2026-11-23T13:27:05.420894951Z",
       "seal": {
         "by": "server",
-        "mac": "137c4516bb3142729e64de07824810556d8f1ad63cd1dc1553a12e248a27764d"
+        "mac": "61798be75959c6d86a2b8da183ea7949046bad3cc5010635f82e38c4a85269ab"
       }
     },
     {
@@ -59731,6 +59836,18 @@
             "by": "server",
             "mac": "0d48d2664e53ac9551c8bbfc612ef126214672b47ef5aca5c63079e79a782c07"
           }
+        },
+        {
+          "id": "EVD-1028",
+          "kind": "test",
+          "locator": "target/i725-logs/test.log (gate.sh test on 99f477c)",
+          "summary": "After review round 1, gate.sh fmt, lint, dylint and test all exited 0 on head 99f477c: 3388 passed, 0 failed (a first run hit an unrelated signin UI test failure and a Chromium address-in-use flake; the re-run was clean).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T13:27:19.628452253Z",
+          "seal": {
+            "by": "server",
+            "mac": "e93529894a15748e564cfb02dd99a498a2a82276678264777a97ca658efbb413"
+          }
         }
       ],
       "verdicts": [
@@ -59759,13 +59876,26 @@
             "by": "server",
             "mac": "1ba803b03c8da01d25f9996ca1726add0548fe4ef58f33cfb1ed6d1b21b01080"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Final gate log on 99f477c: 3388 passed, 0 failed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1028"
+          ],
+          "recorded_at": "2026-11-23T13:27:22.558524240Z",
+          "seal": {
+            "by": "server",
+            "mac": "4b4bed52561d61001a3e049c373bea8389f49afb2331a1d79f72f1a9a285bd28"
+          }
         }
       ],
       "created_at": "2026-11-23T12:35:04.533848494Z",
-      "updated_at": "2026-11-23T12:52:13.830584581Z",
+      "updated_at": "2026-11-23T13:27:22.558524240Z",
       "seal": {
         "by": "server",
-        "mac": "44e207eb48221d28e9e5ba1f4c30bbfe6cde63c900430beabc71cbd3ef470eb7"
+        "mac": "41b5a02aca328a763564b5889479e2fd96077f4350f70849523e409db351aaf1"
       }
     },
     {
@@ -59924,6 +60054,374 @@
       "seal": {
         "by": "server",
         "mac": "4827005f996f50d1341b2f335b9829011ffb02bed85d66a98f3225ec951e5370"
+      }
+    },
+    {
+      "id": "CLM-0756",
+      "statement": "In the console search chooser, an empty selection is kept as a choice and never restores the default catalogs: initialChoice returns the filtered chosen list whenever chosen is not null, including [].",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR review comment: unchecking every box then submitting restored the default catalogs and searched the deselected ones",
+      "source_anchor": {
+        "path": "src/http/ui/js/pages/search.js",
+        "lines": {
+          "start": 17,
+          "end": 26
+        },
+        "commit": "99f477cb840b0312b78516497f08fe5134df926e"
+      },
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/http/ui/js/pages/search.js",
+        "tests/ui_e2e/browse.rs"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1018",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/search.js:22-26,33",
+          "summary": "initialChoice returns chosen.filter(reachable).slice(0,cap) whenever chosen !== null, so [] is returned as [] with no fall-through to the current-catalog/first-reachable defaults; defaults only apply when chosen is null (initial module state, line 15). chooser stores chosen=[...picked] after every change (line 40).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/search.js",
+              "lines": {
+                "start": 15,
+                "end": 26
+              },
+              "commit": "99f477cb840b0312b78516497f08fe5134df926e"
+            }
+          },
+          "recorded_at": "2026-11-23T13:26:53.491023133Z",
+          "seal": {
+            "by": "server",
+            "mac": "a8cb2c5c1b5e5a2d356f9c063a02536307c4d928eeee0d31df92f817f32028e1"
+          }
+        },
+        {
+          "id": "EVD-1019",
+          "kind": "test",
+          "locator": "tests/ui_e2e/browse.rs:266-310 an_empty_choice_is_kept_and_searches_nothing; target/i725-logs/test.log:3399 (ok)",
+          "summary": "Journey unchecks one and three, re-opens #/search/Needle, and asserts CHECKED == [] ('no default is restored'). Gate log line 3399 records the test ok (full gate 3388 tests on HEAD; I did not rerun it).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/browse.rs",
+              "lines": {
+                "start": 266,
+                "end": 310
+              },
+              "commit": "99f477cb840b0312b78516497f08fe5134df926e"
+            }
+          },
+          "recorded_at": "2026-11-23T13:26:53.565581758Z",
+          "seal": {
+            "by": "server",
+            "mac": "af1cc7747259c900a5827cd0390cbe9cd4f942a2b712b4c8a436b383b2f677ae"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code returns [] as a kept choice when chosen is non-null; the journey asserts no default is restored; gate log shows it passing (not rerun by me).",
+          "auditor": "claude-sonnet-5-5-reaudit2",
+          "evidence_ids": [
+            "EVD-1018",
+            "EVD-1019"
+          ],
+          "recorded_at": "2026-11-23T13:27:05.045429520Z",
+          "seal": {
+            "by": "server",
+            "mac": "4c61c7bf5a7e587a4d281f5d25756d450d08712e5a3e854c5b9fbaf0abddb132"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:26:26.978531464Z",
+      "updated_at": "2026-11-23T13:27:05.045429520Z",
+      "seal": {
+        "by": "server",
+        "mac": "53f21c97d858b5e13abd6d9963a8da567d439d7717be8f6a58c8f012dcdafac0"
+      }
+    },
+    {
+      "id": "CLM-0757",
+      "statement": "With nothing chosen in the console search chooser, Search is disabled, a submit does nothing, and a route opened with a query shows #search-none and sends no search request (never an empty catalogs=).",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR review comment fix: nothing chosen sends no request and never an empty catalogs=",
+      "source_anchor": {
+        "path": "src/http/ui/js/pages/search.js",
+        "lines": {
+          "start": 77,
+          "end": 101
+        },
+        "commit": "99f477cb840b0312b78516497f08fe5134df926e"
+      },
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/http/ui/js/pages/search.js",
+        "tests/ui_e2e/browse.rs"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1020",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/search.js:49,77-82,97-101,105",
+          "summary": "refresh() sets submit.disabled = picked.size===0 (49); onsubmit returns early when choosing && chosen.length===0 (80); render, with a query and nothing chosen, appends #search-none and returns before api.get (98-101). The catalogs= string is only built after that return, so an empty catalogs= cannot be produced when choosing.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/search.js",
+              "lines": {
+                "start": 77,
+                "end": 105
+              },
+              "commit": "99f477cb840b0312b78516497f08fe5134df926e"
+            }
+          },
+          "recorded_at": "2026-11-23T13:26:53.616984866Z",
+          "seal": {
+            "by": "server",
+            "mac": "21c6f5d7ac362161f3cf7124a2ebf09cafe4243f0a963a407b257d73180780fa"
+          }
+        },
+        {
+          "id": "EVD-1021",
+          "kind": "test",
+          "locator": "tests/ui_e2e/browse.rs:266-310; target/i725-logs/test.log:3399 (ok)",
+          "summary": "Journey asserts the Search button is disabled, calls form.requestSubmit() (nothing happens), reopens the route and waits for #search-none, then asserts the count of /api/v1/search resource entries is still 1 (the initial search), i.e. no request sent. Log shows the test ok.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/browse.rs",
+              "lines": {
+                "start": 266,
+                "end": 310
+              },
+              "commit": "99f477cb840b0312b78516497f08fe5134df926e"
+            }
+          },
+          "recorded_at": "2026-11-23T13:26:53.667960163Z",
+          "seal": {
+            "by": "server",
+            "mac": "b056da3c77443b10d2105e06d54fc4bd7b1065b6926f1bbab5254b43cb38e3ec"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Button disabled, onsubmit guarded, render returns before api.get with #search-none; journey asserts disabled button, #search-none and an unchanged request count.",
+          "auditor": "claude-sonnet-5-5-reaudit2",
+          "evidence_ids": [
+            "EVD-1020",
+            "EVD-1021"
+          ],
+          "recorded_at": "2026-11-23T13:27:05.125116657Z",
+          "seal": {
+            "by": "server",
+            "mac": "52e7ee22aa965b42a9bf78babe5fba19cd12658168b1e8e8beef81dff173730b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:26:26.978531464Z",
+      "updated_at": "2026-11-23T13:27:05.125116657Z",
+      "seal": {
+        "by": "server",
+        "mac": "c901b2551ef471a79fcebca86917034cee8aca6764f607612e4f997bcb900a5c"
+      }
+    },
+    {
+      "id": "CLM-0758",
+      "statement": "A catalog that was chosen in the console search chooser but is no longer reachable drops out of the choice (it is not checked and not sent), and nothing replaces it from the defaults.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR review comment fix: names no longer reachable drop out of the choice",
+      "source_anchor": {
+        "path": "src/http/ui/js/pages/search.js",
+        "lines": {
+          "start": 22,
+          "end": 26
+        },
+        "commit": "99f477cb840b0312b78516497f08fe5134df926e"
+      },
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/http/ui/js/pages/search.js",
+        "tests/ui_e2e/browse.rs"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1022",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/search.js:22-23",
+          "summary": "chosen.filter(name => catalogs.includes(name)) removes unreachable names, and with chosen non-null there is no default fill-in, so the result may be empty and is then handled as nothing chosen.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/search.js",
+              "lines": {
+                "start": 22,
+                "end": 26
+              },
+              "commit": "99f477cb840b0312b78516497f08fe5134df926e"
+            }
+          },
+          "recorded_at": "2026-11-23T13:26:53.716763849Z",
+          "seal": {
+            "by": "server",
+            "mac": "20de7a4b372e50f6f2c98a7bc133041068c10c19c532ff822d9b8e921a0d02ae"
+          }
+        },
+        {
+          "id": "EVD-1023",
+          "kind": "test",
+          "locator": "tests/ui_e2e/browse.rs:313-334 a_chosen_catalog_that_is_no_longer_reachable_drops_out_of_the_choice; target/i725-logs/test.log:3367 (ok)",
+          "summary": "Cap 1, three catalogs; initial CHECKED == [one]. The test removes 'one' from store.whoami.catalogs (two remain, still above the cap) and navigates to #/search/needle; asserts #search-none, CHECKED == [] (so two/three do not replace it), and zero search requests. Log shows ok.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/browse.rs",
+              "lines": {
+                "start": 313,
+                "end": 334
+              },
+              "commit": "99f477cb840b0312b78516497f08fe5134df926e"
+            }
+          },
+          "recorded_at": "2026-11-23T13:26:53.772523667Z",
+          "seal": {
+            "by": "server",
+            "mac": "d4b62749748bbe83e4e6aa4c526a3d5d250ce96aa469df8842c6bc807d553819"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The filter drops unreachable names with no default fill; the journey removes the chosen catalog and asserts nothing checked, #search-none, zero requests.",
+          "auditor": "claude-sonnet-5-5-reaudit2",
+          "evidence_ids": [
+            "EVD-1022",
+            "EVD-1023"
+          ],
+          "recorded_at": "2026-11-23T13:27:05.197122639Z",
+          "seal": {
+            "by": "server",
+            "mac": "fda767044234997d9fb144b0f74a77dbb542b9208c7be6ed1940ed9764ffe94e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:26:26.978531464Z",
+      "updated_at": "2026-11-23T13:27:05.197122639Z",
+      "seal": {
+        "by": "server",
+        "mac": "ce594f5a2c6ed38bdaf4a51a1f7bc9bd41ffd4fb20227ac6bf77483df97b308e"
+      }
+    },
+    {
+      "id": "CLM-0759",
+      "statement": "The browse.rs journeys an_empty_choice_is_kept_and_searches_nothing and a_chosen_catalog_that_is_no_longer_reachable_drops_out_of_the_choice would fail under the pre-fix chooser behaviour (empty chosen list falling back to defaults).",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR review comment fix: journeys for the empty choice and the unreachable chosen catalog",
+      "source_anchor": {
+        "path": "tests/ui_e2e/browse.rs",
+        "lines": {
+          "start": 266,
+          "end": 334
+        },
+        "commit": "99f477cb840b0312b78516497f08fe5134df926e"
+      },
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "tests/ui_e2e/browse.rs"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1024",
+          "kind": "analysis",
+          "locator": "git diff f8fe443..HEAD -- src/http/ui/js/pages/search.js (old initialChoice) vs tests/ui_e2e/browse.rs:266-334",
+          "summary": "Old initialChoice did 'kept = filtered chosen; if (kept.length) return kept;' then fell through to defaults. Journey 1: after unchecking both, chosen=[] -> on reopen old code returns [one,three]/defaults so CHECKED != [], a search request fires, #search-none never appears, and the Search button was never disabled (old refresh did not touch it): at least three assertions fail. Journey 2: old kept=[] (one unreachable) falls through to defaults: store.catalog 'one' is not reachable so first=[] and catalogs.slice(0,1)=[two]; CHECKED == [two] != [], a request is sent, no #search-none: fails. Both journeys therefore fail under the old code. Not executed against old code (no builds allowed).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/browse.rs",
+              "lines": {
+                "start": 266,
+                "end": 334
+              },
+              "commit": "99f477cb840b0312b78516497f08fe5134df926e"
+            }
+          },
+          "recorded_at": "2026-11-23T13:26:53.824721548Z",
+          "seal": {
+            "by": "server",
+            "mac": "f9c5416928b2a46a87366f3f10ea76f9cc8ac33b9c62b316382c801666a3aff3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Tracing the old initialChoice (fall through to defaults when the kept list is empty, no submit disabling, no #search-none) through each journey shows assertions that fail. By reading only; the old code was not executed.",
+          "auditor": "claude-sonnet-5-5-reaudit2",
+          "evidence_ids": [
+            "EVD-1024"
+          ],
+          "recorded_at": "2026-11-23T13:27:05.272043915Z",
+          "seal": {
+            "by": "server",
+            "mac": "9b4e0faa7be5dc6c8195de3dc735915618be0966ba8a632fb7bd0f58330d05ac"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:26:26.978531464Z",
+      "updated_at": "2026-11-23T13:27:05.272043915Z",
+      "seal": {
+        "by": "server",
+        "mac": "473c8d9245c0bafae1282b57224721ed1e0f32d356f0867275f10bbdb70c1e64"
       }
     }
   ]
