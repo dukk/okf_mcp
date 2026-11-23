@@ -202,6 +202,13 @@ bounded by catalog selection and does not change.
 > the console names every reachable catalog, so capping a list would have
 > broken it. The cap still applies to every key.
 
+> **Corrected (issue #725, 2026-11-23).** An explicit list is capped too: a
+> request may name at most `search_fanout_max` distinct catalogs (a repeated
+> name counts once), in `GET /api/v1/search` and in MCP `search`, with the
+> same 400. The console no longer names every catalog: a key that reaches no
+> more than the cap names none, and one that reaches more is shown a chooser
+> limited to the cap, which it learns from `GET /whoami`'s `search_fanout_max`.
+
 ### 9. The key cache is split by what each change touches
 
 | Cache | Key | Holds | Invalidated by |

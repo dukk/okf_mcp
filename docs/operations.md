@@ -146,7 +146,7 @@ unknown keys are ignored, so one file serves every version.
 | `credential_cache_entries` | `100000` | The most API keys and OAuth grants each credential cache keeps in memory (one by key hash, one by grant id). A key or grant is read from the database the first time it is used; an unknown one is never cached |
 | `user_cache_entries` | `100000` | The most users the user cache keeps in memory: each one's admin flag, teams, entitlements and live unlocks, read on first use (a ceiling is resolved per catalog from these and the catalog's row, so an entry does not grow with the catalogs a user's teams own) |
 | `credential_ttl` | `"10s"` | How long a cached key, grant or user is served before it is read again. A change (a revocation, a team or admin change) drops it on every replica at once; this bounds how long one survives a change message that is lost |
-| `search_fanout_max` | `25` | The most catalogs `GET /api/v1/search` searches when the request names none, from 1 to 999. A credential that reaches more gets a 400 asking it to name the catalogs (`catalogs=`), so one request cannot search every catalog. MCP `search` is bounded by the connection's selection and does not use it, and neither does the console, which names every catalog it reaches in `catalogs=` |
+| `search_fanout_max` | `25` | The most catalogs one search may cover, from 1 to 999. `GET /api/v1/search` with no `catalogs=` searches every catalog the key reaches and answers 400 when it reaches more. A request that names more than this many distinct catalogs (in `catalogs=` or in MCP `search`'s `catalogs` argument) also gets a 400; a name repeated counts once. The console reads the cap from `GET /whoami` (`search_fanout_max`): a key that reaches no more searches them all, and one that reaches more is shown a chooser limited to the cap |
 | `worker_shutdown_grace` | `"30s"` | How long `serve` waits, once told to stop, for the mail worker to finish the mail in hand. Set the pod's `terminationGracePeriodSeconds` a few seconds above it |
 | `mail.smtp.host`, `mail.smtp.port`, `mail.smtp.starttls`, `mail.smtp.username`, `mail.smtp.password_env` | none, `587`, `true`, none, none | The SMTP relay. `starttls = true` requires STARTTLS; `false` is TLS from the first byte (port 465); there is no plain-text mode. `username` and `password_env` (the environment variable holding the password) go together |
 | `mail.postmark.token_env`, `mail.postmark.message_stream` | none, `"outbound"` | Postmark's server token (by environment variable) and message stream |
@@ -794,7 +794,7 @@ first use.
 - **Lists are queries.** `GET /api/v1/catalogs`, `/whoami`, `/labels` and MCP
   `list_catalogs` page through the directory by name (`after`, `limit`),
   rather than scanning memory; `GET /api/v1/search` refuses to search more
-  than `search_fanout_max` catalogs unless it is told which. See the
+  than `search_fanout_max` catalogs unless it is told which, and refuses to be told more than that many. See the
   [API reference](#api-reference).
 - **Optional: ingress hashing on `Mcp-Session-Id`.** A session works on any
   replica, so nothing depends on this. Routing each session to one replica
@@ -3639,7 +3639,7 @@ key and acts only on the signed-in user's own rows. Every endpoint also takes a 
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/whoami` | any | The calling credential: `key_id`, `name`, `actor`, `access`, `maintenance_report`, `all_catalogs`, `catalogs` (one page of the catalogs it reaches, sorted; see [Catalog listings are paginated](#catalog-listings-are-paginated)) with `next`, `levels` (its level on each catalog of the page, `{catalog: "read"\|"write"\|"admin"}`: for a console session the ceiling's level there, resolved per catalog), `default_catalog`, `kind` (`key`, `oauth` or `session`), `client_name` (a grant's client), `user` (the user it belongs to, `null` when unassigned), `teams` (that user's teams, sorted) and `user_admin` (whether that user is an admin user, `false` without one; the console offers Unlock only when it is true). A session's `key_id` is `session:<user>`, its `name` `null` and its `actor` the user's name. Never a key, token or hash |
+| `GET /api/v1/whoami` | any | The calling credential: `key_id`, `name`, `actor`, `access`, `maintenance_report`, `all_catalogs`, `catalogs` (one page of the catalogs it reaches, sorted; see [Catalog listings are paginated](#catalog-listings-are-paginated)) with `next`, `search_fanout_max` (the most catalogs one search may name), `levels` (its level on each catalog of the page, `{catalog: "read"\|"write"\|"admin"}`: for a console session the ceiling's level there, resolved per catalog), `default_catalog`, `kind` (`key`, `oauth` or `session`), `client_name` (a grant's client), `user` (the user it belongs to, `null` when unassigned), `teams` (that user's teams, sorted) and `user_admin` (whether that user is an admin user, `false` without one; the console offers Unlock only when it is true). A session's `key_id` is `session:<user>`, its `name` `null` and its `actor` the user's name. Never a key, token or hash |
 | `GET /api/v1/session` | console session | `{user, email, admin, csrf, expires_at}`: the signed-in user's name, email and admin flag, the CSRF token writes must send as `X-OKF-CSRF`, and when the session ends at the latest. It holds no ceiling (issue #736): the session's level on each catalog is in `GET /api/v1/whoami`'s `levels`, and `GET /api/v1/me/ceiling` pages the ceiling. 401 without a usable session (a dead cookie is cleared); a bearer credential gets 403 |
 | `DELETE /api/v1/session` | console session | Signs out: deletes the session and clears the cookie; 204. Needs `X-OKF-CSRF` (403 without); a bearer credential gets 403 |
 
@@ -4027,7 +4027,7 @@ whole body and scrolls to that heading.
 | `GET /api/v1/catalogs/{catalog}/revisions/{n}/{path}` | read | `text` at revision `n` (null for a deletion or non-text bytes) and a unified `diff` from revision `n-1` |
 | `GET /api/v1/catalogs/{catalog}/documents/{path}` | read | `read_document` (any `index.md` or `log.md`, the root `AGENTS.md`) plus `body_html` |
 | `GET /api/v1/catalogs/{catalog}/recent-changes?limit=&after=` | read | The catalog's published revisions, newest first: `{catalog, catalog_label, changes, next_after}`, each change `{path, title, description, revision, op, actor, actor_label, message, at}` (`title` and `description` as the catalog has the document now; null for a deletion or a document gone since), content left out. Revisions sharing a time come by path, then revision, both descending. `limit` 1..=200 (default 50; outside is 409); `after` is the previous page's `next_after` (an unknown or malformed one is 404); `next_after` is `null` on the last page |
-| `GET /api/v1/search?q=&catalogs=&limit=` | read | The `search` tool. `catalogs` is comma-separated and defaults to every catalog the key reaches, if it reaches at most `search_fanout_max` (25); past that, leaving `catalogs` out is a 400 (`InvalidPath`, "name the catalogs to search (at most 25 are searched by default)"). A named catalog it does not reach is a 404. Each hit also has `snippet_text`: the text of the snippet's block from its line on, without markdown syntax, cut to 160 characters with an ellipsis (null without a snippet) |
+| `GET /api/v1/search?q=&catalogs=&limit=` | read | The `search` tool. `catalogs` is comma-separated and defaults to every catalog the key reaches, if it reaches at most `search_fanout_max` (25); past that, leaving `catalogs` out is a 400 (`InvalidPath`, "name the catalogs to search (at most 25 are searched by default)"). Naming more than `search_fanout_max` distinct catalogs is also a 400 (`InvalidPath`, "name at most 25 catalogs to search at once"); a repeated name counts once. A named catalog it does not reach is a 404. Each hit also has `snippet_text`: the text of the snippet's block from its line on, without markdown syntax, cut to 160 characters with an ellipsis (null without a snippet) |
 
 A catalog the key does not reach, or that does not exist, is 404 on all
 eight.
@@ -4757,7 +4757,8 @@ take the server out of service. Alert on the `error` log line, not on
   - **Response shapes:** `GET /api/v1/catalogs`, `/whoami`, `/labels` and
     MCP `list_catalogs` return one page (`next` is present when more follow;
     send it back as `after`), and `GET /api/v1/search` answers 400 when no
-    catalogs are named and the key reaches more than `search_fanout_max`.
+    catalogs are named and the key reaches more than `search_fanout_max`,
+    or when more than that many distinct catalogs are named (MCP `search` too).
     `GET /whoami` lists every reachable name without loading any catalog;
     `GET /catalogs` and `list_catalogs` leave out a catalog whose data does
     not build.

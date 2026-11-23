@@ -127,6 +127,10 @@ pub(crate) async fn run_with(
     params: SearchParams,
     plain_snippets: bool,
 ) -> Result<SearchResult, OkfError> {
+    check_fanout(
+        params.catalogs.as_deref(),
+        ctx.app().config().search_fanout_max,
+    )?;
     let states = ctx.states(params.catalogs.as_deref()).await?;
     let pinned = ctx.pin(params.changeset.as_deref()).await?;
     require_selected(pinned.as_ref(), &states)?;
@@ -192,6 +196,32 @@ pub(crate) async fn run_with(
         })
         .collect();
     Ok(SearchResult { hits, skipped })
+}
+
+/// Refuses a search that names more than `most` distinct catalogs (M18 spec
+/// Decision 8), so one request cannot load and scan every catalog by listing
+/// them. The MCP tool and `GET /search` both call it through [`run_with`].
+///
+/// # Arguments
+/// * `named` - the `catalogs` argument; `None` names none, which the
+///   selection bounds itself.
+/// * `most` - `search_fanout_max`.
+///
+/// # Errors
+/// [`OkfError::InvalidPath`] (400, naming `catalogs`) when the list holds
+/// more than `most` distinct names; a name repeated counts once.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn check_fanout(named: Option<&[String]>, most: u32) -> Result<(), OkfError> {
+    let distinct = named
+        .map(|names| names.iter().collect::<std::collections::HashSet<_>>().len())
+        .unwrap_or(0);
+    if distinct > most as usize {
+        return Err(OkfError::InvalidPath {
+            path: "catalogs".to_string(),
+            reason: format!("name at most {most} catalogs to search at once"),
+        });
+    }
+    Ok(())
 }
 
 /// The number of hits a call returns at most.
@@ -278,6 +308,49 @@ mod tests {
             limit: None,
             changeset: None,
         }
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn check_fanout_counts_distinct_names_against_the_cap() {
+        assert!(check_fanout(None, 2).is_ok());
+        assert!(check_fanout(Some(&names(&["a", "b"])), 2).is_ok());
+        assert!(check_fanout(Some(&names(&["a", "a", "a", "b"])), 2).is_ok());
+
+        let error = check_fanout(Some(&names(&["a", "b", "c"])), 2).unwrap_err();
+
+        assert!(matches!(&error, OkfError::InvalidPath { path, .. } if path == "catalogs"));
+        assert!(error.to_string().contains("at most 2"), "{error}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_tool_refuses_more_named_catalogs_than_the_cap() {
+        let test = app_with(
+            &[
+                ("a", &[("x.md", TAGGED)]),
+                ("b", &[("x.md", TAGGED)]),
+                ("c", &[("x.md", TAGGED)]),
+            ],
+            Config {
+                search_fanout_max: 2,
+                ..Config::default()
+            },
+        )
+        .await;
+        let ctx = context(&test, principal(&[], Some("a")), None);
+        let mut over = params("", &[]);
+        over.catalogs = Some(names(&["a", "b", "c"]));
+        let mut at = params("", &[]);
+        at.catalogs = Some(names(&["a", "b", "a"]));
+
+        let refused = run(&ctx, over).await.unwrap_err();
+        let allowed = run(&ctx, at).await.unwrap();
+
+        assert!(matches!(refused, OkfError::InvalidPath { .. }), "{refused}");
+        assert_eq!(allowed.hits.len(), 2);
     }
 
     #[tokio::test(flavor = "multi_thread")]

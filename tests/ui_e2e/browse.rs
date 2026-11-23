@@ -181,6 +181,71 @@ async fn search_finds_alpha_and_opens_it() {
     .await;
 }
 
+/// Three catalogs, each holding one concept that says "needle", and a key
+/// on all three, with the search cap at `cap`.
+async fn needle_server(cap: u32) -> (TestServer, String) {
+    let note = |name: &str| files(&[("index.md", "# Index\n"), (name, "# Needle\n\nneedle\n")]);
+    let server = TestServer::start(
+        vec![
+            ("one", note("one.md")),
+            ("two", note("two.md")),
+            ("three", note("three.md")),
+        ],
+        Config {
+            search_fanout_max: cap,
+            ..Config::default()
+        },
+    )
+    .await;
+    let key = server
+        .key(
+            "browse-needle",
+            Access::Read,
+            &["one", "two", "three"],
+            Some("one"),
+        )
+        .await;
+    (server, key)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn search_within_the_cap_names_no_catalogs_and_shows_no_chooser() {
+    let (server, key) = needle_server(3).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/search/needle");
+        ui.wait_text("#search-count", "3 hits");
+        assert!(!ui.present("#search-chooser"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn search_past_the_cap_asks_for_a_choice_and_limits_it() {
+    let (server, key) = needle_server(2).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/search/needle");
+        ui.wait_visible("#search-chooser");
+        // The current catalog and the first other one are chosen to start.
+        ui.wait_text("#search-cap", "2 of at most 2");
+        ui.wait_text("#search-count", "2 hits");
+        let enabled = ui.eval(
+            "() => [...document.querySelectorAll('#search-chooser input:not(:disabled)')].map(box => box.value).sort()",
+            json!(null),
+        );
+        assert_eq!(enabled, json!(["one", "three"]), "the unchosen box is disabled at the cap");
+        // Unchecking one frees the third box; search only the one left.
+        ui.click("#search-chooser input[value=one]");
+        ui.wait_text("#search-cap", "1 of at most 2");
+        ui.click("#search-form button[type=submit]");
+        ui.wait_text("#search-count", "1 hit");
+        let shown = ui.text("#search-results");
+        assert!(shown.contains("three /three.md"), "{shown}");
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn switching_catalogs_while_browsing_opens_the_new_root_once() {
     let server = TestServer::start(
