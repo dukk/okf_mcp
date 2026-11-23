@@ -154,7 +154,12 @@ pub(crate) async fn mint_access(
     } else {
         now + ttl * 2
     };
-    let mut conn = app.pool().acquire().await.expect("a connection");
+    let mut conn = app
+        .accounts()
+        .executor()
+        .acquire()
+        .await
+        .expect("a connection");
     tokens::insert(
         &mut conn,
         &NewToken {

@@ -340,7 +340,7 @@ async fn a_user_load_overtaken_by_a_team_invalidation_is_not_cached() {
 async fn a_suspension_closes_the_catalog_for_every_cached_principal() {
     let test =
         crate::mcp::testing::app_with(&[("main", &[])], crate::config::Config::default()).await;
-    let pool = test.app.pool();
+    let pool = test.app.accounts().executor();
     let granted = ["main".to_string()];
     let (_, secret) = stored(pool, &new_key("writer", TEST_USER, &granted, false)).await;
     // Assembled before the suspension, and kept (a request in progress).

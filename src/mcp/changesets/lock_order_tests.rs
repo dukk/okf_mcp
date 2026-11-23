@@ -32,7 +32,7 @@ async fn pg() -> TestApp {
 /// key at `access` defaulting to `pg`, and returns the
 /// context of a connection with that key.
 async fn user_context(test: &TestApp, name: &str, access: Access, admin: bool) -> ToolContext {
-    let pool = test.app.pool();
+    let pool = test.app.accounts().executor();
     let cli = AuditActor::cli();
     let user = NewUser {
         name,
@@ -92,7 +92,7 @@ fn delete_in_task(
     test: &TestApp,
     name: &str,
 ) -> tokio::task::JoinHandle<Result<DeletedUser, OkfError>> {
-    let pool = test.app.pool().clone();
+    let pool = test.app.accounts().executor().clone();
     let name = name.to_string();
     tokio::spawn(async move {
         users::delete(
@@ -114,7 +114,7 @@ async fn lock_waiters(test: &TestApp, count: i64) {
                 "SELECT count(*) FROM pg_stat_activity \
                  WHERE datname = current_database() AND wait_event_type = 'Lock'",
             )
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("read pg_stat_activity");
             if waiting >= count {
@@ -154,7 +154,13 @@ async fn a_publish_holding_its_changeset_finishes_before_its_users_deletion() {
         .unwrap()
         .expect("catalog pg")
         .id();
-    let mut holder = test.app.pool().begin().await.expect("begin the holder");
+    let mut holder = test
+        .app
+        .accounts()
+        .executor()
+        .begin()
+        .await
+        .expect("begin the holder");
     sqlx::query("SELECT id FROM catalogs WHERE id = $1 FOR NO KEY UPDATE")
         .bind(catalog_id)
         .execute(&mut *holder)
@@ -189,7 +195,7 @@ async fn own_deletion(
     name: &str,
 ) -> impl FnOnce() -> tokio::task::JoinHandle<Result<DeletedUser, OkfError>> {
     use crate::store::{audit, passwords, user_sessions};
-    let pool = test.app.pool().clone();
+    let pool = test.app.accounts().executor().clone();
     let user_id = users::id_by_name(&pool, name).await.expect("the user's id");
     let password = "violet staple orbit lantern";
     passwords::set(&pool, &user_id, password, Utc::now())
@@ -252,7 +258,13 @@ async fn a_publish_holding_its_changeset_finishes_before_its_users_own_deletion(
         .unwrap()
         .expect("catalog pg")
         .id();
-    let mut holder = test.app.pool().begin().await.expect("begin the holder");
+    let mut holder = test
+        .app
+        .accounts()
+        .executor()
+        .begin()
+        .await
+        .expect("begin the holder");
     sqlx::query("SELECT id FROM catalogs WHERE id = $1 FOR NO KEY UPDATE")
         .bind(catalog_id)
         .execute(&mut *holder)
@@ -288,7 +300,13 @@ async fn an_admins_discard_holding_a_changeset_finishes_before_its_owners_deleti
     let handle = open(&alice).await;
     body(&alice, &handle, "# A\n\nAlice.\n").await;
     let changeset_id = changeset_row(&test, &handle).await.id;
-    let mut holder = test.app.pool().begin().await.expect("begin the holder");
+    let mut holder = test
+        .app
+        .accounts()
+        .executor()
+        .begin()
+        .await
+        .expect("begin the holder");
     sqlx::query("SELECT path FROM changeset_entries WHERE changeset_id = $1 FOR UPDATE")
         .bind(changeset_id)
         .execute(&mut *holder)
@@ -326,7 +344,13 @@ async fn a_revert_holding_its_changeset_finishes_before_its_users_deletion() {
     let handle = open(&alice).await;
     body(&alice, &handle, "# A\n\nAlice.\n").await;
     let changeset_id = changeset_row(&test, &handle).await.id;
-    let mut holder = test.app.pool().begin().await.expect("begin the holder");
+    let mut holder = test
+        .app
+        .accounts()
+        .executor()
+        .begin()
+        .await
+        .expect("begin the holder");
     sqlx::query("SELECT path FROM changeset_entries WHERE changeset_id = $1 FOR UPDATE")
         .bind(changeset_id)
         .execute(&mut *holder)

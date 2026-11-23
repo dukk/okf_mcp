@@ -22,7 +22,7 @@ const NOTE: &str = "---\ntype: Note\ntitle: Note\n---\nBody.\n";
 async fn relabel(test: &TestApp, statements: &[&'static str]) {
     for statement in statements {
         sqlx::query(*statement)
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .expect("relabel");
     }

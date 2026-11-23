@@ -15,7 +15,7 @@ use crate::store::users::{self, AdminChange, NewUser};
 /// # Returns
 /// The key's secret.
 async fn admin_user_key(test: &TestApp, user: &str, name: &str, grants: Grants<'_>) -> String {
-    let pool = test.app.pool();
+    let pool = test.app.accounts().executor();
     if users::find(pool, user).await.is_err() {
         let new = NewUser {
             name: user,
@@ -199,12 +199,12 @@ async fn an_admin_unlocks_lists_and_ends_and_an_owner_sees_the_redacted_record()
 /// How many unlocks exist, and how many `catalog.unlocked` entries.
 async fn unlocks_and_entries(test: &TestApp) -> (i64, i64) {
     let unlocks: i64 = sqlx::query_scalar("SELECT count(*) FROM unlocks")
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .unwrap();
     let entries: i64 =
         sqlx::query_scalar("SELECT count(*) FROM audit_entries WHERE action = 'catalog.unlocked'")
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .unwrap();
     (unlocks, entries)
@@ -321,7 +321,7 @@ async fn unlocks_refuse_everyone_but_admins_and_scope_a_scoped_admin() {
     let staff = staff_root(&test).await;
     let keys = keys(&test).await;
     let provisioner = keys::create_provisioner(
-        test.app.pool(),
+        test.app.accounts().executor(),
         &NewProvisioner {
             name: "signup",
             actor: "signup",
@@ -566,7 +566,7 @@ async fn a_key_with_no_user_cannot_unlock_for_itself_or_anyone_else() {
     // A pre-M12 key with no user. A raw update sends no change message, so
     // the key is read again only after a catch-up (what a reconnect does).
     sqlx::query("UPDATE api_keys SET user_id = NULL WHERE name = 'root'")
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .unwrap();
     test.app.apply_reconnect().await;

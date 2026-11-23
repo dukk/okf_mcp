@@ -414,7 +414,7 @@ mod suspension_tests {
         let staff = staff_root(&test).await;
         let runner = staff_key(&test, "runner", Access::Read, true).await;
         sqlx::query("UPDATE catalogs SET maintenance = false WHERE name = 'quiet'")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .unwrap();
         // `require_unlock` bumps the generation, so its poll loads both.

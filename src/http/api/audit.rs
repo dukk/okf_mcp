@@ -93,7 +93,11 @@ impl AuditParams {
         };
         match viewer {
             Viewer::Owner { audit_team, .. } => {
-                let key = server_keys::get_or_create(app.pool(), server_keys::AUDIT_CURSOR).await?;
+                let key = server_keys::get_or_create(
+                    app.accounts().executor(),
+                    server_keys::AUDIT_CURSOR,
+                )
+                .await?;
                 cursor::open(&key, *audit_team, after).map(Some)
             }
             Viewer::Admin | Viewer::Credential(_) => {
@@ -180,7 +184,7 @@ async fn viewer(app: &App, principal: &Principal, team: Option<&str>) -> Result<
     let (CredentialKind::Session { user_id }, Some(team)) = (&principal.kind, team) else {
         return Err(refused());
     };
-    let (team_id, audit_team) = teams::owned_by(app.pool(), user_id, team)
+    let (team_id, audit_team) = teams::owned_by(app.accounts().executor(), user_id, team)
         .await?
         .ok_or_else(refused)?;
     Ok(Viewer::Owner {
@@ -203,14 +207,16 @@ async fn list_audit(
     let mut query = params.query()?;
     let viewer = viewer(&app, &principal, query.team).await?;
     query.after = params.cursor(&app, &viewer).await?;
-    let entries = audit::list(app.pool(), &viewer, &query, app.labels()).await?;
+    let entries = audit::list(app.accounts().executor(), &viewer, &query, app.labels()).await?;
     // A full page may have more after it. `try_from` converts the length,
     // a `usize`, to the `i64` the page size is.
     let full = i64::try_from(entries.len()).is_ok_and(|len| len >= query.page_size());
     let next_after = match (entries.last().filter(|_| full), &viewer) {
         (None, _) => None,
         (Some(last), Viewer::Owner { audit_team, .. }) => {
-            let key = server_keys::get_or_create(app.pool(), server_keys::AUDIT_CURSOR).await?;
+            let key =
+                server_keys::get_or_create(app.accounts().executor(), server_keys::AUDIT_CURSOR)
+                    .await?;
             Some(NextAfter::Sealed(cursor::seal(
                 &key,
                 *audit_team,
@@ -244,7 +250,8 @@ async fn export_audit(
     let mut query = params.query()?;
     let viewer = viewer(&app, &principal, query.team).await?;
     query.after = params.cursor(&app, &viewer).await?;
-    let body = audit::export_lines(app.pool(), &viewer, &query, app.labels()).await?;
+    let body =
+        audit::export_lines(app.accounts().executor(), &viewer, &query, app.labels()).await?;
     let headers = [
         (header::CONTENT_TYPE, "application/x-ndjson"),
         (

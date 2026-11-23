@@ -258,7 +258,7 @@ mod tests {
     /// user takes that user's row lock and is refused when it is gone.
     async fn seed_alice(test: &TestApp) {
         crate::store::users::create(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &crate::store::users::NewUser {
                 name: "alice",
                 display_name: &crate::labels::DisplayName::default(),
@@ -276,7 +276,7 @@ mod tests {
             "SELECT credential, user_slug, kind, origin, credential_kind FROM feedback \
              ORDER BY created_at, id",
         )
-        .fetch_all(test.app.pool())
+        .fetch_all(test.app.accounts().executor())
         .await
         .unwrap()
     }
@@ -420,7 +420,7 @@ mod tests {
         let stored: (String, Option<String>, Option<i16>, String) =
             sqlx::query_as("SELECT message, tool, rating, client FROM feedback WHERE id = $1")
                 .bind(&by_key.id)
-                .fetch_one(test.app.pool())
+                .fetch_one(test.app.accounts().executor())
                 .await
                 .unwrap();
         assert_eq!(
@@ -534,7 +534,7 @@ mod tests {
     ) {
         let audit = crate::store::audit::AuditActor::cli();
         crate::store::users::set_email(
-            test.app.pool(),
+            test.app.accounts().executor(),
             crate::db::TEST_USER,
             Some(EMAIL),
             &audit,
@@ -543,7 +543,7 @@ mod tests {
         .await
         .expect("set the user's email");
         let key = keys::create(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &NewKey {
                 name: KEY_NAME,
                 access: Access::Read,
@@ -656,7 +656,7 @@ mod tests {
         for _ in 0..100 {
             state = sqlx::query_as("SELECT status, submission_id FROM feedback WHERE id = $1")
                 .bind(&id)
-                .fetch_one(test.app.pool())
+                .fetch_one(test.app.accounts().executor())
                 .await
                 .unwrap();
             if state.0 == "sent" {

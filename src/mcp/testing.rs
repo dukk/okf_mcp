@@ -494,7 +494,7 @@ pub(crate) fn principal(reach: &[&str], default: Option<&str>) -> Arc<Principal>
 /// If the store refuses it.
 pub(crate) async fn store_key(test: &TestApp, key_id: &str) {
     crate::store::keys::insert_legacy_test_key(
-        test.app.pool(),
+        test.app.accounts().executor(),
         key_id,
         Access::Admin,
         key_id,
@@ -572,7 +572,7 @@ pub(crate) async fn open_at(
         .unwrap()
         .expect("a loaded catalog");
     let principal = ctx.principal();
-    let mut tx = test.app.pool().begin().await.expect("begin");
+    let mut tx = test.app.accounts().executor().begin().await.expect("begin");
     changesets::lock_catalog(&mut tx, state.id())
         .await
         .expect("lock the catalog");
@@ -595,7 +595,7 @@ pub(crate) async fn open_at(
 /// # Panics
 /// If there is no such changeset or the store fails.
 pub(crate) async fn changeset_row(test: &TestApp, handle: &str) -> ChangesetRow {
-    changesets::by_handle(test.app.pool(), handle)
+    changesets::by_handle(test.app.accounts().executor(), handle)
         .await
         .expect("read the changeset")
         .expect("the changeset exists")
@@ -638,7 +638,7 @@ pub(crate) async fn pending_entry(
         executable: false,
         replay: None,
     };
-    let mut tx = test.app.pool().begin().await.expect("begin");
+    let mut tx = test.app.accounts().executor().begin().await.expect("begin");
     changesets::lock_catalog(&mut tx, changeset.catalog_id)
         .await
         .expect("lock the catalog");
@@ -686,7 +686,7 @@ pub(crate) const SUSPENSION_NOTICE: &str = "Paused for billing.";
 /// # Panics
 /// If the team exists already or a store call fails.
 pub(crate) async fn suspend_catalogs(test: &TestApp, catalogs: &[&str]) {
-    let pool = test.app.pool();
+    let pool = test.app.accounts().executor();
     let now = Utc::now();
     let team = crate::store::teams::NewTeam {
         name: SUSPENDED_TEAM,
@@ -717,7 +717,7 @@ pub(crate) async fn suspend_catalogs(test: &TestApp, catalogs: &[&str]) {
 pub(crate) async fn lift_suspension(test: &TestApp) {
     applied(&test.app, async {
         crate::store::teams::unsuspend(
-            test.app.pool(),
+            test.app.accounts().executor(),
             SUSPENDED_TEAM,
             &AuditActor::cli(),
             Utc::now(),
@@ -769,7 +769,7 @@ pub(crate) async fn stored_secret(
         levels: &[],
     };
     let secret = crate::store::keys::create_with_id(
-        test.app.pool(),
+        test.app.accounts().executor(),
         &new,
         &crate::store::audit::AuditActor::cli(),
         Utc::now(),
@@ -805,7 +805,7 @@ pub(crate) async fn cached_principal(test: &TestApp, secret: &str) -> Arc<Princi
 /// # Panics
 /// If the store refuses the user or the key.
 pub(crate) async fn staff_root(test: &TestApp) -> String {
-    let pool = test.app.pool();
+    let pool = test.app.accounts().executor();
     let new_user = crate::store::users::NewUser {
         name: "staff",
         display_name: &crate::labels::DisplayName::parse("Staff Member").unwrap(),
@@ -866,11 +866,15 @@ pub(crate) async fn staff_key(
         expires_at: None,
         levels: &[],
     };
-    let secret =
-        crate::store::keys::create_with_id(test.app.pool(), &new, &AuditActor::cli(), Utc::now())
-            .await
-            .expect("create the staff key")
-            .key;
+    let secret = crate::store::keys::create_with_id(
+        test.app.accounts().executor(),
+        &new,
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("create the staff key")
+    .key;
     secret
 }
 
@@ -883,7 +887,7 @@ pub(crate) async fn require_unlock(test: &TestApp) {
     use crate::store::settings::{self, SettingKey};
     applied(&test.app, async {
         settings::set(
-            test.app.pool(),
+            test.app.accounts().executor(),
             SettingKey::RequireUnlock,
             "on",
             &AuditActor::cli(),

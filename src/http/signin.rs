@@ -378,7 +378,13 @@ async fn sign_in_post(
     // is checked as the empty address, which names nobody: the same dummy
     // hash and the same 401 as an unknown email, never a database error.
     let email = users::normalize_email(&form.email).unwrap_or_default();
-    let verdict = passwords::verify(app.pool(), &email, &form.password, app.clock().now()).await;
+    let verdict = passwords::verify(
+        app.accounts().executor(),
+        &email,
+        &form.password,
+        app.clock().now(),
+    )
+    .await;
     let outcome = match verdict {
         Ok(SignInOutcome::Ok(verified)) => {
             let started = begin(
@@ -415,7 +421,7 @@ async fn sign_in_post(
     };
     // The same lookup runs for known and unknown emails, so its time says
     // nothing; it only lets the user see their failed attempts.
-    let user_id = match users::find_by_email(app.pool(), &email).await {
+    let user_id = match users::find_by_email(app.accounts().executor(), &email).await {
         Ok(found) => found.map(|user| user.id),
         Err(error) => return AppError(error).into_response(),
     };
@@ -448,7 +454,7 @@ async fn begin(
     // The new session, the end of the old one and the event commit
     // together; after the commit nothing runs, so a committed sign-in
     // always reaches the browser with its cookie.
-    let mut tx = app.pool().begin().await?;
+    let mut tx = app.accounts().executor().begin().await?;
     let signing_in = SignIn {
         user,
         method,
@@ -613,7 +619,8 @@ pub(crate) async fn audit(
     record_attempt(method, outcome);
     app.metrics().auth_attempt(method, outcome);
     let now = app.clock().now();
-    if let Err(error) = sign_in_events::record(app.pool(), user_id, method, outcome, ip, now).await
+    if let Err(error) =
+        sign_in_events::record(app.accounts().executor(), user_id, method, outcome, ip, now).await
     {
         split_event!(
             error,
@@ -794,16 +801,21 @@ async fn send_reset(app: &App, email: &str) -> Result<(), OkfError> {
     // lock, so the link goes to the address the user has while it is live
     // (an email change deletes it): `email_tokens::issue_for_email`.
     let ttl = app.settings().reset_link_ttl;
-    let issued =
-        email_tokens::issue_for_email(app.pool(), email, Purpose::Reset, ttl, app.clock().now())
-            .await?;
+    let issued = email_tokens::issue_for_email(
+        app.accounts().executor(),
+        email,
+        Purpose::Reset,
+        ttl,
+        app.clock().now(),
+    )
+    .await?;
     let Some(issued) = issued else {
         return Ok(());
     };
     let link = mail::link(public_url, RESET_PATH, &issued.token);
     let template = Template::Reset { link };
     mail_queue::enqueue(
-        app.pool(),
+        app.accounts().executor(),
         &issued.to,
         &template,
         app.clock().now(),
@@ -923,7 +935,14 @@ fn setup_response(status: StatusCode, view: &SetupView<'_>, brand: &Brand) -> Re
 async fn setup_page(State(app): State<Arc<App>>, Query(query): Query<TokenQuery>) -> Response {
     let return_to = safe_return_to(query.return_to.as_deref());
     let brand = app.settings().brand();
-    match email_tokens::peek(app.pool(), &query.token, Purpose::Setup, app.clock().now()).await {
+    match email_tokens::peek(
+        app.accounts().executor(),
+        &query.token,
+        Purpose::Setup,
+        app.clock().now(),
+    )
+    .await
+    {
         Ok(user) => setup_response(
             StatusCode::OK,
             &SetupView {
@@ -1021,7 +1040,9 @@ async fn setup_post(
     };
     let return_to = safe_return_to(form.return_to.as_deref());
     let now = app.clock().now();
-    let user = match email_tokens::peek(app.pool(), &form.token, Purpose::Setup, now).await {
+    let user = match email_tokens::peek(app.accounts().executor(), &form.token, Purpose::Setup, now)
+        .await
+    {
         Ok(user) => user,
         Err(error) => return link_error(error, &brand),
     };
@@ -1123,7 +1144,7 @@ async fn use_link(
 ) -> Result<LinkUsed, OkfError> {
     let hashed = NewPassword::hash(password).await?;
     let now = app.clock().now();
-    let mut tx = app.pool().begin().await?;
+    let mut tx = app.accounts().executor().begin().await?;
     // The token's row stays locked until the commit, so of two concurrent
     // posts the second waits and then finds the link used.
     let user = email_tokens::redeem_in(&mut tx, token, purpose, now).await?;
@@ -1200,7 +1221,14 @@ fn reset_response(status: StatusCode, token: &str, error: Option<&str>, brand: &
 #[tracing::instrument(level = "debug", skip_all)]
 async fn reset_page(State(app): State<Arc<App>>, Query(query): Query<TokenQuery>) -> Response {
     let brand = app.settings().brand();
-    match email_tokens::peek(app.pool(), &query.token, Purpose::Reset, app.clock().now()).await {
+    match email_tokens::peek(
+        app.accounts().executor(),
+        &query.token,
+        Purpose::Reset,
+        app.clock().now(),
+    )
+    .await
+    {
         Ok(_) => reset_response(StatusCode::OK, &query.token, None, &brand),
         Err(error) => link_error(error, &brand),
     }
@@ -1232,7 +1260,9 @@ async fn reset_post(
         );
     };
     let now = app.clock().now();
-    if let Err(error) = email_tokens::peek(app.pool(), &form.token, Purpose::Reset, now).await {
+    if let Err(error) =
+        email_tokens::peek(app.accounts().executor(), &form.token, Purpose::Reset, now).await
+    {
         return link_error(error, &brand);
     }
     if let Err(problem) = check_new_password(&form.password, &form.confirm) {
@@ -1472,7 +1502,7 @@ mod tests {
         }
         // The store answers "nobody" too, never a database error, and the
         // check still spends the dummy hash (`Failed`, not an early return).
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         let found = users::find_by_email(pool, "alice@example.com\0").await;
         let checked = passwords::verify(pool, "\0", PASSWORD, Utc::now()).await;
 
@@ -1508,7 +1538,7 @@ mod tests {
             )
             .await;
         let issued = email_tokens::issue_for_email(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "alice@example.com\0",
             Purpose::Reset,
             Duration::from_secs(3600),
@@ -1520,7 +1550,7 @@ mod tests {
         assert_eq!(nul.status, StatusCode::OK);
         assert_eq!(nul.text(), unknown.text());
         assert!(matches!(issued, Ok(None)), "{issued:?}");
-        assert_eq!(queued_mail(test.app.pool()).await, 0);
+        assert_eq!(queued_mail(test.app.accounts().executor()).await, 0);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1570,7 +1600,7 @@ mod tests {
         .await;
         post_sign_in(&mut browser, &test, "alice@example.com", PASSWORD).await;
 
-        let events = sign_in_events::recent(test.app.pool(), "alice", 10)
+        let events = sign_in_events::recent(test.app.accounts().executor(), "alice", 10)
             .await
             .expect("events");
 
@@ -1746,7 +1776,7 @@ mod tests {
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         crate::invalidate::testing::applied(&test.app, async {
             settings::set(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 SettingKey::PasswordSignIn,
                 "false",
                 &AuditActor::cli(),
@@ -1932,7 +1962,7 @@ mod tests {
     /// A fresh setup link for `user_id`.
     async fn setup_token(test: &TestApp, user_id: &str) -> String {
         email_tokens::issue(
-            test.app.pool(),
+            test.app.accounts().executor(),
             user_id,
             Purpose::Setup,
             Duration::from_secs(3600),
@@ -2116,7 +2146,7 @@ mod tests {
         let test = onboarding_app().await;
         let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         let reset = email_tokens::issue(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &alice.id,
             Purpose::Reset,
             Duration::from_secs(3600),
@@ -2156,7 +2186,7 @@ mod tests {
         let test = login_app().await;
         let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
         let token = email_tokens::issue(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &alice.id,
             Purpose::Setup,
             Duration::from_secs(3600),
@@ -2206,7 +2236,7 @@ mod tests {
         assert_eq!(session.json()["user"], "alice");
         assert_eq!(again.status, StatusCode::GONE, "the link is single-use");
         assert!(again.text().contains(LINK_EXPIRED));
-        let events = sign_in_events::recent(test.app.pool(), "alice", 5)
+        let events = sign_in_events::recent(test.app.accounts().executor(), "alice", 5)
             .await
             .expect("events");
         assert!(matches!(
@@ -2221,11 +2251,11 @@ mod tests {
         let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
         sqlx::query("UPDATE users SET display_name = $1 WHERE name = 'alice'")
             .bind(display_name)
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .expect("display name");
         let token = email_tokens::issue(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &alice.id,
             Purpose::Setup,
             Duration::from_secs(3600),
@@ -2269,7 +2299,7 @@ mod tests {
         let test = login_app().await;
         let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
         let token = email_tokens::issue(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &alice.id,
             Purpose::Setup,
             Duration::from_secs(3600),
@@ -2278,7 +2308,7 @@ mod tests {
         .await
         .expect("issue a setup token");
         sqlx::query("UPDATE users SET display_name = 'Alice Example' WHERE name = 'alice'")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .expect("display name");
         let post = |password: &str, confirm: &str| {
@@ -2316,9 +2346,14 @@ mod tests {
             !mismatch.text().contains(PASSWORD),
             "never echoes a password"
         );
-        email_tokens::peek(test.app.pool(), &token, Purpose::Setup, Utc::now())
-            .await
-            .expect("the link still works");
+        email_tokens::peek(
+            test.app.accounts().executor(),
+            &token,
+            Purpose::Setup,
+            Utc::now(),
+        )
+        .await
+        .expect("the link still works");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2343,7 +2378,7 @@ mod tests {
         let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
         // Issued two hours ago with a one-hour lifetime.
         let token = email_tokens::issue(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &alice.id,
             Purpose::Setup,
             Duration::from_secs(3600),
@@ -2381,7 +2416,7 @@ mod tests {
         let mut signed_in = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
         // Issued two hours ago with a one-hour lifetime.
         let token = email_tokens::issue(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &alice.id,
             Purpose::Reset,
             Duration::from_secs(3600),
@@ -2424,14 +2459,14 @@ mod tests {
         let known = Browser::default()
             .send(&test, "POST", "/signin/forgot", forgot("alice@example.com"))
             .await;
-        wait_for_mail(test.app.pool(), 1).await;
+        wait_for_mail(test.app.accounts().executor(), 1).await;
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         assert_eq!(unknown.status, StatusCode::OK);
         assert_eq!(known.status, StatusCode::OK);
         assert_eq!(unknown.text(), known.text());
         assert!(known.text().contains(FORGOT_SENT));
-        assert_eq!(queued_mail(test.app.pool()).await, 1);
+        assert_eq!(queued_mail(test.app.accounts().executor()).await, 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2453,10 +2488,10 @@ mod tests {
                 .await;
             assert_eq!(reply.status, StatusCode::OK);
         }
-        wait_for_mail(test.app.pool(), 3).await;
+        wait_for_mail(test.app.accounts().executor(), 3).await;
         tokio::time::sleep(Duration::from_millis(300)).await;
 
-        assert_eq!(queued_mail(test.app.pool()).await, 3);
+        assert_eq!(queued_mail(test.app.accounts().executor()).await, 3);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2485,7 +2520,7 @@ mod tests {
         let mut first = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
         let mut second = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
         let token = email_tokens::issue(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &alice.id,
             Purpose::Reset,
             Duration::from_secs(3600),
@@ -2544,7 +2579,7 @@ mod tests {
         assert_eq!(old.status, StatusCode::UNAUTHORIZED);
         assert_eq!(new.status, StatusCode::SEE_OTHER);
         // The "a new password" notice went to alice.
-        assert_eq!(queued_mail(test.app.pool()).await, 1);
+        assert_eq!(queued_mail(test.app.accounts().executor()).await, 1);
     }
 
     /// Alice's sessions in the database, live or not.
@@ -2559,7 +2594,14 @@ mod tests {
     /// The password alice signs in with, checked: what `POST /signin`
     /// holds between the check and the session insert.
     async fn verified(test: &TestApp, password: &str) -> passwords::Verified {
-        match passwords::verify(test.app.pool(), "alice@example.com", password, Utc::now()).await {
+        match passwords::verify(
+            test.app.accounts().executor(),
+            "alice@example.com",
+            password,
+            Utc::now(),
+        )
+        .await
+        {
             Ok(SignInOutcome::Ok(verified)) => verified,
             other => panic!("the password was refused: {other:?}"),
         }
@@ -2570,7 +2612,7 @@ mod tests {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         let checked = verified(&test, PASSWORD).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
 
         // The reset commits between the password check and the insert.
         passwords::reset(pool, &checked.user.id, "amber-quarry-signal-77", Utc::now())
@@ -2592,7 +2634,7 @@ mod tests {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         let checked = verified(&test, PASSWORD).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         // Hold alice's row, so the reset and then the insert queue up behind
         // it in that order, whatever the scheduler does.
         let mut holder = pool.begin().await.expect("begin");
@@ -2636,7 +2678,7 @@ mod tests {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         let checked = verified(&test, PASSWORD).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         start_session_with(&test.app, &checked.user, Some(&checked.stamp), None, "")
             .await
             .expect("the session starts while the password is current");
@@ -2664,7 +2706,7 @@ mod tests {
     async fn forgot_racing_an_email_change(first: First) -> (TestApp, Option<String>) {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let mut holder = pool.begin().await.expect("begin");
         sqlx::query("SELECT 1 FROM users WHERE name = 'alice' FOR UPDATE")
             .execute(&mut *holder)
@@ -2733,7 +2775,13 @@ mod tests {
         let (test, token) = forgot_racing_an_email_change(First::Forgot).await;
 
         let token = token.expect("issued while the email was still alice's");
-        let peeked = email_tokens::peek(test.app.pool(), &token, Purpose::Reset, Utc::now()).await;
+        let peeked = email_tokens::peek(
+            test.app.accounts().executor(),
+            &token,
+            Purpose::Reset,
+            Utc::now(),
+        )
+        .await;
 
         assert!(matches!(peeked, Err(OkfError::Gone { .. })), "{peeked:?}");
     }
@@ -2743,7 +2791,7 @@ mod tests {
         let (test, token) = forgot_racing_an_email_change(First::EmailChange).await;
 
         let live: i64 = sqlx::query_scalar("SELECT count(*) FROM email_tokens")
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("count the links");
 
@@ -2755,7 +2803,7 @@ mod tests {
     async fn a_reset_after_setup_ends_the_session_the_setup_started() {
         let test = login_app().await;
         let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         let token = email_tokens::issue(
             pool,
             &alice.id,
@@ -2809,7 +2857,7 @@ mod tests {
     async fn redemption_racing(rival: Rival) -> (TestApp, Result<(), OkfError>, String) {
         let test = login_app().await;
         let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let token = email_tokens::issue(
             &pool,
             &alice.id,
@@ -2881,7 +2929,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_redemption_racing_a_new_link_completes_without_a_deadlock() {
         let (test, redeemed, token) = redemption_racing(Rival::Issue).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
 
         // The new link replaced the one being redeemed, so it is gone and
         // the password is unchanged.
@@ -2901,7 +2949,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_redemption_racing_an_email_change_completes_without_a_deadlock() {
         let (test, redeemed, _) = redemption_racing(Rival::EmailChange).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
 
         // The change deleted the link, so the password is unchanged.
         assert!(
@@ -2927,7 +2975,7 @@ mod tests {
         let test = login_app().await;
         let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         let mut signed_in = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         let token = email_tokens::issue(
             pool,
             &alice.id,
@@ -2981,7 +3029,7 @@ mod tests {
     async fn a_setup_that_fails_sets_nothing_and_keeps_the_link() {
         let test = login_app().await;
         let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         let token = email_tokens::issue(
             pool,
             &alice.id,
@@ -3036,7 +3084,7 @@ mod tests {
     async fn a_password_sign_in_whose_old_session_cannot_end_changes_nothing() {
         let test = login_app().await;
         let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         let mut browser = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
         let old = browser.cookie(COOKIE).expect("a session").to_string();
         fail_on(pool, FAIL_SESSION_DELETE).await;
@@ -3064,7 +3112,7 @@ mod tests {
         let test = login_app().await;
         let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
         user_with_password(&test, "bob", "bob@example.com", Some(PASSWORD)).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         let token = email_tokens::issue(
             pool,
             &alice.id,
@@ -3115,7 +3163,7 @@ mod tests {
     async fn a_password_sign_in_waiting_on_the_event_table_commits_nothing_until_it_answers() {
         let test = Arc::new(login_app().await);
         let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let mut holder = pool.begin().await.expect("begin");
         sqlx::query("LOCK TABLE sign_in_events IN ACCESS EXCLUSIVE MODE")
             .execute(&mut *holder)
@@ -3148,7 +3196,7 @@ mod tests {
     async fn a_reset_queues_its_notice_in_its_own_transaction() {
         let test = Arc::new(login_app().await);
         let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let token = email_tokens::issue(
             &pool,
             &alice.id,
@@ -3263,9 +3311,15 @@ mod tests {
                 (SettingKey::ProductName, "Acme Notes"),
                 (SettingKey::SupportContact, "https://example.com/help"),
             ] {
-                settings::set(test.app.pool(), key, value, &AuditActor::cli(), Utc::now())
-                    .await
-                    .unwrap();
+                settings::set(
+                    test.app.accounts().executor(),
+                    key,
+                    value,
+                    &AuditActor::cli(),
+                    Utc::now(),
+                )
+                .await
+                .unwrap();
             }
         })
         .await;

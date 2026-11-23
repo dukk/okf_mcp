@@ -564,7 +564,7 @@ async fn begin_registration(
     pending: Pending,
 ) -> Result<Response, OkfError> {
     let handle = user_handle(&user.id)?;
-    let existing: Vec<CredentialID> = passkey_rows::for_user(app.pool(), &user.id)
+    let existing: Vec<CredentialID> = passkey_rows::for_user(app.accounts().executor(), &user.id)
         .await?
         .into_iter()
         .map(|(_, passkey)| passkey.cred_id().clone())
@@ -667,8 +667,13 @@ async fn setup_start(
         return Ok(refusal);
     }
     let name = passkey_name(&body.name)?;
-    let user =
-        email_tokens::peek(app.pool(), &body.token, Purpose::Setup, app.clock().now()).await?;
+    let user = email_tokens::peek(
+        app.accounts().executor(),
+        &body.token,
+        Purpose::Setup,
+        app.clock().now(),
+    )
+    .await?;
     let pending = Pending {
         name,
         via: RegisterVia::Setup {
@@ -774,7 +779,7 @@ async fn use_setup_link(
     set_up: &SetUp<'_>,
 ) -> Result<HeaderMap, OkfError> {
     let now = app.clock().now();
-    let mut tx = app.pool().begin().await?;
+    let mut tx = app.accounts().executor().begin().await?;
     let user = email_tokens::redeem_in(&mut tx, set_up.token, Purpose::Setup, now).await?;
     if user.id != set_up.user_id {
         return Err(OkfError::Gone {
@@ -861,7 +866,7 @@ async fn verify_and_start(
     };
     // Every early return below drops `tx`, which rolls back and releases
     // the locks; only a sign-in that holds commits.
-    let mut tx = app.pool().begin().await?;
+    let mut tx = app.accounts().executor().begin().await?;
     let Some((user, mut passkey)) = passkey_rows::lock_for_sign_in(&mut tx, credential_id).await?
     else {
         return Ok(Verdict::Refused { user_id: None });
@@ -1109,7 +1114,7 @@ async fn confirm_start(
     let (user_id, session) = confirming(&principal, session)?;
     let passkeys = enabled(&app)?;
     // `for_user` gives (name, passkey) pairs; only the passkeys are needed.
-    let own: Vec<Passkey> = passkey_rows::for_user(app.pool(), &user_id)
+    let own: Vec<Passkey> = passkey_rows::for_user(app.accounts().executor(), &user_id)
         .await?
         .into_iter()
         .map(|(_, passkey)| passkey)
@@ -1240,7 +1245,7 @@ async fn store_registration(
         .ok_or_else(|| OkfError::Unauthenticated {
             reason: "this session's user no longer exists".to_string(),
         })?;
-    let mut tx = app.pool().begin().await?;
+    let mut tx = app.accounts().executor().begin().await?;
     let ended = passkey_rows::add_from_session_in(&mut tx, registration).await?;
     notify_method_added(app, &mut tx, &user, "a passkey").await?;
     tx.commit().await?;
@@ -1283,7 +1288,7 @@ mod tests {
 
     async fn setup_token(test: &TestApp, user: &UserAuth) -> String {
         email_tokens::issue(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &user.id,
             Purpose::Setup,
             Duration::from_secs(3600),
@@ -1417,7 +1422,7 @@ mod tests {
             challenge.get("mediation").is_none(),
             "a modal prompt, not autofill"
         );
-        let stored = passkey_rows::list(app.pool(), &owner.id)
+        let stored = passkey_rows::list(app.accounts().executor(), &owner.id)
             .await
             .expect("list");
         challenge["publicKey"]["allowCredentials"] =
@@ -1465,11 +1470,11 @@ mod tests {
 
     /// The stored signature counter of alice's only passkey.
     async fn stored_counter(test: &TestApp, user: &UserAuth) -> serde_json::Value {
-        let listed = passkey_rows::list(test.app.pool(), &user.id)
+        let listed = passkey_rows::list(test.app.accounts().executor(), &user.id)
             .await
             .expect("list");
         let credential_id = URL_SAFE_NO_PAD.decode(&listed[0].id).expect("base64url");
-        let (_, stored) = passkey_rows::find(test.app.pool(), &credential_id)
+        let (_, stored) = passkey_rows::find(test.app.accounts().executor(), &credential_id)
             .await
             .expect("find")
             .expect("the passkey");
@@ -1479,7 +1484,7 @@ mod tests {
     async fn sessions_of(test: &TestApp, user: &UserAuth) -> i64 {
         sqlx::query_scalar("SELECT count(*) FROM user_sessions WHERE user_id = $1")
             .bind(&user.id)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("count the sessions")
     }
@@ -1502,9 +1507,15 @@ mod tests {
             None,
             "the ceremony cookie is cleared"
         );
-        let used = email_tokens::peek(test.app.pool(), &token, Purpose::Setup, Utc::now()).await;
+        let used = email_tokens::peek(
+            test.app.accounts().executor(),
+            &token,
+            Purpose::Setup,
+            Utc::now(),
+        )
+        .await;
         assert!(used.is_err(), "the setup link is used");
-        let listed = passkey_rows::list(test.app.pool(), &alice.id)
+        let listed = passkey_rows::list(test.app.accounts().executor(), &alice.id)
             .await
             .expect("list");
         assert_eq!(listed[0].name, "Laptop");
@@ -1527,7 +1538,7 @@ mod tests {
             // The stored counter follows the authenticator's (1, then 2).
             assert_eq!(stored_counter(&test, &alice).await, round);
         }
-        let events = sign_in_events::recent(test.app.pool(), "alice", 5)
+        let events = sign_in_events::recent(test.app.accounts().executor(), "alice", 5)
             .await
             .expect("events");
         assert!(matches!(
@@ -1547,7 +1558,7 @@ mod tests {
         sqlx::query(
             "UPDATE user_passkeys SET passkey = jsonb_set(passkey, '{cred,counter}', '1000')",
         )
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .expect("inflate the stored counter");
         let mut browser = Browser::default();
@@ -1559,7 +1570,7 @@ mod tests {
         assert_eq!(reply.json()["message"], SIGN_IN_FAILED);
         assert_eq!(browser.cookie(COOKIE), None);
         assert_eq!(stored_counter(&test, &alice).await, 1000, "never lowered");
-        let events = sign_in_events::recent(test.app.pool(), "alice", 5)
+        let events = sign_in_events::recent(test.app.accounts().executor(), "alice", 5)
             .await
             .expect("events");
         assert!(matches!(
@@ -1581,7 +1592,7 @@ mod tests {
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{}", reply.text());
         assert_eq!(browser.cookie(COOKIE), None);
         assert_eq!(sessions_of(&test, &bob).await, 0);
-        let events = sign_in_events::recent(test.app.pool(), "alice", 5)
+        let events = sign_in_events::recent(test.app.accounts().executor(), "alice", 5)
             .await
             .expect("events");
         assert!(matches!(
@@ -1855,7 +1866,13 @@ mod tests {
         ];
 
         assert_eq!(statuses, [StatusCode::FORBIDDEN; 4]);
-        let link = email_tokens::peek(test.app.pool(), &token, Purpose::Setup, Utc::now()).await;
+        let link = email_tokens::peek(
+            test.app.accounts().executor(),
+            &token,
+            Purpose::Setup,
+            Utc::now(),
+        )
+        .await;
         assert!(link.is_ok(), "the link is untouched");
     }
 
@@ -1864,7 +1881,7 @@ mod tests {
         let test = login_app().await;
         let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
         let token = setup_token(&test, &alice).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         // The session insert fails, after the link was used and the passkey
         // stored in the same transaction.
         fail_on(pool, "BEFORE INSERT ON user_sessions FOR EACH ROW").await;
@@ -1889,7 +1906,7 @@ mod tests {
     async fn a_passkey_sign_in_whose_old_session_cannot_end_changes_nothing() {
         let test = login_app().await;
         let (alice, mut soft) = alice_with_passkey(&test, Some(PASSWORD)).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         let mut browser = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
         let old = browser.cookie(COOKIE).expect("a session").to_string();
         let before = sessions_of(&test, &alice).await;
@@ -1931,7 +1948,7 @@ mod tests {
         let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
         user_with_password(&test, "bob", "bob@example.com", Some(PASSWORD)).await;
         let token = setup_token(&test, &alice).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         // The browser is still signed in as someone else.
         let mut browser = Browser::signed_in(&test, "bob@example.com", PASSWORD).await;
         let mut soft = SoftPasskey::new(true);
@@ -2032,7 +2049,7 @@ mod tests {
         let before = sessions_of(&test, &alice).await;
         let mut browser = Browser::default();
         let signed = assertion(&test, &mut browser, &mut soft, &alice, "/ui/").await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let holder = lock_table(&pool, "sign_in_events").await;
         let sign_in = tokio::spawn({
             let test = Arc::clone(&test);
@@ -2055,7 +2072,7 @@ mod tests {
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
         assert!(reply.set_cookie(COOKIE).is_some());
         assert_eq!(session.json()["user"], "alice");
-        let events = sign_in_events::recent(test.app.pool(), "alice", 1)
+        let events = sign_in_events::recent(test.app.accounts().executor(), "alice", 1)
             .await
             .expect("events");
         assert!(matches!(
@@ -2073,7 +2090,7 @@ mod tests {
         let credential =
             registration_from_session(&test, &mut browser, &mut soft, json!({ "name": "Phone" }))
                 .await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let holder = lock_table(&pool, "apalis.jobs").await;
         let finish = tokio::spawn({
             let test = Arc::clone(&test);
@@ -2119,7 +2136,7 @@ mod tests {
         let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         let mut browser = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
         let mut soft = SoftPasskey::new(true);
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         fail_on(pool, "BEFORE INSERT ON apalis.jobs FOR EACH STATEMENT").await;
 
         let done =
@@ -2143,7 +2160,7 @@ mod tests {
         let before = sessions_of(&test, &alice).await;
         let mut browser = Browser::default();
         let signed = assertion(&test, &mut browser, &mut soft, &alice, "/ui/").await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         // A removal in progress, as `passkeys::remove` runs it: the user's
         // row locked first, then the passkey deleted, not yet committed.
         let mut removal = pool.begin().await.expect("begin");
@@ -2180,7 +2197,7 @@ mod tests {
         let (alice, mut soft) = alice_with_passkey(&test, Some(PASSWORD)).await;
         let mut browser = Browser::default();
         let signed = assertion(&test, &mut browser, &mut soft, &alice, "/ui/").await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         // Hold the passkey's row (as another sign-in with it would), so the
         // sign-in stops holding alice's row, and the reset queues behind it.
         let mut holder = pool.begin().await.expect("begin");
@@ -2247,7 +2264,7 @@ mod tests {
         assert_eq!(still.status, StatusCode::OK);
         assert_eq!(ended.status, StatusCode::UNAUTHORIZED);
         let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM apalis.jobs")
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("count");
         assert_eq!(queued, 1, "the method-added notice");
@@ -2280,7 +2297,7 @@ mod tests {
         for display_name in ["Alice Example", "", "<b>x</b>"] {
             sqlx::query("UPDATE users SET display_name = $1 WHERE name = 'alice'")
                 .bind(display_name)
-                .execute(test.app.pool())
+                .execute(test.app.accounts().executor())
                 .await
                 .expect("display name");
             // The signed-in user comes from the user cache; a raw update
@@ -2376,7 +2393,7 @@ mod tests {
         let credential =
             registration_from_session(&test, &mut browser, &mut soft, json!({ "name": "Phone" }))
                 .await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let new_password = NewPassword::hash("amber-quarry-signal-77")
             .await
             .expect("hash");
@@ -2487,7 +2504,7 @@ mod tests {
             .send(&test, "GET", "/api/v1/session", Payload::Empty)
             .await;
         assert_eq!(still.status, StatusCode::OK);
-        let stored = passkey_rows::list(test.app.pool(), &alice.id)
+        let stored = passkey_rows::list(test.app.accounts().executor(), &alice.id)
             .await
             .expect("list");
         assert!(stored.is_empty());
@@ -2527,7 +2544,7 @@ mod tests {
             .expect("the router answers");
 
         assert_eq!(reply.status(), StatusCode::FORBIDDEN);
-        let stored = passkey_rows::list(test.app.pool(), &alice.id)
+        let stored = passkey_rows::list(test.app.accounts().executor(), &alice.id)
             .await
             .expect("list");
         assert!(stored.is_empty());
@@ -2699,7 +2716,7 @@ mod tests {
         .await;
 
         assert_eq!(registered.status, StatusCode::OK, "{}", registered.text());
-        let listed = passkey_rows::list(pair.b.pool(), &alice.id)
+        let listed = passkey_rows::list(pair.b.accounts().executor(), &alice.id)
             .await
             .expect("list");
         assert_eq!(listed.len(), 1, "the passkey is stored");
@@ -2834,7 +2851,7 @@ mod tests {
             refused.json()["message"],
             "forbidden: this passkey request belongs to another session"
         );
-        let stored = passkey_rows::list(test.app.pool(), &alice.id)
+        let stored = passkey_rows::list(test.app.accounts().executor(), &alice.id)
             .await
             .expect("list");
         assert!(stored.is_empty(), "no passkey stored");
@@ -3000,15 +3017,20 @@ mod tests {
             assert_eq!(refused.json()["message"], LINK_EXPIRED, "{what}");
         }
         for user in [&alice, &bob] {
-            let stored = passkey_rows::list(test.app.pool(), &user.id)
+            let stored = passkey_rows::list(test.app.accounts().executor(), &user.id)
                 .await
                 .expect("list");
             assert!(stored.is_empty(), "no passkey stored");
             assert_eq!(sessions_of(test, user).await, 0, "no session");
         }
         for link in [&new_link, &bobs_link] {
-            let usable =
-                email_tokens::peek(test.app.pool(), link, Purpose::Setup, Utc::now()).await;
+            let usable = email_tokens::peek(
+                test.app.accounts().executor(),
+                link,
+                Purpose::Setup,
+                Utc::now(),
+            )
+            .await;
             assert!(usable.is_ok(), "the presented link is untouched");
         }
     }
@@ -3193,7 +3215,7 @@ mod tests {
     async fn users_named(test: &TestApp, name: &str) -> i64 {
         sqlx::query_scalar("SELECT count(*) FROM users WHERE name = $1")
             .bind(name)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("count")
     }
@@ -3221,7 +3243,7 @@ mod tests {
         let passkeys: i64 =
             sqlx::query_scalar("SELECT count(*) FROM user_passkeys WHERE user_id = $1")
                 .bind(&alice.id)
-                .fetch_one(test.app.pool())
+                .fetch_one(test.app.accounts().executor())
                 .await
                 .expect("count");
         assert_eq!(passkeys, 0);

@@ -1189,8 +1189,11 @@ mod open_tests {
         list_changesets(&ctx, named("other")).await.unwrap();
         settle_access(&test).await;
 
-        let reads =
-            crate::store::audit::testing::entries(test.app.pool(), "catalog.admin_read").await;
+        let reads = crate::store::audit::testing::entries(
+            test.app.accounts().executor(),
+            "catalog.admin_read",
+        )
+        .await;
         assert_eq!(
             reads.len(),
             1,
@@ -1549,7 +1552,7 @@ mod publish_tests {
         // loads the settings.
         crate::invalidate::testing::applied(&test.app, async {
             crate::store::settings::set(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 crate::store::settings::SettingKey::MaxKeysPerUser,
                 "5",
                 &crate::store::audit::AuditActor::cli(),
@@ -1629,7 +1632,7 @@ mod publish_tests {
     async fn insert_entry(test: &TestApp, handle: &str, entry: EntryRow) {
         let state = test.app.catalog("pg").await.unwrap().unwrap();
         let row = changeset_row(test, handle).await;
-        let mut tx = test.app.pool().begin().await.unwrap();
+        let mut tx = test.app.accounts().executor().begin().await.unwrap();
         changesets::lock_catalog(&mut tx, state.id()).await.unwrap();
         changesets::upsert_entry(&mut tx, row.id, &entry, Utc::now())
             .await
@@ -1644,7 +1647,7 @@ mod publish_tests {
                 "SELECT count(*) FROM pg_stat_activity \
                  WHERE datname = current_database() AND wait_event_type = 'Lock'",
             )
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .unwrap();
             if waiting >= count {
@@ -1695,7 +1698,7 @@ mod publish_tests {
         use crate::invalidate::{testing::invalidations_of, Invalidation};
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         let catalog = catalogs::find(pool, "pg").await.unwrap();
         let admin_before = catalogs::admin_generation(pool).await.unwrap();
         let handle = open(&ctx).await;
@@ -1732,7 +1735,7 @@ mod publish_tests {
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
         let state = test.app.catalog("pg").await.unwrap().unwrap();
-        let before = catalogs::find(test.app.pool(), "pg")
+        let before = catalogs::find(test.app.accounts().executor(), "pg")
             .await
             .unwrap()
             .generation;
@@ -1751,7 +1754,7 @@ mod publish_tests {
             }]
         );
         assert!(published.report.replayed.is_empty());
-        let after = catalogs::find(test.app.pool(), "pg")
+        let after = catalogs::find(test.app.accounts().executor(), "pg")
             .await
             .unwrap()
             .generation;
@@ -1775,13 +1778,13 @@ mod publish_tests {
         let changeset_id: Option<i64> = sqlx::query_scalar(
             "SELECT changeset_id FROM revisions WHERE path = 'a.md' AND revision = 2",
         )
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .unwrap();
         assert_eq!(changeset_id, Some(changeset_row(&test, &handle).await.id));
         let updated_by: String =
             sqlx::query_scalar("SELECT updated_by FROM documents WHERE path = 'a.md'")
-                .fetch_one(test.app.pool())
+                .fetch_one(test.app.accounts().executor())
                 .await
                 .unwrap();
         assert_eq!(updated_by, "writer-a");
@@ -1814,7 +1817,7 @@ mod publish_tests {
         let noop = publish_as(&ctx, &unchanged, "nothing").await.unwrap();
 
         assert!(noop.report.revisions.is_empty(), "{noop:?}");
-        let recorded = entries(test.app.pool(), "catalog.published").await;
+        let recorded = entries(test.app.accounts().executor(), "catalog.published").await;
         assert_eq!(recorded.len(), 1, "{recorded:?}");
         let entry = &recorded[0];
         assert_eq!(entry.target.as_deref(), Some("pg"));
@@ -1823,7 +1826,7 @@ mod publish_tests {
         assert_eq!(entry.details["files"], 2);
         let generation: i64 =
             sqlx::query_scalar("SELECT generation FROM catalogs WHERE name = 'pg'")
-                .fetch_one(test.app.pool())
+                .fetch_one(test.app.accounts().executor())
                 .await
                 .unwrap();
         assert_eq!(entry.details["generation_to"], generation);
@@ -1843,7 +1846,7 @@ mod publish_tests {
         let handle = open(&ctx).await;
         body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
         fail_on(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "BEFORE INSERT ON audit_entries FOR EACH ROW",
         )
         .await;
@@ -1925,7 +1928,7 @@ mod publish_tests {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        let before = catalogs::find(test.app.pool(), "pg")
+        let before = catalogs::find(test.app.accounts().executor(), "pg")
             .await
             .unwrap()
             .generation;
@@ -1942,7 +1945,7 @@ mod publish_tests {
         assert_eq!(blank_unknown.kind(), "Refused");
         assert_eq!(unknown.kind(), "UnknownChangeset");
         assert_eq!(blank.kind(), "Refused");
-        let after = catalogs::find(test.app.pool(), "pg")
+        let after = catalogs::find(test.app.accounts().executor(), "pg")
             .await
             .unwrap()
             .generation;
@@ -1980,10 +1983,15 @@ mod publish_tests {
             .unwrap();
         let state = test.app.catalog("pg").await.unwrap().unwrap();
         let stale = state.current().generation();
-        let size = test.app.pool().options().get_max_connections();
+        let size = test
+            .app
+            .accounts()
+            .executor()
+            .options()
+            .get_max_connections();
         let mut held = Vec::with_capacity(size as usize);
         for _ in 1..size {
-            held.push(test.app.pool().acquire().await.unwrap());
+            held.push(test.app.accounts().executor().acquire().await.unwrap());
         }
 
         // Act: well inside sqlx's 30 s acquire timeout, which a publish
@@ -2024,9 +2032,12 @@ mod publish_tests {
             }]
         ));
         assert_eq!(state_of(&test, &mine).await, ChangesetState::Open);
-        let entries = changesets::entries(test.app.pool(), changeset_row(&test, &mine).await.id)
-            .await
-            .unwrap();
+        let entries = changesets::entries(
+            test.app.accounts().executor(),
+            changeset_row(&test, &mine).await.id,
+        )
+        .await
+        .unwrap();
         assert_eq!(entries.len(), 1);
         assert!(published_text(&test, "a.md").await.ends_with("From a.\n"));
     }
@@ -2196,7 +2207,9 @@ mod publish_tests {
     /// The entry `handle` holds for `path` (`path` without its `/`).
     async fn entry_for(test: &TestApp, handle: &str, path: &str) -> Option<EntryRow> {
         let row = changeset_row(test, handle).await;
-        let entries = changesets::entries(test.app.pool(), row.id).await.unwrap();
+        let entries = changesets::entries(test.app.accounts().executor(), row.id)
+            .await
+            .unwrap();
         entries.into_iter().find(|entry| entry.path == path)
     }
 
@@ -2437,7 +2450,9 @@ mod publish_tests {
         log_entry(&ctx, &handle, "from a").await;
         let published = published_text(&test, "log.md").await;
         let row = changeset_row(&test, &handle).await;
-        let entries = changesets::entries(test.app.pool(), row.id).await.unwrap();
+        let entries = changesets::entries(test.app.accounts().executor(), row.id)
+            .await
+            .unwrap();
 
         let pending = shown(&ctx, &handle).await;
 
@@ -2698,7 +2713,7 @@ mod publish_tests {
             "SELECT revision, deleted_at IS NOT NULL, content FROM documents WHERE path = $1",
         )
         .bind(path)
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .unwrap()
     }
@@ -2773,7 +2788,7 @@ mod publish_tests {
         let deleted: (Option<Vec<u8>>, Option<i64>) = sqlx::query_as(
             "SELECT content, changeset_id FROM revisions WHERE path = 'infra/y.md' AND revision = 2",
         )
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .unwrap();
         assert_eq!(
@@ -2797,7 +2812,7 @@ mod publish_tests {
              VALUES ($1, 'a.md', 2, 'update', 'x'::bytea, false, 'intruder', 'x', now())",
         )
         .bind(state.id())
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .unwrap();
 
@@ -2827,7 +2842,7 @@ mod publish_tests {
         body(&ctx, &handle, "/a.md", "# A\n\nFirst.\n").await;
         // Hold the changeset's row lock, so the publish and then the write
         // queue on it in that order.
-        let mut holder = test.app.pool().begin().await.unwrap();
+        let mut holder = test.app.accounts().executor().begin().await.unwrap();
         changesets::lock_catalog(&mut holder, state.id())
             .await
             .unwrap();
@@ -2883,7 +2898,7 @@ mod publish_tests {
         assert_eq!(published_text(&test, "infra/y.md").await, Y);
         let entries: i64 =
             sqlx::query_scalar("SELECT count(*) FROM changeset_entries WHERE path = 'infra/y.md'")
-                .fetch_one(test.app.pool())
+                .fetch_one(test.app.accounts().executor())
                 .await
                 .unwrap();
         assert_eq!(entries, 0);
@@ -3008,7 +3023,7 @@ mod changes_tests {
     /// The paths of the changeset `handle` names, in order.
     async fn entry_paths(test: &TestApp, handle: &str) -> Vec<String> {
         let row = changeset_row(test, handle).await;
-        changesets::entries(test.app.pool(), row.id)
+        changesets::entries(test.app.accounts().executor(), row.id)
             .await
             .unwrap()
             .into_iter()
@@ -3032,7 +3047,7 @@ mod changes_tests {
                 "SELECT count(*) FROM pg_stat_activity \
                  WHERE datname = current_database() AND wait_event_type = 'Lock'",
             )
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .unwrap();
             if waiting >= count {
@@ -3135,7 +3150,7 @@ mod changes_tests {
         body(&ctx, &handle, "/a.md", "First.\n").await;
         // Hold the changeset's row lock, so the discard and then the write
         // queue on it in that order.
-        let mut holder = test.app.pool().begin().await.unwrap();
+        let mut holder = test.app.accounts().executor().begin().await.unwrap();
         changesets::lock_catalog(&mut holder, state.id())
             .await
             .unwrap();
@@ -3218,9 +3233,12 @@ mod changes_tests {
 
         assert_eq!(reverted.touched, ["/a.md"]);
         assert_eq!(reverted.message, "a.md: reverted to revision 1");
-        let entries = changesets::entries(test.app.pool(), changeset_row(&test, &handle).await.id)
-            .await
-            .unwrap();
+        let entries = changesets::entries(
+            test.app.accounts().executor(),
+            changeset_row(&test, &handle).await.id,
+        )
+        .await
+        .unwrap();
         assert_eq!(entries[0].content.as_deref(), Some(NOTE.as_bytes()));
         // Based on what is published now (revision 2), with no replay.
         assert_eq!(
@@ -3278,8 +3296,12 @@ mod changes_tests {
         discard(&owner, discard_paths(&kept, None)).await.unwrap();
         let closed = discard(&admin, discard_paths(&handle, None)).await.unwrap();
 
-        let reverted = entries(test.app.pool(), "catalog.reverted").await;
-        let discarded = entries(test.app.pool(), "catalog.changeset_discarded").await;
+        let reverted = entries(test.app.accounts().executor(), "catalog.reverted").await;
+        let discarded = entries(
+            test.app.accounts().executor(),
+            "catalog.changeset_discarded",
+        )
+        .await;
         assert_eq!(reverted.len(), 1, "{reverted:?}");
         assert_eq!(reverted[0].target.as_deref(), Some("pg"));
         assert_eq!(reverted[0].teams, [crate::db::TEST_TEAM]);
@@ -3314,7 +3336,7 @@ mod changes_tests {
             None,
         );
         fail_on(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "BEFORE INSERT ON audit_entries FOR EACH ROW",
         )
         .await;
@@ -3361,7 +3383,7 @@ mod changes_tests {
             .unwrap_err();
         // A revision whose bytes are not UTF-8 (no write tool stores one).
         sqlx::query("UPDATE revisions SET content = '\\xff'::bytea WHERE path = 'a.md'")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .unwrap();
         let binary = revert(&ctx, revert_to(&handle, "/a.md", 1))
@@ -3372,9 +3394,12 @@ mod changes_tests {
             .unwrap_err();
 
         assert_eq!(deleted.touched, ["/b.md"]);
-        let entries = changesets::entries(test.app.pool(), changeset_row(&test, &handle).await.id)
-            .await
-            .unwrap();
+        let entries = changesets::entries(
+            test.app.accounts().executor(),
+            changeset_row(&test, &handle).await.id,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             (entries[0].path.as_str(), entries[0].content.as_ref()),
             ("b.md", None)
@@ -3694,7 +3719,7 @@ mod restructure_publish_tests {
         // `$1` is a bind parameter; `documents` stores paths without the `/`.
         sqlx::query_scalar("SELECT deleted_at IS NOT NULL FROM documents WHERE path = $1")
             .bind(path)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .unwrap()
     }

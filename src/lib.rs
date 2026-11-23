@@ -20,10 +20,6 @@
 // toolchain `cargo dylint` builds with overflows its default query depth (128)
 // when it computes the layout of `app::load`'s future.
 #![recursion_limit = "256"]
-// `App::pool()` is deprecated from release 1 of the catalog stores milestone;
-// its ~200 callers move to `accounts()` or a `CatalogDb` in tasks 2 to 6, and
-// task 6 removes this allow with the method.
-#![allow(deprecated)]
 
 pub mod app;
 pub mod archive;

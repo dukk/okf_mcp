@@ -735,7 +735,7 @@ async fn own(
     kind: KeyKind,
     id: &str,
 ) -> Result<KeyRecord, OkfError> {
-    key_rows::list(app.pool())
+    key_rows::list(app.accounts().executor())
         .await?
         .into_iter()
         .find(|record| {
@@ -787,7 +787,12 @@ async fn credentials_ceiling(
     }
     // `&mut *` borrows the pooled connection, returned when the statement ends.
     let ceiling = ceiling::ceiling_in(
-        &mut *app.pool().acquire().await.map_err(OkfError::from)?,
+        &mut *app
+            .accounts()
+            .executor()
+            .acquire()
+            .await
+            .map_err(OkfError::from)?,
         user.id,
         &names,
     )
@@ -828,7 +833,7 @@ async fn own_ceiling(
         .trim()
         .to_ascii_lowercase();
     let page = ceiling::page(
-        app.pool(),
+        app.accounts().executor(),
         user_id,
         &prefix,
         after.as_deref(),
@@ -855,7 +860,7 @@ async fn own_ceiling(
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
 async fn owned(app: &App, user: SessionUser<'_>, kind: KeyKind) -> Result<Vec<KeyView>, OkfError> {
-    Ok(key_rows::list(app.pool())
+    Ok(key_rows::list(app.accounts().executor())
         .await?
         .into_iter()
         .filter(|record| record.kind == kind && record.user_id.as_deref() == Some(user.id))
@@ -894,7 +899,7 @@ async fn account_view(app: &App, principal: &Principal) -> Result<AccountView, O
     };
     let owned_teams = async {
         match principal.user_id.as_deref() {
-            Some(user_id) => teams::owned(app.pool(), user_id).await,
+            Some(user_id) => teams::owned(app.accounts().executor(), user_id).await,
             None => Ok(Vec::new()),
         }
     };
@@ -902,14 +907,17 @@ async fn account_view(app: &App, principal: &Principal) -> Result<AccountView, O
     // whole ceiling (issue #736).
     let ceiling_access = async {
         match principal.user_id.as_deref() {
-            Some(user_id) => ceiling::top_level(app.pool(), user_id).await,
+            Some(user_id) => ceiling::top_level(app.accounts().executor(), user_id).await,
             None => Ok(None),
         }
     };
     // `try_join!` runs the three reads at once (as `asyncio.gather` would)
     // and returns the first error, if any.
-    let (record, ceiling_access, owned) =
-        tokio::try_join!(users::find(app.pool(), name), ceiling_access, owned_teams,)?;
+    let (record, ceiling_access, owned) = tokio::try_join!(
+        users::find(app.accounts().executor(), name),
+        ceiling_access,
+        owned_teams,
+    )?;
     let policy = app.settings();
     let label = user_label(&record.display_name, record.email.as_deref());
     let owned_teams = owned.iter().map(|team| team.name.clone()).collect();
@@ -971,7 +979,7 @@ async fn update_account(
     let user = session_user(&principal)?;
     let display_name = DisplayName::parse(&body.display_name)?;
     users::set_display_name(
-        app.pool(),
+        app.accounts().executor(),
         user.name,
         &display_name,
         &audit,
@@ -1019,7 +1027,12 @@ async fn create_key(
     let requested: Vec<String> = levels.keys().cloned().collect();
     // `&mut *` borrows the pooled connection, returned when the statement ends.
     let ceiling = ceiling::ceiling_in(
-        &mut *app.pool().acquire().await.map_err(OkfError::from)?,
+        &mut *app
+            .accounts()
+            .executor()
+            .acquire()
+            .await
+            .map_err(OkfError::from)?,
         user.id,
         &requested,
     )
@@ -1062,9 +1075,14 @@ async fn create_key(
         expires_at,
         levels: &grants,
     };
-    let created =
-        key_rows::create_self_issued(app.pool(), &new, policy.max_keys_per_user, &audit, now)
-            .await?;
+    let created = key_rows::create_self_issued(
+        app.accounts().executor(),
+        &new,
+        policy.max_keys_per_user,
+        &audit,
+        now,
+    )
+    .await?;
     split_event!(
         info,
         { key = %created.id, },
@@ -1094,7 +1112,7 @@ async fn rename_key(
 ) -> Result<Json<KeyView>, AppError> {
     let user = session_user(&principal)?;
     let target = own(&app, user, KeyKind::Key, &id).await?;
-    key_rows::rename_by_id(app.pool(), &target.id, &body.name).await?;
+    key_rows::rename_by_id(app.accounts().executor(), &target.id, &body.name).await?;
     Ok(Json(
         own(&app, user, KeyKind::Key, &target.id).await?.into(),
     ))
@@ -1175,7 +1193,13 @@ async fn revoke_own(
 ) -> Result<Json<KeyView>, AppError> {
     let user = session_user(principal)?;
     let target = own(app, user, kind, id).await?;
-    key_rows::revoke_by_id(app.pool(), &target.id, audit, app.clock().now()).await?;
+    key_rows::revoke_by_id(
+        app.accounts().executor(),
+        &target.id,
+        audit,
+        app.clock().now(),
+    )
+    .await?;
     split_event!(
         info,
         { credential = %target.id, },
@@ -1214,10 +1238,10 @@ async fn change_password(
     // check and counts no failure.
     passwords::check_policy(&body.new_password)?;
     let now = app.clock().now();
-    let record = users::find(app.pool(), user.name).await?;
+    let record = users::find(app.accounts().executor(), user.name).await?;
     let replaces = if record.has_password {
         let current = body.current_password.as_deref().unwrap_or_default();
-        match passwords::verify_user(app.pool(), user.id, current, now).await? {
+        match passwords::verify_user(app.accounts().executor(), user.id, current, now).await? {
             SignInOutcome::Ok(verified) => Some(verified.stamp),
             SignInOutcome::Failed => {
                 return Err(OkfError::Forbidden {
@@ -1240,7 +1264,7 @@ async fn change_password(
     // For the notice's address, from the database: the user cache can be a
     // `credential_ttl` behind an email change, and the notice must reach the
     // address the account has now.
-    let account = users::find_auth(app.pool(), user.id)
+    let account = users::find_auth(app.accounts().executor(), user.id)
         .await?
         .ok_or_else(|| OkfError::Unauthenticated {
             reason: "this session's user no longer exists".to_string(),
@@ -1283,7 +1307,7 @@ async fn store_password_change(
     change: &SessionChange<'_>,
     account: &users::UserAuth,
 ) -> Result<u64, OkfError> {
-    let mut tx = app.pool().begin().await?;
+    let mut tx = app.accounts().executor().begin().await?;
     let ended = passwords::change_from_session_in(&mut tx, change).await?;
     notify_method_added(app, &mut tx, account, "a new password").await?;
     tx.commit().await?;
@@ -1341,7 +1365,8 @@ async fn delete_account(
     // under the user's row lock by `delete_own`.
     let proved = match (body.password, body.passkey) {
         (Some(password), None) => {
-            match passwords::verify_user(app.pool(), user.id, &password, now).await? {
+            match passwords::verify_user(app.accounts().executor(), user.id, &password, now).await?
+            {
                 SignInOutcome::Ok(verified) => Proved::Password(verified.stamp),
                 SignInOutcome::Failed => {
                     return Err(OkfError::Forbidden {
@@ -1380,7 +1405,7 @@ async fn delete_account(
         session_id: &session.id,
         proof,
     };
-    let deleted = users::delete_own(app.pool(), &own, &actor, now).await?;
+    let deleted = users::delete_own(app.accounts().executor(), &own, &actor, now).await?;
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
     split_event!(
@@ -1402,7 +1427,7 @@ async fn list_passkeys(
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<PasskeyList>, AppError> {
     let user = session_user(&principal)?;
-    let passkeys = passkeys::list(app.pool(), user.id)
+    let passkeys = passkeys::list(app.accounts().executor(), user.id)
         .await?
         .into_iter()
         .map(PasskeyView::from)
@@ -1428,7 +1453,7 @@ async fn rename_passkey(
 ) -> Result<StatusCode, AppError> {
     let user = session_user(&principal)?;
     let name = passkey_name(&body.name)?;
-    passkeys::rename(app.pool(), user.id, &id, &name).await?;
+    passkeys::rename(app.accounts().executor(), user.id, &id, &name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1449,7 +1474,7 @@ async fn remove_passkey(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let user = session_user(&principal)?;
-    passkeys::remove(app.pool(), user.id, &id).await?;
+    passkeys::remove(app.accounts().executor(), user.id, &id).await?;
     split_event!(
         info,
         {},
@@ -1470,7 +1495,7 @@ async fn list_identities(
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<IdentityList>, AppError> {
     let user = session_user(&principal)?;
-    let identities = identities::list(app.pool(), user.id)
+    let identities = identities::list(app.accounts().executor(), user.id)
         .await?
         .into_iter()
         .map(IdentityView::from)
@@ -1506,7 +1531,7 @@ async fn unlink_identity(
     Path(provider): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let user = session_user(&principal)?;
-    identities::unlink(app.pool(), user.id, &provider).await?;
+    identities::unlink(app.accounts().executor(), user.id, &provider).await?;
     split_event!(
         info,
         { %provider, },
@@ -1527,7 +1552,7 @@ async fn list_sessions(
     session: Option<Extension<ConsoleSession>>,
 ) -> Result<Json<SessionList>, AppError> {
     let (user, session) = session_and_user(&principal, session)?;
-    let sessions = user_sessions::list(app.pool(), user.id, Some(&session.id))
+    let sessions = user_sessions::list(app.accounts().executor(), user.id, Some(&session.id))
         .await?
         .into_iter()
         .map(SessionView::from)
@@ -1552,7 +1577,7 @@ async fn revoke_session(
     Path(id_prefix): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let user = session_user(&principal)?;
-    user_sessions::revoke_by_prefix(app.pool(), user.id, &id_prefix).await?;
+    user_sessions::revoke_by_prefix(app.accounts().executor(), user.id, &id_prefix).await?;
     split_event!(
         info,
         { %id_prefix, },
@@ -1572,7 +1597,7 @@ async fn list_sign_ins(
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<SignInList>, AppError> {
     let user = session_user(&principal)?;
-    let sign_ins = sign_in_events::recent(app.pool(), user.name, RECENT_SIGN_INS)
+    let sign_ins = sign_in_events::recent(app.accounts().executor(), user.name, RECENT_SIGN_INS)
         .await?
         .into_iter()
         .map(SignInView::from)
@@ -1618,7 +1643,7 @@ mod tests {
 
     /// Creates user `name` with these entitlements, polls, and signs it in.
     async fn member(test: &TestApp, name: &str, grants: &[(&str, Access)]) -> Browser {
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         users::create(
             pool,
             &NewUser {
@@ -1657,7 +1682,7 @@ mod tests {
     async fn user_id(test: &TestApp, name: &str) -> String {
         sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
             .bind(name)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("the user's id")
     }
@@ -1668,9 +1693,15 @@ mod tests {
     /// Its API id (unpadded base64url).
     async fn add_passkey(test: &TestApp, user_id: &str, name: &str) -> String {
         let passkey = passkey_for(user_id);
-        passkeys::add(test.app.pool(), user_id, &passkey, name, Utc::now())
-            .await
-            .expect("add the passkey");
+        passkeys::add(
+            test.app.accounts().executor(),
+            user_id,
+            &passkey,
+            name,
+            Utc::now(),
+        )
+        .await
+        .expect("add the passkey");
         URL_SAFE_NO_PAD.encode(passkey.cred_id().as_slice())
     }
 
@@ -1681,7 +1712,7 @@ mod tests {
                     (SELECT count(*) FROM user_identities WHERE user_id = $1)",
         )
         .bind(user_id)
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .expect("count the methods")
     }
@@ -1690,7 +1721,7 @@ mod tests {
     async fn hash_of(test: &TestApp, user_id: &str) -> Option<String> {
         sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
             .bind(user_id)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("read the hash")
     }
@@ -1729,7 +1760,7 @@ mod tests {
     async fn a_key_may_read_its_users_account_and_an_unassigned_key_gets_404() {
         let test = app().await;
         let legacy = insert_legacy_test_key(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "legacy",
             Access::Read,
             "legacy",
@@ -1944,7 +1975,7 @@ mod tests {
         let mut alice = member(&test, "alice", &[("main", Access::Read)]).await;
         crate::invalidate::testing::applied(&test.app, async {
             settings::set(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 SettingKey::MaxKeysPerUser,
                 "1",
                 &AuditActor::cli(),
@@ -1994,7 +2025,7 @@ mod tests {
             .parts();
         crate::invalidate::testing::applied(&test.app, async {
             settings::set(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 SettingKey::MaxKeysPerUser,
                 "2",
                 &AuditActor::cli(),
@@ -2033,7 +2064,7 @@ mod tests {
         let mut alice = member(&test, "alice", &[("main", Access::Read)]).await;
         crate::invalidate::testing::applied(&test.app, async {
             settings::set(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 SettingKey::MaxKeyLifetime,
                 "24h",
                 &AuditActor::cli(),
@@ -2097,7 +2128,7 @@ mod tests {
     async fn an_admin_session_is_capped_for_its_own_keys() {
         let test = app().await;
         users::create(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &NewUser {
                 name: "alice",
                 display_name: &crate::labels::DisplayName::default(),
@@ -2108,7 +2139,7 @@ mod tests {
         .await
         .expect("create alice");
         ceiling::entitle(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &NewEntitlement {
                 user: "alice",
                 catalog: "main",
@@ -2121,7 +2152,7 @@ mod tests {
         .expect("entitle");
         crate::invalidate::testing::applied(&test.app, async {
             users::set_admin(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 "alice",
                 AdminChange {
                     on: true,
@@ -2164,7 +2195,7 @@ mod tests {
         let test = app().await;
         let mut alice = member(&test, "alice", &[("main", Access::Read)]).await;
         let client = insert_test_client(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "test-client",
             ClientKind::Dcr,
             "https://client.example.com/callback",
@@ -2175,7 +2206,7 @@ mod tests {
             for (name, user) in [("phone", "alice"), ("tablet", TEST_USER)] {
                 let catalogs = ["main".to_string()];
                 let code = code_rows::create(
-                    test.app.pool(),
+                    test.app.accounts().executor(),
                     &NewSignInCode {
                         name,
                         access: Access::Read,
@@ -2191,9 +2222,14 @@ mod tests {
                 .await
                 .expect("mint a code");
                 grants.push(
-                    code_rows::redeem(test.app.pool(), &code.id, &client, Utc::now())
-                        .await
-                        .expect("redeem"),
+                    code_rows::redeem(
+                        test.app.accounts().executor(),
+                        &code.id,
+                        &client,
+                        Utc::now(),
+                    )
+                    .await
+                    .expect("redeem"),
                 );
             }
         })
@@ -2246,7 +2282,7 @@ mod tests {
         )
         .await;
         users::set_email(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "alice",
             Some("alice@example.com"),
             &AuditActor::cli(),
@@ -2486,7 +2522,7 @@ mod tests {
         let mut second = Browser::session_for(&test, "alice").await;
         let id = user_id(&test, "alice").await;
         users::set_email(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "alice",
             Some("alice@example.com"),
             &AuditActor::cli(),
@@ -2494,9 +2530,14 @@ mod tests {
         )
         .await
         .expect("email");
-        passwords::set(test.app.pool(), &id, "correct horse battery", Utc::now())
-            .await
-            .expect("password");
+        passwords::set(
+            test.app.accounts().executor(),
+            &id,
+            "correct horse battery",
+            Utc::now(),
+        )
+        .await
+        .expect("password");
         let change =
             |current: &str, new: &str| json!({"current_password": current, "new_password": new});
 
@@ -2518,10 +2559,14 @@ mod tests {
             put_password(&test, &mut first, change("correct horse battery", "short"))
                 .await
                 .parts();
-        let unchanged =
-            passwords::verify_user(test.app.pool(), &id, "correct horse battery", Utc::now())
-                .await
-                .expect("verify");
+        let unchanged = passwords::verify_user(
+            test.app.accounts().executor(),
+            &id,
+            "correct horse battery",
+            Utc::now(),
+        )
+        .await
+        .expect("verify");
         let (changed, _) = put_password(
             &test,
             &mut first,
@@ -2537,11 +2582,17 @@ mod tests {
             .send(&test, "GET", "/api/v1/me", Payload::Empty)
             .await
             .parts();
-        let queued = mail_queue::list(test.app.pool()).await.expect("the queue");
-        let now_set =
-            passwords::verify_user(test.app.pool(), &id, "a long new password", Utc::now())
-                .await
-                .expect("verify");
+        let queued = mail_queue::list(test.app.accounts().executor())
+            .await
+            .expect("the queue");
+        let now_set = passwords::verify_user(
+            test.app.accounts().executor(),
+            &id,
+            "a long new password",
+            Utc::now(),
+        )
+        .await
+        .expect("verify");
 
         assert_eq!(missing.as_u16(), 403, "a missing current password");
         assert_eq!(wrong.as_u16(), 403, "a wrong current password, never 401");
@@ -2568,12 +2619,17 @@ mod tests {
         let test = app().await;
         let mut alice = member(&test, "alice", &[]).await;
         let id = user_id(&test, "alice").await;
-        passwords::set(test.app.pool(), &id, "correct horse battery", Utc::now())
-            .await
-            .expect("password");
+        passwords::set(
+            test.app.accounts().executor(),
+            &id,
+            "correct horse battery",
+            Utc::now(),
+        )
+        .await
+        .expect("password");
         sqlx::query("UPDATE users SET locked_until = now() + interval '1 hour' WHERE id = $1")
             .bind(&id)
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .expect("lock alice");
         let before = hash_of(&test, &id).await;
@@ -2633,13 +2689,18 @@ mod tests {
         let mut first = member(&test, "alice", &[]).await;
         let mut second = Browser::session_for(&test, "alice").await;
         let id = user_id(&test, "alice").await;
-        passwords::set(test.app.pool(), &id, "correct horse battery", Utc::now())
-            .await
-            .expect("password");
+        passwords::set(
+            test.app.accounts().executor(),
+            &id,
+            "correct horse battery",
+            Utc::now(),
+        )
+        .await
+        .expect("password");
         let before = hash_of(&test, &id).await;
         // Ending the other sessions fails: the new password must not stay.
         fail_on(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "BEFORE DELETE ON user_sessions FOR EACH ROW",
         )
         .await;
@@ -2650,7 +2711,7 @@ mod tests {
             json!({"current_password": "correct horse battery", "new_password": "a long new password"}),
         )
         .await;
-        allow(test.app.pool(), "user_sessions").await;
+        allow(test.app.accounts().executor(), "user_sessions").await;
         let (other, _) = second
             .send(&test, "GET", "/api/v1/me", Payload::Empty)
             .await
@@ -2784,7 +2845,7 @@ mod tests {
             )
             .bind(hash)
             .bind(&id)
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .expect("insert a session");
         }
@@ -2818,7 +2879,7 @@ mod tests {
         let mut bob = member(&test, "bob", &[]).await;
         let bob_id = user_id(&test, "bob").await;
         passwords::set(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &bob_id,
             "a long first password",
             Utc::now(),
@@ -2827,7 +2888,7 @@ mod tests {
         .expect("password");
         let bobs_passkey = add_passkey(&test, &bob_id, "Bob's phone").await;
         identities::link(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &bob_id,
             "example",
             "sub-b",
@@ -2987,7 +3048,7 @@ mod tests {
         let id = user_id(&test, "alice").await;
         let bob_id = user_id(&test, "bob").await;
         let earlier = Utc::now() - TimeDelta::minutes(5);
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         sign_in_events::record(
             pool,
             Some(&id),
@@ -3040,7 +3101,7 @@ mod tests {
         let mut alice = member(&test, "alice", &[]).await;
         let id = user_id(&test, "alice").await;
         identities::link(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &id,
             "example",
             "sub-1",
@@ -3063,9 +3124,14 @@ mod tests {
             )
             .await
             .parts();
-        passwords::set(test.app.pool(), &id, "a long first password", Utc::now())
-            .await
-            .expect("password");
+        passwords::set(
+            test.app.accounts().executor(),
+            &id,
+            "a long first password",
+            Utc::now(),
+        )
+        .await
+        .expect("password");
         // A NUL, which Postgres refuses, is an unknown provider, not a 500.
         let (malformed, _) = alice
             .send(
@@ -3149,7 +3215,7 @@ mod tests {
         let id = user_id(&test, "alice").await;
         let passkey = add_passkey(&test, &id, "Phone").await;
         identities::link(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &id,
             "example",
             "sub-1",
@@ -3161,7 +3227,7 @@ mod tests {
         // Started before alice's row is held: a session insert takes that
         // row `FOR SHARE`, so it would wait on the holder below forever.
         let second = Browser::session_for(&test, "alice").await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         // Hold alice's row, so both removals are queued on it before either
         // counts her methods: each would see two without the lock.
         let mut holder = pool.begin().await.expect("begin");
@@ -3256,7 +3322,7 @@ mod tests {
                   + (SELECT count(*) FROM user_sessions WHERE user_id = $1)",
         )
         .bind(&id)
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .expect("count what is left");
         assert_eq!(left, 0);
@@ -3264,7 +3330,7 @@ mod tests {
             "SELECT count(*) FROM audit_entries \
              WHERE action = 'user.deleted' AND actor_person_id = target_person_id",
         )
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .expect("count the entries");
         assert_eq!(entries, 1, "recorded with the person as the actor");
@@ -3311,7 +3377,7 @@ mod tests {
         // The 403 and 400 left the account; only the last request deleted it.
         let gone: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE id = $1")
             .bind(&id)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("count");
         assert_eq!(gone, 0);
@@ -3331,7 +3397,7 @@ mod tests {
         assert_eq!(still.status, StatusCode::OK, "still signed in");
         let failed: i32 = sqlx::query_scalar("SELECT failed_sign_ins FROM users WHERE id = $1")
             .bind(&id)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("read the counter");
         assert_eq!(failed, 1, "the sign-in lockout counts it");
@@ -3342,7 +3408,7 @@ mod tests {
         let test = app().await;
         let (id, _) = with_password(&test, "alice").await;
         users::set_admin(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "alice",
             AdminChange {
                 on: true,
@@ -3367,7 +3433,7 @@ mod tests {
         );
         let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE id = $1")
             .bind(&id)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("count");
         assert_eq!(kept, 1);
@@ -3381,7 +3447,7 @@ mod tests {
             "UPDATE catalogs SET owner_team_id = (SELECT id FROM teams WHERE name = 'alice') \
              WHERE name = 'main'",
         )
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .expect("give alice's team main");
 
@@ -3398,7 +3464,7 @@ mod tests {
         );
         let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE id = $1")
             .bind(&id)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("count");
         assert_eq!(kept, 1);

@@ -454,7 +454,7 @@ mod tests {
         // A read-level key with the reporting flag, as the runner holds.
         let grants = ["main".to_owned()];
         let reporter = key_rows::create_with_id(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &NewKey {
                 name: "runner",
                 access: Access::Read,

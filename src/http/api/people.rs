@@ -563,11 +563,11 @@ async fn list_users(
     }
     let looked_up = query.email.is_some();
     let records = match query.email {
-        Some(email) => users::find_record_by_email(app.pool(), &email)
+        Some(email) => users::find_record_by_email(app.accounts().executor(), &email)
             .await?
             .into_iter()
             .collect(),
-        None => users::list(app.pool()).await?,
+        None => users::list(app.accounts().executor()).await?,
     };
     // An admin user is left out for a provisioner, so it counts as not found.
     let records: Vec<UserRecord> = records
@@ -613,7 +613,7 @@ async fn create_user(
         name: &body.name,
         display_name: &display_name,
     };
-    let created = users::create(app.pool(), &new, &actor, app.clock().now()).await?;
+    let created = users::create(app.accounts().executor(), &new, &actor, app.clock().now()).await?;
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
     Ok((StatusCode::CREATED, Json(created.into())))
@@ -633,7 +633,12 @@ async fn user_detail(
 ) -> Result<Json<UserDetail>, AppError> {
     require_reader(&principal)?;
     if principal.provisioner {
-        let mut tx = app.pool().begin().await.map_err(OkfError::from)?;
+        let mut tx = app
+            .accounts()
+            .executor()
+            .begin()
+            .await
+            .map_err(OkfError::from)?;
         let (_, is_admin) = crate::store::audit::lock_people(
             &mut tx,
             &actor,
@@ -659,11 +664,11 @@ async fn user_detail(
             entitlements,
         }));
     }
-    let user = users::find(app.pool(), &name).await?;
+    let user = users::find(app.accounts().executor(), &name).await?;
     // `as_deref` turns the record's `Option<String>` into an `Option<&str>`,
     // comparable with `Some(name)` without allocating.
     let named = |owner: Option<&str>| owner == Some(name.as_str());
-    let keys = key_rows::list(app.pool())
+    let keys = key_rows::list(app.accounts().executor())
         .await?
         .into_iter()
         .filter(|key| {
@@ -672,7 +677,7 @@ async fn user_detail(
         .map(KeyView::from)
         .collect();
     let now = app.clock().now();
-    let codes = codes::list(app.pool())
+    let codes = codes::list(app.accounts().executor())
         .await?
         .into_iter()
         .filter(|code| {
@@ -696,7 +701,7 @@ async fn user_detail(
 /// [`OkfError::UnknownName`]; [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
 async fn entitlement_views(app: &App, name: &str) -> Result<Vec<EntitlementView>, OkfError> {
-    Ok(ceiling::entitlements(app.pool(), name)
+    Ok(ceiling::entitlements(app.accounts().executor(), name)
         .await?
         .into_iter()
         .map(EntitlementView::from)
@@ -725,7 +730,14 @@ async fn set_admin(
         on: body.admin,
         allow_last: false,
     };
-    let previous = users::set_admin(app.pool(), &name, change, &actor, app.clock().now()).await?;
+    let previous = users::set_admin(
+        app.accounts().executor(),
+        &name,
+        change,
+        &actor,
+        app.clock().now(),
+    )
+    .await?;
     split_event!(
         info,
         { previous, admin = body.admin, },
@@ -757,7 +769,14 @@ async fn set_email(
 ) -> Result<Json<UserView>, AppError> {
     require_manager(&principal)?;
     let now = app.clock().now();
-    users::set_email(app.pool(), &name, body.email.as_deref(), &actor, now).await?;
+    users::set_email(
+        app.accounts().executor(),
+        &name,
+        body.email.as_deref(),
+        &actor,
+        now,
+    )
+    .await?;
     // The address itself is not logged.
     split_event!(
         info,
@@ -767,7 +786,9 @@ async fn set_email(
     );
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
-    Ok(Json(users::find(app.pool(), &name).await?.into()))
+    Ok(Json(
+        users::find(app.accounts().executor(), &name).await?.into(),
+    ))
 }
 
 /// `POST /users/{name}/invite`: queues a setup email with a single-use link.
@@ -787,7 +808,8 @@ async fn invite_user(
 ) -> Result<(StatusCode, Json<Invited>), AppError> {
     require_manager(&principal)?;
     let now = app.clock().now();
-    let email = invite::send_setup(app.pool(), app.config(), &name, &actor, now).await?;
+    let email =
+        invite::send_setup(app.accounts().executor(), app.config(), &name, &actor, now).await?;
     split_event!(
         info,
         {},
@@ -866,9 +888,18 @@ async fn entitle(
         access,
     };
     match owner {
-        None => ceiling::entitle(app.pool(), &new, &actor, app.clock().now()).await?,
+        None => {
+            ceiling::entitle(app.accounts().executor(), &new, &actor, app.clock().now()).await?
+        }
         Some(owner) => {
-            ceiling::entitle_as_owner(app.pool(), owner, &new, &actor, app.clock().now()).await?
+            ceiling::entitle_as_owner(
+                app.accounts().executor(),
+                owner,
+                &new,
+                &actor,
+                app.clock().now(),
+            )
+            .await?
         }
     }
     split_event!(
@@ -900,13 +931,14 @@ async fn unentitle(
     let owner = entitlement_caller(&principal)?;
     let now = app.clock().now();
     match owner {
-        None => ceiling::unentitle(app.pool(), &name, &catalog, &actor, now).await?,
+        None => ceiling::unentitle(app.accounts().executor(), &name, &catalog, &actor, now).await?,
         Some(owner) => {
             let target = EntitlementRef {
                 user: &name,
                 catalog: &catalog,
             };
-            ceiling::unentitle_as_owner(app.pool(), owner, &target, &actor, now).await?
+            ceiling::unentitle_as_owner(app.accounts().executor(), owner, &target, &actor, now)
+                .await?
         }
     }
     split_event!(
@@ -932,8 +964,8 @@ async fn list_sessions(
     Path(name): Path<String>,
 ) -> Result<Json<SessionList>, AppError> {
     require_admin(&principal)?;
-    let id = users::id_by_name(app.pool(), &name).await?;
-    let sessions = user_sessions::list(app.pool(), &id, None)
+    let id = users::id_by_name(app.accounts().executor(), &name).await?;
+    let sessions = user_sessions::list(app.accounts().executor(), &id, None)
         .await?
         .into_iter()
         .map(SessionView::from)
@@ -955,7 +987,8 @@ async fn revoke_sessions(
     Path(name): Path<String>,
 ) -> Result<Json<SessionsRevoked>, AppError> {
     require_every_catalog(&principal)?;
-    let revoked = users::end_sessions(app.pool(), &name, &actor, app.clock().now()).await?;
+    let revoked =
+        users::end_sessions(app.accounts().executor(), &name, &actor, app.clock().now()).await?;
     split_event!(
         info,
         { revoked, },
@@ -984,7 +1017,7 @@ async fn revoke_session(
 ) -> Result<StatusCode, AppError> {
     require_every_catalog(&principal)?;
     let now = app.clock().now();
-    users::end_session_by_prefix(app.pool(), &name, &id_prefix, &actor, now).await?;
+    users::end_session_by_prefix(app.accounts().executor(), &name, &id_prefix, &actor, now).await?;
     split_event!(
         info,
         {},
@@ -1006,7 +1039,7 @@ async fn list_sign_ins(
     Path(name): Path<String>,
 ) -> Result<Json<SignInList>, AppError> {
     require_admin(&principal)?;
-    let sign_ins = sign_in_events::recent(app.pool(), &name, RECENT_SIGN_INS)
+    let sign_ins = sign_in_events::recent(app.accounts().executor(), &name, RECENT_SIGN_INS)
         .await?
         .into_iter()
         .map(SignInView::from)
@@ -1044,7 +1077,14 @@ async fn delete_user(
         unless_shared_member: query.unless_shared_member,
         ..users::DeleteOptions::default()
     };
-    users::delete(app.pool(), &name, options, &actor, app.clock().now()).await?;
+    users::delete(
+        app.accounts().executor(),
+        &name,
+        options,
+        &actor,
+        app.clock().now(),
+    )
+    .await?;
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
     Ok(StatusCode::NO_CONTENT)
@@ -1062,7 +1102,7 @@ async fn list_teams(
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<TeamList>, AppError> {
     require_reader(&principal)?;
-    let teams = TeamView::many(&app, teams::list(app.pool()).await?).await?;
+    let teams = TeamView::many(&app, teams::list(app.accounts().executor()).await?).await?;
     Ok(Json(TeamList { teams }))
 }
 
@@ -1089,7 +1129,7 @@ async fn create_team(
         display_name: &display_name,
         owner: &body.owner,
     };
-    let created = teams::create(app.pool(), &new, &actor, app.clock().now()).await?;
+    let created = teams::create(app.accounts().executor(), &new, &actor, app.clock().now()).await?;
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
     Ok((
@@ -1109,7 +1149,7 @@ async fn team_detail(
     Path(name): Path<String>,
 ) -> Result<Json<TeamView>, AppError> {
     require_reader(&principal)?;
-    let record = teams::find(app.pool(), &name).await?;
+    let record = teams::find(app.accounts().executor(), &name).await?;
     Ok(Json(TeamView::one(&app, record).await?))
 }
 
@@ -1130,7 +1170,7 @@ async fn delete_team(
     Path(name): Path<String>,
 ) -> Result<StatusCode, AppError> {
     require_manager(&principal)?;
-    teams::delete(app.pool(), &name, &actor, app.clock().now()).await?;
+    teams::delete(app.accounts().executor(), &name, &actor, app.clock().now()).await?;
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
     Ok(StatusCode::NO_CONTENT)
@@ -1158,12 +1198,18 @@ async fn set_member(
         user: &user,
         role: body.role,
     };
-    let change = teams::set_member(app.pool(), &membership, &actor, app.clock().now()).await?;
+    let change = teams::set_member(
+        app.accounts().executor(),
+        &membership,
+        &actor,
+        app.clock().now(),
+    )
+    .await?;
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
     Ok(Json(MembershipChanged {
         change: change_name(change),
-        team: TeamView::one(&app, teams::find(app.pool(), &team).await?).await?,
+        team: TeamView::one(&app, teams::find(app.accounts().executor(), &team).await?).await?,
     }))
 }
 
@@ -1184,10 +1230,17 @@ async fn remove_member(
     Path((team, user)): Path<(String, String)>,
 ) -> Result<Json<TeamView>, AppError> {
     require_manager(&principal)?;
-    teams::remove_member(app.pool(), &team, &user, &actor, app.clock().now()).await?;
+    teams::remove_member(
+        app.accounts().executor(),
+        &team,
+        &user,
+        &actor,
+        app.clock().now(),
+    )
+    .await?;
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
-    let record = teams::find(app.pool(), &team).await?;
+    let record = teams::find(app.accounts().executor(), &team).await?;
     Ok(Json(TeamView::one(&app, record).await?))
 }
 
@@ -1217,9 +1270,16 @@ async fn set_suspension(
     require_manager(&principal)?;
     let now = app.clock().now();
     let team = if body.suspended {
-        teams::suspend(app.pool(), &name, body.notice.as_deref(), &actor, now).await?
+        teams::suspend(
+            app.accounts().executor(),
+            &name,
+            body.notice.as_deref(),
+            &actor,
+            now,
+        )
+        .await?
     } else {
-        teams::unsuspend(app.pool(), &name, &actor, now).await?
+        teams::unsuspend(app.accounts().executor(), &name, &actor, now).await?
     };
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
@@ -1256,10 +1316,19 @@ async fn update_user(
 ) -> Result<Json<UserView>, AppError> {
     require_manager(&principal)?;
     let display_name = DisplayName::parse(&body.display_name)?;
-    users::set_display_name(app.pool(), &name, &display_name, &actor, app.clock().now()).await?;
+    users::set_display_name(
+        app.accounts().executor(),
+        &name,
+        &display_name,
+        &actor,
+        app.clock().now(),
+    )
+    .await?;
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
-    Ok(Json(users::find(app.pool(), &name).await?.into()))
+    Ok(Json(
+        users::find(app.accounts().executor(), &name).await?.into(),
+    ))
 }
 
 /// `PATCH /teams/{name}`: sets a shared team's display name; the labels show
@@ -1298,10 +1367,16 @@ async fn update_team(
         display_name: &display_name,
         owner,
     };
-    teams::set_display_name(app.pool(), &change, &actor, app.clock().now()).await?;
+    teams::set_display_name(
+        app.accounts().executor(),
+        &change,
+        &actor,
+        app.clock().now(),
+    )
+    .await?;
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
-    let record = teams::find(app.pool(), &name).await?;
+    let record = teams::find(app.accounts().executor(), &name).await?;
     Ok(Json(TeamView::one(&app, record).await?))
 }
 
@@ -1317,7 +1392,7 @@ async fn list_unassigned(
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<UnassignedView>, AppError> {
     require_every_catalog(&principal)?;
-    let rows = unassigned::list(app.pool()).await?;
+    let rows = unassigned::list(app.accounts().executor()).await?;
     let now = app.clock().now();
     Ok(Json(UnassignedView {
         keys: rows.keys.into_iter().map(KeyView::from).collect(),
@@ -1468,7 +1543,7 @@ mod tests {
             ("user.entitlement_removed", 1),
             ("user.sessions_revoked", 2),
         ] {
-            let recorded: Vec<_> = entries(test.app.pool(), action)
+            let recorded: Vec<_> = entries(test.app.accounts().executor(), action)
                 .await
                 .into_iter()
                 .filter(|entry| entry.person.as_deref() == Some("alice"))
@@ -1722,7 +1797,7 @@ mod tests {
         user(&test, &root, "alice").await;
         for name in ["alice", TEST_USER] {
             user_rows::set_admin(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 name,
                 AdminChange {
                     on: true,
@@ -1734,7 +1809,7 @@ mod tests {
             .await
             .expect("make an admin");
         }
-        let mut holder = test.app.pool().begin().await.expect("begin");
+        let mut holder = test.app.accounts().executor().begin().await.expect("begin");
         sqlx::query("SELECT id FROM users WHERE is_admin FOR UPDATE")
             .execute(&mut *holder)
             .await
@@ -1745,9 +1820,12 @@ mod tests {
             async move { send(test, "PUT", &uri, Some(root), Some(json!({"admin": false}))).await }
         };
         let release = async {
-            tokio::time::timeout(RACE_WAIT, wait_for_lock_waiters(test.app.pool(), 2))
-                .await
-                .expect("both clears wait on the admin rows");
+            tokio::time::timeout(
+                RACE_WAIT,
+                wait_for_lock_waiters(test.app.accounts().executor(), 2),
+            )
+            .await
+            .expect("both clears wait on the admin rows");
             holder.rollback().await.expect("release the admin rows");
         };
 
@@ -1762,7 +1840,7 @@ mod tests {
         let mut statuses = [first.as_u16(), second.as_u16()];
         statuses.sort_unstable();
         let admins: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE is_admin")
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("count the admins");
 
@@ -1836,7 +1914,7 @@ mod tests {
         assert_eq!(no_email.as_u16(), 409);
         assert_eq!(status.as_u16(), 202, "{body}");
         assert_eq!(body, json!({"name": "alice", "email": "alice@example.com"}));
-        let queued = crate::mail::queue::list(test.app.pool())
+        let queued = crate::mail::queue::list(test.app.accounts().executor())
             .await
             .expect("the queue");
         assert_eq!(queued.len(), 1);
@@ -1846,7 +1924,7 @@ mod tests {
         let plain = app().await;
         let plain_root = every_catalog_admin(&plain).await;
         user_rows::set_email(
-            plain.app.pool(),
+            plain.app.accounts().executor(),
             TEST_USER,
             Some("tester@example.com"),
             &AuditActor::cli(),
@@ -1879,7 +1957,7 @@ mod tests {
 
         let (entitled, body) = put("main", "read").await;
         let (_, detail) = send(&test, "GET", "/api/v1/users/alice", Some(&root), None).await;
-        let ceiling_now = ceiling::ceiling_of(test.app.pool(), "alice")
+        let ceiling_now = ceiling::ceiling_of(test.app.accounts().executor(), "alice")
             .await
             .expect("ceiling");
         // Her session's ceiling on `main`, resolved from the cached gates
@@ -1930,7 +2008,7 @@ mod tests {
 
     /// The id of user `name`.
     async fn detail_id(test: &TestApp, name: &str) -> String {
-        user_rows::id_by_name(test.app.pool(), name)
+        user_rows::id_by_name(test.app.accounts().executor(), name)
             .await
             .expect("the user's id")
     }
@@ -1944,7 +2022,7 @@ mod tests {
         let mut second = Browser::session_for(&test, "alice").await;
         let id = detail_id(&test, "alice").await;
         sign_in_events::record(
-            test.app.pool(),
+            test.app.accounts().executor(),
             Some(&id),
             Method::Password,
             Outcome::Ok,
@@ -2088,7 +2166,7 @@ mod tests {
             )
             .bind(hash)
             .bind(&id)
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .expect("seed a session");
         }
@@ -2123,7 +2201,7 @@ mod tests {
         let root = every_catalog_admin(&test).await;
         user(&test, &root, "alice").await;
         let id = detail_id(&test, "alice").await;
-        let mut signing_in = test.app.pool().begin().await.expect("begin");
+        let mut signing_in = test.app.accounts().executor().begin().await.expect("begin");
         user_sessions::start(
             &mut *signing_in,
             &SessionStart {
@@ -2138,9 +2216,12 @@ mod tests {
         .await
         .expect("start a session in the open transaction");
         let commit = async {
-            tokio::time::timeout(RACE_WAIT, wait_for_lock_waiters(test.app.pool(), 1))
-                .await
-                .expect("the sign-out waits on the user's row");
+            tokio::time::timeout(
+                RACE_WAIT,
+                wait_for_lock_waiters(test.app.accounts().executor(), 1),
+            )
+            .await
+            .expect("the sign-out waits on the user's row");
             signing_in.commit().await.expect("commit the sign-in");
         };
 
@@ -2160,7 +2241,7 @@ mod tests {
         .expect("the sign-out never finished");
         let left: i64 = sqlx::query_scalar("SELECT count(*) FROM user_sessions WHERE user_id = $1")
             .bind(&id)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("count the sessions");
 
@@ -2349,14 +2430,14 @@ mod tests {
         // Not `{key}`: the answer holds the secret.
         assert_eq!(created.as_u16(), 200, "{}", key["error"]);
         sqlx::query("UPDATE users SET is_admin = (name = 'alice')")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .unwrap();
 
         let (last, body) = send(&test, "DELETE", "/api/v1/users/alice", Some(&root), None).await;
         sqlx::query("UPDATE users SET is_admin = true WHERE name = $1")
             .bind(TEST_USER)
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .unwrap();
         let (deleted, _) = send(&test, "DELETE", "/api/v1/users/alice", Some(&root), None).await;
@@ -2373,7 +2454,7 @@ mod tests {
         assert_eq!(gone, StatusCode::NOT_FOUND);
         let source: String =
             sqlx::query_scalar("SELECT source FROM audit_entries WHERE action = 'user.deleted'")
-                .fetch_one(test.app.pool())
+                .fetch_one(test.app.accounts().executor())
                 .await
                 .unwrap();
         assert_eq!(source, "api");
@@ -2664,7 +2745,7 @@ mod tests {
     async fn assigning_a_legacy_key_and_listing_unassigned() {
         let test = app().await;
         crate::store::keys::insert_legacy_test_key(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "legacy",
             Access::Read,
             "legacy",
@@ -2710,7 +2791,7 @@ mod tests {
         // carries the new user once the route's poll has reloaded the cache.
         let test = app().await;
         let legacy = crate::store::keys::insert_legacy_test_key(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "legacy",
             Access::Read,
             "legacy",
@@ -2767,7 +2848,7 @@ mod tests {
             ("alice-all", Grants::All),
         ] {
             key_rows::create_with_id(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 &NewKey {
                     name,
                     access: Access::Read,
@@ -2789,7 +2870,7 @@ mod tests {
         for (name, catalog) in [("code-main", "main"), ("code-other", "other")] {
             let grants = [catalog.to_string()];
             codes::create(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 &NewSignInCode {
                     name,
                     access: Access::Read,
@@ -3095,7 +3176,7 @@ mod tests {
         let (again, _) = put_suspension(&test, &root, json!({"suspended": false})).await;
 
         assert_eq!([suspended, lifted, again], [200, 200, 200]);
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         let on = crate::store::audit::testing::entries(pool, "team.suspended").await;
         let off = crate::store::audit::testing::entries(pool, "team.unsuspended").await;
         assert_eq!((on.len(), off.len()), (1, 1), "{on:?} {off:?}");
