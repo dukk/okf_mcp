@@ -175,7 +175,7 @@ impl CatalogDb {
         dylint_lib = "hyp_tracing",
         allow(uninstrumented_fn, reason = "one-line constructor")
     )]
-    pub(crate) fn new(store: StoreName, pool: PgPool) -> Self {
+    pub fn new(store: StoreName, pool: PgPool) -> Self {
         Self { store, pool }
     }
 

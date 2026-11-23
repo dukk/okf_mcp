@@ -826,7 +826,7 @@ async fn an_import_and_a_repair_invalidate_the_catalog_at_their_generation() {
     };
     let imported = invalidations_of(&db.pool, async {
         import(
-            &db.pool,
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
             "main",
             crate::archive::files(&[("a.md", NOTE)]),
             &options,
@@ -842,7 +842,13 @@ async fn an_import_and_a_repair_invalidate_the_catalog_at_their_generation() {
             audit: &audit,
             now: now(),
         };
-        repair(&db.pool, "main", &options).await.unwrap();
+        repair(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "main",
+            &options,
+        )
+        .await
+        .unwrap();
     })
     .await;
     let at = |generation| Invalidation::Catalog {

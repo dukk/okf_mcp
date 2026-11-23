@@ -209,7 +209,7 @@ async fn publish_locked(
     let lock_started = std::time::Instant::now();
     let locks = async {
         let publishing = app.publish_lock(state.id()).await;
-        let mut tx = app.pool().begin().await?;
+        let mut tx = app.main_store().begin().await?;
         // The users the entry resolves (the actor, its key's owner and the
         // person of a personal owner team), before the changeset: the
         // order `users::delete` takes them in (issue #418). After the

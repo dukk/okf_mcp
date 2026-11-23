@@ -83,12 +83,17 @@ async fn import_behind(pool: &PgPool, catalog: &str, files: &[(&str, &str)]) -> 
         audit: &AuditActor::cli(),
         now: Utc::now(),
     };
-    import(pool, catalog, files, &options)
-        .await
-        .unwrap()
-        .changed
-        .expect("the import changed the catalog")
-        .generation
+    import(
+        &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+        catalog,
+        files,
+        &options,
+    )
+    .await
+    .unwrap()
+    .changed
+    .expect("the import changed the catalog")
+    .generation
 }
 
 /// Stores a row no workspace accepts (a path escaping the catalog) and

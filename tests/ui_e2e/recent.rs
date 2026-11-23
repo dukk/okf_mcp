@@ -44,9 +44,17 @@ async fn publish(server: &TestServer, catalog: &str, entries: Files, actor: &str
         now: Utc::now(),
     };
     crate::support::server::applied(&server.app, async {
-        import(&server.db.pool, catalog, entries, &options)
-            .await
-            .expect("import");
+        import(
+            &okf_mcp::stores::CatalogDb::new(
+                okf_mcp::stores::StoreName::main(),
+                server.db.pool.clone(),
+            ),
+            catalog,
+            entries,
+            &options,
+        )
+        .await
+        .expect("import");
     })
     .await;
 }
@@ -100,9 +108,14 @@ async fn add_late(pool: &sqlx::PgPool, app: &std::sync::Arc<okf_mcp::app::App>) 
         now: Utc::now(),
     };
     crate::support::server::applied(app, async {
-        import(pool, "main", entries, &options)
-            .await
-            .expect("import late.md");
+        import(
+            &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), pool.clone()),
+            "main",
+            entries,
+            &options,
+        )
+        .await
+        .expect("import late.md");
     })
     .await;
 }

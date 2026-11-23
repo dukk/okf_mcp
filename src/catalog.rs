@@ -570,7 +570,14 @@ mod tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
         };
-        import(pool, "pg", files(entries), &options).await.unwrap();
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+            "pg",
+            files(entries),
+            &options,
+        )
+        .await
+        .unwrap();
     }
 
     /// A refresh and a publish's refresh (`refresh_locked`) racing on a full
@@ -774,7 +781,14 @@ mod tests {
             now: imported,
         };
         let entries = files(&[("a.md", b"# A\n"), ("b.txt", b"b\n")]);
-        import(&db.pool, "pg", entries, &options).await.unwrap();
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            entries,
+            &options,
+        )
+        .await
+        .unwrap();
 
         empty.refresh(&db.pool, &rebuilds).await.unwrap();
 
@@ -1084,7 +1098,14 @@ mod tests {
             ("later.md", later.as_bytes()),
             ("earlier.md", earlier.as_bytes()),
         ]);
-        import(&db.pool, "pg", entries, &options).await.unwrap();
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            entries,
+            &options,
+        )
+        .await
+        .unwrap();
         let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
             .await
             .unwrap();

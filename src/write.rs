@@ -175,7 +175,7 @@ where
     app.catalog_cache().refreshed_if_moved(&state, before).await;
     // Dropping `tx` without `commit()` (any `?` below) rolls everything back:
     // a refused edit leaves no entry behind.
-    let mut tx = app.pool().begin().await?;
+    let mut tx = app.main_store().begin().await?;
     if audit.is_some() {
         // The entry's users before the changeset, as publish (issue #418).
         crate::store::publish::lock_people(&mut tx, &ctx.audit_actor(), state.name()).await?;
@@ -722,7 +722,7 @@ mod tests {
             now: Utc::now(),
         };
         let republished = files(&[("a.md", "# Changed\n"), ("AGENTS.md", "# Agents\n")]);
-        import(test.app.pool(), "pg", republished, &options)
+        import(test.app.main_store(), "pg", republished, &options)
             .await
             .unwrap();
         let state = test.app.catalog("pg").await.unwrap().unwrap();

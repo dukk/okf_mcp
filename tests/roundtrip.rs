@@ -48,7 +48,14 @@ async fn round_trip(files: &Files) -> (Files, ImportReport) {
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),
     };
-    import(&db.pool, "rt", files.clone(), &first).await.unwrap();
+    import(
+        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), db.pool.clone()),
+        "rt",
+        files.clone(),
+        &first,
+    )
+    .await
+    .unwrap();
 
     let (tarball, _generation) = export::export(
         &db.pool,
@@ -72,9 +79,14 @@ async fn round_trip(files: &Files) -> (Files, ImportReport) {
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),
     };
-    let report = import(&db.pool, "rt", exported.clone(), &again)
-        .await
-        .unwrap();
+    let report = import(
+        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), db.pool.clone()),
+        "rt",
+        exported.clone(),
+        &again,
+    )
+    .await
+    .unwrap();
     (exported, report)
 }
 

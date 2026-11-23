@@ -234,6 +234,8 @@ Each release ends deployable: after Task 6 (types only, rolling), after Task 10 
 - [ ] Where one of these transactions also reads or writes account tables (the audit write, `audit::lock_people`, the `catalogs` row lock, `catalogs.generation`), leave the statement in place, and list each one with file and line in this task's changelog under `## Notes` as "crosses in release 1". Tasks 11-13 remove every listed item. That list is the inventory those tasks work from.
 - [ ] Tests: existing tests pass unchanged apart from handle types.
 
+> **Corrected (issue #960, 2026-11-23).** Shipped: `import::import` and `repair::repair` take `&CatalogDb` (`db.begin()`); publish, `write::apply`/`apply_audited` (edits and revert) and `open_changeset`/discard in `src/mcp/changesets.rs` begin on `app.main_store()`, since they already take `App` or `ToolContext`. `CatalogDb::new` is now `pub` (not `pub(crate)` as Task 1 had it), so integration tests holding only a pool can build `CatalogDb::new(StoreName::main(), pool.clone())`; `Stores` (Task 8) remains the only production source. Reads inside these functions (`state.refresh`, `changesets::entries`, `with_current_revisions`) still use `App::pool()` and are Task 3's. The "crosses in release 1" inventory is in `changelog/2026-11-23T12-55-43Z-m21-task-02-catalog-writes-take-catalogdb.md`; Tasks 11-13 start from it.
+
 ### Task 3: catalog reads take `CatalogDb`
 
 **Files:** `src/catalog.rs`, `src/store/history.rs`, `src/store/documents.rs`, `src/store/export.rs`, `src/store/gates.rs`, `src/mcp/history.rs`, `src/mcp/documents.rs`, `src/mcp/search.rs`, `src/mcp/context.rs`, `src/http/api/browse.rs`, `src/cache/catalogs.rs`.

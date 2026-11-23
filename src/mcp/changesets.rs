@@ -313,7 +313,7 @@ pub(crate) async fn open_changeset(
     ctx.require_contents(Access::Write, &state).await?;
     // The lock order of every changeset write: the catalog row first, so a
     // concurrent `catalog delete` either waits for this or is seen here.
-    let mut tx = ctx.app().pool().begin().await?;
+    let mut tx = ctx.app().main_store().begin().await?;
     changesets::lock_catalog(&mut tx, state.id()).await?;
     let opened = changesets::open(
         &mut tx,
@@ -641,7 +641,7 @@ pub(crate) async fn discard(
     let recorded =
         paths.is_none() && changeset.key_id.as_deref() != Some(principal.key_id.as_str());
     // Dropping `tx` without `commit()` (any `?`) rolls back.
-    let mut tx = app.pool().begin().await?;
+    let mut tx = app.main_store().begin().await?;
     if recorded {
         // The entry's users before the changeset, as publish (issue #418).
         crate::store::publish::lock_people(&mut tx, &ctx.audit_actor(), state.name()).await?;
@@ -1973,7 +1973,7 @@ mod publish_tests {
             ("log.md", "# Log\n"),
             ("z.md", "# Z\n"),
         ]);
-        import(test.app.pool(), "pg", republished, &options)
+        import(test.app.main_store(), "pg", republished, &options)
             .await
             .unwrap();
         let state = test.app.catalog("pg").await.unwrap().unwrap();
@@ -2405,7 +2405,7 @@ mod publish_tests {
             ("infra/y.md", Y),
             ("log.md", "# Log\n"),
         ]);
-        import(test.app.pool(), "pg", incoming, &options)
+        import(test.app.main_store(), "pg", incoming, &options)
             .await
             .unwrap();
         // The import wrote revision 3; this server's snapshot still has 2
@@ -2650,7 +2650,7 @@ mod publish_tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
         };
-        import(test.app.pool(), "pg", files(&incoming), &options)
+        import(test.app.main_store(), "pg", files(&incoming), &options)
             .await
             .unwrap();
         let state = test.app.catalog("pg").await.unwrap().unwrap();
@@ -2930,7 +2930,7 @@ mod changes_tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
         };
-        import(test.app.pool(), "pg", files(entries), &options)
+        import(test.app.main_store(), "pg", files(entries), &options)
             .await
             .unwrap();
         test.app

@@ -1773,7 +1773,7 @@ mod repair_tests {
         let imported = "---\nokf_version: \"0.2\"\n---\n# Imported\n";
         crate::invalidate::testing::applied(&test.app, async {
             crate::store::import::import(
-                test.app.pool(),
+                test.app.main_store(),
                 "pg",
                 crate::mcp::testing::files(&[("index.md", imported), ("log.md", "# Log\n")]),
                 &options,

@@ -300,9 +300,17 @@ impl TestServer {
                 audit: &okf_mcp::store::audit::AuditActor::cli(),
                 now: Utc::now(),
             };
-            import(&db.pool, name, files, &options)
-                .await
-                .expect("import");
+            import(
+                &okf_mcp::stores::CatalogDb::new(
+                    okf_mcp::stores::StoreName::main(),
+                    db.pool.clone(),
+                ),
+                name,
+                files,
+                &options,
+            )
+            .await
+            .expect("import");
         }
         let (base, app, shutdown, served) =
             serve_app(db.pool.clone(), make_config, mail_worker, redis).await;
