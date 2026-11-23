@@ -439,7 +439,8 @@ impl OkfServer {
                        add_source and remove_source edits of a concept, are replayed onto the new \
                        text instead; a replay that can no longer apply is refused with its reason), \
                        or with LintFailed when a changed file has lint errors; the changeset \
-                       then stays open. Lint errors elsewhere come back as warnings. When every \
+                       then stays open (an error the published file already has is a warning, not \
+                       a refusal). Lint errors elsewhere come back as warnings. When every \
                        edit already matches the published text, the changeset is closed with \
                        published: true and no revisions. Write access.",
         annotations(
@@ -2509,6 +2510,85 @@ mod publish_tests {
             .any(|finding| finding.file == "a.md" && finding.rule == "broken-link"));
         assert_eq!(state_of(&test, &handle).await, ChangesetState::Open);
         assert_eq!(published_text(&test, "a.md").await, NOTE);
+    }
+
+    /// A catalog whose `log.md` and `old.md` hold a broken link already
+    /// (text from before angle-bracket links parsed as links).
+    async fn pg_with_old_broken_links() -> TestApp {
+        let old = format!("{NOTE}See [x](<a b.md>).\n");
+        let log = "# Log\n\n## 2026-11-01\n\n* **Update:** was ([x](<a b.md>), ...)\n";
+        let files: &[(&str, &str)] = &[("a.md", NOTE), ("old.md", &old), ("log.md", log)];
+        app_with(&[("pg", files)], Config::default()).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_logged_publish_over_an_old_broken_link_in_log_md_reports_it_as_a_warning() {
+        let test = pg_with_old_broken_links().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        log_entry(&ctx, &handle, "fine").await;
+
+        let published = publish_as(&ctx, &handle, "log").await.unwrap();
+
+        assert!(published.report.published);
+        let text = published_text(&test, "log.md").await;
+        assert!(text.contains("* **Update:** fine"), "{text}");
+        assert!(
+            published
+                .report
+                .warnings
+                .iter()
+                .any(|finding| finding.file == "log.md"
+                    && finding.rule == "broken-link"
+                    && finding.message.contains("a b.md")),
+            "{:?}",
+            published.report.warnings
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_broken_link_in_a_log_entry_is_still_refused_beside_an_old_one() {
+        let test = pg_with_old_broken_links().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        // The same target as the old finding: one old plus one new is one new.
+        log_entry(&ctx, &handle, "now [y](<a b.md>)").await;
+
+        let error = publish_as(&ctx, &handle, "log").await.unwrap_err();
+
+        let OkfError::LintFailed { errors, warnings } = &error else {
+            panic!("not LintFailed: {error:?}")
+        };
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(
+            (errors[0].file.as_str(), errors[0].rule.as_str()),
+            ("log.md", "broken-link")
+        );
+        assert!(warnings.iter().any(|finding| finding.rule == "broken-link"));
+        assert_eq!(state_of(&test, &handle).await, ChangesetState::Open);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_old_broken_link_in_a_concept_is_a_warning_when_the_concept_is_edited() {
+        let test = pg_with_old_broken_links().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        body(
+            &ctx,
+            &handle,
+            "/old.md",
+            "See [x](<a b.md>).\n\nMore text.\n",
+        )
+        .await;
+
+        let published = publish_as(&ctx, &handle, "edit").await.unwrap();
+
+        assert!(published.report.published);
+        assert!(published
+            .report
+            .warnings
+            .iter()
+            .any(|finding| finding.file == "old.md" && finding.rule == "broken-link"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

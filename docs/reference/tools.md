@@ -459,7 +459,7 @@ The unpublished changeset `changeset` names: each changed path (create, update o
 
 **Publish Changeset** (destructive)
 
-Publish the changeset `changeset` names: its edits become the published documents, each with a new revision carrying `message`. Refused with Conflict when a document changed since this changeset read it (log.md and index.md bookkeeping, and the stamp, review, question, unquestion, add_source and remove_source edits of a concept, are replayed onto the new text instead; a replay that can no longer apply is refused with its reason), or with LintFailed when a changed file has lint errors; the changeset then stays open. Lint errors elsewhere come back as warnings. When every edit already matches the published text, the changeset is closed with published: true and no revisions. Write access.
+Publish the changeset `changeset` names: its edits become the published documents, each with a new revision carrying `message`. Refused with Conflict when a document changed since this changeset read it (log.md and index.md bookkeeping, and the stamp, review, question, unquestion, add_source and remove_source edits of a concept, are replayed onto the new text instead; a replay that can no longer apply is refused with its reason), or with LintFailed when a changed file has lint errors; the changeset then stays open (an error the published file already has is a warning, not a refusal). Lint errors elsewhere come back as warnings. When every edit already matches the published text, the changeset is closed with published: true and no revisions. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
