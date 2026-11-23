@@ -530,6 +530,35 @@ STUB
     rc=$?
 }
 
+# hanging_ps: a stub `ps` that never answers in time, first on PATH.
+hanging_ps() {
+    new_fixtures
+    mkdir -p "$fx/bin"
+    printf '%s\n' '#!/usr/bin/env bash' 'exec sleep 30' >"$fx/bin/ps"
+    chmod +x "$fx/bin/ps"
+}
+
+test_watchdog_skips_a_pass_when_the_ps_scan_hangs() {
+    # #675: an unbounded ps would freeze the watchdog, which then runs until
+    # timeout stops it (124) with at most one warning. Bounded, each 1 s scan
+    # is skipped with a warning and the next pass runs: two fit in 3 s.
+    hanging_ps
+    out=$(cd "$work/wt" && PATH="$fx/bin:$PATH" AGENTIC_CALL_TIMEOUT=1 \
+        AGENTIC_WATCHDOG_INTERVAL=0 timeout 3 "$tools/watchdog.sh" 2>&1)
+    rc=$?
+    want_rc 124; want_out "ps scan failed or timed out"; want_no_out WATCHDOG
+    [ "$(grep -c "ps scan failed or timed out" <<<"$out")" -ge 2 ] \
+        || die "the watchdog did not run a second pass"
+}
+
+test_watchdog_once_exits_0_when_the_ps_scan_hangs() {
+    hanging_ps
+    out=$(cd "$work/wt" && PATH="$fx/bin:$PATH" AGENTIC_CALL_TIMEOUT=1 \
+        timeout 10 "$tools/watchdog.sh" --once 2>&1)
+    rc=$?
+    want_rc 0; want_out "ps scan failed or timed out"; want_no_out WATCHDOG
+}
+
 test_watchdog_ignores_a_wrapped_etimes_reading() {
     # The 2026-11-18 sighting: 2^32 - 4123168608 = 171798688.
     watchdog_with_ps 4123168608 5001

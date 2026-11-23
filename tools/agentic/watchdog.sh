@@ -40,6 +40,10 @@
 # It reports each process's pid, elapsed time, comm (the executable's name)
 # and directory, never its command line: command lines can carry credentials.
 # (Matching still reads the command line internally.)
+# Every `ps` scan is bounded like the tools' gh and git calls (AGENTIC_CALL_TIMEOUT,
+# default 60 s, #675). A scan that times out or fails skips that pass with a
+# warning on stderr (never the scan's output) and the next pass tries again; it
+# is not an alarm, and with --once it still exits 0.
 # After handling an alert, start it again. With --once it checks a single time
 # and exits 0 when nothing is over its limit.
 #
@@ -94,6 +98,20 @@ newest_log_time() {
     return 0
 }
 
+# scan_ps <variable> <ps args...>: runs `ps` bounded (lib.sh: agentic_bounded_call)
+# and stores its output in <variable>. A `ps` that hangs or fails (for example on
+# a /proc entry stuck in an uninterruptible read) is a skipped scan, not an
+# alarm: it warns, without any output of the scan, and returns 1.
+scan_ps() {
+    local out status=0
+    out=$(agentic_bounded_call ps "${@:2}") || status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "watchdog: warning: ps scan failed or timed out (status $status); skipping it" >&2
+        return 1
+    fi
+    printf -v "$1" '%s' "$out"
+}
+
 # Checks every pending expectation (expect.sh), appends alerts to $found.
 check_expectations() {
     local dir file started label wt name now newest time idle busy cwd
@@ -101,14 +119,15 @@ check_expectations() {
     [ -d "$dir" ] || return 0
     # Working processes: the cwd of each cargo, rustc, just or flock, of a
     # gate.sh (a bash, so by its argument) and of a test binary.
-    local busy_cwds=()
+    local busy_cwds=() procs
+    scan_ps procs -eo pid=,comm=,args= || return 0
     while read -r pid comm args; do
         case "$comm" in
             cargo | cargo-* | rustc | just | flock) ;;
             *) case "$args" in */gate.sh* | */debug/deps/* | */debug/build/*/out/*) ;; *) continue ;; esac ;;
         esac
         cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null) && busy_cwds+=("$cwd")
-    done < <(ps -eo pid=,comm=,args= | grep -v -E 'grep|watchdog\.sh')
+    done < <(grep -v -E 'grep|watchdog\.sh' <<<"$procs")
     now=$(agentic_now)
     for file in "$dir"/*; do
         [ -f "$file" ] || continue
@@ -150,6 +169,13 @@ while :; do
         < <(agentic_git -C "$root" worktree list --porcelain | sed -n 's/^worktree //p')
     found=""
     uptime=$(agentic_uptime)
+    # Both scans are bounded. When one times out the whole pass is skipped
+    # (with a warning from scan_ps, never an alarm); the next pass tries again.
+    if ! { scan_ps all_procs -eo pid=,etimes=,args= && scan_ps readers -eo pid=,etimes=,comm=; }; then
+        [ "$once" = 1 ] && exit 0
+        sleep "$interval"
+        continue
+    fi
     while read -r pid elapsed args; do
         cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null) || continue
         in_checkout "$cwd" || continue
@@ -165,8 +191,7 @@ while :; do
             read -r comm <"/proc/$pid/comm" 2>/dev/null || comm=unknown
             found+="pid=$pid elapsed=${elapsed}s comm=$comm cwd=$cwd"$'\n'
         fi
-    done < <(ps -eo pid=,etimes=,args= \
-        | grep -E '/debug/deps/|/debug/build/[^/ ]+/[^/ ]+/out/|cargo (test|clippy|build)|just (test|lint|test-ui)' \
+    done < <(grep -E '/debug/deps/|/debug/build/[^/ ]+/[^/ ]+/out/|cargo (test|clippy|build)|just (test|lint|test-ui)' <<<"$all_procs" \
         | grep -v -E 'grep|watchdog\.sh')
     # Idle stdin readers (#780). The list is by comm only; the command line is
     # read here just to tell `tail -f` (a legitimate follower) from `tail`.
@@ -191,7 +216,7 @@ while :; do
         case "$again" in '' | *[!0-9]*) continue ;; esac
         [ "$again" -gt "$idle_limit" ] && plausible "$again" || continue
         found+="pid=$pid elapsed=${elapsed}s comm=$comm cwd=$cwd idle-stdin-reader"$'\n'
-    done < <(ps -eo pid=,etimes=,comm= | awk '$3=="cat"||$3=="tee"||$3=="head"||$3=="tail"')
+    done < <(awk '$3=="cat"||$3=="tee"||$3=="head"||$3=="tail"' <<<"$readers")
     check_expectations
     if [ -n "$found" ]; then
         echo "WATCHDOG $(date -u +%FT%TZ): long-running or idle processes in $root:"
