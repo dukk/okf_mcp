@@ -294,24 +294,27 @@ enum SnapshotChange {
 
 /// Returns once a backend waits in `lock_people` on `holder_pid`'s lock.
 /// Seeing it blocked there proves the credential snapshot has been read; no
-/// scheduling sleep decides when a competing change may run. Callers bound
-/// this with `tokio::time::timeout`.
+/// scheduling sleep decides when a competing change may run.
+///
+/// `lock_people` takes its users' rows `FOR KEY SHARE`, so the wait is for a
+/// row lock on `users` (see [`crate::test_locks::wait_row_lock_waiter`]); the
+/// holder is the only session that holds one. It reads `pg_locks`, not the
+/// text of the waiter's query, which `pg_stat_activity` can show stale
+/// (issue #639).
+///
+/// # Errors
+/// Never; the result keeps the callers' `?` unchanged.
+///
+/// # Panics
+/// When no such wait appears within 10 s; the message names what it waited
+/// for.
 async fn blocked_in_lock_people(pool: &PgPool, holder_pid: i32) -> Result<(), OkfError> {
-    loop {
-        let waiting: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity \
-             WHERE datname = current_database() AND wait_event_type = 'Lock' \
-               AND $1 = ANY(pg_blocking_pids(pid)) \
-               AND query = 'SELECT is_admin FROM users WHERE id = $1 FOR KEY SHARE')",
-        )
-        .bind(holder_pid)
-        .fetch_one(pool)
-        .await?;
-        if waiting {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    crate::test_locks::wait_row_lock_waiter(pool, holder_pid, "users", Duration::from_secs(10))
+        .await
+        .unwrap_or_else(|| {
+            panic!("no backend waited in lock_people for a users row held by backend {holder_pid}")
+        });
+    Ok(())
 }
 
 /// Pauses a revoke after its snapshot, commits a competing change using an
