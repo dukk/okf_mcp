@@ -276,16 +276,33 @@ async fn an_empty_choice_is_kept_and_searches_nothing() {
         assert_eq!(ui.eval(CHECKED, json!(null)), json!([]));
         // Search is off, and a submit anyway (Enter in the box) does nothing.
         assert_eq!(
-            ui.eval("() => document.querySelector('#search-form button').disabled", json!(null)),
+            ui.eval(
+                "() => document.querySelector('#search-form button').disabled",
+                json!(null)
+            ),
             json!(true)
         );
-        ui.eval("() => document.querySelector('#search-form').requestSubmit()", json!(null));
+        ui.eval(
+            "() => document.querySelector('#search-form').requestSubmit()",
+            json!(null),
+        );
         // Opening the search again (a reload of the link) keeps the empty choice
         // instead of restoring the defaults, and sends no request.
-        ui.eval("() => { location.hash = '#/search/needle%20again'; }", json!(null));
+        ui.eval(
+            "() => { location.hash = '#/search/needle%20again'; }",
+            json!(null),
+        );
         ui.wait_text("#search-none", "Choose at least one catalog");
-        assert_eq!(ui.eval(CHECKED, json!(null)), json!([]), "no default is restored");
-        assert_eq!(ui.eval(SEARCH_REQUESTS, json!(null)), json!(1), "no request was sent");
+        assert_eq!(
+            ui.eval(CHECKED, json!(null)),
+            json!([]),
+            "no default is restored"
+        );
+        assert_eq!(
+            ui.eval(SEARCH_REQUESTS, json!(null)),
+            json!(1),
+            "no request was sent"
+        );
         // Choosing one again enables Search and searches only that one.
         ui.click("#search-chooser input[value=two]");
         ui.click("#search-form button[type=submit]");
