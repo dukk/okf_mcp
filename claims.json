@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 721,
+  "next_claim_seq": 724,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "24130cf5f6ae52315c5f7af558f25d94f3be333c12a969ad84262249455862bf"
+    "mac": "43ede50592975ad32e73b580e9946b226bc831c69894e49502f69062131eb8f9"
   },
-  "next_evidence_seq": 956,
+  "next_evidence_seq": 965,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "e2ec4a5814ba1df462b99191cd5c6b43dfc6f67951cda3dc240b1d043ab80bf4"
+    "mac": "14bf0fd8d7126886c4b417eb3818025823a0ee6aa487dac8db344386be97ac6e"
   },
   "claims": [
     {
@@ -56106,6 +56106,30 @@
             "by": "server",
             "mac": "20e381cadb5bd8314c05b3751d2aca7f270324847a55e5c6c0e7f06ee1f7cf2b"
           }
+        },
+        {
+          "id": "EVD-0961",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "On HEAD 8593239: 40 passed, 0 failed; the delete is the same SQL moved into a const (diff shows identical text); deleting_a_user_removes_its_undelivered_feedback_only and both race tests still pass.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:15:46.838454991Z",
+          "seal": {
+            "by": "server",
+            "mac": "81db3900f7f8dfedfc306eb771e40969d30e5ee27a99d3db8a6fdcd36883012b"
+          }
+        },
+        {
+          "id": "EVD-0962",
+          "kind": "analysis",
+          "locator": "children of CLM-0712",
+          "summary": "Children now also include CLM-0721 (delete uses its partial index) and CLM-0722 (index migration concurrent); with the earlier children all supported.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:15:46.878870048Z",
+          "seal": {
+            "by": "server",
+            "mac": "ab98dabf9fe890dc88d3d8611e7b35c3e66cd99ddd55dffd1ebda2dbb61e54a1"
+          }
         }
       ],
       "verdicts": [
@@ -56154,13 +56178,28 @@
             "by": "server",
             "mac": "77012e412eb22af70270b89756e07551cdadc34470e1f60f7f5ff44fbf2a8aca"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 8593239: same delete, tests pass, new children supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0923",
+            "EVD-0961",
+            "EVD-0962"
+          ],
+          "recorded_at": "2026-11-23T11:15:56.163281790Z",
+          "seal": {
+            "by": "server",
+            "mac": "e0c9d70e2ba155dc3ba5be7e585cac3e4b1840accbf9b6d68a1d23615b5affbe"
+          }
         }
       ],
       "created_at": "2026-11-23T10:45:51.402016283Z",
-      "updated_at": "2026-11-23T11:03:06.626367363Z",
+      "updated_at": "2026-11-23T11:15:56.163281790Z",
       "seal": {
         "by": "server",
-        "mac": "0f41752d7dbdd09552f41d571e69fb74296bf0139db5f028c1ddaa697e61a45d"
+        "mac": "4c557bc3ddfb34b5853307425add6553305946c254b8e40203d69d253bd83f67"
       }
     },
     {
@@ -56217,6 +56256,18 @@
             "by": "server",
             "mac": "85fb3e6706d39ec208dcab8ac6bf090241b6daacbd16e27dfe27cbef0c90858a"
           }
+        },
+        {
+          "id": "EVD-0963",
+          "kind": "analysis",
+          "locator": "src/store/users.rs delete_checked at HEAD 8593239",
+          "summary": "delete_own and delete still reach delete_checked, which runs DELETE_UNDELIVERED_FEEDBACK; the commit only extracted the const. Code reading only.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:15:46.924823048Z",
+          "seal": {
+            "by": "server",
+            "mac": "265b082aa135aba9ce9220e02bca5edce312c435cb0c69c58fb8c42d78db9763"
+          }
         }
       ],
       "verdicts": [
@@ -56245,13 +56296,26 @@
             "by": "server",
             "mac": "df684c7b8c52b32d6002d37398a75ff5e3d70fe3d42130e413d7e4a464a805d0"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 8593239: path unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0963"
+          ],
+          "recorded_at": "2026-11-23T11:15:56.080997819Z",
+          "seal": {
+            "by": "server",
+            "mac": "58f2d610b2ff2052c6cc959fa45a52d624ea490e25f83f55aad82591025973df"
+          }
         }
       ],
       "created_at": "2026-11-23T10:45:51.402016283Z",
-      "updated_at": "2026-11-23T11:03:06.521716950Z",
+      "updated_at": "2026-11-23T11:15:56.080997819Z",
       "seal": {
         "by": "server",
-        "mac": "f9c670e08eed741c47c3957fbee43b1ae7bbed16e78418bb1a7691e22f066a84"
+        "mac": "7297d29e769ad92090cd899be79f1010961902099a03b718fe8933c1e254930c"
       }
     },
     {
@@ -56320,6 +56384,18 @@
             "by": "server",
             "mac": "1b52784560622bdebaba8d71978e654b1eaa2f8ba10aafe81a83d3b52fbd95ce"
           }
+        },
+        {
+          "id": "EVD-0964",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "On HEAD 8593239: 40 passed, 0 failed, including deleting_a_user_removes_its_undelivered_feedback_only; the status filter text is unchanged.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:15:46.969588894Z",
+          "seal": {
+            "by": "server",
+            "mac": "c1f3074c00a0ad7324e18b960e05eac2db131afbd91ae94b2cfbee772db8f6f4"
+          }
         }
       ],
       "verdicts": [
@@ -56349,13 +56425,26 @@
             "by": "server",
             "mac": "cbcd2c5658bc5a7b43609f2eb830b72f9ae8d3441fb09a2b6b52210006674954"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 8593239: test passes, filter unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0964"
+          ],
+          "recorded_at": "2026-11-23T11:15:56.121718402Z",
+          "seal": {
+            "by": "server",
+            "mac": "279b1b4af1204823e8ce8858345145d9e0650de902f8af8aa84e77c71e707670"
+          }
         }
       ],
       "created_at": "2026-11-23T10:45:51.402016283Z",
-      "updated_at": "2026-11-23T11:03:06.572664866Z",
+      "updated_at": "2026-11-23T11:15:56.121718402Z",
       "seal": {
         "by": "server",
-        "mac": "226413f56a9dc1cd183319c3ed4e9b8869cb75d1f859797a3c57af1a1b64e580"
+        "mac": "db292879e467866aa5ec61c43d9d671c45ddb4f0a2bc623cbaeac58a31b1645c"
       }
     },
     {
@@ -56851,6 +56940,243 @@
       "seal": {
         "by": "server",
         "mac": "657705a19033aa6a6eadc93e592152547e9906ea377592885ec22edf660d07e2"
+      }
+    },
+    {
+      "id": "CLM-0721",
+      "statement": "The user-deletion feedback delete (const DELETE_UNDELIVERED_FEEDBACK) has the predicate of partial index feedback_undelivered_user (user_slug, status IN pending/failed), so the planner can use it; a test confirms the plan names the index.",
+      "kind": "performance",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Commit 8593239 message and migration 0035",
+      "derived_from": [
+        "CLM-0712"
+      ],
+      "artifacts": [
+        "src/store/users.rs",
+        "migrations/0035_feedback_undelivered_user_index.sql"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0956",
+          "kind": "test",
+          "locator": "src/store/users.rs tests::the_feedback_delete_on_user_deletion_uses_its_partial_index",
+          "summary": "With enable_seqscan off, EXPLAIN of the exact const DELETE_UNDELIVERED_FEEDBACK (the one delete_checked executes) must contain feedback_undelivered_user. Caveat: with seqscan disabled it proves the index is usable, not that the planner prefers it on a large table.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 2644,
+                "end": 2667
+              },
+              "commit": "8593239016b2ef88b21b1c07b12b054ae459803e"
+            }
+          },
+          "recorded_at": "2026-11-23T11:15:46.595865838Z",
+          "seal": {
+            "by": "server",
+            "mac": "3f1135631ff7c9d5fe29ae4d60233de22b08cc0efaf0b06164504b2c35830e95"
+          }
+        },
+        {
+          "id": "EVD-0957",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "On HEAD 8593239: 40 passed, 0 failed (includes the EXPLAIN test is named users::tests::the_feedback_delete_on_user_deletion_uses_its_partial_index; it matches the filter 'feedback').",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:15:46.657900142Z",
+          "seal": {
+            "by": "server",
+            "mac": "372a97f9e8b7b3f74cc423d14698db24867dba4f4134f0e177d331346ed95c1d"
+          }
+        },
+        {
+          "id": "EVD-0958",
+          "kind": "inspection",
+          "locator": "src/store/users.rs:960-965, 1430-1433; migrations/0035:8-9",
+          "summary": "The const is `DELETE FROM feedback WHERE user_slug = $1 AND status IN ('pending','failed')`; delete_checked executes that const; the index is ON feedback(user_slug) WHERE status IN ('pending','failed'): same predicate.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 960,
+                "end": 965
+              },
+              "commit": "8593239016b2ef88b21b1c07b12b054ae459803e"
+            }
+          },
+          "recorded_at": "2026-11-23T11:15:46.705093344Z",
+          "seal": {
+            "by": "server",
+            "mac": "22bd9054982940528ee5392bff24c8f28e61c209d5bb1b35b8423f6f76f3167a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Same predicate in const and index, and the EXPLAIN test on the executed const names the index; passes. It shows usability, not the planner's choice at scale.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0956",
+            "EVD-0957",
+            "EVD-0958"
+          ],
+          "recorded_at": "2026-11-23T11:15:55.953614745Z",
+          "seal": {
+            "by": "server",
+            "mac": "096d8dd6dfa198f722de81f07e42968296d6ab245863bd9fb28d65f3d2416730"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:15:30.010087013Z",
+      "updated_at": "2026-11-23T11:15:55.953614745Z",
+      "seal": {
+        "by": "server",
+        "mac": "8701078955a132356c8e9396733b90d5c406421d4a1395581d19926f9d2dce26"
+      }
+    },
+    {
+      "id": "CLM-0722",
+      "statement": "Migration 0035 is a no-transaction, single-statement CREATE INDEX CONCURRENTLY IF NOT EXISTS feedback_undelivered_user, and the index is listed in db::CONCURRENT_INDEXES.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Commit 8593239 and migration 0035",
+      "derived_from": [
+        "CLM-0712"
+      ],
+      "artifacts": [
+        "migrations/0035_feedback_undelivered_user_index.sql",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0959",
+          "kind": "inspection",
+          "locator": "migrations/0035_feedback_undelivered_user_index.sql:1-9; src/db.rs:49-56",
+          "summary": "First line \"-- no-transaction\", one statement CREATE INDEX CONCURRENTLY IF NOT EXISTS feedback_undelivered_user ON feedback(user_slug) WHERE status IN ('pending','failed'); db.rs CONCURRENT_INDEXES is [&str;5] ending with that name.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/0035_feedback_undelivered_user_index.sql",
+              "lines": {
+                "start": 1,
+                "end": 9
+              },
+              "commit": "8593239016b2ef88b21b1c07b12b054ae459803e"
+            }
+          },
+          "recorded_at": "2026-11-23T11:15:46.754323690Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d89adeda458840995fe03ded32547179710f989749f2a898cecadc31c9efbce"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Migration text and CONCURRENT_INDEXES entry match the claim.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0959"
+          ],
+          "recorded_at": "2026-11-23T11:15:55.998138895Z",
+          "seal": {
+            "by": "server",
+            "mac": "4b6eb203da42ac8ade9628ab12dd6a420eeaa3d0777b8a0b914ab0f6027553c4"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:15:30.010087013Z",
+      "updated_at": "2026-11-23T11:15:55.998138895Z",
+      "seal": {
+        "by": "server",
+        "mac": "293715071edb94e36e72279aa77a7959fb0e6f04ecab7718541f4bbdb34bc67f"
+      }
+    },
+    {
+      "id": "CLM-0723",
+      "statement": "feedback retry, feedback list and the rate-limit count need no new index: retry looks up by primary key id, the rate-limit count is served by feedback_credential_created, and list_failed is an operator command over failed rows bounded by the prune.",
+      "kind": "performance",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "Commit 8593239 rationale",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs",
+        "migrations/0022_feedback.sql"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0960",
+          "kind": "analysis",
+          "locator": "migrations/0022_feedback.sql:8,34; src/mail/feedback.rs:320 (rate count), retry UPDATE/SELECT WHERE id = $1",
+          "summary": "id is the primary key, so retry's lookups are indexed; the rate-limit count filters credential = $1 AND created_at > $2, matching feedback_credential_created(credential, created_at); list_failed scans for status='failed' ordered by finished_at, which has no dedicated index but runs only from the operator CLI on rows pruned after retention. Not measured.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/0022_feedback.sql",
+              "lines": {
+                "start": 8,
+                "end": 8
+              },
+              "commit": "8593239016b2ef88b21b1c07b12b054ae459803e"
+            }
+          },
+          "recorded_at": "2026-11-23T11:15:46.798591405Z",
+          "seal": {
+            "by": "server",
+            "mac": "1e4b50ae57950ad31a45954d2ddcfbf4fb6e590c9b9696f208606a1e658a4007"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "PK, existing credential/created_at index, and bounded operator scan, by reading; not measured.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0960"
+          ],
+          "recorded_at": "2026-11-23T11:15:56.040441726Z",
+          "seal": {
+            "by": "server",
+            "mac": "7a30ed8c33113fd355cedd71e276aebc4e6c244f744057efec5e48cde28ef0f3"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:15:30.010087013Z",
+      "updated_at": "2026-11-23T11:15:56.040441726Z",
+      "seal": {
+        "by": "server",
+        "mac": "bd8e9c715c31120b8a684772d0d383f21090a168d98f9506acf5eec20d2f3fbb"
       }
     }
   ]
