@@ -12,6 +12,7 @@
 use sqlx::postgres::PgPool;
 use sqlx::{Postgres, Transaction};
 
+mod credentials;
 mod registry;
 
 pub use registry::{PoolSettings, Stores, STORE_SEARCH_PATH};
@@ -179,6 +180,10 @@ impl AccountDb {
 pub struct CatalogDb {
     store: StoreName,
     pool: PgPool,
+    // Raised when a connection attempt on this pool is refused its login,
+    // so the credential task fetches a fresh one (`None` for a credential
+    // that never changes).
+    auth_failed: Option<std::sync::Arc<tokio::sync::Notify>>,
 }
 
 impl CatalogDb {
@@ -192,7 +197,28 @@ impl CatalogDb {
         allow(uninstrumented_fn, reason = "one-line constructor")
     )]
     pub fn new(store: StoreName, pool: PgPool) -> Self {
-        Self { store, pool }
+        Self {
+            store,
+            pool,
+            auth_failed: None,
+        }
+    }
+
+    /// This handle, told where to report a refused login (see
+    /// [`CatalogDb::classify`]).
+    ///
+    /// # Arguments
+    /// * `signal` - raised on a refused login.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line builder")
+    )]
+    pub(crate) fn with_auth_failure_signal(
+        mut self,
+        signal: std::sync::Arc<tokio::sync::Notify>,
+    ) -> Self {
+        self.auth_failed = Some(signal);
+        self
     }
 
     /// The store's name.
@@ -212,7 +238,7 @@ impl CatalogDb {
     /// # Errors
     /// [`OkfError::StoreUnavailable`] when no connection can be had within
     /// `store_connect_timeout` (the pool is exhausted, or the store cannot be
-    /// reached to open another); [`OkfError::Database`] or `Busy` otherwise.
+    /// reached to open another, or refuses the login); [`OkfError::Database`] or `Busy` otherwise.
     #[tracing::instrument(level = "trace", skip_all)]
     pub async fn begin(&self) -> Result<Transaction<'static, Postgres>, OkfError> {
         self.pool
@@ -222,7 +248,7 @@ impl CatalogDb {
     }
 
     /// Reads a driver error from this store's pool: a failure to get a
-    /// connection is [`OkfError::StoreUnavailable`] (which never names the
+    /// connection, or a refused login, is [`OkfError::StoreUnavailable`] (which never names the
     /// store to the client), anything else the usual conversion. Account
     /// database errors never pass through here.
     ///
@@ -233,6 +259,15 @@ impl CatalogDb {
     /// The error to hand back.
     #[tracing::instrument(level = "trace", skip_all)]
     pub fn classify(&self, error: sqlx::Error) -> OkfError {
+        // A refused login is the store being unreachable to this server (a
+        // rotated secret, an expired token), not a fault in the request;
+        // the credential task is told to fetch a fresh one.
+        if credentials::is_auth_failure(&error) {
+            if let Some(signal) = &self.auth_failed {
+                signal.notify_one();
+            }
+            return OkfError::store_unavailable(&self.store);
+        }
         match error {
             sqlx::Error::PoolTimedOut
             | sqlx::Error::PoolClosed
