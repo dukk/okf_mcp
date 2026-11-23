@@ -171,7 +171,7 @@ where
     // transaction: a rebuild waits for the rebuild lock and a connection, and
     // nothing here holds a pooled connection yet (issue #671).
     let before = state.current().generation();
-    state.refresh(app.pool(), app.rebuild_locks()).await?;
+    state.refresh(app.main_store(), app.rebuild_locks()).await?;
     app.catalog_cache().refreshed_if_moved(&state, before).await;
     // Dropping `tx` without `commit()` (any `?` below) rolls everything back:
     // a refused edit leaves no entry behind.
@@ -727,7 +727,7 @@ mod tests {
             .unwrap();
         let state = test.app.catalog("pg").await.unwrap().unwrap();
         state
-            .refresh(test.app.pool(), test.app.rebuild_locks())
+            .refresh(test.app.main_store(), test.app.rebuild_locks())
             .await
             .unwrap();
         assert_eq!(state.current().revision("a.md"), Some(2));

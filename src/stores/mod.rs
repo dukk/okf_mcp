@@ -209,6 +209,17 @@ impl CatalogDb {
     pub fn executor(&self) -> &PgPool {
         &self.pool
     }
+
+    /// The release-1 `main` store over a test pool: the one-line handle the
+    /// tests build around the pool they hold.
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line test constructor")
+    )]
+    pub(crate) fn main_of(pool: &PgPool) -> Self {
+        Self::new(StoreName::main(), pool.clone())
+    }
 }
 
 #[cfg(test)]

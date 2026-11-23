@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 764,
+  "next_claim_seq": 788,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "4ee4184af547e8617aeb9e1cc31f8fc0344651ce95e8c089aaacb5b429676163"
+    "mac": "96ccfcfc2e2654aa6d29d752a842d1c068532b5a62a1fd06f080088348d9278e"
   },
-  "next_evidence_seq": 1020,
+  "next_evidence_seq": 1056,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "ebfe2df02827161b2d956349e7efdcfc34fc3c23ed6ff3fd2271d3fb45bb6d71"
+    "mac": "b07f65ff46f2c7600a17cf73e7ca91d0a62b5485e0d84de328b079e36609839a"
   },
   "claims": [
     {
@@ -52471,6 +52471,28 @@
             "by": "server",
             "mac": "102a40a51f6383d0a1ec01a1f00c3167a5dc8adbf8e3a46a70447285ad16c4f4"
           }
+        },
+        {
+          "id": "EVD-1052",
+          "kind": "inspection",
+          "locator": "src/catalog.rs:273-279,346-354; src/cache/catalogs.rs:254-262",
+          "summary": "Re-audit at 2d8a3ae: refresh/refresh_locked bodies are unchanged except pool -> db; refresh_locked still takes no rebuild lock; refresh callers (cache, write::apply, publish after commit) take the lock without a held connection. Hunks in the anchored ranges only retype the handle.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 273,
+                "end": 279
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:55:04.576378693Z",
+          "seal": {
+            "by": "server",
+            "mac": "8b43a1811bdc38a8a217907e83eb0ef00fd81dac5f9cb96f9a7168dca3bfc304"
+          }
         }
       ],
       "verdicts": [
@@ -52514,13 +52536,26 @@
             "by": "server",
             "mac": "699f78b31b32c0fcd91f884421884722fb08c78bbe161113803501b2d1dc58c2"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audit on head; only handle types changed in the anchored ranges.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1052"
+          ],
+          "recorded_at": "2026-11-23T13:55:09.322740672Z",
+          "seal": {
+            "by": "server",
+            "mac": "1920326a65236d393b5b78189975e0b455a1a3eb48328899abf93a389c0f3c3b"
+          }
         }
       ],
       "created_at": "2026-11-23T07:17:33.220112894Z",
-      "updated_at": "2026-11-23T07:43:40.124640802Z",
+      "updated_at": "2026-11-23T13:55:09.322740672Z",
       "seal": {
         "by": "server",
-        "mac": "e7f0c984acce962e6c9fd9843a0876dde9fba7038d1f9c726cee437d23b7011a"
+        "mac": "742a69d080d751e5cf2c15e66dd80067b9e31de4eba7fb716214042480734fd1"
       }
     },
     {
@@ -53135,6 +53170,28 @@
             "by": "server",
             "mac": "8e5252fe05a079e61554a1d05bec7e35a294244985a53f9197f5ed36e1481eae"
           }
+        },
+        {
+          "id": "EVD-1053",
+          "kind": "inspection",
+          "locator": "src/write.rs:166-176",
+          "summary": "Re-audit at 2d8a3ae: refresh and refreshed_if_moved run after the write-queue lock and before the transaction begins; the begin is app.main_store().begin() (Task 2's change), same pool as the claim's app.pool().begin().",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/write.rs",
+              "lines": {
+                "start": 166,
+                "end": 176
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:55:04.625796599Z",
+          "seal": {
+            "by": "server",
+            "mac": "f363af3e85e5aa90cc9b0d05515cec1d1cde7f087e9c2e37774bfd293da749fc"
+          }
         }
       ],
       "verdicts": [
@@ -53163,13 +53220,26 @@
             "by": "server",
             "mac": "84a7f6760684e546f137604a252e5a4b0836adcb649d9a95515d96ea0f8aa2e5"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audit on head; order unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1053"
+          ],
+          "recorded_at": "2026-11-23T13:55:09.370552562Z",
+          "seal": {
+            "by": "server",
+            "mac": "126ee859592074e92ace3e17e74758ab7178bb0597102978662d3da26fa929fa"
+          }
         }
       ],
       "created_at": "2026-11-23T08:12:15.185449087Z",
-      "updated_at": "2026-11-23T13:18:51.032593387Z",
+      "updated_at": "2026-11-23T13:55:09.370552562Z",
       "seal": {
         "by": "server",
-        "mac": "47f399c54bcf5d87e3a6cc3f86b03da013a0d57b6d79aa9a6633bf6d78c02a82"
+        "mac": "d2a35a7ad64391343c61b39c0f8beb3c59af52249adddb282d5345cd6f587ee9"
       }
     },
     {
@@ -53215,6 +53285,28 @@
             "by": "server",
             "mac": "ea32f1796bb7d64524b47b27cd847bc06ba2ec999297a07cb5a2bd4aad6b7dde"
           }
+        },
+        {
+          "id": "EVD-1051",
+          "kind": "inspection",
+          "locator": "src/write.rs:166-176; src/catalog.rs:273-279",
+          "summary": "Re-audit at 2d8a3ae: apply refreshes via state.refresh(app.main_store(), ..) before app.main_store().begin(); refresh does one generation_in(db.executor()) read then refresh_to rebuilds only if generation moved. Only the handle type changed; the lock order is unchanged.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/write.rs",
+              "lines": {
+                "start": 166,
+                "end": 176
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:55:04.511456960Z",
+          "seal": {
+            "by": "server",
+            "mac": "a1e9dffd0c4a188e9a7c6da78e03bb0cf47c130ea0885eee3e7d19f09d9da41b"
+          }
         }
       ],
       "verdicts": [
@@ -53230,13 +53322,26 @@
             "by": "server",
             "mac": "9753c87afbb1fe2e91e99e2e364f14cf39ddf29aa7869c1ebd1403c600e95e90"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audit on head after PR #961 retyped the refresh; unchanged semantics.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1051"
+          ],
+          "recorded_at": "2026-11-23T13:55:09.281248680Z",
+          "seal": {
+            "by": "server",
+            "mac": "4a8d84a2105ff136244cb68e584f6779a178de63c3b6623783e0add83fefd2bc"
+          }
         }
       ],
       "created_at": "2026-11-23T08:12:15.185449087Z",
-      "updated_at": "2026-11-23T08:13:21.666604411Z",
+      "updated_at": "2026-11-23T13:55:09.281248680Z",
       "seal": {
         "by": "server",
-        "mac": "4fc0f20a791fb913960ee940c2017d92b4d97a2b28dca2a7c7e4e488d47248c6"
+        "mac": "f2cec52cc7e426f3494ac78f844f39ba67e7760ef07bf607c70fcad0cb22d5fe"
       }
     },
     {
@@ -60286,6 +60391,1786 @@
       "seal": {
         "by": "server",
         "mac": "c143f0c4a03f711658ab252502a917d0f66c1a6963b13d3899f028b91ddcbb4b"
+      }
+    },
+    {
+      "id": "CLM-0764",
+      "statement": "Issue #961 (M21.03) is delivered: snapshot loads, history, revision content, export and search take &CatalogDb, their crossings are added to the inventory, and behaviour is preserved.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/961 (Task 3 of docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md)",
+      "derived_from": [],
+      "artifacts": [
+        "src/catalog.rs",
+        "src/store/history.rs",
+        "src/store/export.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1050",
+          "kind": "analysis",
+          "locator": "children of CLM-0764",
+          "summary": "Children CLM-0765 to 0787 (except CLM-0774) are supported: signatures typed, call sites pass main_store or the CLI's own handle, behaviour unchanged, inventory lines match the code, gates and tests pass. One child, CLM-0774 (the changelog's table list for gates.rs), is refuted: it names users and teams, which gates.rs does not read, and omits unlocks and audit_people. The delivery itself is sound; one changelog sentence is wrong.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-23T13:54:38.355473697Z",
+          "seal": {
+            "by": "server",
+            "mac": "d4fab6432eed85bac860b80486b509ceef4c3cbd8a25d6e68cd2636a8dad48ad"
+          }
+        },
+        {
+          "id": "EVD-1055",
+          "kind": "analysis",
+          "locator": "children of CLM-0764",
+          "summary": "All children CLM-0765 to 0787 are now supported, including CLM-0774 after the changelog fix in 2040387, which changed only a changelog line and the plan note's capitalisation. Together they cover the typing, callers, inventory, no-behaviour-change and gate requirements.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T13:56:33.063327041Z",
+          "seal": {
+            "by": "server",
+            "mac": "ccc9a4a9af71cd1211d78727285576d0364bbde806ef346b7a5e956ef151ee54"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "All substantive requirements hold (typing, callers, inventory, no behaviour change, gates), but one child, CLM-0774, is refuted: the changelog misnames the tables gates.rs reads. Fix: correct the changelog line for src/store/gates.rs to list team_members, user_catalogs, unlocks, audit_people and audit_credentials, commit, and have CLM-0774 re-audited.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1050"
+          ],
+          "recorded_at": "2026-11-23T13:54:44.187023107Z",
+          "seal": {
+            "by": "server",
+            "mac": "b0ef92a89c7f66118cb96bd805a6c78c9a3cadfa4fb1787b597a0a6a4622f496"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All children supported after the changelog fix.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1055"
+          ],
+          "recorded_at": "2026-11-23T13:56:36.624042889Z",
+          "seal": {
+            "by": "server",
+            "mac": "cc4c5d3bf6c05a7ad53e1f6ebead36984a37347fd8f72024c54a9d4071980905"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:56:36.624042889Z",
+      "seal": {
+        "by": "server",
+        "mac": "b8c105e8bfca81882b91dfb1da831bfe823c6d4e3fd2dbd28502b1d42f69e20d"
+      }
+    },
+    {
+      "id": "CLM-0765",
+      "statement": "CatalogState::load, CatalogState::refresh, CatalogState::current_covering and the private build function take &CatalogDb instead of &PgPool.",
+      "kind": "interface",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"`CatalogState::load`, `refresh` and `current_covering`, `OverlayCache::get` and `CatalogCache` (which now holds a `CatalogDb`) take or hold a `CatalogDb`.\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "src/catalog.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1020",
+          "kind": "inspection",
+          "locator": "src/catalog.rs:209,273,303,454",
+          "summary": "load(db: &CatalogDb, ..), refresh(&self, db: &CatalogDb, ..), current_covering(.. db: &CatalogDb ..) and build(db: &CatalogDb, ..) no longer name PgPool; `use sqlx::PgPool` is gone from the non-test imports.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 273,
+                "end": 276
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:52:42.356005080Z",
+          "seal": {
+            "by": "server",
+            "mac": "1d875b22b662df77c0b6696b2f76fbf6e1bbb1b05eaea7a02aed05f629fa9114"
+          }
+        },
+        {
+          "id": "EVD-1021",
+          "kind": "inspection",
+          "locator": "src/catalog.rs:303-318 (current_covering)",
+          "summary": "current_covering takes db: &CatalogDb and passes it to self.refresh(db, rebuilds).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 301,
+                "end": 318
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:52:42.407031954Z",
+          "seal": {
+            "by": "server",
+            "mac": "5e397256b063764035edf32399c8c80530b48cd46a39d12c5a5f015aef2ad5b0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All four signatures take &CatalogDb; current_covering forwards it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1020",
+            "EVD-1021"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.176713816Z",
+          "seal": {
+            "by": "server",
+            "mac": "eaf22bed9c7ef6075dcf1227a1abb38394a222b84bcc906fbbadcab1d520382e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.176713816Z",
+      "seal": {
+        "by": "server",
+        "mac": "375e037e014ae762a9f36929760768a8c307496387d91b53708d55f9e425fbe5"
+      }
+    },
+    {
+      "id": "CLM-0766",
+      "statement": "OverlayCache::get takes &CatalogDb, and CatalogCache holds a CatalogDb that App::new builds as the same main-store handle App keeps as main_store.",
+      "kind": "interface",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"`OverlayCache::get` and `CatalogCache` (which now holds a `CatalogDb`)\"; changelog Changed section",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "src/overlay.rs",
+        "src/cache/catalogs.rs",
+        "src/app.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1022",
+          "kind": "inspection",
+          "locator": "src/overlay.rs:352 (Overlays::get); src/cache/catalogs.rs:155,191; src/app.rs:341-345",
+          "summary": "Overlays::get takes db: &CatalogDb and calls state.current_covering(db, ..); CatalogCache has field db: CatalogDb and new(db: CatalogDb, ..); App::new builds main_store once and passes main_store.clone() to CatalogCache::new, then stores main_store in App.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/app.rs",
+              "lines": {
+                "start": 341,
+                "end": 350
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:52:42.456231060Z",
+          "seal": {
+            "by": "server",
+            "mac": "89faacfedb9248d781570d4546c75d32f8edfed3bcd508c51ea7aecd2e75162a"
+          }
+        },
+        {
+          "id": "EVD-1023",
+          "kind": "inspection",
+          "locator": "src/cache/catalogs.rs:153-200",
+          "summary": "CatalogCache { db: CatalogDb, .. } and new(db: CatalogDb, budget_bytes, metrics).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/catalogs.rs",
+              "lines": {
+                "start": 153,
+                "end": 158
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:52:42.504841013Z",
+          "seal": {
+            "by": "server",
+            "mac": "de52d4950e9c9e46ffd1073cf5f493da2cf987e12f334daf2f0cd48b8e736e82"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Overlays::get, CatalogCache and App::new match the statement.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1022",
+            "EVD-1023"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.223882612Z",
+          "seal": {
+            "by": "server",
+            "mac": "5f6a6ae4cb13069c5a3e7627cd3ff4e255cc6e092792a086f6cef4ea8420e98c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.223882612Z",
+      "seal": {
+        "by": "server",
+        "mac": "a0c92149e1521c3814425c84aca93c7fc0e5f6c301de955d5caf00992ec98037"
+      }
+    },
+    {
+      "id": "CLM-0767",
+      "statement": "history::revisions, history::content_at, history::recent and export::export (and its private record_export) take &CatalogDb instead of &PgPool.",
+      "kind": "interface",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"`history::revisions`, `content_at`, `recent` and `export::export` take `&CatalogDb`.\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "src/store/history.rs",
+        "src/store/export.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1024",
+          "kind": "inspection",
+          "locator": "src/store/history.rs:39,82,179; src/store/export.rs:48,158",
+          "summary": "revisions, content_at and recent take db: &CatalogDb and fetch on db.executor(); export takes db: &CatalogDb, begins with db.begin(), and record_export takes db: &CatalogDb and begins with db.begin().",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/export.rs",
+              "lines": {
+                "start": 48,
+                "end": 62
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:52:42.551290176Z",
+          "seal": {
+            "by": "server",
+            "mac": "dac9a2ccf4ac11387ed5f2466e4b8cc5f918cdad768b11017714dc05542b2206"
+          }
+        },
+        {
+          "id": "EVD-1025",
+          "kind": "inspection",
+          "locator": "src/store/history.rs:39-55",
+          "summary": "revisions(db: &CatalogDb, ..) runs the same SELECT FROM revisions on db.executor().",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/history.rs",
+              "lines": {
+                "start": 39,
+                "end": 55
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:52:42.594174305Z",
+          "seal": {
+            "by": "server",
+            "mac": "8b440ed4f40e5e4af0e09bb7adf5b62177656e61d7b4eefda9fe775db6443a1b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Signatures read directly.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1024",
+            "EVD-1025"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.279515345Z",
+          "seal": {
+            "by": "server",
+            "mac": "5d952db5e30cbae184e9d3a25dc8890580b3c978f47e5a79e27858ba37f8a38c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.279515345Z",
+      "seal": {
+        "by": "server",
+        "mac": "5215ececde169b6d42691b6fa166fabd1fde2a01b7f2243efb2da7e24ea26a99"
+      }
+    },
+    {
+      "id": "CLM-0768",
+      "statement": "Every production call of CatalogState::load/refresh/current_covering, OverlayCache::get, history::revisions/content_at/recent, export::export and publish::with_current_revisions passes App::main_store() (directly, or through CatalogCache which holds that clone), except the CLI export, which passes its own main-store handle.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"Callers ... get the handle from `App::main_store()`.\"; Manual Test Plan grep",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "src/mcp/history.rs",
+        "src/mcp/changesets.rs",
+        "src/mcp/context.rs",
+        "src/http/api/browse.rs",
+        "src/http/archives.rs",
+        "src/write.rs",
+        "src/store/publish.rs",
+        "src/cli.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1026",
+          "kind": "inspection",
+          "locator": "src/mcp/changesets.rs:805-823; src/mcp/context.rs:870-880",
+          "summary": "pending_changes binds store = ctx.app().main_store() and passes it to changesets::entries(store.executor()) and current_covering(store, ..); ToolContext::view passes self.app.main_store() to overlays().get.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets.rs",
+              "lines": {
+                "start": 805,
+                "end": 823
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:52:55.606117726Z",
+          "seal": {
+            "by": "server",
+            "mac": "a4a6aa7e9ffc99f8162c3a3d42252d6a4b11d5906f9d26a5ca5c311201cb7045"
+          }
+        },
+        {
+          "id": "EVD-1030",
+          "kind": "analysis",
+          "locator": "grep -rn for CatalogState::load, current_covering(, .refresh(, overlays(), history revisions/content_at/recent, with_current_revisions(, export( across src and tests, then each hit read in context",
+          "summary": "Production call sites: cache/catalogs.rs:241,261,310 (self.db); mcp/context.rs:873-875 (overlays().get(main_store())); mcp/changesets.rs:730 (content_at main_store), 820 (current_covering(store), store = main_store()); mcp/history.rs:133; http/api/browse.rs:462,469,568; http/archives.rs:369 (export main_store()); write.rs:174; store/publish.rs:273,337; overlay.rs:398 passes its db through; app.rs:1278 and archives.rs:585 reach catch_up on the cache (own db = main_store clone). cli.rs:1082 builds its own handle. Every other hit is inside a #[cfg(test)] module or tests/ and uses main_store()/main_of/CatalogDb::new. No production call left on pool().",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T13:53:14.677562606Z",
+          "seal": {
+            "by": "server",
+            "mac": "b4b228e6780a727f479968db97711ed43730106d4c6334e5431f8852ccc3c79f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Repository-wide grep at head, each hit read; every production call passes main_store() or the cache's clone, and the CLI builds its own.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1030",
+            "EVD-1026"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.326291069Z",
+          "seal": {
+            "by": "server",
+            "mac": "9a8d940c5b4ae9332404cd99be4a482e478d54c9b945885d47e9cd22be302eaa"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.326291069Z",
+      "seal": {
+        "by": "server",
+        "mac": "f9edad4e371cfc941a4191222726ef1371525daecc18db89d87670f9d73d9e7a"
+      }
+    },
+    {
+      "id": "CLM-0769",
+      "statement": "The CLI's export builds its own main-store handle (CatalogDb::new(StoreName::main(), pool.clone())) from the pool it connects with, as import does, and is the one production path of these functions that does not take its handle from App.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"The CLI's `export` builds its own main-store handle from its pool, as its `import` does; it is the one production path here that does not use `App`.\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "src/cli.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1027",
+          "kind": "inspection",
+          "locator": "src/cli.rs:1076-1090 and 1060-1068 (import)",
+          "summary": "Command::Export connects its own pool and calls export::export(&CatalogDb::new(StoreName::main(), pool.clone()), ..), the same construction Command::Import uses just above; no other production caller outside App was found (CLI import/repair-indexes are Task 2).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli.rs",
+              "lines": {
+                "start": 1076,
+                "end": 1092
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:52:55.682772856Z",
+          "seal": {
+            "by": "server",
+            "mac": "bbf6642ce72caa314c4d027f22bc9784ee20750c8b9f0e20d185cf67e182423d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "cli.rs Export builds CatalogDb::new(StoreName::main(), pool.clone()) as Import does.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1027"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.372750252Z",
+          "seal": {
+            "by": "server",
+            "mac": "1f8f878ba25589a5526fda739cdf45a7c0768d2bdaced1971b878b9db03fb941"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.372750252Z",
+      "seal": {
+        "by": "server",
+        "mac": "41aab556d53b68c259498910d82c420b936ebe425d72b7c11809fdaa3c063a71"
+      }
+    },
+    {
+      "id": "CLM-0770",
+      "statement": "The reads inside the write paths that Task 2 left on App::pool() now use App::main_store(): state.refresh in write::apply and in publish, changesets::entries in publish, and with_current_revisions in publish.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"Reads inside the write paths that Task 2 left on `App::pool()` now use `App::main_store()`\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "src/write.rs",
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1028",
+          "kind": "inspection",
+          "locator": "src/write.rs:174; src/store/publish.rs:200,273,337",
+          "summary": "write::apply calls state.refresh(app.main_store(), ..); publish_locked calls changesets::entries(app.main_store().executor(), ..), with_current_revisions(app.main_store(), ..) and state.refresh(app.main_store(), ..). The base commit had app.pool() at each (git diff).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 198,
+                "end": 204
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:52:55.756592264Z",
+          "seal": {
+            "by": "server",
+            "mac": "93f095661a56429d33e77aadd5e1e7052e88d3d08f52957e76024d60820104f3"
+          }
+        },
+        {
+          "id": "EVD-1029",
+          "kind": "inspection",
+          "locator": "src/store/publish.rs:822-839; src/write.rs:171-175",
+          "summary": "with_current_revisions takes db: &CatalogDb and fetches on db.executor(); write::apply refreshes with app.main_store().",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 822,
+                "end": 839
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:52:55.841911792Z",
+          "seal": {
+            "by": "server",
+            "mac": "1f5706b6ed8cdab904ad2da1b7e0e831b8a38a02c17f58ef631695dda2b0ecb6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All four write-path reads use main_store().",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1028",
+            "EVD-1029"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.418684952Z",
+          "seal": {
+            "by": "server",
+            "mac": "c420ad68a093983e1595ca8af096522d1358da3fc97ff9b4590d8c004e2a1212"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.418684952Z",
+      "seal": {
+        "by": "server",
+        "mac": "3e7a59b1305d01afdb1200ac95f96dee46fcf47bedf2d5a5f8a94b84284626bf"
+      }
+    },
+    {
+      "id": "CLM-0771",
+      "statement": "The change preserves behaviour: no non-test hunk alters a SQL statement, transaction, isolation level, ordering or error path; the changed signatures only swap the pool for a CatalogDb whose pool is the same one in release 1.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"No behaviour change: in release 1 `main_store()` and the account pool are one pool.\"; plan Conventions: \"Behaviour is preserved\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "src/catalog.rs",
+        "src/store/history.rs",
+        "src/store/export.rs",
+        "src/store/publish.rs",
+        "src/overlay.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1031",
+          "kind": "analysis",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD -- src (non-test hunks)",
+          "summary": "Read every non-test hunk: history.rs and with_current_revisions swap fetch_*(pool) for fetch_*(db.executor()) with SQL text unchanged; build swaps pool.begin_with(..) for db.executor().begin_with(same BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY); export/record_export swap pool.begin() for db.begin(), which is self.pool.begin() (src/stores/mod.rs:~190); refresh/generation_in use db.executor(); overlays/current_covering pass db through; the remaining hunks are call-site arguments (pool() -> main_store()) and the CLI handle construction. The only added item, CatalogDb::main_of, is #[cfg(test)]. App::main_store and App::pool share one PgPool in App::new (app.rs:341-352, pool.clone()).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 170,
+                "end": 218
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:14.777595379Z",
+          "seal": {
+            "by": "server",
+            "mac": "c35cbbfd02102469cfe1671f39dc38c36dd3454fa82e7fa83185cb050f07bf45"
+          }
+        },
+        {
+          "id": "EVD-1032",
+          "kind": "log",
+          "locator": "target/i961-logs/test.log (written 08:46, after the 08:39 commit)",
+          "summary": "Summed `test result:` lines across the 28 suites: 3385 passed, 0 failed, 21 ignored; no FAILED or panicked line. The existing suite (history, snapshot, export, publish, overlay tests) passes with handle-type-only edits.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T13:53:14.821608695Z",
+          "seal": {
+            "by": "server",
+            "mac": "1a877a0e0cd6dd789aef5969a88994915c0dca34fc008c7b8e565b195b55f7ca"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every non-test hunk read: statements, isolation levels and error paths are unchanged; only handle types and call-site arguments differ, and the suite passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1031",
+            "EVD-1032"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.464857624Z",
+          "seal": {
+            "by": "server",
+            "mac": "e19ff5a91383184a89f541b6a1cfca894a2648a882f619ca02544cb5a6c3223f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.464857624Z",
+      "seal": {
+        "by": "server",
+        "mac": "e9356954e263d1e16ec7b26c3e0cc10709141faeb86faf006a09f43e127ffcf9"
+      }
+    },
+    {
+      "id": "CLM-0772",
+      "statement": "src/store/documents.rs needed no change because documents::published (the snapshot's document read) takes a generic PgExecutor, not a PgPool.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body and changelog: \"`src/store/documents.rs` (executor-based helpers)\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "src/store/documents.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1033",
+          "kind": "inspection",
+          "locator": "src/store/documents.rs:43-55",
+          "summary": "published<'e>(executor: impl PgExecutor<'e>, catalog_id) runs SELECT ... FROM documents; build passes it &mut *tx (a connection) and refresh_locked a PgConnection, so it needs no CatalogDb. The file is untouched by the commit (git diff --stat).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/documents.rs",
+              "lines": {
+                "start": 43,
+                "end": 55
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:14.868680604Z",
+          "seal": {
+            "by": "server",
+            "mac": "da533bf71fa2a92933b032658f4bd8c1fb555b908bfc555a2ffe8de147b2bf36"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "published takes impl PgExecutor.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1033"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.518071936Z",
+          "seal": {
+            "by": "server",
+            "mac": "0ae719a0f9d0580e57333b5b27c6aaffa70efc7b098d79c8739c56be11e2fa04"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.518071936Z",
+      "seal": {
+        "by": "server",
+        "mac": "3edfa4258dbddf5ee314304ad3d3c34bcfe45906b48a60609200bb8a586e81c6"
+      }
+    },
+    {
+      "id": "CLM-0773",
+      "statement": "src/store/gates.rs needed no change because it reads only account tables.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Changelog: \"`src/store/gates.rs` (reads only account tables: `audit_credentials` and the gates' users, teams and entitlements)\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "src/store/gates.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1034",
+          "kind": "inspection",
+          "locator": "src/store/gates.rs:76-100,128-135",
+          "summary": "The statements read team_members, user_catalogs, unlocks, audit_people and audit_credentials; all five are account tables (migrations 0009, 0010, 0016, 0012) and none is a documents/revisions/changeset table. No catalog-store table is read.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/gates.rs",
+              "lines": {
+                "start": 76,
+                "end": 100
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:14.915706662Z",
+          "seal": {
+            "by": "server",
+            "mac": "42eb075add445a58b7a5dde15cff651201b4775dd6e3c05f11525d084205508a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All five tables gates.rs reads are account tables.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1034"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.564381358Z",
+          "seal": {
+            "by": "server",
+            "mac": "0d1e1df826407d375d428241e4e139d05fd9e691de9ed7cb06498b014e8a6a5c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.564381358Z",
+      "seal": {
+        "by": "server",
+        "mac": "3bf058fa02dc7e2e53ddece3476808f8d01ed9a359b9c58c30ace0e64a70cb2b"
+      }
+    },
+    {
+      "id": "CLM-0774",
+      "statement": "The changelog's description of what src/store/gates.rs reads (\"`audit_credentials` and the gates' users, teams and entitlements\") names the tables the file's statements actually read.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Changelog Notes: \"`src/store/gates.rs` (reads only account tables: `audit_credentials` and the gates' users, teams and entitlements)\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md",
+        "src/store/gates.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1035",
+          "kind": "inspection",
+          "locator": "src/store/gates.rs:76-100",
+          "summary": "for_user reads team_members, user_catalogs, unlocks and audit_people; audit_credential_id reads audit_credentials. It never reads users or teams. The changelog names \"users, teams and entitlements\" and omits unlocks and audit_people, so the table list is loose (the account-only conclusion still holds).",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/store/gates.rs",
+              "lines": {
+                "start": 76,
+                "end": 100
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:14.964321418Z",
+          "seal": {
+            "by": "server",
+            "mac": "d4bedb439bcb3a29123abe90b32c605fbca6603f4667a9c8aeb31211f8954bcb"
+          }
+        },
+        {
+          "id": "EVD-1054",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md:38 vs src/store/gates.rs:76-100,128-135",
+          "summary": "At 2040387 the changelog lists team_members, user_catalogs, unlocks, audit_people and audit_credentials, exactly the five tables the statements in gates.rs read.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md",
+              "lines": {
+                "start": 38,
+                "end": 38
+              },
+              "commit": "204038735e461cb25f590dc0e9893fb45505873e"
+            }
+          },
+          "recorded_at": "2026-11-23T13:56:27.953830061Z",
+          "seal": {
+            "by": "server",
+            "mac": "3946f9fa4c45a86dbd072727cb1291b0ae0e26561146b2cb1a47ca887b7c1cf3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The statements read team_members, user_catalogs, unlocks, audit_people and audit_credentials. The changelog's \"users, teams and entitlements\" names users and teams, which no statement in gates.rs reads, and omits unlocks and audit_people. The conclusion (account tables only) is right; the table list is not. Fix: in the changelog Notes line for src/store/gates.rs replace \"the gates' users, teams and entitlements\" with \"`team_members`, `user_catalogs`, `unlocks` and `audit_people`\" (keeping `audit_credentials`).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1035"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.610664430Z",
+          "seal": {
+            "by": "server",
+            "mac": "d27244f4baeb60ad9d0c7caa78e2ba8dbb1a807f36050811acf9c951f602ba90"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Fixed in 2040387; the list now matches the tables read.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1054"
+          ],
+          "recorded_at": "2026-11-23T13:56:32.805692769Z",
+          "seal": {
+            "by": "server",
+            "mac": "1cc431a3be1c02cec9eaedf2eb1a605128c521b4392b63ed0b5895ceb93166b0"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:56:32.805692769Z",
+      "seal": {
+        "by": "server",
+        "mac": "aed40db689673a8767536530054a398c60d3f5c22ad7de82c8b2a713c02e6dc2"
+      }
+    },
+    {
+      "id": "CLM-0775",
+      "statement": "src/mcp/documents.rs and src/mcp/search.rs needed no change: they reach the database only through ToolContext, with no direct pool or handle use in production code.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Changelog: \"`src/mcp/documents.rs` and `src/mcp/search.rs` (they read the in-memory snapshot and reach the database only through `ToolContext`, which this task types)\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "src/mcp/documents.rs",
+        "src/mcp/search.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1036",
+          "kind": "inspection",
+          "locator": "git grep -nE 'pool|PgPool|sqlx|main_store|executor' src/mcp/documents.rs src/mcp/search.rs",
+          "summary": "Three hits, all search.rs:382-385, a comment and a call inside a test (test.app.pool().close()); production code in both files has no pool or CatalogDb use. Neither file is in the diff.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "pool|PgPool|sqlx|main_store|executor",
+              "scope": [
+                "src/mcp/documents.rs",
+                "src/mcp/search.rs"
+              ],
+              "hits": 3,
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:38.131029701Z",
+          "seal": {
+            "by": "server",
+            "mac": "243368a9ba660105c8d40f3eb7d64f6665c6017eb35c318e1798f2c0b7bdaa91"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Only test-code hits for pool in those files.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1036"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.657441955Z",
+          "seal": {
+            "by": "server",
+            "mac": "4c1e2d7329daabbac83a0100dfa2800d466eaa2167ed07bdac1163c19c817a5f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.657441955Z",
+      "seal": {
+        "by": "server",
+        "mac": "0ba5b449e5c939b7e85c0bfade3adb103700b04e567eed4b3c363b03496364f6"
+      }
+    },
+    {
+      "id": "CLM-0776",
+      "statement": "Changelog: the entry points that read only store tables are history::revisions, content_at and recent (table revisions), with_current_revisions (documents), changesets::entries (changeset_entries), changesets::by_handle (changesets) and documents::published (documents).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Changelog Notes: \"Entry points that read only store tables and so cross nothing: ...\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md",
+        "src/store/history.rs",
+        "src/store/publish.rs",
+        "src/store/changesets.rs",
+        "src/store/documents.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1037",
+          "kind": "analysis",
+          "locator": "src/store/history.rs:46-52,91-96,163-170 (RECENT_SQL, RECENT_CURSOR_SQL); src/store/publish.rs:829-831; src/store/changesets.rs:362-366,426-429; src/store/documents.rs:47-50",
+          "summary": "Traced SQL: revisions/content_at/recent read only `revisions`; with_current_revisions reads only `documents`; changesets::entries reads only `changeset_entries`; by_handle reads only `changesets` (changeset_columns! is plain columns, no join); documents::published reads only `documents`. Each statement is single-table, so none touches an account table.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 355,
+                "end": 371
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:38.180833192Z",
+          "seal": {
+            "by": "server",
+            "mac": "53949a674433f97105b473bf3a7eab826bb76148fa645f2df752998ecd4093d4"
+          }
+        },
+        {
+          "id": "EVD-1038",
+          "kind": "inspection",
+          "locator": "src/store/changesets.rs:421-434 (entries)",
+          "summary": "entries: SELECT path, base_revision, content, executable, replay FROM changeset_entries WHERE changeset_id = $1.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 421,
+                "end": 434
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:38.230259741Z",
+          "seal": {
+            "by": "server",
+            "mac": "c47eec2ed913cb34070c3600d344dd67a76c447e0475afa3e1fe794a54bacf6d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Each listed function's SQL is single-table and matches the named table.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1037",
+            "EVD-1038"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.708138466Z",
+          "seal": {
+            "by": "server",
+            "mac": "149f34d8777e70b6429b00c920420774632e94e3946ba4f8671ada479ac11f8c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.708138466Z",
+      "seal": {
+        "by": "server",
+        "mac": "80174b615d3f141e03e8872d717acf5b796c7c846af766fb8b59b875772264bc"
+      }
+    },
+    {
+      "id": "CLM-0777",
+      "statement": "Changelog: build (behind CatalogState::load and, through refresh_to, refresh) opens one REPEATABLE READ, READ ONLY transaction on db.executor(), runs SELECT generation FROM catalogs WHERE id = $1 and then documents::published (documents) in it.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Changelog Crosses in release 1, first bullet under Snapshot load and refresh",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md",
+        "src/catalog.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1039",
+          "kind": "analysis",
+          "locator": "src/catalog.rs:27 (GENERATION), 454-480 (build); src/store/documents.rs:43-55",
+          "summary": "build: db.executor().begin_with(\"BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY\"); query_scalar(GENERATION) with GENERATION = \"SELECT generation FROM catalogs WHERE id = $1\"; then documents::published(&mut *tx, ..) which reads documents; commit. load calls build; refresh calls refresh_to with a closure calling build. Matches the changelog line exactly.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 454,
+                "end": 478
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:38.277571351Z",
+          "seal": {
+            "by": "server",
+            "mac": "efe139572e3829af96275796594045bf93814d67d913663df1292a70f7acc197"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "build matches the line exactly.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1039"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.753684855Z",
+          "seal": {
+            "by": "server",
+            "mac": "8bae53f5a83e0e4cc6b33872ed39e3e29b683f896470aaba0dbf84a725e450e2"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.753684855Z",
+      "seal": {
+        "by": "server",
+        "mac": "ddba88d0484605b3b62214443ae11243834970268a86ad60553720a3ab8bd86b"
+      }
+    },
+    {
+      "id": "CLM-0778",
+      "statement": "Changelog: generation_in runs the same GENERATION statement on db.executor() in CatalogState::refresh and on the caller's transaction in refresh_locked, which only publish::current_base calls (under the catalog's advisory lock); refresh_locked also reads documents through documents::published; Task 2's inventory names current_base's own SELECT generation FROM catalogs but not this read.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Changelog Crosses in release 1, second bullet under Snapshot load and refresh",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md",
+        "src/catalog.rs",
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1040",
+          "kind": "analysis",
+          "locator": "src/catalog.rs:273-276,346-354,386-390; src/store/publish.rs:219,246,394-402; git grep refresh_locked",
+          "summary": "refresh calls generation_in(db.executor()); refresh_locked calls generation_in(&mut *conn) then documents::published(&mut *conn, ..); generation_in runs GENERATION. The only non-catalog.rs caller of refresh_locked is publish.rs:402 inside current_base, which publish_locked calls at :246 after catalogs::lock (advisory lock) at :219. Task 2's changelog line 17 lists current_base's own SELECT generation FROM catalogs and nothing for refresh_locked.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 346,
+                "end": 354
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:38.327046750Z",
+          "seal": {
+            "by": "server",
+            "mac": "8e513abcdb7b3b750314475ee5b1843414e9a497c203321bc21aa4bd9ae44cc0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "generation_in and refresh_locked match; sole caller is current_base under the advisory lock; Task 2's inventory does not list this read.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1040"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.800159838Z",
+          "seal": {
+            "by": "server",
+            "mac": "10c63453d1b8373a19e16c02c244b9bebebb471884f0597d1bfae472b5fd13ed"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.800159838Z",
+      "seal": {
+        "by": "server",
+        "mac": "734819d13d4743c7fbc4063d9805f7786f30f0440c53ef7866d3ea30e04e9a24"
+      }
+    },
+    {
+      "id": "CLM-0779",
+      "statement": "Changelog: the callers of the snapshot load and refresh are CatalogCache::get and catch_up (catch_up also from App and http::archives after an announcement), write::apply, publish, OverlayCache::get (from ToolContext::view) and pending_changes.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Changelog Crosses in release 1: \"Callers of these: ...\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md",
+        "src/cache/catalogs.rs",
+        "src/app.rs",
+        "src/http/archives.rs",
+        "src/write.rs",
+        "src/store/publish.rs",
+        "src/mcp/context.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1041",
+          "kind": "analysis",
+          "locator": "src/cache/catalogs.rs:241,261,310; src/app.rs:1278; src/http/archives.rs:585; src/write.rs:174; src/store/publish.rs:337,402; src/mcp/context.rs:873; src/mcp/changesets.rs:820; src/overlay.rs:398",
+          "summary": "Each named caller exists: CatalogCache get (load 241, refresh 261) and catch_up (refresh 310); catch_up is called from App (app.rs:1278) and http::archives (585); write::apply refresh; publish refresh and, via current_base, refresh_locked; OverlayCache::get from ToolContext::view; pending_changes via current_covering. No caller outside the list in production.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/catalogs.rs",
+              "lines": {
+                "start": 236,
+                "end": 262
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:38.385794601Z",
+          "seal": {
+            "by": "server",
+            "mac": "5acb09aa7bfc407e3eb65ee5e81ee78411e7a1e7fe2b605d9cc339e995659933"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Callers verified in code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1041"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.867847393Z",
+          "seal": {
+            "by": "server",
+            "mac": "941c1b89834d196327e0eba07d2f2b69ef0347aba60087e3b3bb18e7a29177bf"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.867847393Z",
+      "seal": {
+        "by": "server",
+        "mac": "4a81dcfece828333216a3759ae9dc2a0377fb4e4484b25f5ee22d052f17cd0b7"
+      }
+    },
+    {
+      "id": "CLM-0780",
+      "statement": "Changelog: export's snapshot transaction (db.begin(), then SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY) runs catalogs::find (select_catalogs!: catalogs with a teams subquery for the owner team's name), a statement joining catalogs and audit_teams for the owner team's audit id, and documents::published (documents).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Changelog Crosses in release 1, Export bullet",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md",
+        "src/store/export.rs",
+        "src/store/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1042",
+          "kind": "analysis",
+          "locator": "src/store/export.rs:62-86; src/store/catalogs.rs:63-69,851-860",
+          "summary": "export: db.begin(), SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY (first statement), catalogs::find -> select_catalogs! = SELECT c.id,... (SELECT t.name FROM teams t WHERE t.id = c.owner_team_id) FROM catalogs c WHERE c.name=$1; documents::published (documents); SELECT a.id FROM catalogs c JOIN audit_teams a ON a.team_id = c.owner_team_id. Order in code is find, published, join; the changelog lists find, join, published (a list, not a claimed order).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/export.rs",
+              "lines": {
+                "start": 62,
+                "end": 86
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:38.435260341Z",
+          "seal": {
+            "by": "server",
+            "mac": "6d8c5bc58fc11def7782bc2ac6809e0676011d9aed7222ef1836366ec398e0ea"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Export transaction statements and tables match.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1042"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.913929994Z",
+          "seal": {
+            "by": "server",
+            "mac": "b6250cf59729286cdb46e16560bd847d88bd4389607e2c60ae3562eeaa52dac8"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.913929994Z",
+      "seal": {
+        "by": "server",
+        "mac": "b6909b36a15dd18b703f2672c233e972636ea9ab86cb53889d8df16606f307fe"
+      }
+    },
+    {
+      "id": "CLM-0781",
+      "statement": "Changelog: record_export (a second transaction on db.begin()) runs audit::lock_people with an empty People (one SELECT naming users, api_keys, sign_in_codes, teams and catalogs, then each users row found locked FOR KEY SHARE) and audit::record (INSERT into audit_entries reading users, teams, api_keys, sign_in_codes and calling audit_person, audit_team_ref and audit_credential).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Changelog Crosses in release 1, Export's audit record bullet",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md",
+        "src/store/export.rs",
+        "src/store/audit.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1043",
+          "kind": "analysis",
+          "locator": "src/store/export.rs:158-185; src/store/audit.rs:601-669 (lock_people), 477-540 (insert)",
+          "summary": "record_export: db.begin(); audit::lock_people(&mut tx, audit, &People::default()); audit::record; commit. lock_people's SELECT names users, api_keys, sign_in_codes, teams (personal_of) and catalogs (joined to teams), then locks each found users row with the FOR KEY SHARE arm (no target). record -> insert: INSERT INTO audit_entries ... SELECT reading users (is_admin), teams (name lookup), api_keys, sign_in_codes, calling audit_person, audit_team_ref, audit_credential. Matches the changelog.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 622,
+                "end": 641
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:38.485473583Z",
+          "seal": {
+            "by": "server",
+            "mac": "5fb9b5199983dca7443283076f90afa2a51d57f97c3790ad74554e728bf7cbcc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "lock_people and record statements match the changelog's table lists. SQL function bodies (audit_person etc.) were not traced, and the changelog says it did not either.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1043"
+          ],
+          "recorded_at": "2026-11-23T13:54:31.968818864Z",
+          "seal": {
+            "by": "server",
+            "mac": "c62a4a5b827b6ec38d887dd87a4b7d4062d150816fe0c72442821a4e817219b6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:31.968818864Z",
+      "seal": {
+        "by": "server",
+        "mac": "5a5a0538b7a321324f31e9f8a612c6f0b03e59ca7681237bbe94f7de306b2d64"
+      }
+    },
+    {
+      "id": "CLM-0782",
+      "statement": "Changelog Still on App::pool(): the changeset listing (changesets::list_open and open_for_catalogs, joining catalogs and api_keys), the table reads in src/store/changesets.rs, src/store/repair.rs and src/store/users.rs that Task 5 splits, ToolContext::resolve_changeset's catalogs::row_by_id, and src/store/maintenance/* and src/mcp/maintenance/* are still on the account pool.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Changelog Notes: \"Still on `App::pool()`, not part of this task\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md",
+        "src/mcp/changesets.rs",
+        "src/mcp/context.rs",
+        "src/store/changesets.rs",
+        "src/store/repair.rs",
+        "src/mcp/maintenance/work.rs"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1044",
+          "kind": "analysis",
+          "locator": "src/store/changesets.rs:640-675; src/mcp/changesets.rs:133,140,156; src/mcp/context.rs:984; src/store/catalogs.rs:1043-1053; src/store/repair.rs:280-290; src/mcp/maintenance/work.rs:120-240; src/mcp/maintenance/reports.rs:148,169",
+          "summary": "list_open/open_for_catalogs -> listed(pool: &PgPool): FROM changesets JOIN catalogs LEFT JOIN api_keys LEFT JOIN changeset_entries, called with ctx.app().pool(). resolve_changeset still calls catalogs::row_by_id(self.app.pool(), ..) (catalog registry row). repair::missing_root_index(pool) reads catalogs and documents. mcp/maintenance uses ctx.app().pool(). users.rs functions take &PgPool (plan names users.rs:1268 and 1494 as the joined statements). All still pool-based as stated.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 975,
+                "end": 988
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:55.847243796Z",
+          "seal": {
+            "by": "server",
+            "mac": "a51413df717acc573ec77ae699d5147ccad4fad20c8d4548c2b763e694c9e1f6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Each listed item still uses the pool and reads the account tables named.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1044"
+          ],
+          "recorded_at": "2026-11-23T13:54:32.036112998Z",
+          "seal": {
+            "by": "server",
+            "mac": "3b801c98e105357d0c8b0fd0b1531564a0d94c1c47f535bc4ad7c3ccd415381b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:32.036112998Z",
+      "seal": {
+        "by": "server",
+        "mac": "006c0e7143e340e643e8b8f100bc5cc6e78438db2834119a12ba4f0dbe09ef2a"
+      }
+    },
+    {
+      "id": "CLM-0783",
+      "statement": "The changelog's Changed section lists accurately the caller changes (mcp::history, mcp::changesets revert and pending_changes, mcp::context view and resolve_changeset's by_handle, http::api::browse, http::archives, write::apply and publish) and states that tests changed by handle types only.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Changelog Changed section",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1045",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md:8-15 vs git diff",
+          "summary": "Each Changed bullet matches the diff: history/content_at/recent/export/record_export, CatalogCache::new(db), OverlayCache::get, publish::with_current_revisions, callers mcp::history, mcp::changesets (revert content_at; pending_changes), mcp::context (view; resolve_changeset by_handle), browse, archives, write::apply, publish (refresh, entries). Test edits in tests/ and unit tests are handle-type changes only (main_of / CatalogDb::new).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md",
+              "lines": {
+                "start": 1,
+                "end": 17
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:55.912336195Z",
+          "seal": {
+            "by": "server",
+            "mac": "7c8b73d6b027a17e0806abf66a859c7ab25eb3c8371d11cb4a6318d259221d8b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Changed section matches the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1045"
+          ],
+          "recorded_at": "2026-11-23T13:54:32.083106903Z",
+          "seal": {
+            "by": "server",
+            "mac": "e204e8766170231f2f139fe23c51da5ba0478a7e595ba7f442caa985541e7b32"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:32.083106903Z",
+      "seal": {
+        "by": "server",
+        "mac": "2999081d0ebd9e9f5d82f98dff0402b774d3b942e23120c052eb282cd56d378d"
+      }
+    },
+    {
+      "id": "CLM-0784",
+      "statement": "The dated Corrected (issue #961) note under Task 3 of the plan matches the shipped code, and no task after Task 3 names a changed symbol.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"Plan correction: a dated `Corrected (issue #961)` note under Task 3. No later task names a changed symbol (grepped)\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1046",
+          "kind": "analysis",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:246-251 vs src",
+          "summary": "Every bullet of the note matches the shipped code: listed symbols take &CatalogDb; CatalogCache gets main_store clone in App::new; CLI export builds its handle (cli.rs:1082); write-path reads typed; by_handle/entries pass main_store().executor() (context.rs:978, mcp/changesets.rs:809); the four files unchanged with the stated reasons; main_of test-only; Still-on-pool list and Task numbers match the plan's own Task 4/5/6 text; the export tables are catalogs, teams, audit_teams. A grep of Tasks 4-20 of the plan for the changed symbols (CatalogState, current_covering, OverlayCache, CatalogCache, history::, content_at, revisions(, recent(, export(, with_current_revisions, record_export, main_of, .refresh() found no hit. Cosmetic: line 251 has a lowercase \"they\" after a full stop.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 246,
+                "end": 251
+              },
+              "commit": "2d8a3aeafb8b6c797a81380b5616702764685527"
+            }
+          },
+          "recorded_at": "2026-11-23T13:53:55.968455194Z",
+          "seal": {
+            "by": "server",
+            "mac": "5e1fda2bfde133e4c15a1991f43e80538fd15fccb75bd6a877e9a3c014aea133"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Note matches code; no later task names a changed symbol.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1046"
+          ],
+          "recorded_at": "2026-11-23T13:54:32.137166939Z",
+          "seal": {
+            "by": "server",
+            "mac": "46be41f999b69246e02f351b158c4aab4536d486ccce968e473ebfb4ce46c2d6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:38.310774032Z",
+      "seal": {
+        "by": "server",
+        "mac": "7a4caa98ade360a82d3265ab21bd08cfed2ea45c7dc7dc871006a4c035f72f5d"
+      }
+    },
+    {
+      "id": "CLM-0785",
+      "statement": "tools/agentic/gate.sh test on the head commit passes: 3385 passed, 0 failed, 21 ignored (target/i961-logs/test.log).",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body Validation: \"`tools/agentic/gate.sh test`: 3385 passed, 0 failed, 21 ignored\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1047",
+          "kind": "log",
+          "locator": "target/i961-logs/test.log; awk over `^test result` lines",
+          "summary": "28 suites summed to 3385 passed, 0 failed, 21 ignored; file mtime 08:46:59 is after the commit at 08:39:09; no FAILED or panicked lines. I did not rerun the 20-minute suite; the number is from the author's log, cross-checked by summing it.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T13:53:56.009565437Z",
+          "seal": {
+            "by": "server",
+            "mac": "0c576d3e6f210b200be7e335c8a74cdea04ebcaf2903e49c47de45763e3e3f8c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The log sums to the stated counts and post-dates the commit; not rerun by the auditor.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1047"
+          ],
+          "recorded_at": "2026-11-23T13:54:32.182109415Z",
+          "seal": {
+            "by": "server",
+            "mac": "515d1f986b41723ad2b5cccfc0907a4bef7c5d6999b5328045684abcf7305d4b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:32.182109415Z",
+      "seal": {
+        "by": "server",
+        "mac": "d06a55d2acf5325670428536e75ef1aaf001f026b3a3e8cd8fec3de4278d5e8e"
+      }
+    },
+    {
+      "id": "CLM-0786",
+      "statement": "tools/agentic/gate.sh fmt and lint (clippy and rustdoc with warnings denied) pass on the head commit.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body Validation: \"`gate.sh fmt`, `lint` ... passed\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1048",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh fmt; tools/agentic/gate.sh lint (on 2d8a3ae, run by the auditor)",
+          "summary": "fmt: cargo fmt --all --check printed nothing and exited 0. lint: cargo clippy --all-targets -D warnings finished, and RUSTDOCFLAGS=-D warnings cargo doc finished, exit 0, no warnings.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T13:53:56.056871587Z",
+          "seal": {
+            "by": "server",
+            "mac": "7002f36f8c7ba4b889664befe269041879ff11a60bc75bb0ff6e3dfd945928e7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reran both gates on head; both exit 0.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1048"
+          ],
+          "recorded_at": "2026-11-23T13:54:32.226732580Z",
+          "seal": {
+            "by": "server",
+            "mac": "4312b42292e863813848243db4a75bfef577277ffa28c30cfb1cd7e1195297d9"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:32.226732580Z",
+      "seal": {
+        "by": "server",
+        "mac": "e7de0f9885009b9dc5387003dac005b9f3f848e11d0a1b669af779fef2c2d740"
+      }
+    },
+    {
+      "id": "CLM-0787",
+      "statement": "The change touches no console (web UI) file, so test-ui was not needed.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "PR body: \"`test-ui` not run: the console is unchanged.\"",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:961"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1049",
+          "kind": "analysis",
+          "locator": "git diff --name-only origin/milestone/958-catalog-stores..HEAD",
+          "summary": "The 23 changed files are all under src/ (Rust only), tests/, docs/ and changelog/; none is a console asset (no .html/.css/.js, no console path). browse.rs and archives.rs are JSON/archive handlers whose only change is the handle argument.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T13:53:56.100438950Z",
+          "seal": {
+            "by": "server",
+            "mac": "923700476a5cc2d09f6644014d659e10c57f1a3d78cfeab72421cfbcb2e3e6bd"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "No console files in the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1049"
+          ],
+          "recorded_at": "2026-11-23T13:54:32.278571106Z",
+          "seal": {
+            "by": "server",
+            "mac": "392b01e03c34deb8673f2b3f9c5f2334aa2c8ffc54f7301238e290aac4526c7f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:52:22.270219644Z",
+      "updated_at": "2026-11-23T13:54:32.278571106Z",
+      "seal": {
+        "by": "server",
+        "mac": "09a5256138ef3bac7e46ca3569de8372d39cf21b08dee666c45500fd77a1d346"
       }
     }
   ]

@@ -11,7 +11,7 @@ use std::future::Future;
 use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
-use sqlx::{PgConnection, PgExecutor, PgPool};
+use sqlx::{PgConnection, PgExecutor};
 
 use crate::error::OkfError;
 use crate::keyed_lock::KeyedLocks;
@@ -21,6 +21,7 @@ use crate::okf::workspace::{MemWorkspace, StoredFile};
 use crate::store::catalogs::CatalogRow;
 use crate::store::documents;
 use crate::store::documents::DocumentRow;
+use crate::stores::CatalogDb;
 
 /// The catalog's current generation, or `None` if the row is gone.
 const GENERATION: &str = "SELECT generation FROM catalogs WHERE id = $1";
@@ -192,7 +193,7 @@ impl CatalogState {
     /// Loads a catalog: its current generation and snapshot.
     ///
     /// # Arguments
-    /// * `pool` - the database.
+    /// * `db` - the catalog's store.
     /// * `row` - the catalog's directory row; the load reads by its
     ///   `catalogs.id`, so a catalog deleted and created again under the
     ///   name since the row was read is not loaded in its place.
@@ -205,8 +206,8 @@ impl CatalogState {
     /// [`OkfError::InvalidPath`] or another workspace error if the stored
     /// rows cannot form a workspace; [`OkfError::Database`].
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn load(pool: &PgPool, row: &CatalogRow) -> Result<Self, OkfError> {
-        let loaded = build(pool, row.id, &row.name).await?;
+    pub async fn load(db: &CatalogDb, row: &CatalogRow) -> Result<Self, OkfError> {
+        let loaded = build(db, row.id, &row.name).await?;
         Ok(Self {
             id: row.id,
             name: row.name.clone(),
@@ -259,7 +260,7 @@ impl CatalogState {
     /// publish) must not wait for it: see `refresh_locked`.
     ///
     /// # Arguments
-    /// * `pool` - the database.
+    /// * `db` - the catalog's store.
     /// * `rebuilds` - the rebuild locks, by catalog id (`App::rebuild_locks`).
     ///
     /// # Returns
@@ -269,9 +270,9 @@ impl CatalogState {
     /// [`OkfError::CatalogNotSelected`] if the catalog was deleted;
     /// [`OkfError::Database`]; a workspace error as for [`CatalogState::load`].
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn refresh(&self, pool: &PgPool, rebuilds: &KeyedLocks) -> Result<bool, OkfError> {
-        let generation = self.generation_in(pool).await?;
-        self.refresh_to(rebuilds, generation, || build(pool, self.id, &self.name))
+    pub async fn refresh(&self, db: &CatalogDb, rebuilds: &KeyedLocks) -> Result<bool, OkfError> {
+        let generation = self.generation_in(db.executor()).await?;
+        self.refresh_to(rebuilds, generation, || build(db, self.id, &self.name))
             .await
     }
 
@@ -287,7 +288,7 @@ impl CatalogState {
     /// and a rebuild only if it moved.
     ///
     /// # Arguments
-    /// * `pool` - the database.
+    /// * `db` - the catalog's store.
     /// * `rebuilds` - the rebuild locks, by catalog id (`App::rebuild_locks`).
     /// * `bases` - each entry's normalized path and base revision.
     ///
@@ -301,7 +302,7 @@ impl CatalogState {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn current_covering<'a>(
         &self,
-        pool: &PgPool,
+        db: &CatalogDb,
         rebuilds: &KeyedLocks,
         bases: impl IntoIterator<Item = (&'a str, Option<i32>)>,
     ) -> Result<Arc<Loaded>, OkfError> {
@@ -315,7 +316,7 @@ impl CatalogState {
         if !behind {
             return Ok(loaded);
         }
-        self.refresh(pool, rebuilds).await?;
+        self.refresh(db, rebuilds).await?;
         Ok(self.current())
     }
 
@@ -450,11 +451,12 @@ impl CatalogState {
 /// [`OkfError::CatalogNotSelected`] (naming `name`) if the row is gone;
 /// [`OkfError::Database`]; a workspace or snapshot error.
 #[tracing::instrument(level = "debug", skip_all)]
-async fn build(pool: &PgPool, catalog_id: i64, name: &str) -> Result<Loaded, OkfError> {
+async fn build(db: &CatalogDb, catalog_id: i64, name: &str) -> Result<Loaded, OkfError> {
     // A repeatable-read transaction sees one moment of the database, so the
     // generation and the rows agree even if an import commits meanwhile.
     // `begin_with` sets the isolation level in the `BEGIN` itself.
-    let mut tx = pool
+    let mut tx = db
+        .executor()
         .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .await?;
     // `&mut *tx` reborrows the transaction as a connection for one query.
@@ -538,6 +540,7 @@ mod tests {
     use crate::store::catalogs;
     use crate::store::import::{import, ImportOptions, ImportScope};
     use chrono::{TimeDelta, TimeZone};
+    use sqlx::PgPool;
 
     fn files(entries: &[(&str, &[u8])]) -> Files {
         entries
@@ -571,7 +574,7 @@ mod tests {
             now: Utc::now(),
         };
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+            &crate::stores::CatalogDb::main_of(pool),
             "pg",
             files(entries),
             &options,
@@ -609,9 +612,12 @@ mod tests {
         .await
         .unwrap();
         let state = Arc::new(
-            CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
-                .await
-                .unwrap(),
+            CatalogState::load(
+                &crate::stores::CatalogDb::main_of(&db.pool),
+                &row(&db.pool, "pg").await,
+            )
+            .await
+            .unwrap(),
         );
         import_into(&db.pool, &[("a.md", b"# A\n")], false).await;
         let behind = state.current().generation();
@@ -640,7 +646,7 @@ mod tests {
                     .refresh_to(&rebuilds, generation, || async {
                         // Runs under the lock, before the build's connection.
                         locked_tx.send(()).expect("the test waits for the signal");
-                        build(&small, id, &name).await
+                        build(&crate::stores::CatalogDb::main_of(&small), id, &name).await
                     })
                     .await
             })
@@ -695,10 +701,19 @@ mod tests {
         )
         .await
         .unwrap();
-        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
-            .await
-            .unwrap();
-        let older = build(&db.pool, state.id(), "pg").await.unwrap();
+        let state = CatalogState::load(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            &row(&db.pool, "pg").await,
+        )
+        .await
+        .unwrap();
+        let older = build(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            state.id(),
+            "pg",
+        )
+        .await
+        .unwrap();
         import_into(&db.pool, &[("a.md", b"# A\n")], false).await;
         let mut conn = db.pool.acquire().await.unwrap();
         assert!(state.refresh_locked(&mut conn).await.unwrap());
@@ -735,9 +750,12 @@ mod tests {
         ];
         import_into(&db.pool, entries, false).await;
 
-        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
-            .await
-            .unwrap();
+        let state = CatalogState::load(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            &row(&db.pool, "pg").await,
+        )
+        .await
+        .unwrap();
 
         let loaded = state.current();
         assert_eq!((state.name(), loaded.generation()), ("pg", 1));
@@ -764,9 +782,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let empty = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
-            .await
-            .unwrap();
+        let empty = CatalogState::load(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            &row(&db.pool, "pg").await,
+        )
+        .await
+        .unwrap();
         // A new catalog holds its starter files (index.md and log.md).
         assert_eq!(empty.current().files(), crate::okf::ops::STARTER_FILE_COUNT);
         assert_eq!(empty.current().last_change(), Some(created));
@@ -790,7 +811,10 @@ mod tests {
         .await
         .unwrap();
 
-        empty.refresh(&db.pool, &rebuilds).await.unwrap();
+        empty
+            .refresh(&crate::stores::CatalogDb::main_of(&db.pool), &rebuilds)
+            .await
+            .unwrap();
 
         let loaded = empty.current();
         assert_eq!(loaded.files(), 2);
@@ -821,10 +845,13 @@ mod tests {
         import_into(&db.pool, first, false).await;
         import_into(&db.pool, second, true).await;
 
-        let loaded = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
-            .await
-            .unwrap()
-            .current();
+        let loaded = CatalogState::load(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            &row(&db.pool, "pg").await,
+        )
+        .await
+        .unwrap()
+        .current();
 
         assert_eq!(loaded.workspace().read_to_string("a.md").unwrap(), "# A2\n");
         assert!(loaded.workspace().is_file("logo.png"));
@@ -860,7 +887,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = CatalogState::load(&db.pool, &stale).await;
+        let result = CatalogState::load(&crate::stores::CatalogDb::main_of(&db.pool), &stale).await;
 
         assert!(matches!(result, Err(OkfError::CatalogNotSelected { .. })));
     }
@@ -883,24 +910,36 @@ mod tests {
         .await
         .unwrap();
         import_into(&db.pool, &[("a.md", b"# Old\n")], false).await;
-        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
-            .await
-            .unwrap();
+        let state = CatalogState::load(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            &row(&db.pool, "pg").await,
+        )
+        .await
+        .unwrap();
         let before = state.current();
 
         assert!(
-            !state.refresh(&db.pool, &rebuilds).await.unwrap(),
+            !state
+                .refresh(&crate::stores::CatalogDb::main_of(&db.pool), &rebuilds)
+                .await
+                .unwrap(),
             "nothing changed yet"
         );
         import_into(&db.pool, &[("a.md", b"# New\n")], true).await;
-        assert!(state.refresh(&db.pool, &rebuilds).await.unwrap());
+        assert!(state
+            .refresh(&crate::stores::CatalogDb::main_of(&db.pool), &rebuilds)
+            .await
+            .unwrap());
 
         let after = state.current();
         assert_eq!(after.generation(), 2);
         assert_eq!(after.snapshot().get("a.md").unwrap().text(), "# New\n");
         // A reader that took the old snapshot still sees it, whole.
         assert_eq!(before.snapshot().get("a.md").unwrap().text(), "# Old\n");
-        assert!(!state.refresh(&db.pool, &rebuilds).await.unwrap());
+        assert!(!state
+            .refresh(&crate::stores::CatalogDb::main_of(&db.pool), &rebuilds)
+            .await
+            .unwrap());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -920,15 +959,19 @@ mod tests {
         )
         .await
         .unwrap();
-        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
-            .await
-            .unwrap();
+        let state = CatalogState::load(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            &row(&db.pool, "pg").await,
+        )
+        .await
+        .unwrap();
         import_into(&db.pool, &[("a.md", b"# New\n")], false).await;
 
         // `tokio::join!` runs both futures at once on this task.
+        let store = crate::stores::CatalogDb::main_of(&db.pool);
         let (first, second) = tokio::join!(
-            state.refresh(&db.pool, &rebuilds),
-            state.refresh(&db.pool, &rebuilds)
+            state.refresh(&store, &rebuilds),
+            state.refresh(&store, &rebuilds)
         );
 
         assert_eq!(
@@ -963,13 +1006,19 @@ mod tests {
         )
         .await
         .unwrap();
-        let first = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
-            .await
-            .unwrap();
+        let first = CatalogState::load(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            &row(&db.pool, "pg").await,
+        )
+        .await
+        .unwrap();
         let second = Arc::new(
-            CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
-                .await
-                .unwrap(),
+            CatalogState::load(
+                &crate::stores::CatalogDb::main_of(&db.pool),
+                &row(&db.pool, "pg").await,
+            )
+            .await
+            .unwrap(),
         );
         import_into(&db.pool, &[("a.md", b"# New\n")], false).await;
         // Held as `first`'s rebuild would hold it.
@@ -978,7 +1027,11 @@ mod tests {
         let refreshing = {
             let (pool, rebuilds, second) =
                 (db.pool.clone(), Arc::clone(&rebuilds), Arc::clone(&second));
-            tokio::spawn(async move { second.refresh(&pool, &rebuilds).await })
+            tokio::spawn(async move {
+                second
+                    .refresh(&crate::stores::CatalogDb::main_of(&pool), &rebuilds)
+                    .await
+            })
         };
         tokio::time::sleep(Duration::from_millis(500)).await;
         let waited = !refreshing.is_finished();
@@ -1012,9 +1065,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
-            .await
-            .unwrap();
+        let state = CatalogState::load(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            &row(&db.pool, "pg").await,
+        )
+        .await
+        .unwrap();
         catalogs::delete(
             &db.pool,
             "pg",
@@ -1025,7 +1081,9 @@ mod tests {
         .await
         .unwrap();
 
-        let result = state.refresh(&db.pool, &rebuilds).await;
+        let result = state
+            .refresh(&crate::stores::CatalogDb::main_of(&db.pool), &rebuilds)
+            .await;
 
         assert_eq!(state.id(), catalog.id);
         assert!(matches!(result, Err(OkfError::CatalogNotSelected { .. })));
@@ -1057,7 +1115,12 @@ mod tests {
         .await
         .unwrap();
 
-        let result = build(&db.pool, catalog.id, "pg").await;
+        let result = build(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            catalog.id,
+            "pg",
+        )
+        .await;
 
         assert!(matches!(
             result,
@@ -1106,9 +1169,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
-            .await
-            .unwrap();
+        let state = CatalogState::load(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            &row(&db.pool, "pg").await,
+        )
+        .await
+        .unwrap();
 
         let report = state.current().lint(imported + TimeDelta::minutes(30));
 

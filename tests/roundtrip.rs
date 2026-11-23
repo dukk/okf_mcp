@@ -58,7 +58,7 @@ async fn round_trip(files: &Files) -> (Files, ImportReport) {
     .unwrap();
 
     let (tarball, _generation) = export::export(
-        &db.pool,
+        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), db.pool.clone()),
         "rt",
         Vec::new(),
         &export::ExportOptions {

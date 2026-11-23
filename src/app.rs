@@ -338,15 +338,16 @@ impl App {
                 tracing::warn!(catalog = %name, "default_catalog does not exist (yet)");
             }
         }
+        let main_store = CatalogDb::new(StoreName::main(), pool.clone());
         let catalog_cache = CatalogCache::new(
-            pool.clone(),
+            main_store.clone(),
             config.catalog_cache_bytes.as_u64(),
             metrics.clone(),
         );
         let sign_in_limits = SignInLimits::new(redis.as_ref());
         let app = Arc::new(Self {
             accounts: AccountDb::new(pool.clone()),
-            main_store: CatalogDb::new(StoreName::main(), pool),
+            main_store,
             config,
             clock,
             credentials,

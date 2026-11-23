@@ -1080,7 +1080,7 @@ async fn dispatch(
             // `.await` (which would make this future impossible to
             // `tokio::spawn`), and an unknown catalog leaves no file behind.
             let (tarball, generation) = export::export(
-                &pool,
+                &CatalogDb::new(StoreName::main(), pool.clone()),
                 &catalog,
                 Vec::new(),
                 &export::ExportOptions {

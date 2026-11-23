@@ -167,7 +167,12 @@ async fn seed_empty(pool: &PgPool, name: &str, count: usize) {
 async fn weigh(pool: &PgPool, name: &str) -> (i64, u64) {
     let row = catalogs::row_by_name(pool, name).await.unwrap().unwrap();
     let before = LIVE.load(Ordering::SeqCst);
-    let state = CatalogState::load(pool, &row).await.unwrap();
+    let state = CatalogState::load(
+        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), pool.clone()),
+        &row,
+    )
+    .await
+    .unwrap();
     let resident = LIVE.load(Ordering::SeqCst) - before;
     let stored = state.current().stored_bytes();
     drop(state);

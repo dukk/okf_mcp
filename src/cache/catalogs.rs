@@ -31,13 +31,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::PgPool;
-
 use crate::cache::{Bounded, CacheName, Limit};
 use crate::catalog::{CatalogState, Loaded};
 use crate::error::OkfError;
 use crate::keyed_lock::KeyedLocks;
 use crate::store::catalogs::CatalogRow;
+use crate::stores::CatalogDb;
 use crate::telemetry::metrics::Metrics;
 use crate::telemetry::subscriber::split_event;
 
@@ -153,7 +152,7 @@ pub enum CatchUp {
 
 /// Catalog snapshots by catalog id, bounded in estimated bytes.
 pub struct CatalogCache {
-    pool: PgPool,
+    db: CatalogDb,
     states: Bounded<i64, Arc<CatalogState>>,
     // `(id, generation)` pairs whose stored data would not build.
     broken: Bounded<(i64, i64), ()>,
@@ -181,7 +180,7 @@ impl CatalogCache {
     /// An empty cache.
     ///
     /// # Arguments
-    /// * `pool` - the database.
+    /// * `db` - the store the catalogs it holds are read from.
     /// * `budget_bytes` - the most estimated bytes kept
     ///   (`catalog_cache_bytes`).
     /// * `metrics` - the instruments `okf.cache.*` is recorded on.
@@ -189,12 +188,12 @@ impl CatalogCache {
     /// # Returns
     /// The cache.
     #[tracing::instrument(level = "trace", skip_all)]
-    pub fn new(pool: PgPool, budget_bytes: u64, metrics: Metrics) -> Self {
+    pub fn new(db: CatalogDb, budget_bytes: u64, metrics: Metrics) -> Self {
         let states = Bounded::new(CacheName::Catalog, Limit::Bytes(budget_bytes), SNAPSHOT_TTL)
             .with_weigher(|_id: &i64, state: &Arc<CatalogState>| weight_of(&state.current()))
             .with_metrics(metrics);
         Self {
-            pool,
+            db,
             states,
             broken: Bounded::new(
                 CacheName::Catalog,
@@ -239,7 +238,7 @@ impl CatalogCache {
         let loaded = self
             .states
             .get_or_load(row.id, || async {
-                CatalogState::load(&self.pool, row).await.map(Arc::new)
+                CatalogState::load(&self.db, row).await.map(Arc::new)
             })
             .await;
         let state = match loaded {
@@ -259,7 +258,7 @@ impl CatalogCache {
         {
             return Ok(state);
         }
-        match state.refresh(&self.pool, rebuilds).await {
+        match state.refresh(&self.db, rebuilds).await {
             Ok(true) => self.refreshed(row.id).await,
             Ok(false) => {}
             Err(error @ OkfError::CatalogNotSelected { .. }) => {
@@ -308,7 +307,7 @@ impl CatalogCache {
         if generation <= state.current().generation() {
             return Ok(CatchUp::Current);
         }
-        match state.refresh(&self.pool, rebuilds).await {
+        match state.refresh(&self.db, rebuilds).await {
             Ok(true) => {
                 self.refreshed(id).await;
                 Ok(CatchUp::Applied)
