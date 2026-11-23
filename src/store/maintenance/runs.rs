@@ -6,7 +6,7 @@ use chrono::{DateTime, Duration, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 
 use super::{candidates, lease_end, lock, receipt, recover, refused, replay, validate};
 use crate::error::OkfError;
@@ -15,6 +15,7 @@ use crate::maintenance::types::{new_id, Disposition};
 use crate::maintenance::types::{
     Actor, Assessment, ClaimResult, Evidence, Lane, Lease, RevisionPin, RunState, WorkOutcome,
 };
+use crate::stores::CatalogDb;
 
 /// A deterministic page (ascending unless a run listing asks for newest
 /// first); the cursor is the last returned row ID.
@@ -103,9 +104,9 @@ pub(super) fn not_found() -> OkfError {
 
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "runs.snapshot"))]
 pub(super) async fn snapshot(
-    pool: &PgPool,
+    db: &CatalogDb,
 ) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, OkfError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = db.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *tx)
         .await?;
@@ -241,13 +242,13 @@ pub(super) async fn page_ids(
 /// or a database error. An empty catalog returns an empty page.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "runs.list_runs", catalog_id = catalog_id))]
 pub async fn list_runs(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     after: Option<&str>,
     limit: u32,
     order: RunOrder,
 ) -> Result<Page<RunSummary>, OkfError> {
-    let mut tx = snapshot(pool).await?;
+    let mut tx = snapshot(db).await?;
     let ids = page_ids(&mut tx, catalog_id, after, limit, Listing::Runs(order)).await?;
     let mut items = Vec::with_capacity(ids.items.len());
     for id in ids.items {
@@ -269,9 +270,9 @@ pub async fn list_runs(
 /// # Errors
 /// `Refused` for a blank ID, `NotFound` for an absent/foreign run, or a database error.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "runs.get_run", catalog_id = catalog_id))]
-pub async fn get_run(pool: &PgPool, catalog_id: i64, run_id: &str) -> Result<RunReport, OkfError> {
+pub async fn get_run(db: &CatalogDb, catalog_id: i64, run_id: &str) -> Result<RunReport, OkfError> {
     required_id(run_id)?;
-    let mut tx = snapshot(pool).await?;
+    let mut tx = snapshot(db).await?;
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM maintenance_runs WHERE catalog_id=$1 AND id=$2)",
     )
@@ -434,7 +435,7 @@ async fn summary(
 /// Refuses invalid limits or conflicting idempotency; propagates database failures.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "runs.claim", catalog_id = catalog_id))]
 pub async fn claim(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     actor: &Actor,
     idempotency_key: &str,
@@ -452,7 +453,7 @@ pub async fn claim(
         ));
     }
     let payload = json!({"limit": limit});
-    let mut tx = pool.begin().await?;
+    let mut tx = db.begin().await?;
     lock(&mut tx, catalog_id, now).await?;
     if let Some(previous) = replay(
         &mut tx,
@@ -533,7 +534,7 @@ pub async fn claim(
 /// Refuses expired, foreign, or terminal leases; propagates database failures.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "runs.renew", catalog_id = catalog_id))]
 pub async fn renew(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     actor: &Actor,
     work_id: &str,
@@ -547,7 +548,7 @@ pub async fn renew(
         return Err(refused("work ID and lease token are required"));
     }
     let payload = json!({"work_id": work_id, "token": token});
-    let mut tx = pool.begin().await?;
+    let mut tx = db.begin().await?;
     lock(&mut tx, catalog_id, now).await?;
     // Ownership is checked before replay; old tokens must not cross credential boundaries.
     let row = sqlx::query("SELECT w.run_id,w.path,w.revision,w.lanes,w.lease_token,w.lease_expires_at,w.outcome,r.credential_id,r.state,r.deadline FROM maintenance_work w JOIN maintenance_runs r ON r.catalog_id=w.catalog_id AND r.id=w.run_id WHERE w.catalog_id=$1 AND w.id=$2 FOR UPDATE OF r,w")
@@ -658,7 +659,7 @@ pub async fn renew(
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "runs.close", catalog_id = catalog_id))]
 pub async fn close(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     actor: &Actor,
     run_id: &str,
@@ -675,7 +676,7 @@ pub async fn close(
         return Err(refused("run ID and terminal state are required"));
     }
     let payload = json!({"run_id":run_id,"state":desired,"rationale":rationale,"may_close_others":may_close_others});
-    let mut tx = pool.begin().await?;
+    let mut tx = db.begin().await?;
     lock(&mut tx, catalog_id, now).await?;
     let owner: Option<String> = sqlx::query_scalar(
         "SELECT credential_id FROM maintenance_runs WHERE catalog_id=$1 AND id=$2 FOR UPDATE",

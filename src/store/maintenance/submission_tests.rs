@@ -3,15 +3,24 @@ use super::{candidates, reports, runs};
 use crate::db::test_db;
 use crate::error::OkfError;
 use crate::maintenance::types::*;
+use crate::stores::CatalogDb;
 use chrono::Duration;
 use sqlx::PgPool;
 
 async fn claim(pool: &PgPool, catalog: i64, key: &str, at: chrono::DateTime<chrono::Utc>) -> Lease {
-    runs::claim(pool, catalog, &actor("one"), key, 1, Duration::days(30), at)
-        .await
-        .unwrap()
-        .leases
-        .remove(0)
+    runs::claim(
+        &CatalogDb::main_of(pool),
+        catalog,
+        &actor("one"),
+        key,
+        1,
+        Duration::days(30),
+        at,
+    )
+    .await
+    .unwrap()
+    .leases
+    .remove(0)
 }
 
 fn report(lease: &Lease) -> Submission {
@@ -52,7 +61,7 @@ async fn submit(
     at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Receipt, OkfError> {
     reports::submit(
-        pool,
+        &CatalogDb::main_of(pool),
         catalog,
         &actor("one"),
         &lease.work_id,
@@ -117,7 +126,7 @@ async fn maintenance_submit_is_atomic_and_idempotent() {
         .is_err());
     assert!(matches!(
         reports::submit(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &actor("other"),
             &lease.work_id,
@@ -199,7 +208,7 @@ async fn maintenance_historical_report_does_not_cover_new_revision() {
     .unwrap();
     assert_eq!(result.outcome, WorkOutcome::Superseded);
     assert!(result.outdated);
-    let stored = runs::get_run(&db.pool, catalog, &lease.run_id)
+    let stored = runs::get_run(&CatalogDb::main_of(&db.pool), catalog, &lease.run_id)
         .await
         .unwrap();
     assert_eq!(
@@ -303,7 +312,7 @@ async fn maintenance_submit_all_evidence_controls_effective_support() {
     assert_eq!(rows[0].reported_supported, None);
     let later = t0() + Duration::days(31);
     let batch = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "later",
@@ -419,7 +428,7 @@ async fn maintenance_submit_context_and_state_guards() {
     assert_eq!(state, ("failed".into(), Some("budget_exhausted".into())));
     let lease = claim(&db.pool, catalog, "close", t0() + Duration::seconds(4500)).await;
     runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &lease.run_id,
@@ -583,7 +592,7 @@ async fn maintenance_submit_cursors_preserve_other_completed_lanes() {
     )
     .await;
     let batch = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "claim",
@@ -636,7 +645,7 @@ async fn maintenance_submit_assessment_pins_and_outdated_findings_never_certify_
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md", "b.md"]).await;
     let batch = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "claim",

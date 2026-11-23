@@ -238,14 +238,14 @@ mod tests {
             .await
             .unwrap()
             .expect("main is loaded");
-        let pool = test.app.pool();
+        let db = test.app.main_store();
         let now = test.app.clock().now();
         let reporter = Actor {
             key_id: "reporter".into(),
             actor: "agent/reporter".into(),
         };
         let claimed = run_store::claim(
-            pool,
+            db,
             state.id(),
             &reporter,
             "seed-claim",
@@ -278,7 +278,7 @@ mod tests {
             reported_tokens: None,
         };
         let receipt = finding_store::submit(
-            pool,
+            db,
             state.id(),
             &reporter,
             &lease.work_id,

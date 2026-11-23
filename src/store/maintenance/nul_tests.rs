@@ -9,6 +9,7 @@ use super::{reports, runs};
 use crate::db::test_db;
 use crate::error::OkfError;
 use crate::maintenance::types::*;
+use crate::stores::CatalogDb;
 
 const NUL: &str = "a\0b";
 
@@ -16,7 +17,7 @@ const NUL: &str = "a\0b";
 async fn leased(pool: &sqlx::PgPool) -> (i64, String, Lease) {
     let catalog = setup(pool, &["a.md"]).await;
     let batch = runs::claim(
-        pool,
+        &CatalogDb::main_of(pool),
         catalog,
         &actor("one"),
         "claim",
@@ -55,10 +56,19 @@ async fn a_nul_in_a_work_id_or_token_is_not_found_for_renew_and_submit() {
     let who = actor("one");
 
     for (work, token) in [(NUL, lease.token.as_str()), (lease.work_id.as_str(), NUL)] {
-        let renewed = runs::renew(&db.pool, catalog, &who, work, token, "renew", t0()).await;
+        let renewed = runs::renew(
+            &CatalogDb::main_of(&db.pool),
+            catalog,
+            &who,
+            work,
+            token,
+            "renew",
+            t0(),
+        )
+        .await;
         assert!(is_not_found(renewed), "renew {work:?} {token:?}");
         let submitted = reports::submit(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &who,
             work,
@@ -78,7 +88,7 @@ async fn a_nul_in_a_run_id_is_not_found_for_close_and_the_reads() {
     let (catalog, _, _) = leased(&db.pool).await;
 
     let closed = runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         NUL,
@@ -90,12 +100,14 @@ async fn a_nul_in_a_run_id_is_not_found_for_close_and_the_reads() {
     )
     .await;
     assert!(is_not_found(closed), "close");
-    assert!(is_not_found(runs::get_run(&db.pool, catalog, NUL).await));
     assert!(is_not_found(
-        reports::get_finding(&db.pool, catalog, NUL).await
+        runs::get_run(&CatalogDb::main_of(&db.pool), catalog, NUL).await
+    ));
+    assert!(is_not_found(
+        reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, NUL).await
     ));
     let disposed = reports::dispose(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         NUL,
@@ -117,13 +129,19 @@ async fn a_nul_in_a_list_cursor_or_in_report_text_is_never_a_database_error() {
 
     seen.push((
         "runs cursor",
-        runs::list_runs(&db.pool, catalog, Some(NUL), 10, runs::RunOrder::Asc)
-            .await
-            .map(|_| ()),
+        runs::list_runs(
+            &CatalogDb::main_of(&db.pool),
+            catalog,
+            Some(NUL),
+            10,
+            runs::RunOrder::Asc,
+        )
+        .await
+        .map(|_| ()),
     ));
     seen.push((
         "findings cursor",
-        reports::list_findings(&db.pool, catalog, Some(NUL), 10)
+        reports::list_findings(&CatalogDb::main_of(&db.pool), catalog, Some(NUL), 10)
             .await
             .map(|_| ()),
     ));
@@ -132,7 +150,7 @@ async fn a_nul_in_a_list_cursor_or_in_report_text_is_never_a_database_error() {
     seen.push((
         "summary",
         reports::submit(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &who,
             &lease.work_id,
@@ -149,7 +167,7 @@ async fn a_nul_in_a_list_cursor_or_in_report_text_is_never_a_database_error() {
     seen.push((
         "excerpt",
         reports::submit(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &who,
             &lease.work_id,
@@ -162,7 +180,7 @@ async fn a_nul_in_a_list_cursor_or_in_report_text_is_never_a_database_error() {
         .map(|_| ()),
     ));
     let disposed = reports::dispose(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &who,
         "someid",

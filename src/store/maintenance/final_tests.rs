@@ -8,6 +8,7 @@ use crate::maintenance::select::select;
 use crate::maintenance::types::*;
 use crate::okf::workspace::StoredFile;
 use crate::store::import::{import, ImportOptions, ImportScope};
+use crate::stores::CatalogDb;
 use crate::test_locks::wait_waiter;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -108,7 +109,7 @@ async fn replacement_import_race(submit: bool) {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md", "b.md"]).await;
     let claimed = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "initial",
@@ -120,7 +121,7 @@ async fn replacement_import_race(submit: bool) {
     .unwrap();
     if !submit {
         runs::close(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &actor("one"),
             &claimed.run_id,
@@ -190,7 +191,7 @@ async fn replacement_import_race(submit: bool) {
                 excerpt: "Body".into(),
             });
             let receipt = reports::submit(
-                &pool,
+                &CatalogDb::main_of(&pool),
                 catalog,
                 &actor("one"),
                 &lease.work_id,
@@ -204,7 +205,7 @@ async fn replacement_import_race(submit: bool) {
             assert!(receipt.outdated);
         } else {
             let result = runs::claim(
-                &pool,
+                &CatalogDb::main_of(&pool),
                 catalog,
                 &actor("one"),
                 "after-import",
@@ -347,7 +348,7 @@ async fn maintenance_final_recreated_hint_skips_null_history() {
     let text = "---\ntype: Note\nverified:\n  - at: '2026-11-06T12:00:00Z'\n---\nBody\n";
     revision(&db.pool, catalog, "a.md", 3, t0(), text).await;
     let result = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "recreated",
@@ -390,7 +391,7 @@ async fn maintenance_final_edits_preserve_attempt_fairness() {
         revision(&db.pool, catalog, path, 2, t0(), text).await;
     }
     let batch = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -401,7 +402,7 @@ async fn maintenance_final_edits_preserve_attempt_fairness() {
     .await
     .unwrap();
     runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &batch.run_id,
@@ -455,7 +456,7 @@ async fn maintenance_final_completed_close_acknowledges_without_rewriting_histor
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let batch = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -467,7 +468,7 @@ async fn maintenance_final_completed_close_acknowledges_without_rewriting_histor
     .unwrap();
     let lease = &batch.leases[0];
     reports::submit(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &lease.work_id,
@@ -479,7 +480,7 @@ async fn maintenance_final_completed_close_acknowledges_without_rewriting_histor
     .await
     .unwrap();
     let empty = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "empty",
@@ -491,9 +492,11 @@ async fn maintenance_final_completed_close_acknowledges_without_rewriting_histor
     .unwrap();
     assert!(empty.leases.is_empty());
     for run in [&batch.run_id, &empty.run_id] {
-        let before = runs::get_run(&db.pool, catalog, run).await.unwrap();
+        let before = runs::get_run(&CatalogDb::main_of(&db.pool), catalog, run)
+            .await
+            .unwrap();
         let result = runs::close(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &actor("one"),
             run,
@@ -506,10 +509,15 @@ async fn maintenance_final_completed_close_acknowledges_without_rewriting_histor
         .await
         .unwrap();
         assert_eq!(result, before.run);
-        assert_eq!(runs::get_run(&db.pool, catalog, run).await.unwrap(), before);
+        assert_eq!(
+            runs::get_run(&CatalogDb::main_of(&db.pool), catalog, run)
+                .await
+                .unwrap(),
+            before
+        );
         assert_eq!(
             runs::close(
-                &db.pool,
+                &CatalogDb::main_of(&db.pool),
                 catalog,
                 &actor("one"),
                 run,
@@ -524,7 +532,7 @@ async fn maintenance_final_completed_close_acknowledges_without_rewriting_histor
             result
         );
         assert!(runs::close(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &actor("other"),
             run,
@@ -539,7 +547,7 @@ async fn maintenance_final_completed_close_acknowledges_without_rewriting_histor
         let failure_key = format!("failure-{run}");
         for at in [t0() + Duration::seconds(1), t0() + Duration::days(2)] {
             let acknowledged = runs::close(
-                &db.pool,
+                &CatalogDb::main_of(&db.pool),
                 catalog,
                 &actor("one"),
                 run,
@@ -552,10 +560,15 @@ async fn maintenance_final_completed_close_acknowledges_without_rewriting_histor
             .await
             .unwrap();
             assert_eq!(acknowledged, before.run);
-            assert_eq!(runs::get_run(&db.pool, catalog, run).await.unwrap(), before);
+            assert_eq!(
+                runs::get_run(&CatalogDb::main_of(&db.pool), catalog, run)
+                    .await
+                    .unwrap(),
+                before
+            );
         }
         assert!(runs::close(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &actor("other"),
             run,
@@ -569,7 +582,7 @@ async fn maintenance_final_completed_close_acknowledges_without_rewriting_histor
         .is_err());
         for state in [RunState::Running, RunState::Cancelled] {
             assert!(runs::close(
-                &db.pool,
+                &CatalogDb::main_of(&db.pool),
                 catalog,
                 &actor("one"),
                 run,
