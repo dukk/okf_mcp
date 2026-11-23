@@ -7,7 +7,9 @@
 //! changeset's overlay under one, so concurrent first reads build it once.
 //! [`crate::app::App`] keeps each catalog's publish lock and rebuild lock
 //! here, by catalog id, outside any `CatalogState`, so a catalog's states
-//! (an evicted entry still in use, and its reload) share them.
+//! (an evicted entry still in use, and its reload) share them. The rebuild
+//! lock is always taken after the pooled connection its holder reads on
+//! (never while waiting for one), the order a publish already has.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
