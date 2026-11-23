@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 704,
+  "next_claim_seq": 718,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "ee91815bd49b8bb9858575bde416cb1537e92ab54eba3a51cc2c9ef114593316"
+    "mac": "cdb753ffd06d3fafbc252b087e7e64188adc74a092c8ad2e45ed783540603ad6"
   },
-  "next_evidence_seq": 914,
+  "next_evidence_seq": 943,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "0dd2e013d6dc53296bc744ab16cd5c8b9b7326326536bc305b1d68c39d605d70"
+    "mac": "593ad0ac1343728c1af2b71db2c7a9c97df075ccdff0704515ed9c994b3494f1"
   },
   "claims": [
     {
@@ -13765,6 +13765,28 @@
             "by": "server",
             "mac": "6b98f4f4c94cd600453c19daca66d96649e7c4559301d52085e24eb8115bf17e"
           }
+        },
+        {
+          "id": "EVD-0941",
+          "kind": "inspection",
+          "locator": "src/cli.rs:531 (UnlockCommand), 552, 569 (MailCommand), 605 (AuditCommand), 343 (user list), 243 (SetMaintenance)",
+          "summary": "At head 713fbca the PR's insertion (FeedbackCommand at 592-601) only shifted the lines; UnlockCommand, AuditCommand, user list --email and CatalogCommand::SetMaintenance are all still present and unchanged by the diff.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli.rs",
+              "lines": {
+                "start": 531,
+                "end": 568
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:48:02.875348817Z",
+          "seal": {
+            "by": "server",
+            "mac": "d6dcd4f75a3124b69749b121391115dc09eb351a1acae4f9cf4fdd008c6521b9"
+          }
         }
       ],
       "verdicts": [
@@ -13780,13 +13802,26 @@
             "by": "server",
             "mac": "2bf6f1416e6c098cfcea3c3031a69b61811d9bf8cf4bb1febd438a8d241ae200"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 713fbca: the listed subcommands still exist; the PR only inserted a new enum.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0941"
+          ],
+          "recorded_at": "2026-11-23T10:48:07.001859715Z",
+          "seal": {
+            "by": "server",
+            "mac": "a0685d848bd6d925b4a6be8d0d704b9963cf09848f16e169ce1e16c11ba68f5f"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:06.412184286Z",
-      "updated_at": "2026-11-21T19:09:35.633976262Z",
+      "updated_at": "2026-11-23T10:48:07.001859715Z",
       "seal": {
         "by": "server",
-        "mac": "2b41a46c148e6eb1989de473d921fbe79021c3d838f45479fc0afe426fe7ddb7"
+        "mac": "036fcae281093c54b785c12cb445f6ceab498e285e71972272616bf74938092a"
       }
     },
     {
@@ -19753,6 +19788,28 @@
             "by": "server",
             "mac": "2308b472482252887a1a7e692509aa77b1843cb9c90c5668335617a50a9e5ec9"
           }
+        },
+        {
+          "id": "EVD-0942",
+          "kind": "inspection",
+          "locator": "docs/operations.md:154-158",
+          "summary": "The PR edited only the retention row's trailing sentence; the default \"30d\" and the 1 day to 10 years range, worker true and max_per_hour 10 rows are unchanged, so the claim's statement of defaults still matches the doc.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 154,
+                "end": 158
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:48:02.938208619Z",
+          "seal": {
+            "by": "server",
+            "mac": "0cbe4b4540f48a6996451bae9c0ac7db689e1bc77ee945c994a7bf237040a68f"
+          }
         }
       ],
       "verdicts": [
@@ -19768,13 +19825,26 @@
             "by": "server",
             "mac": "1c6c15e1b4f4d0387d26fedf3d82492f929c185cf729bfd711cc7e0c94cc1394"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 713fbca: the defaults the claim names are unchanged in the doc and in config (the PR changed only the retention row's prose about failed rows).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0942"
+          ],
+          "recorded_at": "2026-11-23T10:48:07.076529346Z",
+          "seal": {
+            "by": "server",
+            "mac": "ddec6e3f8b6d0055ba10571b110cc6360d275fd3a9ac342f8328872e3094b785"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:50.360239770Z",
-      "updated_at": "2026-11-21T19:09:00.140404785Z",
+      "updated_at": "2026-11-23T10:48:07.076529346Z",
       "seal": {
         "by": "server",
-        "mac": "9867537bbffab9236517b7ad85c21313c0d92e0c43f7de036b524e0e1d9b6e99"
+        "mac": "19b4a11f6f3fd90d239526e84e3e36a7485763c455bc855b0f865ce632c3d135"
       }
     },
     {
@@ -55171,6 +55241,1182 @@
       "seal": {
         "by": "server",
         "mac": "f1ff25d84b78d5be9a9e59d70e258212c54edb8096ea484d0df8124bc424550a"
+      }
+    },
+    {
+      "id": "CLM-0704",
+      "statement": "Issue #698 is resolved: failed feedback rows have an operator path (see, clear or retry), a warning log with the error code, and prune after the same retention; and user deletion handles pending/failed rows in the same transaction with a decision about sent rows.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/698",
+      "derived_from": [],
+      "artifacts": [
+        "src/mail/feedback.rs",
+        "src/cli/feedback.rs",
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0940",
+          "kind": "analysis",
+          "locator": "children of CLM-0704",
+          "summary": "Children cover each requirement: CLI list and retry (CLM-0705/0707), existing warn log (0709), prune of failed rows (0710), user deletion with the sent-row decision (0712), console/REST not added (0716), docs (0717). All supported.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:47:28.222035147Z",
+          "seal": {
+            "by": "server",
+            "mac": "fef2b7c12525fc7e6f7262ebdc8694c8c0d1c6d84083a469846b27af991f6304"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Each requirement of the issue is met by a supported child.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0940"
+          ],
+          "recorded_at": "2026-11-23T10:47:37.386742763Z",
+          "seal": {
+            "by": "server",
+            "mac": "a81bbbc7886097ffc4d40be97f72bb939adcd4f51fe477bdcaeeeba0147da8f6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:37.386742763Z",
+      "seal": {
+        "by": "server",
+        "mac": "597bd2d86f098bf08d775fda31215ac9bfb5cbb24034785001df7311fc50b552"
+      }
+    },
+    {
+      "id": "CLM-0705",
+      "statement": "An operator can list failed feedback rows from the command line with `okf-mcp feedback list`, which prints id, user, kind, attempts, failed-at time and error code per row.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #698 req 1; PR: \"`okf-mcp feedback list` lists `failed` rows (id, user, kind, attempts, failed-at, error; never the message).\"",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "src/cli/feedback.rs",
+        "src/cli.rs",
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0914",
+          "kind": "inspection",
+          "locator": "src/cli/feedback.rs:25-60; src/cli.rs:107-109,589-600,1014-1018",
+          "summary": "`Command::Feedback(FeedbackCommand::List)` is dispatched to feedback::feedback, which calls list_failed (status='failed', ordered by finished_at,id) and prints one tab row per failed row: id, user, kind, attempts, failed at, error; prints 'no failed feedback' when empty.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli/feedback.rs",
+              "lines": {
+                "start": 25,
+                "end": 60
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:27.716056952Z",
+          "seal": {
+            "by": "server",
+            "mac": "769a9cfbf757634e90b1ae6218cdcd672a6fde7ea3640576781aaf723481ad9c"
+          }
+        },
+        {
+          "id": "EVD-0915",
+          "kind": "test",
+          "locator": "src/cli/feedback.rs tests::list_shows_failed_rows_and_retry_requeues_one",
+          "summary": "Test inserts a failed row, runs the parsed `feedback list` and asserts the exact line \"f1\\tuser alice\\tkind bug\\tattempts 1\\tfailed at 2026-11-23T12:00:00Z\\terror FORM_NOT_FOUND\". Result recorded separately after the run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli/feedback.rs",
+              "lines": {
+                "start": 85,
+                "end": 120
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:27.757914369Z",
+          "seal": {
+            "by": "server",
+            "mac": "b3cad29c67dc950229e3caeb2f1e12823fbfc47c575b6d24a49def69ea43dbf0"
+          }
+        },
+        {
+          "id": "EVD-0930",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- cli::feedback",
+          "summary": "1 passed, 0 failed: cli::feedback::tests::list_shows_failed_rows_and_retry_requeues_one, on HEAD 713fbca.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:46:55.135340932Z",
+          "seal": {
+            "by": "server",
+            "mac": "a12f8b4a88e6a7d7d493e98116d50150d16e01d4c9be47c88459e1b7bd73afb0"
+          }
+        },
+        {
+          "id": "EVD-0936",
+          "kind": "analysis",
+          "locator": "children of CLM-0705",
+          "summary": "The one child (the list output never carries the message) is supported, and the list behaviour itself is tested directly.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:47:28.055520044Z",
+          "seal": {
+            "by": "server",
+            "mac": "af98cdc350610cc940875e603e66f28abbca28331a0012d959398b8f17df0a4d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Dispatch code and a passing CLI test asserting the exact output line.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0914",
+            "EVD-0915",
+            "EVD-0930"
+          ],
+          "recorded_at": "2026-11-23T10:47:17.455297916Z",
+          "seal": {
+            "by": "server",
+            "mac": "4aa51bf5f7c16e07def79b337767ee63760564d7a16f2d4dc34c741155afde00"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Dispatch code, a passing CLI test with the exact line, and the supported child.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0914",
+            "EVD-0915",
+            "EVD-0930",
+            "EVD-0936"
+          ],
+          "recorded_at": "2026-11-23T10:47:37.184292109Z",
+          "seal": {
+            "by": "server",
+            "mac": "da8b1b74aa9e60a7b5b6b6c15cfc43a04026ad254a1fb70825318e5197fbd8a8"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:37.184292109Z",
+      "seal": {
+        "by": "server",
+        "mac": "61411ee797ae7452b78d789afd1502ee5faccf032b76ddc3207de8bec12e99c8"
+      }
+    },
+    {
+      "id": "CLM-0706",
+      "statement": "`okf-mcp feedback list` never prints the feedback message text.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR: \"never the message\"",
+      "derived_from": [
+        "CLM-0705"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs",
+        "src/cli/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0916",
+          "kind": "analysis",
+          "locator": "src/mail/feedback.rs:583-613 (FailedFeedback, list_failed)",
+          "summary": "FailedFeedback has fields id, user_slug, kind, attempts, last_error, finished_at; the list_failed SELECT names exactly those columns, not message or credential. format_failed prints only those fields.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 583,
+                "end": 613
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:27.797144597Z",
+          "seal": {
+            "by": "server",
+            "mac": "9b2599c8c86cc2d762462a432c8bd69f0d223fc3b4ede4b43bfc5d68129d0c54"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The struct and SELECT omit the message column entirely, so it cannot be printed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0916"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.211670378Z",
+          "seal": {
+            "by": "server",
+            "mac": "46f93e712b2b4166da05d089ab4c598d1bb05fbe03886a4de97dcd5129445cf9"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:09.211670378Z",
+      "seal": {
+        "by": "server",
+        "mac": "970f3eda3d27fb8b2704a8f253a889c9bc5acf913deba4c5ede43e8e75049910"
+      }
+    },
+    {
+      "id": "CLM-0707",
+      "statement": "`okf-mcp feedback retry <id>` sets a failed row back to pending with 0 attempts and queues a new job, in one transaction.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR: \"`okf-mcp feedback retry <id>` sets a failed row back to `pending` with 0 attempts and queues a new job, in one transaction.\"",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs",
+        "src/cli/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0917",
+          "kind": "inspection",
+          "locator": "src/mail/feedback.rs:615-662 (retry)",
+          "summary": "retry begins a tx, UPDATE sets status='pending', attempts=0, finished_at=NULL WHERE id and status='failed', then queue_job on the same tx connection, then commit. last_error is kept (doc says so).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 615,
+                "end": 662
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:27.843730833Z",
+          "seal": {
+            "by": "server",
+            "mac": "9cf7f80e6fe88b89c6f4c93832abf5eebf51994de74aeb4da469263312c41bc8"
+          }
+        },
+        {
+          "id": "EVD-0918",
+          "kind": "test",
+          "locator": "src/mail/feedback.rs tests::a_failed_row_is_listed_and_retried_once",
+          "summary": "Asserts after retry the row state is (pending, 0), list_failed is empty, and apalis.jobs count rose by exactly 1. Run result recorded separately.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1863,
+                "end": 1919
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:27.893088021Z",
+          "seal": {
+            "by": "server",
+            "mac": "16d7722b7ebd54bd3b1c903dca3b391fb78ac813aa3d6621000677a5d54bf329"
+          }
+        },
+        {
+          "id": "EVD-0931",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "37 passed, 0 failed (2834 filtered), including mail::feedback::tests::a_failed_row_is_listed_and_retried_once.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:46:55.187260162Z",
+          "seal": {
+            "by": "server",
+            "mac": "8fbe7fa3b39ffa7424c01723c67bac7194a94219e2ba15303a2fc56b741e5dc8"
+          }
+        },
+        {
+          "id": "EVD-0937",
+          "kind": "analysis",
+          "locator": "children of CLM-0707",
+          "summary": "The child (unknown or non-failed rows are refused) is supported and complements the happy path.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:47:28.098596818Z",
+          "seal": {
+            "by": "server",
+            "mac": "169b4655d03a6e81c0431f7b1817e30cc4fc2e2151057d250ef20249ed9529a7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "retry's UPDATE and queue_job share one tx; test asserts pending/0 state and exactly one new job; passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0917",
+            "EVD-0918",
+            "EVD-0931"
+          ],
+          "recorded_at": "2026-11-23T10:47:17.412831774Z",
+          "seal": {
+            "by": "server",
+            "mac": "8a477accae80bbbcfe6c15eb8a1325bc6ac58d6b7db977cacc6f91e72351d1ee"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "One tx, tested state and job count, supported child.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0917",
+            "EVD-0918",
+            "EVD-0931",
+            "EVD-0937"
+          ],
+          "recorded_at": "2026-11-23T10:47:37.264087960Z",
+          "seal": {
+            "by": "server",
+            "mac": "8fa02332ffc74859aa0eb8e228c33de51d12c9fccd8f48c14f204f1fac845380"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:37.264087960Z",
+      "seal": {
+        "by": "server",
+        "mac": "11dbf667e467a0b9ac1c84e769b3c152a8a7d1e7016a001f55bc3a1e7dfd3ed7"
+      }
+    },
+    {
+      "id": "CLM-0708",
+      "statement": "`feedback retry` refuses a row that is unknown or not `failed`.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"A row that is unknown or not `failed` is refused.\"",
+      "derived_from": [
+        "CLM-0707"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0919",
+          "kind": "test",
+          "locator": "src/mail/feedback.rs tests::a_failed_row_is_listed_and_retried_once",
+          "summary": "Asserts a second retry of the now pending row and a retry of a never-failed pending row both return OkfError::Refused, and an unknown id returns OkfError::UnknownName{noun:\"feedback\"}. CLI test also asserts a pending row retry is an error.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1896,
+                "end": 1919
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:27.938015941Z",
+          "seal": {
+            "by": "server",
+            "mac": "eb73692b2620b325a5b2f9d6b0d087e775b84f03abdc0dc4df85a6678dcc717c"
+          }
+        },
+        {
+          "id": "EVD-0932",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "37 passed, 0 failed, including a_failed_row_is_listed_and_retried_once.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:46:55.228921081Z",
+          "seal": {
+            "by": "server",
+            "mac": "1c5dc1bc988293b934d172385c7939f55235f9f3c3717adc56d2053d03fdc218"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test asserts Refused for a pending row, UnknownName for an unknown id; test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0919",
+            "EVD-0932"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.274124750Z",
+          "seal": {
+            "by": "server",
+            "mac": "3b3fb790df61a115714e751a53e04b85e4b3119d65fca422c1707826b092b38f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:09.274124750Z",
+      "seal": {
+        "by": "server",
+        "mac": "514ee6ee67fd3d58a1e23bc2a9c0bf22c0f851e8e582d5a0fc3f8938fd2a77b2"
+      }
+    },
+    {
+      "id": "CLM-0709",
+      "statement": "The feedback worker logs a warning carrying the error code (as `reason`) when it marks a row failed, with no new log added by this change.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR: \"The worker already logs a warning with the error code (`reason`) when it marks a row `failed` (`feedback not delivered; marked failed`), so no new log was added.\"",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0920",
+          "kind": "inspection",
+          "locator": "src/mail/feedback.rs:1072-1095 (forward)",
+          "summary": "When give_up is Some(reason) (Forminit refusal code, or gave up after MAX_TRIES), forward emits split_event!(warn, ... %reason, \"feedback not delivered; marked failed\") before settling the row failed. The diff to this function and log lines is empty: no log added by the change.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1072,
+                "end": 1095
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:27.984938089Z",
+          "seal": {
+            "by": "server",
+            "mac": "e722d45e4de7e36b0ff4d8e6f6fcb04d34cfe349323c75a7db8f7e1f10546589"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The warn event with reason precedes settle(failed) on both give-up paths, and the diff does not touch it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0920"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.316525602Z",
+          "seal": {
+            "by": "server",
+            "mac": "e728b4fb0dca3a6a9cd9518772528c9fae720c6cf45ee160d92a48e5266f1fbe"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:09.316525602Z",
+      "seal": {
+        "by": "server",
+        "mac": "465b9f167ac1720f871e0ab37ef5f29099c3138139d494f1f917edd8ba0f9169"
+      }
+    },
+    {
+      "id": "CLM-0710",
+      "statement": "`feedback::prune` deletes `failed` rows as well as `sent` rows once finished_at is older than the same retention.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR: \"`feedback::prune` now deletes `failed` rows after the same retention as `sent` rows.\"",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0921",
+          "kind": "test",
+          "locator": "src/mail/feedback.rs tests::prune_deletes_sent_and_failed_feedback_past_retention_only",
+          "summary": "Four rows: old sent, recent sent (29d), old failed (31d), pending. prune with 30d returns 2 and leaves 2, with old sent and old failed gone. Delete query is status IN ('sent','failed') AND finished_at < before.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1828,
+                "end": 1862
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.030363061Z",
+          "seal": {
+            "by": "server",
+            "mac": "d1a91e083a846129894da712e366f5237530561db8c0aa26665fc62679511578"
+          }
+        },
+        {
+          "id": "EVD-0933",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "37 passed, 0 failed, including prune_deletes_sent_and_failed_feedback_past_retention_only.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:46:55.269741816Z",
+          "seal": {
+            "by": "server",
+            "mac": "e0a262e10c24908997e1b5ea72f4005f4aab06cd23c3d6ede4eb868e28fffdbb"
+          }
+        },
+        {
+          "id": "EVD-0938",
+          "kind": "analysis",
+          "locator": "children of CLM-0710",
+          "summary": "The child (index widened to both statuses) is supported; prune behaviour and its index agree.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:47:28.139633114Z",
+          "seal": {
+            "by": "server",
+            "mac": "9546b227467fbf13c83d270ab03c741d36b7f51ae8dd2e7fbd95acd466d0510f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Delete predicate covers failed; test with an old failed row and 30d retention prunes it while a recent sent and a pending row stay; passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0921",
+            "EVD-0933"
+          ],
+          "recorded_at": "2026-11-23T10:47:17.326982637Z",
+          "seal": {
+            "by": "server",
+            "mac": "cbe3c1ae33e6aef198ef688fb07dcc763cebaf10dd61caa09bb6df06c4438495"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Passing prune test with an old failed row, plus the supported index child.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0921",
+            "EVD-0933",
+            "EVD-0938"
+          ],
+          "recorded_at": "2026-11-23T10:47:37.305267006Z",
+          "seal": {
+            "by": "server",
+            "mac": "bbe84e847851af3ee519b04475db2a8b54c2991327a9f0739b9ddbc70199447b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:37.305267006Z",
+      "seal": {
+        "by": "server",
+        "mac": "e71cc37ab51ae7743fd625f1c551dd937e377e3db8dec6a6b7b48905ccdd62b1"
+      }
+    },
+    {
+      "id": "CLM-0711",
+      "statement": "Migration 0033 replaces the prune index with one on finished_at covering both sent and failed rows.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR: \"Migration 0033 widens the prune index to both statuses.\"",
+      "derived_from": [
+        "CLM-0710"
+      ],
+      "artifacts": [
+        "migrations/0033_feedback_failed_prune_index.sql"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0922",
+          "kind": "inspection",
+          "locator": "migrations/0033_feedback_failed_prune_index.sql:4-5; migrations/0022_feedback.sql:36",
+          "summary": "0022 created feedback_sent_finished ON feedback(finished_at) WHERE status='sent'. 0033 drops it and creates feedback_finished ON feedback(finished_at) WHERE status IN ('sent','failed'). Index name is not referenced elsewhere in the repo (git grep). Prune predicate matches the partial-index predicate.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/0033_feedback_failed_prune_index.sql",
+              "lines": {
+                "start": 4,
+                "end": 5
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.071476836Z",
+          "seal": {
+            "by": "server",
+            "mac": "47eca82c03fe67d26f2be8707f922926e01ff7bcf2e8985c8eaa5eb297f3eeb1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The migration SQL does exactly this and the prune predicate matches the index predicate.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0922"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.360636770Z",
+          "seal": {
+            "by": "server",
+            "mac": "6101239d6d7c6d977c865e61793a93d490bb5b2e8260c034650e48b9ab804758"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:09.360636770Z",
+      "seal": {
+        "by": "server",
+        "mac": "252983c12420ca7946bdfd9b1d5855a219435909509ea801bd8db23e2be1d9e2"
+      }
+    },
+    {
+      "id": "CLM-0712",
+      "statement": "`store::users::delete` deletes the user's pending and failed feedback rows in the same transaction as the user deletion.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #698 req 2; PR: \"`store::users::delete` ... deletes the user's `pending` and `failed` feedback rows in the same transaction.\"",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0923",
+          "kind": "inspection",
+          "locator": "src/store/users.rs:1416-1427 (delete_checked)",
+          "summary": "DELETE FROM feedback WHERE user_slug=$1 AND status IN ('pending','failed') runs on `&mut *tx`, the same transaction as the later audit::forget_person and user delete in delete_checked.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 1416,
+                "end": 1427
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.118300613Z",
+          "seal": {
+            "by": "server",
+            "mac": "1b6d349c5fe5976e8b28ac2e073f3bfe34cd5c9e6b7ba9c6b2f03f32dcaceb97"
+          }
+        },
+        {
+          "id": "EVD-0924",
+          "kind": "test",
+          "locator": "src/store/users.rs tests::deleting_a_user_removes_its_undelivered_feedback_only",
+          "summary": "Seeds alice pending/failed/sent and bob pending, deletes alice, asserts remaining ids == [f-other, f-sent]. Run result recorded separately. It does not assert rollback atomicity (same-transaction is shown by code only).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 2526,
+                "end": 2567
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.164262588Z",
+          "seal": {
+            "by": "server",
+            "mac": "654f5f845a9599452dad76d00414553c0efc6d4b370d3c4af54aba4b55231458"
+          }
+        },
+        {
+          "id": "EVD-0934",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "37 passed, 0 failed, including store::users::tests::deleting_a_user_removes_its_undelivered_feedback_only.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:46:55.311581095Z",
+          "seal": {
+            "by": "server",
+            "mac": "b5d7338183974d4aa679114353e490a5aa39c10948b03b0831851338d760784b"
+          }
+        },
+        {
+          "id": "EVD-0939",
+          "kind": "analysis",
+          "locator": "children of CLM-0712",
+          "summary": "Children (delete_own covered, sent rows and others untouched, orphan job skipped) are all supported and cover the paths and the sent-row decision.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:47:28.181550793Z",
+          "seal": {
+            "by": "server",
+            "mac": "6f2b87f61064e80d5f16a87336c807d113ea682e5799431b00101da08cb63dbf"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The DELETE runs on the transaction in delete_checked; test confirms pending and failed rows of the deleted user are gone. Atomicity rests on code reading (same &mut *tx), which is direct.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0923",
+            "EVD-0924",
+            "EVD-0934"
+          ],
+          "recorded_at": "2026-11-23T10:47:17.377303010Z",
+          "seal": {
+            "by": "server",
+            "mac": "1e3a97e32c217401340b042d8b633c6d49e1990ad0d070e46bb5052e4c4b0e67"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Delete runs in delete_checked's tx; passing test; supported children.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0923",
+            "EVD-0924",
+            "EVD-0934",
+            "EVD-0939"
+          ],
+          "recorded_at": "2026-11-23T10:47:37.345877229Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d472b3f2d6eec8a8c9cd19e739bdb17715b4f70ecd796ede71547ab3635f7a2"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:37.345877229Z",
+      "seal": {
+        "by": "server",
+        "mac": "82e169d3f0ee67b4d30b8227cfeb5e6b998723eb743297bd7fba9c39fc35223b"
+      }
+    },
+    {
+      "id": "CLM-0713",
+      "statement": "`store::users::delete_own` also deletes the user's pending and failed feedback, because it goes through the same delete path.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR: \"(and so `delete_own`)\"",
+      "derived_from": [
+        "CLM-0712"
+      ],
+      "artifacts": [
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0925",
+          "kind": "analysis",
+          "locator": "src/store/users.rs:1087-1105 (delete_own), 1223-1231 (delete)",
+          "summary": "Both delete_own and delete call delete_checked, where the feedback DELETE lives. No test calls delete_own with feedback rows, so this rests on code reading.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 1087,
+                "end": 1105
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.210199912Z",
+          "seal": {
+            "by": "server",
+            "mac": "c514a4d076d66826e7a9d9a8ef4dda1d5180b65846d15a835904df98e5b377fc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "delete_own calls delete_checked, which holds the new DELETE.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0925"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.404833049Z",
+          "seal": {
+            "by": "server",
+            "mac": "21882b15acd983f9299db44212930e0f11cbdff0e2cc9b9e0ef95eb90b66b7a1"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:09.404833049Z",
+      "seal": {
+        "by": "server",
+        "mac": "8ca986cfa6c96161394f75e4bc92d6eb2d8ce4e90fd71b961dfa1b1895046649"
+      }
+    },
+    {
+      "id": "CLM-0714",
+      "statement": "User deletion leaves the user's `sent` feedback rows in place, for the prune to remove, and does not touch other users' rows.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"`sent` rows are left: they are already delivered and the prune removes them.\"",
+      "derived_from": [
+        "CLM-0712"
+      ],
+      "artifacts": [
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0926",
+          "kind": "test",
+          "locator": "src/store/users.rs tests::deleting_a_user_removes_its_undelivered_feedback_only",
+          "summary": "After deleting alice the survivors are f-sent (alice, sent) and f-other (bob, pending); the delete's status filter excludes 'sent' and filters on user_slug.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 1416,
+                "end": 1427
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.251944379Z",
+          "seal": {
+            "by": "server",
+            "mac": "f1f558e4bc26a33909c92fb9461258791771bb6cb3185a2f8ef7ae077fb3b196"
+          }
+        },
+        {
+          "id": "EVD-0935",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "37 passed, 0 failed, including deleting_a_user_removes_its_undelivered_feedback_only (asserts survivors f-other, f-sent).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:46:55.358267564Z",
+          "seal": {
+            "by": "server",
+            "mac": "da748d1b81ebe5d8418f0acab854cff8f77fcf83cdc767a75bc3883fa95c14fa"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Passing test shows sent row and other user's pending row survive.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0926",
+            "EVD-0935"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.445916715Z",
+          "seal": {
+            "by": "server",
+            "mac": "dc732f1bfcaad5c5ab36cd0ecba37871ca9fbd5c17e39dc45a67af1895924956"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:09.445916715Z",
+      "seal": {
+        "by": "server",
+        "mac": "25b94ea040a051f8fdfcb621c31c21925b777469a54043cdf68ac674e6578473"
+      }
+    },
+    {
+      "id": "CLM-0715",
+      "statement": "A queued job whose feedback row was deleted finds nothing and ends as skipped.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR: \"A queued job for a deleted row finds nothing and ends as skipped.\"",
+      "derived_from": [
+        "CLM-0712"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0927",
+          "kind": "analysis",
+          "locator": "src/mail/feedback.rs:959-968 (take), 1038-1041 (forward)",
+          "summary": "take runs UPDATE ... WHERE id AND status='pending' RETURNING and gives Ok(None) for a missing row; forward turns Ok(None) into (Ok(()), \"skipped\"). No test deletes a row under a queued job; code reading only.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 959,
+                "end": 968
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.293818086Z",
+          "seal": {
+            "by": "server",
+            "mac": "bcb6132c4acd93ba507f3032f2a58e09c6db033c5b4f94d9e104681d913904ef"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "take returns None for an absent row and forward maps that to skipped; no test exercises it, but the code path is direct.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0927"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.487470923Z",
+          "seal": {
+            "by": "server",
+            "mac": "1552c2ef983099eb7dec1c230f7d6e423ad1247291cde3ea00dadc631c75f996"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:09.487470923Z",
+      "seal": {
+        "by": "server",
+        "mac": "118d5c031928bb1e35a2269ba67f929a9ba0a95ede0af6d6c6a7047e030f0c8c"
+      }
+    },
+    {
+      "id": "CLM-0716",
+      "statement": "There is no console page or REST route for failed feedback in this change; the CLI follows the `mail queue` / `mail retry` pattern.",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR: \"It follows `mail queue` / `mail retry`; no console page or REST route\"",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "src/cli/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0928",
+          "kind": "analysis",
+          "locator": "git diff --name-only origin/main..HEAD; src/cli/admin.rs:96-107",
+          "summary": "The diff touches no file under src/http or any console asset; the only addition is the CLI handler. MailCommand::Queue/Retry in admin.rs use the same list/retry-and-print shape as the new FeedbackCommand.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli/admin.rs",
+              "lines": {
+                "start": 96,
+                "end": 107
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.339572670Z",
+          "seal": {
+            "by": "server",
+            "mac": "d361eaa616b7edc9d74b8f037f06f8984eec4bcac246b8a5412cdbea6c203138"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "No http or console file in the diff; CLI mirrors mail queue/retry.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0928"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.528703530Z",
+          "seal": {
+            "by": "server",
+            "mac": "aad96e790354cfcae5531e01e0c338753dfd5f6e5ffb40cdafa8de7c92d6c647"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:09.528703530Z",
+      "seal": {
+        "by": "server",
+        "mac": "c1d7a825849457a621a2f519010822ee1530cd58b06f72ea0d6fb0a198b0a252"
+      }
+    },
+    {
+      "id": "CLM-0717",
+      "statement": "docs/operations.md documents the feedback list/retry commands, the failed-row prune and the user-deletion behaviour, and no longer says failed feedback is kept.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR: \"Docs: `docs/operations.md` (Feedback section, retention row); changelog entry.\"",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0929",
+          "kind": "inspection",
+          "locator": "docs/operations.md:158, 2783-2802",
+          "summary": "Retention row now says failed feedback is pruned after the same time; the Feedback section shows `feedback list` and `feedback retry ID`, the warning log, user-deletion behaviour and sent rows left for the prune. Searching other docs for 'failed ... kept' finds no stale statement (only a historical migration 0029 comment); the sample-config comment at docs/operations.md:2742 says 'how long sent feedback is kept', which is imprecise but not wrong.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2783,
+                "end": 2802
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.383232595Z",
+          "seal": {
+            "by": "server",
+            "mac": "814f8819b8d7591a76c22b0a5d4170f7ec0a4cae8ac21f58a20d6bb88d6df157"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Retention row and Feedback section updated as described; no remaining statement that failed rows are kept.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0929"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.569355994Z",
+          "seal": {
+            "by": "server",
+            "mac": "bff97c8e88c6a43111c422a2b6b206f8a85e7a4c620c152a9bd0ca90d47388e0"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:09.569355994Z",
+      "seal": {
+        "by": "server",
+        "mac": "2e6a546c7fcb7ca907d2af2215c6f86c828c96e09d5947567ec13f504d106fe2"
       }
     }
   ]
