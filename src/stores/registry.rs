@@ -175,7 +175,7 @@ impl Stores {
         dylint_lib = "hyp_tracing",
         allow(uninstrumented_fn, reason = "builds an empty cache, no I/O")
     )]
-    fn with_environment(
+    pub(crate) fn with_environment(
         accounts: PgPool,
         settings: PoolSettings,
         environment: Environment,
@@ -328,6 +328,17 @@ impl Stores {
         };
         #[cfg(test)]
         self.pause_if_gated().await;
+        self.open_row(row).await
+    }
+
+    /// Opens a pool from a row, which need not be stored yet: the part of
+    /// [`Stores::open`] after the row is read, shared with [`Stores::check`].
+    ///
+    /// # Errors
+    /// An [`OpenFailure`]; the detail is logged here, on the local side only.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn open_row(&self, row: StoreRow) -> Result<CatalogDb, OpenFailure> {
+        let store = &row.name;
         let options = self.connect_options(&row).map_err(|reason| {
             split_event!(
                 warn,
@@ -384,6 +395,32 @@ impl Stores {
         #[cfg(test)]
         self.inner.opened.fetch_add(1, Ordering::SeqCst);
         Ok(CatalogDb::new(row.name, pool))
+    }
+
+    /// Whether a store that has no row yet could be opened: the same open
+    /// path as [`Stores::get`] (connection settings, credential, timeout),
+    /// on a row the caller has not stored. The pool is closed again and
+    /// nothing is cached.
+    ///
+    /// # Arguments
+    /// * `row` - the row about to be stored.
+    ///
+    /// # Returns
+    /// `Ok(())` if a connection was made.
+    ///
+    /// # Errors
+    /// [`OkfError::StoreUnavailable`] if it cannot connect within
+    /// `store_connect_timeout` (the error names no host and no credential;
+    /// the cause is logged on the local side only).
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn check(&self, row: StoreRow) -> Result<(), OkfError> {
+        let name = row.name.clone();
+        // Boxed for the same reason as in `get`: the open's state is large.
+        let db = Box::pin(self.open_row(row))
+            .await
+            .map_err(|_failure| OkfError::store_unavailable(&name))?;
+        db.executor().close().await;
+        Ok(())
     }
 
     /// The connection settings of a store's row, built on the account

@@ -56,6 +56,7 @@ mod people;
 mod provisioner_tests;
 mod search;
 mod settings;
+mod stores;
 #[cfg(test)]
 pub(crate) mod testing;
 mod unlocks;
@@ -91,6 +92,7 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
         .merge(changesets::routes())
         .merge(people::routes())
         .merge(settings::routes())
+        .merge(stores::routes())
         .merge(mail::routes())
         .merge(me::routes())
         .merge(feedback::routes())
