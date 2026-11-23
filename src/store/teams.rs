@@ -188,7 +188,8 @@ macro_rules! select_teams {
         "SELECT t.name, t.display_name, p.name AS personal_of, t.created_at, \
                 t.suspended_at, t.suspension_notice, \
                 COALESCE((SELECT array_agg(c.name ORDER BY c.name) FROM catalogs c \
-                          WHERE c.owner_team_id = t.id), '{}'::text[]) AS catalogs \
+                          WHERE c.owner_team_id = t.id \
+                            AND c.provisioned_at IS NOT NULL), '{}'::text[]) AS catalogs \
          FROM teams t LEFT JOIN users p ON p.id = t.personal_of"
     };
 }

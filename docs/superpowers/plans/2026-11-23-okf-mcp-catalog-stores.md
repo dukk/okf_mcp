@@ -92,7 +92,7 @@ The spec already carries these: P1 is its Decision 5, P2 Decision 7, P3 Decision
   - So a stalled create either finishes first, and recovery sees its data, or waits behind recovery, then finds its row gone and writes nothing. There's no time threshold to get wrong.
 - **P10 (from review of PR #956): release 3 deploys in a maintenance window, not as a rolling upgrade.** Release-2 replicas query tables in `public` and read `catalogs.generation`, and migrations 0041-0042 remove both. Procedure: snapshot the database; scale `serve` to zero; run `okf-mcp migrate` (account migrations, then adoption); start the new release. Task 19 writes it into `docs/operations.md`, and Task 20's smoke test follows it.
 
-- **P11 (from review of PR #956): release 2 is compatible with release-1 replicas.** Migration 0036 gives `catalogs.store` the default `main` and `provisioned_at` the default `now()`, so a release-1 create still works and lands provisioned. Hiding unprovisioned rows ships in Task 8, and two-step creation (Task 10b) ships later as release 2b, so no replica that would show a half-created catalog is still running when the first one is written.
+- **P11 (from review of PR #956): release 2 is compatible with release-1 replicas.** Migration 0036 gives `catalogs.store` the default `main` and `provisioned_at` the default `now()`, so a release-1 create still works and lands provisioned. Hiding unprovisioned rows ships in Task 8 for the directory queries and in Task 10b part 1 (issue #969) for every by-name reader, both in release 2, and two-step creation (Task 10b part 2) ships later as release 2b, so no replica that would show a half-created catalog is still running when the first one is written.
 - **P12 (from review of PR #956): deleting a catalog holds the store's row lock across the account commit.** A store transaction holding `catalog_state` `FOR UPDATE` wraps the account transaction, and `catalog_state.deleted_at` tells writers that waited behind it that the catalog is gone. Without force, a delete never discards work written during it (Task 13).
 - **P13 (from review of PR #956): store cleanup is owed in the transaction that causes it.** `store_cleanups`, in the account database, gets its rows in the deleting transaction itself, keeping the ids the cleanup needs. A crash after commit can't lose a cleanup (Task 13).
 
@@ -206,13 +206,15 @@ Config keys (`src/config.rs`): `store_max_connections` (u32, default 8, must be 
 
 ```
 Release 1:  1 -> 2 -> 3 -> 4 -> 5 -> 6
-Release 2:  6 -> 7 -> 8 -> 9, 10 (parallel)
-Release 2b: 10 -> 10b
+Release 2:  6 -> 7 -> 8 -> 9, 10 (parallel) -> 10b part 1 (hide unprovisioned rows from every by-name reader)
+Release 2b: 10b part 1 -> 10b part 2 (the two-step create and ProvisionCatalogs)
 Release 3:  10b -> 11 -> 12 -> 13 -> 14 -> 15 -> 17
 Then:       17 -> 16, 18 (parallel) -> 19 -> 20 (lifts P8)
 ```
 
-Each release ends deployable: after Task 6 (types only, rolling), after Task 10 (registry and placement, rolling), after Task 10b (two-step create, rolling, once release 2 is on every replica: P11), after Task 17 (the split, in a maintenance window: P10). Separate stores become usable only after Task 20 (P8).
+Each release ends deployable: after Task 6 (types only, rolling), after Task 10b part 1 (registry, placement and every reader hiding unprovisioned rows, rolling), after Task 10b part 2 (two-step create, rolling, once release 2 is on every replica: P11), after Task 17 (the split, in a maintenance window: P10). Separate stores become usable only after Task 20 (P8).
+
+> **Corrected (issue #969, 2026-11-23).** Review of PR #999 found that the by-name and ceiling readers Task 8 left unfiltered would, in the same release that first writes a NULL `provisioned_at`, let a release-2 replica see or act on a half-made catalog: a break of P11. Task 10b is therefore two PRs. Part 1 ("hide unprovisioned catalogs from every by-name reader") adds `provisioned_at IS NOT NULL` to `catalogs::{find, list, set_owner, update_details, set_maintenance}`, every read and by-name write in `ceiling.rs` (`highest`, `page`, `ceiling_in`, `entitlements_in`, `member_access`, `team_access`, `entitle`, `set_member_access`), the team catalog list in `teams.rs`, `keys::catalog_ids` and `repair::missing_root_index`, and ends release 2. Part 2 (the two-step create, `ProvisionCatalogs` and recovery) is release 2b and may be rolled out only after part 1 is on every replica. No mixed-version test harness exists: the order is enforced by the release sequence, and part 1's tests (`src/store/catalogs_unprovisioned_tests.rs`) show that every reader hides a row seeded directly with `provisioned_at` NULL.
 
 ---
 
@@ -319,7 +321,7 @@ Each release ends deployable: after Task 6 (types only, rolling), after Task 10 
 
   In both cases the pool sets `search_path` at connect through `after_connect`, uses `store_max_connections`, sets `min_connections = 0` and `idle_timeout = store_idle_timeout`, and gives up after `store_connect_timeout` with `StoreUnavailable`. Concurrent first calls for one store share one open, as `try_get_with` does in the caches.
 - [ ] Until Task 11, the store pool's `search_path` is `public`, because the catalog tables are still there. Task 11 switches it to `catalog`. Write the value in one constant so that switch is one line.
-- [ ] Directory lookups and listings hide a registry row whose `provisioned_at` is NULL. Nothing writes one yet (Task 10b does); shipping the reader first is what makes 10b safe to roll out (P11). Test: `an_unprovisioned_row_is_hidden_from_lookups_and_listings`.
+- [ ] Directory lookups and listings hide a registry row whose `provisioned_at` is NULL. Nothing writes one yet (Task 10b does); shipping the reader first is what makes 10b safe to roll out (P11). Only the directory queries are covered here; the by-name readers are Task 10b part 1. Test: `an_unprovisioned_row_is_hidden_from_lookups_and_listings`.
 - [ ] `App::catalog_db(row)` replaces `App::main_store()`; every caller from Tasks 2-6 moves to it.
 - [ ] Changing a `stores` row sends an invalidation, and each replica drops that store's pool (`Stores::forget`).
 - [ ] Tests: `account_database_store_opens_its_own_pool`; `concurrent_first_use_opens_one_pool`; `an_unreachable_store_is_store_unavailable_within_the_timeout` (a `host` row pointing at a closed port on `127.0.0.1`); `changing_a_store_row_reopens_its_pool_on_every_replica` (two-replica harness).
@@ -364,7 +366,7 @@ Each release ends deployable: after Task 6 (types only, rolling), after Task 10 
 
 **Files:** `src/store/catalogs.rs` (create), `src/housekeeping.rs` (new task `ProvisionCatalogs`).
 
-- [ ] Task 8 already makes every lookup and listing hide a row whose `provisioned_at` is NULL; this task is the first to write one. It ships as its own deploy (release 2b) after release 2 is on every replica, so no replica that shows unprovisioned rows is still running (P11).
+- [ ] Task 8 already makes every lookup and listing hide a row whose `provisioned_at` is NULL; this task is the first to write one. It ships as its own deploy (release 2b) after release 2, which now ends with Task 10b part 1, is on every replica, so no replica that shows unprovisioned rows is still running (P11).
 - [ ] Create inserts the registry row with `store` from placement and `provisioned_at` NULL, and commits. Then it runs the store transaction under P9's protocol: take the catalog's lock on the store, check the registry row on the account database, write the store side, commit. Then it sets `provisioned_at`. Directory lookups and listings treat a row with `provisioned_at` NULL as absent.
 - [ ] **What "the store side" is depends on the release.** In release 2 it is the starter files (`documents` and `revisions` rows), since `catalog_state` doesn't exist yet and the only store is `main` (P8). From Task 11 on, it also includes the `catalog.catalog_state` row; Task 11 updates create and recovery to write and check it. Write the existence check as one function, `store_side_exists(catalog_db, id)`, so Task 11 changes one place.
 - [ ] `ProvisionCatalogs` runs every minute over unprovisioned rows older than one minute (an efficiency filter only; safety comes from P9's lock, not the age). For each row it follows P9's recovery half, and records a failed create in the audit details when it removes a row.
