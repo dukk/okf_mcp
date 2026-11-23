@@ -12,6 +12,10 @@
 use sqlx::postgres::PgPool;
 use sqlx::{Postgres, Transaction};
 
+mod registry;
+
+pub use registry::{PoolSettings, Stores, STORE_SEARCH_PATH};
+
 use crate::error::OkfError;
 
 /// The name of the store every existing catalog is on after migration 0036.
@@ -206,10 +210,37 @@ impl CatalogDb {
     /// The transaction, which owns its connection (`'static`).
     ///
     /// # Errors
-    /// [`OkfError::Database`] (or `Busy`) when no connection is available.
+    /// [`OkfError::StoreUnavailable`] when no connection can be had within
+    /// `store_connect_timeout` (the pool is exhausted, or the store cannot be
+    /// reached to open another); [`OkfError::Database`] or `Busy` otherwise.
     #[tracing::instrument(level = "trace", skip_all)]
     pub async fn begin(&self) -> Result<Transaction<'static, Postgres>, OkfError> {
-        Ok(self.pool.begin().await?)
+        self.pool
+            .begin()
+            .await
+            .map_err(|error| self.classify(error))
+    }
+
+    /// Reads a driver error from this store's pool: a failure to get a
+    /// connection is [`OkfError::StoreUnavailable`] (which never names the
+    /// store to the client), anything else the usual conversion. Account
+    /// database errors never pass through here.
+    ///
+    /// # Arguments
+    /// * `error` - what the driver returned for an operation on this store.
+    ///
+    /// # Returns
+    /// The error to hand back.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn classify(&self, error: sqlx::Error) -> OkfError {
+        match error {
+            sqlx::Error::PoolTimedOut
+            | sqlx::Error::PoolClosed
+            | sqlx::Error::Io(_)
+            | sqlx::Error::Tls(_)
+            | sqlx::Error::WorkerCrashed => OkfError::store_unavailable(&self.store),
+            other => OkfError::from(other),
+        }
     }
 
     /// The pool, for store-layer functions that take an executor. Routes and
@@ -237,6 +268,29 @@ impl CatalogDb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn classify_turns_connection_failures_into_store_unavailable() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://u:p@127.0.0.1:1/x")
+            .unwrap();
+        let db = CatalogDb::new(StoreName::parse("shared-1").unwrap(), pool);
+
+        for failure in [
+            sqlx::Error::PoolTimedOut,
+            sqlx::Error::PoolClosed,
+            sqlx::Error::WorkerCrashed,
+            sqlx::Error::Io(std::io::Error::other("connection refused")),
+        ] {
+            let error = db.classify(failure);
+            assert!(
+                matches!(error, OkfError::StoreUnavailable { .. }),
+                "{error:?}"
+            );
+        }
+        let other = db.classify(sqlx::Error::RowNotFound);
+        assert!(matches!(other, OkfError::Database { .. }), "{other:?}");
+    }
 
     #[test]
     fn store_name_parse_accepts_slugs_and_refuses_the_rest() {
@@ -313,10 +367,10 @@ mod tests {
             .await
             .unwrap();
         let from_store: String = sqlx::query_scalar("SELECT current_database()")
-            .fetch_one(app.main_store().executor())
+            .fetch_one(app.main_db().await.executor())
             .await
             .unwrap();
         assert_eq!(from_accounts, from_store);
-        assert_eq!(app.main_store().store(), &StoreName::main());
+        assert_eq!(app.main_db().await.store(), &StoreName::main());
     }
 }

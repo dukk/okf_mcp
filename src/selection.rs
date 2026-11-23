@@ -478,6 +478,7 @@ mod tests {
             .zip(1..)
             .map(|(name, id)| {
                 let row = CatalogRow {
+                    store: crate::stores::StoreName::main(),
                     id,
                     name: name.to_string(),
                     display_name: String::new(),

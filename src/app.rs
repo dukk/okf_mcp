@@ -35,7 +35,7 @@ use crate::store::audit::{self, AccessKind, AccessRecord, ProvisionerUse};
 use crate::store::catalogs::{CatalogGeneration, CatalogRow};
 use crate::store::settings::{self, Settings};
 use crate::store::{catalogs, unlocks};
-use crate::stores::{AccountDb, CatalogDb, StoreName};
+use crate::stores::{AccountDb, CatalogDb, PoolSettings, StoreName, Stores};
 use crate::telemetry::metrics::{AnnouncementResult, Metrics, Outcome};
 use crate::telemetry::subscriber::split_event;
 
@@ -68,11 +68,12 @@ struct LoadedSettings {
 /// The state every route and tool shares. Built once by [`App::load`] and
 /// shared as an `Arc<App>`.
 pub struct App {
-    // The account database. Release 1 of the catalog stores milestone keeps the
-    // one pool here; `pool()` and `main_store()` hand out the same one.
+    // The account database: users, teams, keys, sessions and the catalog
+    // registry.
     accounts: AccountDb,
-    // The store every catalog is on in release 1: the same pool as `accounts`.
-    main_store: CatalogDb,
+    // Every catalog store's pool, opened on first use. Never the account
+    // pool, even for `main` (plan decision P1).
+    stores: Stores,
     config: Config,
     // `Arc<dyn Clock>`: any clock (the real one, or a fixed one in tests),
     // shared between threads. `dyn Clock` is a trait object: Python's duck
@@ -338,16 +339,16 @@ impl App {
                 tracing::warn!(catalog = %name, "default_catalog does not exist (yet)");
             }
         }
-        let main_store = CatalogDb::new(StoreName::main(), pool.clone());
+        let stores = Stores::new(pool.clone(), PoolSettings::from_config(&config));
         let catalog_cache = CatalogCache::new(
-            main_store.clone(),
+            stores.clone(),
             config.catalog_cache_bytes.as_u64(),
             metrics.clone(),
         );
         let sign_in_limits = SignInLimits::new(redis.as_ref());
         let app = Arc::new(Self {
             accounts: AccountDb::new(pool.clone()),
-            main_store,
+            stores,
             config,
             clock,
             credentials,
@@ -541,15 +542,64 @@ impl App {
         &self.accounts
     }
 
-    /// The store every catalog is on in release 1 (`main`): the same pool as
-    /// [`App::accounts`]. Temporary: a catalog's own store replaces it
-    /// (`App::catalog_db`, a later task).
+    /// The registry of catalog stores.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(uninstrumented_fn, reason = "one-line accessor")
     )]
-    pub fn main_store(&self) -> &CatalogDb {
-        &self.main_store
+    pub fn stores(&self) -> &Stores {
+        &self.stores
+    }
+
+    /// The database holding `row`'s catalog data: its store, opened on first
+    /// use.
+    ///
+    /// # Arguments
+    /// * `row` - the catalog's directory row (`row.store`).
+    ///
+    /// # Returns
+    /// The store's handle.
+    ///
+    /// # Errors
+    /// As [`Stores::get`]: [`OkfError::StoreUnavailable`] when the store
+    /// cannot be reached.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn catalog_db(&self, row: &CatalogRow) -> Result<CatalogDb, OkfError> {
+        self.stores.get(&row.store).await
+    }
+
+    /// The database of the store called `store`, for a caller that holds a
+    /// loaded catalog ([`crate::catalog::CatalogState::store`]) or a
+    /// changeset's catalog and not its directory row.
+    ///
+    /// # Arguments
+    /// * `store` - the store's name.
+    ///
+    /// # Returns
+    /// The store's handle.
+    ///
+    /// # Errors
+    /// As [`Stores::get`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn store_db(&self, store: &StoreName) -> Result<CatalogDb, OkfError> {
+        self.stores.get(store).await
+    }
+
+    /// The `main` store's handle, for tests that import or read as another
+    /// replica or the command line would.
+    ///
+    /// # Returns
+    /// The handle.
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "a test helper")
+    )]
+    pub(crate) async fn main_db(&self) -> CatalogDb {
+        self.stores
+            .get(&StoreName::main())
+            .await
+            .expect("the main store opens")
     }
 
     /// The server's settings.
@@ -1320,6 +1370,9 @@ impl App {
                 .await;
             }
             Invalidation::Settings => self.reload_settings().await,
+            // Every replica reopens the store's pool on its next use, with
+            // the row as it is now.
+            Invalidation::Store { name } => self.stores.forget(name).await,
             Invalidation::CatalogMeta { id, name } => {
                 self.forget_if_deleted(*id, name).await;
             }
@@ -1349,8 +1402,10 @@ impl App {
             self.labels.apply(invalidation).await;
             // A mark, not a reload: the next request checks the settings
             // ([`App::fresh_settings`]) whatever their age.
-            if matches!(invalidation, crate::invalidate::Invalidation::Settings) {
-                self.mark_settings_stale();
+            match invalidation {
+                crate::invalidate::Invalidation::Settings => self.mark_settings_stale(),
+                crate::invalidate::Invalidation::Store { name } => self.stores.forget(name).await,
+                _ => {}
             }
         }
     }
@@ -1390,6 +1445,9 @@ impl App {
         self.catch_up_catalogs().await;
         self.credentials.mark_all_stale();
         self.labels.mark_all_stale();
+        // A `stores` change may have been missed: every pool reopens from
+        // its row on next use.
+        self.stores.forget_all().await;
         self.reload_settings().await;
     }
 

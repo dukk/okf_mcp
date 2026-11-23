@@ -238,7 +238,7 @@ mod tests {
             .await
             .unwrap()
             .expect("main is loaded");
-        let db = test.app.main_store();
+        let db = &test.app.main_db().await;
         let now = test.app.clock().now();
         let reporter = Actor {
             key_id: "reporter".into(),

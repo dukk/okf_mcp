@@ -324,6 +324,8 @@ Each release ends deployable: after Task 6 (types only, rolling), after Task 10 
 - [ ] Changing a `stores` row sends an invalidation, and each replica drops that store's pool (`Stores::forget`).
 - [ ] Tests: `account_database_store_opens_its_own_pool`; `concurrent_first_use_opens_one_pool`; `an_unreachable_store_is_store_unavailable_within_the_timeout` (a `host` row pointing at a closed port on `127.0.0.1`); `changing_a_store_row_reopens_its_pool_on_every_replica` (two-replica harness).
 
+> **Corrected (issue #966, 2026-11-23).** Shipped: `Stores::new(accounts: PgPool, PoolSettings)` (`PoolSettings::from_config`), clonable, with its pools in a moka cache (single flight per store, a failed open is not kept) and `Stores::{get, all, forget, forget_all}` (`forget_all` runs when the change feed reconnects). `get` is `NotFound` for no row, `StoreUnavailable` on a failed or slow connect (logged on the local side only), `Busy` if the registry cannot be read. A store inside the account database takes the account pool's connect options; a `host` row takes them too, with host, port and database from the row and the password from the environment variable `credential_ref` names (the account database's own password is never sent). The user, TLS and other settings therefore come from the account pool's options: Task 9 decides the user's place on the row and fills in `secrets-manager` and `iam`, which are `StoreUnavailable` until then. The search path is `STORE_SEARCH_PATH` in `src/stores/registry.rs`. `App` holds `stores: Stores`; `App::catalog_db(&CatalogRow)` and `App::store_db(&StoreName)` (for a caller holding a `CatalogState`, which now has `store()`, or a changeset) replace `main_store()`. `CatalogRow` carries `store`, and `CatalogCache` holds a `Stores`. The directory queries (`row_by_name`, `row_by_id`, `rows_by_names`, `page`, `ceiling_page`) hide `provisioned_at IS NULL`; `catalogs::find` and the other by-name reads do not, so Task 10b's create reads its own half-made row by id with its own query. The invalidation is `Invalidation::Store { name }` (`Invalidation::store(&name)`); nothing writes a `stores` row yet, so Task 10 must call `invalidate(tx, &[Invalidation::store(&name)])` in every transaction that changes or removes one. The CLI `import` and `export` look up the catalog's row and open its store through the registry. Still on `main` until the task named, each marked in the code: the changeset list across catalogs (`list_changesets` without `catalog`) and `ToolContext::resolve_changeset`'s `by_handle` (Task 18: a handle does not name its store, so the lookup must try every store, `main` first), `prune_changesets` and `cluster_stats`'s open-changeset count (Task 16), and CLI `repair-indexes` (Task 20, with P8: it must loop over `Stores::all`).
+
 ### Task 9: credential kinds `secrets-manager` and `iam`
 
 **Files:** create `src/stores/credentials.rs`; modify `Cargo.toml`.
@@ -566,6 +568,7 @@ Release 3 is not deployable yet: Task 17 (listeners per store) completes it.
 
 - [ ] Merging reads (`search`, `list_catalogs` counts, the console search) query stores concurrently and add `unavailable: [catalog id]` when any store fails with `StoreUnavailable`. Omit the field when empty, as other optional fields are.
 - [ ] First-match reads follow P3.
+- [ ] `ToolContext::resolve_changeset` finds a handle's store (every store from `Stores::all()`, `main` first; an unreachable one is `StoreUnavailable` as P3), and `list_changesets` without `catalog` fans out over the stores. Both read `main` only after Task 8 (issue #966).
 - [ ] Tests: `search_returns_other_stores_results_and_names_the_unavailable_catalog`; `get_concept_fails_when_an_earlier_catalogs_store_is_unavailable`; `a_write_to_an_unavailable_store_fails_with_store_unavailable`.
 
 ### Task 19: docs
@@ -594,6 +597,7 @@ Release 3 is not deployable yet: Task 17 (listeners per store) completes it.
   5. Assert each catalog's rows exist only on its own store.
   6. Stop store `acme`'s database; assert team B is unaffected and team A gets `StoreUnavailable`.
 - [ ] Smoke: deploy release 3 to a disposable environment built from a snapshot of a pre-split database. Follow P10's procedure. Check the adoption, the audit view (old and new entries) and a publish, and record the result in the milestone changelog.
+- [ ] CLI `repair-indexes` loops over `Stores::all()`; after Task 8 it repairs `main` only (issue #966).
 - [ ] Remove P8's restriction on `host` stores (Task 10's check) once the end-to-end test passes, and invert its test: `adding_a_host_store_is_refused_until_enabled` becomes `a_host_store_can_be_added`.
 - [ ] Milestone changelog summarising the epic.
 

@@ -21,7 +21,7 @@ use crate::okf::workspace::{MemWorkspace, StoredFile};
 use crate::store::catalogs::CatalogRow;
 use crate::store::documents;
 use crate::store::documents::DocumentRow;
-use crate::stores::CatalogDb;
+use crate::stores::{CatalogDb, StoreName};
 
 /// The catalog's current generation, or `None` if the row is gone.
 const GENERATION: &str = "SELECT generation FROM catalogs WHERE id = $1";
@@ -174,6 +174,9 @@ impl Loaded {
 pub struct CatalogState {
     id: i64,
     name: String,
+    // The store its rows are in, as of the row it was loaded from. A
+    // catalog never moves between stores (spec non-goal).
+    store: StoreName,
     // The description and owner are not held here: they change without a
     // publish, so readers take them from the catalog's directory row
     // (`CatalogRow`, M18 spec Decision 6).
@@ -211,6 +214,7 @@ impl CatalogState {
         Ok(Self {
             id: row.id,
             name: row.name.clone(),
+            store: row.store.clone(),
             current: RwLock::new(Arc::new(loaded)),
         })
     }
@@ -225,6 +229,18 @@ impl CatalogState {
     )]
     pub fn id(&self) -> i64 {
         self.id
+    }
+
+    /// The store holding the catalog's data.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn store(&self) -> &StoreName {
+        &self.store
     }
 
     /// The catalog's name.

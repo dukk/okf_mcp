@@ -130,7 +130,13 @@ pub(crate) async fn history(ctx: &ToolContext, params: HistoryParams) -> Result<
         for path in &paths {
             // `.await` suspends this call until Postgres answers, freeing the
             // thread for other requests meanwhile.
-            let rows = revisions(ctx.app().main_store(), state.id(), path, limit).await?;
+            let rows = revisions(
+                &ctx.app().store_db(state.store()).await?,
+                state.id(),
+                path,
+                limit,
+            )
+            .await?;
             if rows.is_empty() {
                 continue;
             }

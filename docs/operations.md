@@ -119,6 +119,9 @@ unknown keys are ignored, so one file serves every version.
 | `time_server` | none | The NTP server for the clock check (`host`, `host:port` or an address). Without it there is no check |
 | `concept_outline_chars` | `20000` | `get_concept` returns an outline of the headings, not the body, for a body longer than this many characters, unless the call passes `full` or `section` |
 | `database_max_connections` | `16` | The most database connections one process opens (`serve` and every subcommand). Writers queued on one changeset wait without one; the writer whose turn it is, a publish, and a read that builds an overlay each hold one |
+| `store_max_connections` | `8` | The most connections one process opens to each catalog store, beside `database_max_connections` (the account database). Every store, `main` included, has a pool of its own, opened on its first use |
+| `store_idle_timeout` | `"10m"` | How long an idle connection to a catalog store is kept open before it is closed. A store's pool holds no connection while unused |
+| `store_connect_timeout` | `"5s"` | How long opening a store's pool, or waiting for a connection to begin a transaction on it, may take. Past it the request fails with `StoreUnavailable`, which never names the store |
 | `overlay_cache_bytes` | `"256MiB"` | The most memory the changeset overlays (an open changeset's view of its catalog) may take, estimated like a catalog snapshot (a fixed cost per file plus a multiple of the stored size, over the overlay's whole workspace, so many empty files count). Past it, an overlay is dropped and rebuilt on its next read; one larger than the whole budget is served but not kept. An overlay unused for `session_idle_timeout` is dropped too. `overlay_cache_size` is deprecated and ignored (a warning at start-up) |
 | `public_url` | none | The server's public origin, such as `"https://okf-mcp.example.com"` (no path, query or user info; a trailing `/` is dropped). Setting it turns on OAuth ("OAuth connectors") and console sign-in by account ("Signing in and self-service"); without it the OAuth and sign-in routes are 404. It must be `https`, except on a loopback host (such as `localhost`, `127.0.0.1` or `::1`) for local testing, and its host must be in `allowed_hosts` |
 | `oauth.access_token_ttl` | `"24h"` | How long an OAuth access token works. A revoked one stops working at once whatever its lifetime, so the long default costs little; each refresh is a chance for a client's processes to race (`oauth.refresh_reuse_grace`) |
@@ -173,7 +176,7 @@ unknown keys are ignored, so one file serves every version.
 
 The server refuses to start (and every subcommand refuses to run) with a zero
 `session_idle_timeout`, `worker_shutdown_grace`,
-`database_max_connections`, `overlay_cache_bytes`, `catalog_cache_bytes`, `catalog_directory_entries`, `catalog_ttl`,
+`database_max_connections`, `store_max_connections`, `store_idle_timeout`, `store_connect_timeout`, `overlay_cache_bytes`, `catalog_cache_bytes`, `catalog_directory_entries`, `catalog_ttl`,
 `credential_cache_entries`, `user_cache_entries` or `credential_ttl`, a `search_fanout_max` outside 1 to 999, an empty `allowed_hosts` or a blank
 entry in it, or a `time_server` that is blank or has surrounding whitespace.
 `maintenance_review_intervals` also rejects invalid catalog names, malformed

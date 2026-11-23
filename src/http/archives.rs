@@ -366,7 +366,12 @@ async fn export_catalog(
     // Only now is the name admitted: the span and the metrics take the
     // loaded catalog's own name, never the path segment.
     transfer.admit(resolved_catalog(&transfer.span, &app, &name).await);
-    let exported = export(app.main_store(), &name, Vec::new(), &options).await;
+    // A store that cannot be reached is an error of the export, which
+    // `finish` records like any other.
+    let exported = match app.catalog_db(&row).await {
+        Ok(db) => export(&db, &name, Vec::new(), &options).await,
+        Err(error) => Err(error),
+    };
     transfer.finish(
         exported
             .as_ref()
@@ -547,7 +552,8 @@ async fn import_catalog(
             audit: &actor,
             now: app.clock().now(),
         };
-        let report = import(app.main_store(), &name, files, &options)
+        let db = app.catalog_db(&row).await?;
+        let report = import(&db, &name, files, &options)
             .await
             // `store::import`'s "not empty" refusal names the CLI flag: say what
             // HTTP needs instead. Its generation refusal ("... export it again")

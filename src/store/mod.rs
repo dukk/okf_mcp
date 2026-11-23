@@ -28,6 +28,7 @@ pub mod server_keys;
 pub mod settings;
 pub mod sign_in_events;
 pub mod sign_in_methods;
+pub mod stores;
 pub mod teams;
 pub mod unassigned;
 pub mod unlocks;

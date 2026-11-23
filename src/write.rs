@@ -171,11 +171,12 @@ where
     // transaction: a rebuild waits for the rebuild lock and a connection, and
     // nothing here holds a pooled connection yet (issue #671).
     let before = state.current().generation();
-    state.refresh(app.main_store(), app.rebuild_locks()).await?;
+    let db = app.store_db(state.store()).await?;
+    state.refresh(&db, app.rebuild_locks()).await?;
     app.catalog_cache().refreshed_if_moved(&state, before).await;
     // Dropping `tx` without `commit()` (any `?` below) rolls everything back:
     // a refused edit leaves no entry behind.
-    let mut tx = app.main_store().begin().await?;
+    let mut tx = db.begin().await?;
     if audit.is_some() {
         // The entry's users before the changeset, as publish (issue #418).
         crate::store::publish::lock_people(&mut tx, &ctx.audit_actor(), state.name()).await?;
@@ -724,12 +725,12 @@ mod tests {
             now: Utc::now(),
         };
         let republished = files(&[("a.md", "# Changed\n"), ("AGENTS.md", "# Agents\n")]);
-        import(test.app.main_store(), "pg", republished, &options)
+        import(&test.app.main_db().await, "pg", republished, &options)
             .await
             .unwrap();
         let state = test.app.catalog("pg").await.unwrap().unwrap();
         state
-            .refresh(test.app.main_store(), test.app.rebuild_locks())
+            .refresh(&test.app.main_db().await, test.app.rebuild_locks())
             .await
             .unwrap();
         assert_eq!(state.current().revision("a.md"), Some(2));

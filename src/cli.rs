@@ -38,7 +38,7 @@ use crate::store::repair;
 use crate::store::settings::SettingKey;
 use crate::store::teams::Role;
 use crate::store::unlocks::Category;
-use crate::stores::{AccountDb, CatalogDb, StoreName};
+use crate::stores::{AccountDb, CatalogDb, PoolSettings, StoreName, Stores};
 use crate::telemetry::metrics::Metrics;
 use crate::telemetry::subscriber::split_event;
 use crate::telemetry::{self, StartUp, Telemetry};
@@ -970,7 +970,8 @@ async fn dispatch(
         }
         Command::Catalog(command) => {
             let pool = connect(cli.database_url.as_deref(), &config).await?;
-            let ran = run_catalog(&pool, command, clock.as_ref(), &mut changed).await;
+            let stores = Stores::new(pool.clone(), PoolSettings::from_config(&config));
+            let ran = run_catalog(&pool, &stores, command, clock.as_ref(), &mut changed).await;
             if ran.is_err() {
                 // What it committed before failing is announced all the same.
                 announce_from_cli(&config, env, &Metrics::global(), &changed, false).await;
@@ -1064,13 +1065,8 @@ async fn dispatch(
                 audit: &AuditActor::cli(),
                 now: clock.now(),
             };
-            let report = import::import(
-                &CatalogDb::new(StoreName::main(), pool.clone()),
-                &catalog,
-                files,
-                &options,
-            )
-            .await?;
+            let db = catalog_store(&pool, &config, &catalog).await?;
+            let report = import::import(&db, &catalog, files, &options).await?;
             changed.extend(report.changed);
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
@@ -1079,8 +1075,9 @@ async fn dispatch(
             // Build the archive in memory first: no `StdoutLock` is held across
             // `.await` (which would make this future impossible to
             // `tokio::spawn`), and an unknown catalog leaves no file behind.
+            let db = catalog_store(&pool, &config, &catalog).await?;
             let (tarball, generation) = export::export(
-                &CatalogDb::new(StoreName::main(), pool.clone()),
+                &db,
                 &catalog,
                 Vec::new(),
                 &export::ExportOptions {
@@ -1290,6 +1287,7 @@ fn describe_details_change(
 #[tracing::instrument(level = "debug", skip_all)]
 async fn run_catalog(
     pool: &PgPool,
+    stores: &Stores,
     command: CatalogCommand,
     clock: &dyn Clock,
     changed: &mut Vec<CatalogGeneration>,
@@ -1366,8 +1364,11 @@ async fn run_catalog(
             dry_run,
             actor,
         } => {
-            // Release 1: the only store is `main`, in the account database.
-            let store = CatalogDb::new(StoreName::main(), pool.clone());
+            // `main` only: it is the only store that can hold catalogs until
+            // the milestone's last task lifts the restriction on separate
+            // stores (plan decision P8), which makes this a loop over
+            // `Stores::all`.
+            let store = stores.get(&StoreName::main()).await?;
             let (targets, skipped) =
                 repair_targets(&AccountDb::new(pool.clone()), &store, names, missing_only).await?;
             for name in &skipped {
@@ -1849,6 +1850,32 @@ fn format_code_record(code: &SignInCodeRecord, now: chrono::DateTime<chrono::Utc
         &labelled("grant", code.grant_id.as_deref()),
         &labelled("user", code.user.as_deref()),
     ])
+}
+
+/// The store database holding catalog `name`'s data, opened through the
+/// registry like the server does.
+///
+/// # Arguments
+/// * `pool` - the account database.
+/// * `config` - the settings (`store_*`) the store's pool is opened with.
+/// * `name` - the catalog's name. One with no registry row (unknown, or not
+///   provisioned yet) is looked up on `main`, so the store function's own
+///   "no such catalog" refusal is what the caller sees.
+///
+/// # Returns
+/// The store's handle.
+///
+/// # Errors
+/// The registry read, or [`OkfError::StoreUnavailable`] when the store
+/// cannot be reached.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn catalog_store(pool: &PgPool, config: &Config, name: &str) -> anyhow::Result<CatalogDb> {
+    let store = match catalogs::row_by_name(pool, name).await? {
+        Some(row) => row.store,
+        None => StoreName::main(),
+    };
+    let stores = Stores::new(pool.clone(), PoolSettings::from_config(config));
+    Ok(stores.get(&store).await?)
 }
 
 /// Connects to the database and applies the migrations.

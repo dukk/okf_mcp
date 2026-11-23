@@ -326,7 +326,7 @@ impl Credentials {
                     .await;
             }
             // Catalog content and settings are read per request elsewhere.
-            Invalidation::Catalog { .. } | Invalidation::Settings => {}
+            Invalidation::Catalog { .. } | Invalidation::Settings | Invalidation::Store { .. } => {}
         }
     }
 
