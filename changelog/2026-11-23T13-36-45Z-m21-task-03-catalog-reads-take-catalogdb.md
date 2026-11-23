@@ -35,5 +35,5 @@
   - the changeset listing in `mcp::changesets` (`changesets::list_open` and `open_for_catalogs`, which join `catalogs` and `api_keys`), and the table reads in `src/store/changesets.rs`, `src/store/repair.rs` and `src/store/users.rs` that Task 5 splits;
   - `ToolContext::resolve_changeset`'s `catalogs::row_by_id` (the registry, an account read);
   - `src/store/maintenance/*` and `src/mcp/maintenance/*` (Task 4).
-- Files named by the issue that needed no change: `src/store/documents.rs` (executor-based helpers), `src/store/gates.rs` (reads only account tables: `audit_credentials` and the gates' users, teams and entitlements), `src/mcp/documents.rs` and `src/mcp/search.rs` (they read the in-memory snapshot and reach the database only through `ToolContext`, which this task types).
+- Files named by the issue that needed no change: `src/store/documents.rs` (executor-based helpers), `src/store/gates.rs` (reads only account tables: `team_members`, `user_catalogs`, `unlocks`, `audit_people` and `audit_credentials`), `src/mcp/documents.rs` and `src/mcp/search.rs` (they read the in-memory snapshot and reach the database only through `ToolContext`, which this task types).
 - I traced the statements above in the code; I did not trace the SQL functions beyond the names Task 2 already lists.
