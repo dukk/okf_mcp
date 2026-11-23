@@ -164,6 +164,15 @@ where
     // connection and then the row lock (which still orders writers in other
     // processes, and publish and discard). `_queued` is held until return.
     let _queued = app.write_queue().lock(row.id).await;
+    // A snapshot behind the database (this replica was not told of a publish
+    // elsewhere) would give the entry an older base revision than the text
+    // it edits, and publish would replay or conflict for nothing (issue
+    // #672). One generation read, and a rebuild only if it moved. Before the
+    // transaction: a rebuild waits for the rebuild lock and a connection, and
+    // nothing here holds a pooled connection yet (issue #671).
+    let before = state.current().generation();
+    state.refresh(app.pool(), app.rebuild_locks()).await?;
+    app.catalog_cache().refreshed_if_moved(&state, before).await;
     // Dropping `tx` without `commit()` (any `?` below) rolls everything back:
     // a refused edit leaves no entry behind.
     let mut tx = app.pool().begin().await?;
@@ -215,11 +224,12 @@ where
         // `remove` takes the entry out of the map (no copy).
         let previous = existing.remove(&path);
         // The revision in the in-memory snapshot this write's overlay is
-        // built on. A snapshot is only ever swapped in from committed state,
-        // so it never runs ahead of the database: a publish that commits
-        // after it was taken leaves this base behind the published revision,
-        // and publish reports a Conflict. (The row lock orders writers of
-        // this changeset; it does not hold off other changesets' publishes.)
+        // built on, refreshed at the start of this call. A snapshot is only
+        // ever swapped in from committed state, so it never runs ahead of the
+        // database: a publish that commits after it was taken leaves this
+        // base behind the published revision, and publish reports a Conflict.
+        // (The row lock orders writers of this changeset; it does not hold
+        // off other changesets' publishes.)
         let published = overlay.base().revision(&path);
         let replay = outcome.replay.get(&path);
         // A rebased path (a revert) starts again on `published`: its earlier

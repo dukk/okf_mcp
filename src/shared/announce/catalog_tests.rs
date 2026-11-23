@@ -494,6 +494,67 @@ async fn pending_changes_refuses_a_snapshot_behind_a_base_it_cannot_catch_up_to(
     );
 }
 
+/// An edit made on a lagging replica records the base revision of the
+/// current published text, not of the older snapshot (issue #672), so a
+/// publish of it neither conflicts nor replays. B holds an older snapshot of
+/// `/index.md` because A's publish was never announced to it.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_edit_on_a_lagging_replica_records_the_fresh_base_and_publishes_cleanly() {
+    let (a, b, _redis) = pair().await;
+    let on_a = writer(&a, "alice", "pg").await;
+    let on_b = alice_on(&b);
+    // B holds pg before A publishes, and is not told.
+    read(&on_b, "/index.md", None).await;
+    published_edit(&on_a, "/index.md", "- systems", "- the systems").await;
+    let fresh = a
+        .app
+        .catalog("pg")
+        .await
+        .unwrap()
+        .expect("A holds pg")
+        .current()
+        .revision("index.md")
+        .expect("index.md is published");
+    let stale = b
+        .catalog("pg")
+        .await
+        .unwrap()
+        .expect("B holds pg")
+        .current()
+        .revision("index.md")
+        .expect("index.md is published");
+    assert!(stale < fresh, "B is behind: {stale} < {fresh}");
+
+    // An edit of another line of the same file, made on B.
+    let handle = open(&on_b).await;
+    edit(&on_b, &handle, "/index.md", "# PG", "# Postgres").await;
+
+    let base: Option<i32> = sqlx::query_scalar(
+        "SELECT e.base_revision FROM changeset_entries e \
+         JOIN changesets c ON c.id = e.changeset_id WHERE c.handle = $1",
+    )
+    .bind(&handle)
+    .fetch_one(a.app.pool())
+    .await
+    .expect("the entry");
+    assert_eq!(
+        base,
+        Some(fresh),
+        "the entry's base is the current revision"
+    );
+    let params = PublishParams {
+        message: "test".to_string(),
+        changeset: handle.clone(),
+    };
+    let published = publish(&on_b, params).await.expect("no conflict");
+    assert!(published.report.published);
+    let text = read(&on_b, "/index.md", None).await;
+    assert!(
+        text.contains("# Postgres") && text.contains("the systems"),
+        "{text}"
+    );
+}
+
 /// Announcements racing direct refreshes of one catalog rebuild it once,
 /// and an announcement of an older generation leaves it alone. Refreshes
 /// are serialized by `CatalogState`'s rebuild lock and skip a generation
