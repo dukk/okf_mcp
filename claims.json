@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1020,
+  "next_claim_seq": 1024,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "26179d3a0aaa4e690b2f4de655062b6de9504b8bad619901aa17618133b102da"
+    "mac": "ddc55107830dc6907d4c66c1f90cca85e16aeea547667f15c8111a078911f178"
   },
-  "next_evidence_seq": 1468,
+  "next_evidence_seq": 1478,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "26496dd7a3270a924edcee864e9d318f46419437ca64bf882b756431af5a77af"
+    "mac": "ac2f025d777aa287725643145dd4215478043208af2f3fbd2687ffc0d3b8c612"
   },
   "claims": [
     {
@@ -81017,6 +81017,18 @@
             "by": "server",
             "mac": "807151f41d280f009caaae058adb7ff562266fffaa08df2fb1739e540090cf96"
           }
+        },
+        {
+          "id": "EVD-1477",
+          "kind": "analysis",
+          "locator": "children of CLM-0999",
+          "summary": "At HEAD 8d0719a every active child (CLM-1000 to 1017 except the retired CLM-1018/1019, and CLM-1020 to 1023) is supported; CLM-1018 and CLM-1019 (unverifiable PR-body statements) are retired and replaced by CLM-1020 to 1023. The earlier pool-per-call observation is closed by CLM-1021 and CLM-1022.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T23:23:48.094988059Z",
+          "seal": {
+            "by": "server",
+            "mac": "2c662909b56a72f2919bcac872abb24d04475c8798edb06eb0c09d6777e34f9e"
+          }
         }
       ],
       "verdicts": [
@@ -81032,13 +81044,26 @@
             "by": "server",
             "mac": "8bd11fdd43e87621acff03c913b2bb1f2abb64cb167c836737eec5170d4024bd"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All active children are supported at 8d0719a; the two unverifiable children are retired and replaced by checkable ones.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1477"
+          ],
+          "recorded_at": "2026-11-23T23:23:52.040119690Z",
+          "seal": {
+            "by": "server",
+            "mac": "bf0f23959f2383d49366a969a4b5564accfddd2ecbb6e3ba60dace755876be5b"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T22:44:11.306743432Z",
+      "updated_at": "2026-11-23T23:23:52.040119690Z",
       "seal": {
         "by": "server",
-        "mac": "558f5f492888bfb330640234e2f0959689f4d950013803a352a4670df21907f7"
+        "mac": "321343bf2bba96d2946e9652794ad5a477becd6febd27f55f120fcb2ed92b947"
       }
     },
     {
@@ -81964,6 +81989,28 @@
             "by": "server",
             "mac": "2c7b8cee9a3594bbb92e0a08566763197108a655b5a20718da71db3954ed23f3"
           }
+        },
+        {
+          "id": "EVD-1473",
+          "kind": "test",
+          "locator": "audit2 logs: claim_needs_only_one_connection, create_and_recovery_work_on_a_one_connection_pool, a_one_connection_configuration_never_opens_a_second_pool_for_main",
+          "summary": "At HEAD 8d0719a all three pass. The HEAD commit removes the per-call pool from production (main_in is cfg(test), CatalogDirectory::new takes Stores, users::delete_on takes the store handle), so the one-connection path now uses the registry's single main pool, and the new test checks create, import, directory load and delete on max_connections = 1.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 445,
+                "end": 470
+              },
+              "commit": "8d0719ae6dad53ba3ad61e3aef74063adb74105e"
+            }
+          },
+          "recorded_at": "2026-11-23T23:23:35.116810123Z",
+          "seal": {
+            "by": "server",
+            "mac": "71e7f47f8d6e2daddaa08e2cd5acfa630c2115f63daa7d3066035ec322403a7e"
+          }
         }
       ],
       "verdicts": [
@@ -81979,13 +82026,26 @@
             "by": "server",
             "mac": "c7d7ba3aa085e3e17810a0becab3a3ebb421245d94fcd35aa085b47be768a37c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 8d0719a: one-connection tests pass and production no longer builds a second main pool.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1473"
+          ],
+          "recorded_at": "2026-11-23T23:23:47.645913671Z",
+          "seal": {
+            "by": "server",
+            "mac": "50dd37e49a81a155f386577a5a0e80ebad1f5a9800dbdf0162ba297a15516f79"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T22:43:43.384038639Z",
+      "updated_at": "2026-11-23T23:23:47.645913671Z",
       "seal": {
         "by": "server",
-        "mac": "a8c73d2455fa762ff60e88206fe99d5ee9679c59d6a27b44af6b0209dc496674"
+        "mac": "4857893a4e9bdb11f89299306f524f2da186c43e501d8447723858e935e3687e"
       }
     },
     {
@@ -82053,6 +82113,28 @@
             "by": "server",
             "mac": "85f485c83ed12d8a5240c04f0bf27a1617de6da86017ce3e46f58065cf8acc11"
           }
+        },
+        {
+          "id": "EVD-1474",
+          "kind": "test",
+          "locator": "src/store/catalogs.rs registration/store_side_exists at HEAD; audit2 log provisioning_job (2 passed)",
+          "summary": "The HEAD diff changes catalogs.rs (43 lines) only to route create/delete through create_in/delete_in with the registry handle; registration still runs on the account connection and store_side_exists reads catalog.catalog_state. The provisioning tests pass at HEAD.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "catalog\\.catalog_state",
+              "scope": [
+                "src/store/catalogs.rs"
+              ],
+              "hits": 3,
+              "commit": "8d0719ae6dad53ba3ad61e3aef74063adb74105e"
+            }
+          },
+          "recorded_at": "2026-11-23T23:23:35.179878350Z",
+          "seal": {
+            "by": "server",
+            "mac": "6eef6917b6c7751d7a3e914d5272ac0c4955d04a4efed331c81a87b42973c36e"
+          }
         }
       ],
       "verdicts": [
@@ -82069,13 +82151,26 @@
             "by": "server",
             "mac": "6aa775e6abc2792c0cb49998669d816abd7f2861c32c6f0bc0559a0a43f66e6e"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 8d0719a: registration and store_side_exists unchanged in substance, tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1474"
+          ],
+          "recorded_at": "2026-11-23T23:23:47.703034873Z",
+          "seal": {
+            "by": "server",
+            "mac": "c13ee2622d47ebe73ef7db7d5fa33171ed12a4752b247c20858d580103d50092"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T22:43:43.440716846Z",
+      "updated_at": "2026-11-23T23:23:47.703034873Z",
       "seal": {
         "by": "server",
-        "mac": "81790186d0aff3cba2c528a3de2ef85f3d306491d5d08326f2b05058180298b9"
+        "mac": "00a4458e3b64d79063a2829a2a1b203e1fc7fb7960215728e60df708a32a0017"
       }
     },
     {
@@ -82343,6 +82438,28 @@
             "by": "server",
             "mac": "e24140a496452892b4cc6fc621c2bcfbe80d115ed9709e01931cb9f61ba728c6"
           }
+        },
+        {
+          "id": "EVD-1475",
+          "kind": "test",
+          "locator": "audit2 log a_changeset_opened_while_a_deletion_runs (src/store/users.rs)",
+          "summary": "HEAD changes users.rs (delete_on and delete_own_on now take the store handle; test-only delete/delete_own wrap them). The test passes at HEAD, and the changelog Known gaps section still states the changeset stays open under a deleted key until Task 13.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "a_changeset_opened_while_a_deletion_runs",
+              "scope": [
+                "src/store/users.rs"
+              ],
+              "hits": 1,
+              "commit": "8d0719ae6dad53ba3ad61e3aef74063adb74105e"
+            }
+          },
+          "recorded_at": "2026-11-23T23:23:35.242810176Z",
+          "seal": {
+            "by": "server",
+            "mac": "d83d4795c8286361b07f9186ee280cec5aa6f274d26a0cb1a7418c1c9e60a64f"
+          }
         }
       ],
       "verdicts": [
@@ -82358,13 +82475,26 @@
             "by": "server",
             "mac": "fe58bcb1f0deedaf224b36ceeee56c0f9aca47b04531adca83912bbcc0afd368"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 8d0719a: deletion signature change does not alter the documented behaviour; test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1475"
+          ],
+          "recorded_at": "2026-11-23T23:23:47.758638720Z",
+          "seal": {
+            "by": "server",
+            "mac": "b9e758162652a03df084cf83c67c4635b9ac04b76300090411859bd0f253bef2"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T22:43:43.684498407Z",
+      "updated_at": "2026-11-23T23:23:47.758638720Z",
       "seal": {
         "by": "server",
-        "mac": "56bbbee5c68a6b8e34448c02680af50ff36aa0e0b47d4c290a99822f31f5804d"
+        "mac": "d2bca2953f88c849c3e041fa8a08bd57f820adc0c662bcfb904a6a47623af3ec"
       }
     },
     {
@@ -82409,6 +82539,28 @@
             "by": "server",
             "mac": "36fb543c69d92ef1c5e662d9b825eeb1fa9500fde120f84cbf0c7109e5571130"
           }
+        },
+        {
+          "id": "EVD-1476",
+          "kind": "test",
+          "locator": "audit2 logs publish_bumps_generation_in_catalog_state, maintenance_run_end_is_audited_after_the_trigger_is_gone",
+          "summary": "The HEAD commit does not touch src/store/publish.rs or changesets.rs (not in the diff stat); the publish test passes at HEAD, so the transaction order is unchanged.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "catalog_state",
+              "scope": [
+                "src/store/publish.rs"
+              ],
+              "hits": 1,
+              "commit": "8d0719ae6dad53ba3ad61e3aef74063adb74105e"
+            }
+          },
+          "recorded_at": "2026-11-23T23:23:35.303806845Z",
+          "seal": {
+            "by": "server",
+            "mac": "c84899afc509ff39c4c2c024b5eee65f8f33ca1f9758197e774d5fe35ebd9417"
+          }
         }
       ],
       "verdicts": [
@@ -82424,13 +82576,26 @@
             "by": "server",
             "mac": "4017b0c28170c4b452a78e47baea4886c7f2b3d45e6ae830847e24b6579327af"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 8d0719a: publish code untouched by the new commit, test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1476"
+          ],
+          "recorded_at": "2026-11-23T23:23:47.814551377Z",
+          "seal": {
+            "by": "server",
+            "mac": "c76a832905c845ecd20e6bd97bd401d1a4ea6f587d8170611bc08fc27e4c7d02"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T22:43:43.741074904Z",
+      "updated_at": "2026-11-23T23:23:47.814551377Z",
       "seal": {
         "by": "server",
-        "mac": "abd554d536ebbb3d6d5f249c56676259cffbeab6155c233abcd72ad9a125dba5"
+        "mac": "4a02aa600f6fbdeea6948bad13e79d855c4c99a7ff4bdcac3f9fa1d9e7a4707d"
       }
     },
     {
@@ -82517,7 +82682,9 @@
         "from-issue:970"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Unverifiable PR-body statement about gate counts; replaced by checkable claims derived from CLM-0999 (named tests pass at HEAD 8d0719a).",
+        "retired_at": "2026-11-23T23:23:07.238896601Z"
       },
       "evidence": [
         {
@@ -82549,10 +82716,10 @@
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T22:43:43.854684090Z",
+      "updated_at": "2026-11-23T23:23:07.238896601Z",
       "seal": {
         "by": "server",
-        "mac": "c4dd939a7e48933e9ae74c0f8a7273bd453ea860aeb61da0e263e2748f671d62"
+        "mac": "9baff0a3f3b40f4abe1125eb4e408fbc8290d1310f9c3526a2cf7dab34b97319"
       }
     },
     {
@@ -82575,7 +82742,9 @@
         "from-issue:970"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Unverifiable PR-body statement about revert checks; replaced by checkable claims derived from CLM-0999.",
+        "retired_at": "2026-11-23T23:23:07.299051970Z"
       },
       "evidence": [
         {
@@ -82607,10 +82776,303 @@
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T22:43:43.911760260Z",
+      "updated_at": "2026-11-23T23:23:07.299051970Z",
       "seal": {
         "by": "server",
-        "mac": "a57e6e6902afe0fc203afcbbe837a38e9d8c18453e250738a6ae4e06985e3c7e"
+        "mac": "338bba7502a96d750030556e8ee4b886328a30e02a11876803b76e8615fbed4d"
+      }
+    },
+    {
+      "id": "CLM-1020",
+      "statement": "The six tests named in the Task 11 changelog Evidence section exist and pass at HEAD 8d0719a.",
+      "kind": "functional",
+      "level": "artifact",
+      "verification_method": "test",
+      "source": "Replaces CLM-1018/CLM-1019",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T22-12-07Z-m21-task-11-catalog-schema.md"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1468",
+          "kind": "test",
+          "locator": "target/i970-logs/audit2-<test>.log (gate.sh narrow --lib, six tests)",
+          "summary": "At HEAD 8d0719a each narrow run printed '1 passed; 0 failed': maintenance_run_end_is_audited_after_the_trigger_is_gone, an_empty_maintenance_run_is_audited_after_the_trigger_is_gone, publish_bumps_generation_in_catalog_state, a_store_pool_cannot_see_account_tables, an_account_pool_cannot_see_catalog_tables, no_foreign_key_crosses_between_schemas. The changelog Evidence section names exactly these six.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T22-12-07Z-m21-task-11-catalog-schema.md",
+              "lines": {
+                "start": 73,
+                "end": 82
+              },
+              "commit": "8d0719ae6dad53ba3ad61e3aef74063adb74105e"
+            }
+          },
+          "recorded_at": "2026-11-23T23:23:25.799619552Z",
+          "seal": {
+            "by": "server",
+            "mac": "a39e5a9aafa83ba64964c8a8e2db1cd9ef8a69573e17443e9f697e6010c8e6f7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All six named tests pass at HEAD. I did not repeat the revert-check; the claim is only existence and passing.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1468"
+          ],
+          "recorded_at": "2026-11-23T23:23:47.870608136Z",
+          "seal": {
+            "by": "server",
+            "mac": "849ee2ec78535520b45320c085799e690814155763e4d89acbe3422bd12fc3cb"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T23:23:12.221157712Z",
+      "updated_at": "2026-11-23T23:23:47.870608136Z",
+      "seal": {
+        "by": "server",
+        "mac": "89f8180e1ec810fc3c00323997c5bbbbc10edf8a53f212c0ea121c95d21b6ed3"
+      }
+    },
+    {
+      "id": "CLM-1021",
+      "statement": "No non-test code path builds a pool per call: CatalogDb::main_in and main_of are #[cfg(test)] and every caller is in test-only code, and the non-test lib build compiles.",
+      "kind": "constraint",
+      "level": "component",
+      "verification_method": "inspection",
+      "source": "Review of PR #1001",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/stores/mod.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1469",
+          "kind": "inspection",
+          "locator": "src/stores/mod.rs:301-317; src/store/catalogs.rs:142-162; src/store/users.rs:1125-1133,1269-1278; src/mcp/mod.rs:27-28",
+          "summary": "main_in (line 303) and main_of (316) are each under #[cfg(test)]. A script over git grep of 'main_in(|main_of(' in src found callers outside test modules only in src/mcp/testing.rs (module declared #[cfg(test)] at mod.rs:27), catalogs::create (cfg(test), line 142), users::delete_own and users::delete (cfg(test), lines 1125 and 1269). No production caller. 'cargo check --lib' (non-test build) finished clean (log target/i970-logs/audit2-check-lib.log), so nothing in the non-test build references them.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 299,
+                "end": 319
+              },
+              "commit": "8d0719ae6dad53ba3ad61e3aef74063adb74105e"
+            }
+          },
+          "recorded_at": "2026-11-23T23:23:25.860703010Z",
+          "seal": {
+            "by": "server",
+            "mac": "6c17b98703f1339e7e4f560076a6aa99b591db607cd723c32c484fe8d651751f"
+          }
+        },
+        {
+          "id": "EVD-1470",
+          "kind": "analysis",
+          "locator": "git grep -E 'main_in\\(|main_of\\(' -- src",
+          "summary": "Search anchor of every use of main_in/main_of in src (all hits reviewed as above: definitions plus test-only callers).",
+          "stance": "neutral",
+          "anchor": {
+            "search": {
+              "pattern": "main_in\\(|main_of\\(",
+              "scope": [
+                "src/app.rs",
+                "src/cache/directory.rs",
+                "src/catalog.rs",
+                "src/cli",
+                "src/cli.rs",
+                "src/housekeeping.rs",
+                "src/http",
+                "src/overlay.rs"
+              ],
+              "hits": 43,
+              "commit": "8d0719ae6dad53ba3ad61e3aef74063adb74105e"
+            }
+          },
+          "recorded_at": "2026-11-23T23:23:25.932724564Z",
+          "seal": {
+            "by": "server",
+            "mac": "f84e26aafa459133a10d302e40c5bd013948fb9a2e3a55251ec8a0d22a563fd5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both constructors are cfg(test); the only non-test-module callers are themselves cfg(test) items; the non-test lib build compiles.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1469"
+          ],
+          "recorded_at": "2026-11-23T23:23:47.927240636Z",
+          "seal": {
+            "by": "server",
+            "mac": "a5d00e2cdd0223575a4ec54e79d80e2bbb1db3af436c054ded805ecd23e6aa87"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T23:23:12.221157712Z",
+      "updated_at": "2026-11-23T23:23:47.927240636Z",
+      "seal": {
+        "by": "server",
+        "mac": "8c359ab496b94c273b2b6f0717910b131e15b9393c70646a58e92e43bb4fcc6b"
+      }
+    },
+    {
+      "id": "CLM-1022",
+      "statement": "The test a_one_connection_configuration_never_opens_a_second_pool_for_main exists and passes at HEAD.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "source": "Review of PR #1001",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/stores/mod.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1471",
+          "kind": "test",
+          "locator": "src/stores/mod.rs:451 a_one_connection_configuration_never_opens_a_second_pool_for_main; target/i970-logs/audit2-a_one_connection_configuration_never_opens_a_second_pool_for_main.log",
+          "summary": "Narrow run at HEAD: '1 passed; 0 failed'. The changelog says it covers create, import, directory load and delete on database_max_connections = 1 and that the registry opens one store pool.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 445,
+                "end": 470
+              },
+              "commit": "8d0719ae6dad53ba3ad61e3aef74063adb74105e"
+            }
+          },
+          "recorded_at": "2026-11-23T23:23:25.991467383Z",
+          "seal": {
+            "by": "server",
+            "mac": "d41abe0b5309abfdab97c4f76aa83f8b4833bb7e59c7ee4a55270c3d0f435ea4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test exists at src/stores/mod.rs:451 and passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1471"
+          ],
+          "recorded_at": "2026-11-23T23:23:47.983590876Z",
+          "seal": {
+            "by": "server",
+            "mac": "cffbb9dd1a3e53f69995c5edf8448de89cf0aeafd9a8a79791ef3697cfe4b594"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T23:23:12.221157712Z",
+      "updated_at": "2026-11-23T23:23:47.983590876Z",
+      "seal": {
+        "by": "server",
+        "mac": "2d4778d8ead5daf4481927cac871e8534c5b12ada94979bed7d572f4a4550781"
+      }
+    },
+    {
+      "id": "CLM-1023",
+      "statement": "Stale-text notes marked 'Done in #970' exist in the Task 5 changelog, the Task 8 changelog and plan Task 10b.",
+      "kind": "documentation",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "source": "Review of PR #1001",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-33-15Z-m21-task-05-split-joined-statements.md",
+        "changelog/2026-11-23T17-00-55Z-m21-task-08-stores-registry.md",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1472",
+          "kind": "inspection",
+          "locator": "changelog task-05 line 37; changelog task-08 line 22; plan line 219",
+          "summary": "grep 'Done in #970' finds one blockquote note in each of the three files: Task 5 (key_id foreign keys dropped), Task 8 (STORE_SEARCH_PATH is catalog), plan Task 10b (registration on an account connection, store_side_exists on catalog.catalog_state).",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "Done in #970",
+              "scope": [
+                "changelog/2026-11-23T14-33-15Z-m21-task-05-split-joined-statements.md",
+                "changelog/2026-11-23T17-00-55Z-m21-task-08-stores-registry.md",
+                "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+              ],
+              "hits": 3,
+              "commit": "8d0719ae6dad53ba3ad61e3aef74063adb74105e"
+            }
+          },
+          "recorded_at": "2026-11-23T23:23:26.053077154Z",
+          "seal": {
+            "by": "server",
+            "mac": "e39e89d8116ca411fb3ce3b73f264ae2177ec40306f9c5ccdf2e1c07b1802bc1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "One note in each of the three files, 3 hits.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1472"
+          ],
+          "recorded_at": "2026-11-23T23:23:48.039205232Z",
+          "seal": {
+            "by": "server",
+            "mac": "a119aab70a22199c09bde7644912d8b98a7fd4e7d330ad3e88d06d7e7d90c232"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T23:23:12.221157712Z",
+      "updated_at": "2026-11-23T23:23:48.039205232Z",
+      "seal": {
+        "by": "server",
+        "mac": "641f7a16491343e5096335ad6aa68af44bfc7fa758249f49d016bac4f1684430"
       }
     }
   ]
