@@ -47,7 +47,8 @@ pub struct PublishReport {
     pub published: bool,
     /// The revisions written, in path order. A file whose content ended up as published gets none.
     pub revisions: Vec<PublishedRevision>,
-    /// Lint advice: errors in files this publish does not change, and warnings in those it does.
+    /// Lint advice: errors in files this publish does not change, errors in files it does change
+    /// that the published file already had, and warnings in those it changes.
     pub warnings: Vec<Finding>,
     /// `/`-prefixed paths whose bookkeeping (log, index listings) was replayed onto newer text.
     pub replayed: Vec<String>,
@@ -560,9 +561,9 @@ async fn check(
         .collect();
     // The secret scan is CPU work; the entries go to the blocking thread and back.
     let entries = blocking(move || check_contents(entries)).await?;
-    let overlay = build_overlay(base, changeset, entries).await?;
+    let overlay = build_overlay(Arc::clone(&base), changeset, entries).await?;
     let (overlay, findings) = blocking(move || {
-        let findings = split_lint(&overlay, &changed, &deleted, now);
+        let findings = split_lint(&base, &overlay, &changed, &deleted, now);
         (overlay, findings)
     })
     .await;
@@ -599,12 +600,16 @@ fn check_contents(entries: Vec<EntryRow>) -> Result<Vec<EntryRow>, OkfError> {
     Ok(entries)
 }
 
-/// Lint of the overlay, split for publish. Errors in changed files refuse,
-/// as do links from unchanged documents into deleted paths. Errors
-/// elsewhere become advice, beside the warnings in changed files. Warnings
-/// elsewhere are left out: they predate this publish.
+/// Lint of the overlay, split for publish. New errors in changed files
+/// refuse, as do links from unchanged documents into deleted paths. An
+/// error in a changed file that the published file already has is advice
+/// instead (see [`demote_preexisting`]), so a parser or lint change cannot
+/// strand content that predates it. Errors elsewhere become advice, beside
+/// the warnings in changed files. Warnings elsewhere are left out: they
+/// predate this publish.
 #[tracing::instrument(level = "trace", skip_all)]
 fn split_lint(
+    base: &Loaded,
     overlay: &Overlay,
     changed: &BTreeSet<String>,
     deleted: &BTreeSet<String>,
@@ -616,9 +621,60 @@ fn split_lint(
     // `partition` splits one list in two by the predicate, in one pass.
     let (mut errors, mut warnings): (Vec<Finding>, Vec<Finding>) =
         report.errors.into_iter().partition(in_changed);
+    // The published catalog is linted only when something would refuse.
+    if !errors.is_empty() {
+        let (new_errors, preexisting) = demote_preexisting(errors, || base.lint(now).errors);
+        errors = new_errors;
+        warnings.extend(preexisting);
+    }
     errors.extend(links_into_deleted(overlay.snapshot(), changed, deleted));
     warnings.extend(report.warnings.into_iter().filter(in_changed));
     LintReport { errors, warnings }
+}
+
+/// Splits errors in changed files into those the changeset introduced and
+/// those the published files already had.
+///
+/// Findings match on file, rule and message, never on line number: adding
+/// lines moves every finding below them. Matching is by count, so one
+/// published broken link plus one new identical one is one new error: each
+/// published finding excuses at most one finding of the result.
+///
+/// # Arguments
+/// * `errors` - the error findings in changed files, from the result.
+/// * `published_errors` - the published catalog's errors, computed only
+///   when `errors` is not empty.
+///
+/// # Returns
+/// `(new, preexisting)`. A pre-existing finding keeps its place but its
+/// message says it was already there.
+fn demote_preexisting(
+    errors: Vec<Finding>,
+    published_errors: impl FnOnce() -> Vec<Finding>,
+) -> (Vec<Finding>, Vec<Finding>) {
+    let mut excused: HashMap<(String, String, String), usize> = HashMap::new();
+    let changed_files: BTreeSet<&str> = errors.iter().map(|error| error.file.as_str()).collect();
+    for finding in published_errors() {
+        if changed_files.contains(finding.file.as_str()) {
+            *excused
+                .entry((finding.file, finding.rule, finding.message))
+                .or_default() += 1;
+        }
+    }
+    let mut new = Vec::with_capacity(errors.len());
+    let mut preexisting = Vec::new();
+    for mut finding in errors {
+        let key = (finding.file.clone(), finding.rule.clone(), finding.message.clone());
+        match excused.get_mut(&key) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                finding.message.push_str(" (already in the published file)");
+                preexisting.push(finding);
+            }
+            _ => new.push(finding),
+        }
+    }
+    (new, preexisting)
 }
 
 /// Links from documents this publish does not change into paths it deletes
@@ -792,6 +848,48 @@ mod tests {
             revision,
             live,
         }
+    }
+
+    fn finding(file: &str, line: usize, message: &str) -> Finding {
+        Finding {
+            file: file.to_string(),
+            line,
+            rule: "broken-link".to_string(),
+            message: message.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_published_error_excuses_the_same_error_on_a_moved_line() {
+        let published = vec![finding("log.md", 3, "link target does not exist: a b.md")];
+        let result = vec![finding("log.md", 9, "link target does not exist: a b.md")];
+
+        let (new, old) = demote_preexisting(result, || published);
+
+        assert!(new.is_empty());
+        assert_eq!(old.len(), 1);
+        assert!(old[0].message.ends_with("(already in the published file)"));
+    }
+
+    #[test]
+    fn one_published_error_excuses_only_one_of_two_identical_errors() {
+        let published = vec![finding("log.md", 3, "m")];
+        let result = vec![finding("log.md", 3, "m"), finding("log.md", 8, "m")];
+
+        let (new, old) = demote_preexisting(result, || published);
+
+        assert_eq!((new.len(), old.len()), (1, 1));
+        assert_eq!(new[0].line, 8);
+    }
+
+    #[test]
+    fn a_published_error_does_not_excuse_another_message_or_file() {
+        let published = vec![finding("a.md", 1, "m")];
+        let result = vec![finding("a.md", 1, "other"), finding("b.md", 1, "m")];
+
+        let (new, old) = demote_preexisting(result, || published);
+
+        assert_eq!((new.len(), old.len()), (2, 0));
     }
 
     #[test]
