@@ -5,10 +5,10 @@
     "by": "server",
     "mac": "43e9131605ea9457f77c1243f7fb10cd7cc1d919d738686e2326e13b154369d5"
   },
-  "next_evidence_seq": 709,
+  "next_evidence_seq": 711,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "937e1620d4fa2916820d5299b7aa0d8909fefd843f5cad8b3bb4cacb96a62575"
+    "mac": "ea9b95d6ebbe2a3cc27da34b1489a3baf75d3c1f240858240d695300cb7a511e"
   },
   "claims": [
     {
@@ -43469,6 +43469,28 @@
             "by": "server",
             "mac": "a062c88ffff3a5a1c7ec5495aab215c77ad6ec833a33101f507bc33b040651df"
           }
+        },
+        {
+          "id": "EVD-0709",
+          "kind": "test",
+          "locator": "src/oauth/token.rs a_code_expiring_mid_exchange_keeps_its_tokens (standalone and cluster)",
+          "summary": "At head 127bb35 the test also asserts the post-mark PTTL exceeds REQUEST_TIMEOUT (floor = 120 s + 30 s); gate test run passed 2834, 0 failed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/token.rs",
+              "lines": {
+                "start": 1490,
+                "end": 1560
+              },
+              "commit": "127bb35cac141049bcac7fb9303a6b9352cd9c3e"
+            }
+          },
+          "recorded_at": "2026-11-23T01:18:17.306412316Z",
+          "seal": {
+            "by": "server",
+            "mac": "5c7faf9235536cd60933177760cb2440d04f74929bad62ba0c150faccd9f2af6"
+          }
         }
       ],
       "verdicts": [
@@ -43484,13 +43506,26 @@
             "by": "server",
             "mac": "514f2af8587946a1ed9c930d1d7f50ad6256ce57c35ce1da9c5f78472523c3df"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited after the test changed in review round 1.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0709"
+          ],
+          "recorded_at": "2026-11-23T01:18:22.123608228Z",
+          "seal": {
+            "by": "server",
+            "mac": "048b3b127c8bd0653fe56f6d5665040ec180b2276153bb7f2892d82d1d270a4b"
+          }
         }
       ],
       "created_at": "2026-11-23T00:59:34.754310735Z",
-      "updated_at": "2026-11-23T01:00:28.605343921Z",
+      "updated_at": "2026-11-23T01:18:22.123608228Z",
       "seal": {
         "by": "server",
-        "mac": "1100005ca94fb5792d94d34e02d04991a41e0ec41854254b23d5bbd727492577"
+        "mac": "37d5f1e247f18c4b53e50ec5ec2d6ee11447e414750b61c6102f278573750b6e"
       }
     },
     {
@@ -44179,6 +44214,24 @@
             "by": "server",
             "mac": "fad1d4b609bb9ffdf943ee020e9602530040f0c0cf92f22d4c7e3e11f7079612"
           }
+        },
+        {
+          "id": "EVD-0710",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T00-39-31Z-issue-590-code-expiry-mid-exchange.md",
+          "summary": "The changelog entry exists and now describes the floor as the request timeout plus 30 s.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T00-39-31Z-issue-590-code-expiry-mid-exchange.md",
+              "commit": "127bb35cac141049bcac7fb9303a6b9352cd9c3e"
+            }
+          },
+          "recorded_at": "2026-11-23T01:18:17.363095970Z",
+          "seal": {
+            "by": "server",
+            "mac": "f3f5e8b0c564c0a203109d66627b0af37fc7f391eb0d2c7c21b4551b91ec56e2"
+          }
         }
       ],
       "verdicts": [
@@ -44194,13 +44247,26 @@
             "by": "server",
             "mac": "2c066755c2ab0de7c7bb5124c46d724d4b7afdd00a411a6425a95a93ae0656eb"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited after the changelog changed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0710"
+          ],
+          "recorded_at": "2026-11-23T01:18:22.158043292Z",
+          "seal": {
+            "by": "server",
+            "mac": "e057cb14bc1485e7d13b61ea4ef65c4ece8fa2dca9e9d380e172f7c13a4e0dd2"
+          }
         }
       ],
       "created_at": "2026-11-23T00:59:34.754310735Z",
-      "updated_at": "2026-11-23T01:00:28.990490489Z",
+      "updated_at": "2026-11-23T01:18:22.158043292Z",
       "seal": {
         "by": "server",
-        "mac": "f4665aa40cfcca73432aa76545a97cad56a4e0fff061fd4da6e40b9dc3686312"
+        "mac": "4c881a580d9e3a426c6015901c5490603c1d070da6e275ff40005550a82f59cb"
       }
     }
   ]
