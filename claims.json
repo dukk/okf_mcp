@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 991,
+  "next_claim_seq": 999,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "4c331f3147f47193b0ad3b0a40ff21c9a0de4e43cb5bd48eccc909fdd5784d11"
+    "mac": "09f115a641bc92d2ff2d6da2a3964e619d0ca339e5938a2ea0e2f15523aa41d3"
   },
-  "next_evidence_seq": 1424,
+  "next_evidence_seq": 1432,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "a68a4c2ed8e560c240c067d23a799089b812d92ee37acf7039f37b1fe6b64783"
+    "mac": "7f4ae0698c0d8309d7033f16e4a5aa0f0fbf0408da2729d03614622841903487"
   },
   "claims": [
     {
@@ -53998,7 +53998,7 @@
           }
         },
         {
-          "id": "EVD-1409",
+          "id": "EVD-1417",
           "kind": "inspection",
           "locator": "src/store/catalogs.rs:141-152,377-410; provision_tests::create_leaves_a_whole_catalog_and_announces_it_once",
           "summary": "create() still sends CatalogMeta (and the owner Team invalidation), now through mark_provisioned -> mark_provisioned_in -> invalidate in step 3, after the store side commits; the invalidation is no longer in create's own transaction. Behaviour holds (test passed) but the old evidence anchor (create's transaction, lines 190-200) is stale.",
@@ -54017,11 +54017,11 @@
           "recorded_at": "2026-11-23T19:52:41.322503187Z",
           "seal": {
             "by": "server",
-            "mac": "0ee078e08db4fdf962962c9f7ae585ff431e42158ffa438aa20652c2d19a8125"
+            "mac": "ea2780e21c7177faee8f67a1caa080294805cf858e07d54685803015ebe72e59"
           }
         },
         {
-          "id": "EVD-1422",
+          "id": "EVD-1430",
           "kind": "inspection",
           "locator": "src/store/catalogs.rs:377-410 at 6094e6f2",
           "summary": "Re-recorded on the committed file: create sends CatalogMeta via mark_provisioned_in; create_leaves_a_whole_catalog_and_announces_it_once passed.",
@@ -54039,7 +54039,7 @@
           "recorded_at": "2026-11-23T20:03:14.467559011Z",
           "seal": {
             "by": "server",
-            "mac": "85e6a2f5c7ef365133dd8ff383ed6b399ce1e2b24e5d6d93c3c8cafc62d89c6e"
+            "mac": "b00b901f5904287357eebf3c3eda569b4a6248cf6d8319954a18afaca086c262"
           }
         }
       ],
@@ -54062,12 +54062,12 @@
           "rationale": "create still sends CatalogMeta, now via mark_provisioned in step 3; test create_leaves_a_whole_catalog_and_announces_it_once passed.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1409"
+            "EVD-1417"
           ],
           "recorded_at": "2026-11-23T19:53:08.119434302Z",
           "seal": {
             "by": "server",
-            "mac": "170dbfd843103704d59b0aca5da2a09464f131272012dc5eadba6a98ac01e55e"
+            "mac": "c67859340c27e83fc043f37b73b37a8e475e5d0bfb91a6b89bd6fa4e14bb1d0c"
           }
         },
         {
@@ -54075,12 +54075,12 @@
           "rationale": "Re-confirmed at 6094e6f2.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1422"
+            "EVD-1430"
           ],
           "recorded_at": "2026-11-23T20:03:31.575635211Z",
           "seal": {
             "by": "server",
-            "mac": "be5ddac09a22abf9c081d00f29962c275e7aa1301d0f6b4d6abc740474779426"
+            "mac": "d23fa48f870c7e0b1ad8e4915b493e691c208ffb8899010a1c54c519382904bc"
           }
         }
       ],
@@ -54088,7 +54088,7 @@
       "updated_at": "2026-11-23T20:03:31.575635211Z",
       "seal": {
         "by": "server",
-        "mac": "9e02361f951ed538b5dac44f6997048d7a6093572959b8e6bfeed31e4294d25d"
+        "mac": "e647eabde743db713474c4d7d26c98340f2c35d2bfef5d56d658a7722c37556d"
       }
     },
     {
@@ -65610,7 +65610,7 @@
           }
         },
         {
-          "id": "EVD-1410",
+          "id": "EVD-1418",
           "kind": "inspection",
           "locator": "src/store/repair.rs:287-300",
           "summary": "missing_root_index keeps its (&AccountDb, &CatalogDb) signature and name-ordered account-side listing; the only change is WHERE provisioned_at IS NOT NULL. Test a_half_created_catalog_is_not_listed_granted_or_repaired passed; repair_lists_the_same_catalogs_after_the_split not rerun.",
@@ -65628,7 +65628,7 @@
           "recorded_at": "2026-11-23T19:52:41.409103989Z",
           "seal": {
             "by": "server",
-            "mac": "7e748d9e56da5ad601232b2e68d45a0f2767903061fd0b0c06175a89a8485673"
+            "mac": "bcb893f790a02c5a96b8f3d1f840f5024320f7c399d3000d591366901cf36003"
           }
         }
       ],
@@ -65652,12 +65652,12 @@
           "rationale": "Signature and ordering unchanged; only a provisioned filter was added.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1410"
+            "EVD-1418"
           ],
           "recorded_at": "2026-11-23T19:53:08.191328206Z",
           "seal": {
             "by": "server",
-            "mac": "e3582c4d67b3792569c572b8b4fc3063f9681edc7de5389de7fd3c19f6f383c8"
+            "mac": "e7fa431dbdc68d4e75bb9f6a88a99058896c2b93acc9ff444d39e9e8b87e5129"
           }
         }
       ],
@@ -65665,7 +65665,7 @@
       "updated_at": "2026-11-23T19:53:08.191328206Z",
       "seal": {
         "by": "server",
-        "mac": "5cb6af89c4121e9cf6b4d496355220fc8c26a2c0e8a1ea5007a8e8a6cd934e49"
+        "mac": "df2b2434046852fbcb20122829e0d55181865c1d083852d9c36515a7147c11ef"
       }
     },
     {
@@ -75747,7 +75747,7 @@
           }
         },
         {
-          "id": "EVD-1408",
+          "id": "EVD-1416",
           "kind": "inspection",
           "locator": "src/store/catalogs.rs:171-215 (register)",
           "summary": "At head, catalogs::register still calls placement::choose on its own tx and binds the store as $7, but the INSERT now writes provisioned_at as literal NULL (VALUES ($1,$2,$3,$4,$6,$7,NULL)); provisioned_at is set later by mark_provisioned. The statement's parenthetical 'with provisioned_at set' no longer holds for the insert (issue #969 changed it deliberately).",
@@ -75766,7 +75766,7 @@
           "recorded_at": "2026-11-23T19:52:41.240239565Z",
           "seal": {
             "by": "server",
-            "mac": "d305dedc8cc1d31dadad383ed59123e6536772b443f691d4bec18fdf9732f650"
+            "mac": "3a5e58073ebb3a0873e72890b371220de6279dbb81797f5e6508dc9841f53164"
           }
         }
       ],
@@ -75790,12 +75790,12 @@
           "rationale": "The statement says create inserts with provisioned_at set; at head the insert writes provisioned_at NULL by design (issue #969), so the claim is outdated by this diff. Fix: retire CLM-0934 and add a replacement claim that register inserts store from placement::choose with provisioned_at NULL and mark_provisioned sets it.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1408"
+            "EVD-1416"
           ],
           "recorded_at": "2026-11-23T19:53:08.037675951Z",
           "seal": {
             "by": "server",
-            "mac": "18f8261d1900a78e1660a86479ef96ba41b0c9be14d57b48f71df8bc4353905b"
+            "mac": "24cd7df11d5ae93c715dba3f0445fbd3ac51c515d095cee513eb66833ff0d7c1"
           }
         }
       ],
@@ -75803,7 +75803,7 @@
       "updated_at": "2026-11-23T20:02:50.591759596Z",
       "seal": {
         "by": "server",
-        "mac": "703bb392ff0322a6bb5030d60e90d96322b321b83aa1663f51216a7083ce3ac4"
+        "mac": "8fba5ac78906b1a60a2f93c1655657f09dc14cd7de3d1b1183b6bd3c27d9c49f"
       }
     },
     {
@@ -78858,6 +78858,541 @@
     },
     {
       "id": "CLM-0977",
+      "statement": "Every account-side reader and by-name writer of the catalogs table that can be reached by a catalog name hides rows whose provisioned_at IS NULL, so a release-2 replica cannot see or act on a half-made catalog (decision P11, issue #969 part 1).",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/969 and plan docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md P11",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/catalogs.rs",
+        "src/store/ceiling.rs",
+        "src/store/teams.rs",
+        "src/store/keys.rs",
+        "src/store/repair.rs"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1394",
+          "kind": "analysis",
+          "locator": "children of CLM-0977",
+          "summary": "The children cover the filtered sites in catalogs.rs, ceiling.rs, teams.rs, keys.rs, repair.rs, show the remaining readers cannot reach an unprovisioned row, and show no writer of NULL is added.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T20:37:55.880116524Z",
+          "seal": {
+            "by": "server",
+            "mac": "eefd181fb30417aa0400249589c940c4b2f17085d53a0b8ca1b5409ee897b67a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All children supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1394"
+          ],
+          "recorded_at": "2026-11-23T20:37:59.324180603Z",
+          "seal": {
+            "by": "server",
+            "mac": "cdb54d0fe7050c4059843c711765c71ca59327324bea1a5ec9f9bc3e36fd0891"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:59.324180603Z",
+      "seal": {
+        "by": "server",
+        "mac": "4d24d7297e2c66ac144cacf9b33f3f088f31fe2dcd8a46deca5d29b203d6c796"
+      }
+    },
+    {
+      "id": "CLM-0978",
+      "statement": "catalogs::find, catalogs::list and the by-name subqueries of set_owner, update_details and set_maintenance add provisioned_at IS NOT NULL, and a test shows each refuses or omits a row seeded with provisioned_at NULL.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"provisioned_at IS NOT NULL is added to catalogs::find and list, and to the by-name subqueries of set_owner, update_details and set_maintenance.\"",
+      "derived_from": [
+        "CLM-0977"
+      ],
+      "artifacts": [
+        "src/store/catalogs.rs",
+        "src/store/catalogs_unprovisioned_tests.rs"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1387",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib unprovisioned_tests (3 passed); src/store/catalogs.rs:320-325,477-482,778-783,839-880",
+          "summary": "Filters present in find, list and the three UPDATE subqueries; a_half_created_catalog_is_not_visible asserts find/delete/set_owner/lock_by_name give CatalogNotSelected and list is empty; update_details and set_maintenance asserted in the ceiling test. 3 passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 839,
+                "end": 880
+              },
+              "commit": "e545f62f18a04881c29028e5d1d977a7af58ba8b"
+            }
+          },
+          "recorded_at": "2026-11-23T20:37:40.362606287Z",
+          "seal": {
+            "by": "server",
+            "mac": "66dcd0b7a094faa33b121c6556ae6a8b896e3a806dc0deedc4016d4d8bd4bcc6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Filters read in the diff; test passes and asserts refusal/omission.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1387"
+          ],
+          "recorded_at": "2026-11-23T20:37:55.340114323Z",
+          "seal": {
+            "by": "server",
+            "mac": "4f119fa067e3bcabbabdfac9bfb77208b0747cc7255821a613c2947ec90b3102"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:55.340114323Z",
+      "seal": {
+        "by": "server",
+        "mac": "b7f01941d24919cea3752f9830bd0df18e495ebc99a0a1cdbc2cc819076bfb88"
+      }
+    },
+    {
+      "id": "CLM-0979",
+      "statement": "Every read and by-name write in ceiling.rs (highest, page, ceiling_in, entitlements_in, member_access, team_access via read_catalog_locked, entitle via begin_entitlement including the team-owner branch, set_member_access and the owner variants) adds provisioned_at IS NOT NULL, and tests exercise them against an unprovisioned row.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"It is added to every ceiling.rs read and by-name write ... and the locks beneath them.\"",
+      "derived_from": [
+        "CLM-0977"
+      ],
+      "artifacts": [
+        "src/store/ceiling.rs",
+        "src/store/catalogs_unprovisioned_tests.rs"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1388",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib unprovisioned_tests (3 passed); gate.sh narrow --lib an_owner_cannot_act_on_a_catalog_that_is_not (1 passed); src/store/ceiling.rs:142-150,264-273,319-327,367-385,669-675,727-733,831-836,1299-1306,1377-1383",
+          "summary": "Every ceiling.rs query naming catalogs carries the filter (CEILING_ROWS is cfg(test) only). Tests cover ceiling_in, entitlements_in, highest, page, set_member_access, member_access, team_access, entitle and the owner entitle/set paths; entitle and team_access assertions are only is_err(). lock_shared_team_owner in catalogs.rs is unfiltered, but each caller is followed by a filtered statement.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/ceiling.rs",
+              "lines": {
+                "start": 319,
+                "end": 327
+              },
+              "commit": "e545f62f18a04881c29028e5d1d977a7af58ba8b"
+            }
+          },
+          "recorded_at": "2026-11-23T20:37:40.435483441Z",
+          "seal": {
+            "by": "server",
+            "mac": "57f7d81dfe47d82441e63d6b1719f46a01eb34b0501f29d95fdbe81efb7788c8"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All ceiling.rs catalogs queries filtered; four tests pass. entitle/team_access asserts are weak (is_err only) but the owner test covers the entitle path with Forbidden and a positive control.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1388"
+          ],
+          "recorded_at": "2026-11-23T20:37:55.420255360Z",
+          "seal": {
+            "by": "server",
+            "mac": "fe2581070d9d6cb1601504d751de14c3837f0c293aa7bd5eef354f88b400da24"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:55.420255360Z",
+      "seal": {
+        "by": "server",
+        "mac": "6c33d01d61b44016170c1682e83fa547dd570b831f0898c0a9cc56f20ae3c991"
+      }
+    },
+    {
+      "id": "CLM-0980",
+      "statement": "The team catalog list (teams.rs select_teams), keys::catalog_ids and repair::missing_root_index add provisioned_at IS NOT NULL, and a test shows each omits an unprovisioned row.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"It is added to the team catalog list (teams.rs), keys::catalog_ids and repair::missing_root_index.\"",
+      "derived_from": [
+        "CLM-0977"
+      ],
+      "artifacts": [
+        "src/store/teams.rs",
+        "src/store/keys.rs",
+        "src/store/repair.rs",
+        "src/store/catalogs_unprovisioned_tests.rs"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1389",
+          "kind": "test",
+          "locator": "a_half_created_catalog_is_not_listed_granted_or_repaired (passed); src/store/teams.rs:190-192, keys.rs:847, repair.rs:290-294",
+          "summary": "Test asserts team.catalogs empty, catalog_ids returns CatalogNotSelected, missing_root_index empty for the seeded row, and team.catalogs shows it after provisioning.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/keys.rs",
+              "lines": {
+                "start": 844,
+                "end": 850
+              },
+              "commit": "e545f62f18a04881c29028e5d1d977a7af58ba8b"
+            }
+          },
+          "recorded_at": "2026-11-23T20:37:40.519374454Z",
+          "seal": {
+            "by": "server",
+            "mac": "4cca72ceed5a0d2de6db6f9edd9098afa39dd8f1c8e8d1cebd7d665008029391"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Filters present; the test passes with absent-then-present assertions.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1389"
+          ],
+          "recorded_at": "2026-11-23T20:37:55.494249069Z",
+          "seal": {
+            "by": "server",
+            "mac": "427e2a318fa404c7371c651d636a8cf9c0fe70cb66280e03dc5132e5d935556b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:55.494249069Z",
+      "seal": {
+        "by": "server",
+        "mac": "1d585878383776755527c5c0cc3d24a93661a618775ff661f69123ac3e42b186"
+      }
+    },
+    {
+      "id": "CLM-0981",
+      "statement": "The remaining readers of catalogs (unlocks, sign-in codes, key list and changeset joins, audit rendering, labels, changeset name filter, unassigned list, export, team and user deletion counts, lock_owner and lock_shared_team_owner) cannot expose or act on an unprovisioned row: they take an id that only filtered paths hand out, or are followed in the same transaction by a filtered statement, or err on the safe side.",
+      "kind": "security",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"Readers left as they are\"",
+      "derived_from": [
+        "CLM-0977"
+      ],
+      "artifacts": [
+        "src/store/unlocks.rs",
+        "src/store/oauth/codes.rs",
+        "src/store/keys.rs",
+        "src/store/changesets.rs",
+        "src/cache/labels.rs",
+        "src/store/unassigned.rs",
+        "src/store/users.rs",
+        "src/store/teams.rs"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1390",
+          "kind": "analysis",
+          "locator": "src/store/unlocks.rs:483 (create resolves by catalogs::find), :358,583,645,822 (id joins); src/store/oauth/codes.rs:228-231; src/store/keys.rs:940-944; changesets.rs:675,728; cache/labels.rs:286; unassigned.rs:66; teams.rs:862,1193; users.rs:1319,1529,1592; catalogs.rs:575,611,1280",
+          "summary": "Each remaining site either joins/looks up by an id minted only via filtered paths (grants via catalog_ids, unlocks via find, changesets after publish), is a display-name or count read, or is a by-name lock (lock_owner, lock_shared_team_owner) whose five callers (catalogs.rs:466,771; ceiling.rs:664,829,1287) are followed in the same tx by a filtered statement that refuses. changesets.rs:675 and labels.rs:286 filter by name without the check but expose only ids/names of rows that cannot have changesets or grants yet. Unassigned list requires owner_team_id NULL, which create never writes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/unlocks.rs",
+              "lines": {
+                "start": 483,
+                "end": 483
+              },
+              "commit": "e545f62f18a04881c29028e5d1d977a7af58ba8b"
+            }
+          },
+          "recorded_at": "2026-11-23T20:37:40.608966772Z",
+          "seal": {
+            "by": "server",
+            "mac": "881dbe722a44520c698edfec5b1c251ab36c0392ccd51b288a2db615da3d355f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every remaining site traced; none lets a caller see or act on an unprovisioned row by name. Reasoned, not tested (no mixed-version harness).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1390"
+          ],
+          "recorded_at": "2026-11-23T20:37:55.578017671Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa3f6f298ffb3405a21146f2d78c84a8d940e6b6f39a7fed925006ba0649fee6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:55.578017671Z",
+      "seal": {
+        "by": "server",
+        "mac": "a48de6966bc7a25ac5b93766280e55e3392ff15b4c2bda0a1af0bd2c577e207a"
+      }
+    },
+    {
+      "id": "CLM-0982",
+      "statement": "This PR adds no non-test writer of a NULL provisioned_at, no ProvisionCatalogs task, and no migration.",
+      "kind": "constraint",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"nothing here writes a NULL provisioned_at, and there is no ProvisionCatalogs task ... No migration.\"",
+      "derived_from": [
+        "CLM-0977"
+      ],
+      "artifacts": [
+        "src",
+        "migrations"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1391",
+          "kind": "analysis",
+          "locator": "git diff --name-only origin/milestone/958-catalog-stores..HEAD; git grep ProvisionCatalogs -- src",
+          "summary": "Diff touches 8 files, none under migrations/ or *.sql; the only added statements setting provisioned_at NULL are in test code (ceiling.rs test, catalogs_unprovisioned_tests.rs seed); catalogs::create still inserts provisioned_at = $3. ProvisionCatalogs appears nowhere in src.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "ProvisionCatalogs",
+              "scope": [
+                "src"
+              ],
+              "hits": 0,
+              "commit": "e545f62f18a04881c29028e5d1d977a7af58ba8b"
+            }
+          },
+          "recorded_at": "2026-11-23T20:37:40.692392463Z",
+          "seal": {
+            "by": "server",
+            "mac": "1127bf01089430a9a48cd62e44d2b496fe4eb9ba891401cb45be4bc073f91a2d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "No migration in diff, zero ProvisionCatalogs hits, only test code sets NULL.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1391"
+          ],
+          "recorded_at": "2026-11-23T20:37:55.659945995Z",
+          "seal": {
+            "by": "server",
+            "mac": "385da46a0771eafeca25935d23ca04649ae64751ffaaacc5ea1e6d1fd49438b6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:55.659945995Z",
+      "seal": {
+        "by": "server",
+        "mac": "b61786ff170ddce28827bc914d3472dfd7fb57cfa2dc178331746cf56827c7a6"
+      }
+    },
+    {
+      "id": "CLM-0983",
+      "statement": "A changelog entry for the change exists and the plan carries a dated 'Corrected (issue #969, 2026-11-23)' note, with P11, the release graph, the Task 8 line and the Task 10b line consistent with each other.",
+      "kind": "documentation",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"Plan: a dated Corrected note ... Changelog entry added.\"",
+      "derived_from": [
+        "CLM-0977"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T20-20-27Z-m21-task-10b-part-1-hide-unprovisioned-readers.md",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1392",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:95,206-217,324,369; changelog/2026-11-23T20-20-27Z-m21-task-10b-part-1-hide-unprovisioned-readers.md",
+          "summary": "Changelog present. P11 line, release graph (Release 2 ends with 10b part 1, 2b is part 2), Task 8 and Task 10b lines and the Corrected note agree. Minor: the Release 3 line still reads '10b -> 11' without saying part 2.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 206,
+                "end": 217
+              },
+              "commit": "e545f62f18a04881c29028e5d1d977a7af58ba8b"
+            }
+          },
+          "recorded_at": "2026-11-23T20:37:40.768133340Z",
+          "seal": {
+            "by": "server",
+            "mac": "59ba3c021494b1a2370304c15f71f60c8d17362b2e50a51d49f2da8aaaff75fb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Plan edits and changelog read and consistent.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1392"
+          ],
+          "recorded_at": "2026-11-23T20:37:55.734143435Z",
+          "seal": {
+            "by": "server",
+            "mac": "e26e7242a10738c5825d299bf533beb6e2dc5d22db22094d33543b31579104c2"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:55.734143435Z",
+      "seal": {
+        "by": "server",
+        "mac": "0f9031f9736b9e87d79efe291fc1506c012b7490da028be473dd68748960cae0"
+      }
+    },
+    {
+      "id": "CLM-0984",
+      "statement": "The new tests would fail if their filters were removed: each asserts absence or refusal for a row seeded with provisioned_at NULL, and one asserts the row shows once provisioned.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body Tests section",
+      "derived_from": [
+        "CLM-0977"
+      ],
+      "artifacts": [
+        "src/store/catalogs_unprovisioned_tests.rs",
+        "src/store/ceiling.rs"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1393",
+          "kind": "analysis",
+          "locator": "src/store/catalogs_unprovisioned_tests.rs:44-203; src/store/ceiling.rs an_owner_cannot_act_on_a_catalog_that_is_not_provisioned_yet",
+          "summary": "Reasoned per filter: list/find/delete/set_owner/lock_by_name, ceiling_in, entitlements_in, page, highest (seeded team write plus entitlement write; the assertion Read fails if either branch is unfiltered), set_member_access, member_access, update_details, set_maintenance, catalog_ids, team list and missing_root_index all have a positive absence/refusal assertion that a missing filter would break, and the owner test asserts Forbidden plus zero written rows and a post-provision success. Weak spots: entitle and team_access are asserted with is_err() only, no post-provision control; set_owner is possibly refused earlier by find-like paths so its subquery filter is covered only if lock reaches it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs_unprovisioned_tests.rs",
+              "lines": {
+                "start": 62,
+                "end": 160
+              },
+              "commit": "e545f62f18a04881c29028e5d1d977a7af58ba8b"
+            }
+          },
+          "recorded_at": "2026-11-23T20:37:40.844618890Z",
+          "seal": {
+            "by": "server",
+            "mac": "688a651f7f3a4c53bb73a43d7a8414846c63477faa6d1d6ce55dc447bb277320"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reasoning per filter shows a failing assertion without it; two weak spots (entitle/team_access is_err only) are noted but each still fails if the filter is removed, since the unfiltered baseline would succeed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1393"
+          ],
+          "recorded_at": "2026-11-23T20:37:55.800472920Z",
+          "seal": {
+            "by": "server",
+            "mac": "9b9521dda0053cc2b250005149aff5bfee048db00c8d899a31a95afb1cd107f4"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:55.800472920Z",
+      "seal": {
+        "by": "server",
+        "mac": "31d7e495470d4b64c9d6bff2659f7716e50a9fdbedf43a335c47adc12b931067"
+      }
+    },
+    {
+      "id": "CLM-0985",
       "statement": "Issue #969 (M21.10b): catalog creation is split in two steps per plan Task 10b and decision P9, with housekeeping recovery of half-created catalogs.",
       "kind": "functional",
       "level": "system",
@@ -78877,7 +79412,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1411",
+          "id": "EVD-1419",
           "kind": "analysis",
           "locator": "children of CLM-0944",
           "summary": "Every child is supported except CLM-0953 (other readers of catalogs): ceiling::member_access still shows a half-made catalog and four filtered sites lack tests.",
@@ -78885,11 +79420,11 @@
           "recorded_at": "2026-11-23T19:53:11.470785941Z",
           "seal": {
             "by": "server",
-            "mac": "a9f782fbe71d179872ebf41c1547305a9f1c36dcb32d8a5ca7e7f1ab8242f1ea"
+            "mac": "595218847cb888407e7911c1bcb9827cf302a76847bf5c36d8e5897d25186261"
           }
         },
         {
-          "id": "EVD-1423",
+          "id": "EVD-1431",
           "kind": "analysis",
           "locator": "children of CLM-0944",
           "summary": "All active children (two-step create, lock and abort, hidden lookups, one existence check, task cadence, recovery, pool rule, named tests, other readers, docs, PR statements, register NULL) are supported at 6094e6f2.",
@@ -78897,7 +79432,7 @@
           "recorded_at": "2026-11-23T20:03:31.641047582Z",
           "seal": {
             "by": "server",
-            "mac": "4f62ed4a2888d5cc810795dba72b6d1741eddea8567a0253b38499b309ca9275"
+            "mac": "b5546643a37e9d7277299b105badc3521f52499796425c3dd86166c5e54696b9"
           }
         }
       ],
@@ -78907,12 +79442,12 @@
           "rationale": "The two-step create, recovery task, pool rule, named tests and docs are supported, but the requirement to hide half-created rows from every other reader is not met (CLM-0953). Fix: resolve CLM-0953 (filter ceiling::member_access and add the missing half-made-row tests), then re-audit.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1411"
+            "EVD-1419"
           ],
           "recorded_at": "2026-11-23T19:53:14.571207078Z",
           "seal": {
             "by": "server",
-            "mac": "b8c27c3e8db90e8230d6728c180fb68b76b7055ed012dfd22a04e20cfe22d726"
+            "mac": "175892fad6640759cc53ffe574e618a7a9d16e3e675af003e7a61e5d03d5a6b8"
           }
         },
         {
@@ -78920,12 +79455,12 @@
           "rationale": "All children are supported at 6094e6f2, including CLM-0953 now that member_access is filtered and tested.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1423"
+            "EVD-1431"
           ],
           "recorded_at": "2026-11-23T20:03:35.326078146Z",
           "seal": {
             "by": "server",
-            "mac": "f5e9d4fd8fc43169fcfe5d9c4a7330b5e542ae028b378e186813c149660a8ea6"
+            "mac": "4fd499c7176243824dbb44d7538ff2bf9cc3c8cf68b28c13d1e413a4738c9992"
           }
         }
       ],
@@ -78933,11 +79468,11 @@
       "updated_at": "2026-11-23T20:03:35.326078146Z",
       "seal": {
         "by": "server",
-        "mac": "4aa296dc1fc83755a143beede112b5a1c0f8b33e77f5533f6da15591aa7de5bc"
+        "mac": "a54939a8c8da3272b92c8dedc6e4970ade8a6d5de882c7ec45301d2c7aec667c"
       }
     },
     {
-      "id": "CLM-0978",
+      "id": "CLM-0986",
       "statement": "catalogs::register inserts the catalogs row with store from placement::choose (called on the same account transaction) and provisioned_at NULL, records catalog.created, and commits before any store-side write.",
       "kind": "functional",
       "level": "unit",
@@ -78945,7 +79480,7 @@
       "verification_method": "test",
       "source": "Issue #969: Create inserts the registry row with store from placement and provisioned_at NULL and commits; placement::choose stays in the first (account) transaction",
       "derived_from": [
-        "CLM-0977"
+        "CLM-0985"
       ],
       "artifacts": [
         "src/store/catalogs.rs"
@@ -78958,7 +79493,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1387",
+          "id": "EVD-1395",
           "kind": "inspection",
           "locator": "src/store/catalogs.rs:171-250",
           "summary": "register opens one account tx, calls placement::choose(&mut tx, owner_team), INSERTs the row with provisioned_at literal NULL and store=$7, records catalog.created, then tx.commit(); no starter-file write remains in it. create() calls register before provision_store_side.",
@@ -78977,11 +79512,11 @@
           "recorded_at": "2026-11-23T19:51:38.482280949Z",
           "seal": {
             "by": "server",
-            "mac": "6d60c8810ef1bf4e016126aff2ddbb1888d7df8a45b9509e52730032d7b0811e"
+            "mac": "5291c9cd736acb0117255c22c324b4c2a63a837f7a533f02c16eef40be48b282"
           }
         },
         {
-          "id": "EVD-1388",
+          "id": "EVD-1396",
           "kind": "test",
           "locator": "tools/agentic/gate.sh narrow --jobs 4 --lib provision_tests (10 passed)",
           "summary": "All 10 provision_tests pass on head a5d82ba; half_made uses register and a_half_created_catalog_is_not_visible asserts the row is hidden yet the name taken; create_leaves_a_whole_catalog_and_announces_it_once asserts one catalog.created and provisioned_at set after create. Placement default/pin tests (stores::placement) are not rerun here.",
@@ -78999,11 +79534,11 @@
           "recorded_at": "2026-11-23T19:51:38.545531413Z",
           "seal": {
             "by": "server",
-            "mac": "f2ec918a19dc88c664e20d89f5578e0358bf1be6ebde9d5c3abe73609e876316"
+            "mac": "3df8d73b14f315e7a523bef4c0e773dab05bf44017488cc6d7b3234895203fc5"
           }
         },
         {
-          "id": "EVD-1416",
+          "id": "EVD-1424",
           "kind": "inspection",
           "locator": "src/store/catalogs.rs:171-250 at 6094e6f2",
           "summary": "Re-recorded on the committed file: register chooses the store on its account tx, inserts with provisioned_at NULL, records catalog.created, commits.",
@@ -79021,7 +79556,7 @@
           "recorded_at": "2026-11-23T20:03:13.938609447Z",
           "seal": {
             "by": "server",
-            "mac": "ac17839232100386de4928d662b31a1f015b2f99d98fe2cced1c8a79695ec473"
+            "mac": "c02421a379a32d613d7036ab353ff72c86ecf7bbb7237f46bde0162136c2b6d0"
           }
         }
       ],
@@ -79031,13 +79566,13 @@
           "rationale": "Code reads and the passing tests show register inserts with NULL and commits first; choose runs on the same tx.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1387",
-            "EVD-1388"
+            "EVD-1395",
+            "EVD-1396"
           ],
           "recorded_at": "2026-11-23T19:53:07.059916038Z",
           "seal": {
             "by": "server",
-            "mac": "d19b1d66ae91096baa3eefa36cbaf82279774f599935888abce3958677db5a35"
+            "mac": "a996616e5bb03ccdd6c9e8b5f0eaad619bf83573d7a895cb8e017cdc5db44c75"
           }
         },
         {
@@ -79045,13 +79580,13 @@
           "rationale": "Re-confirmed at 6094e6f2.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1416",
-            "EVD-1388"
+            "EVD-1424",
+            "EVD-1396"
           ],
           "recorded_at": "2026-11-23T20:03:31.150759251Z",
           "seal": {
             "by": "server",
-            "mac": "dbc24687969ca6ceff99cd43450f084a017ceeeed96b93ad2d5c06a40ef13ff3"
+            "mac": "44882edab1875f567bc0bad1ddffd00a57772cac97d3af7c8477e79ea4282f0d"
           }
         }
       ],
@@ -79059,11 +79594,11 @@
       "updated_at": "2026-11-23T20:03:31.150759251Z",
       "seal": {
         "by": "server",
-        "mac": "aa76b661ee336594837362c103015fe9e6585c548757fc0382b081fc571670bb"
+        "mac": "870f6439fa514a31e8cae0c3b88358dec7c88f663de262edee0b7a0a8a6a4fb3"
       }
     },
     {
-      "id": "CLM-0979",
+      "id": "CLM-0987",
       "statement": "provision_store_side takes pg_advisory_xact_lock(CATALOG_LOCK_NAMESPACE, id), checks the registry row still exists and is unprovisioned (returning Busy and writing nothing if the row is gone), writes the starter files and commits; only then does create set provisioned_at (mark_provisioned).",
       "kind": "functional",
       "level": "unit",
@@ -79071,7 +79606,7 @@
       "verification_method": "test",
       "source": "Issue #969: then runs the store transaction: take the catalog's lock..., check the registry row ... (abort if not), write the store side, commit; then set provisioned_at",
       "derived_from": [
-        "CLM-0977"
+        "CLM-0985"
       ],
       "artifacts": [
         "src/store/catalogs.rs"
@@ -79084,7 +79619,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1389",
+          "id": "EVD-1397",
           "kind": "inspection",
           "locator": "src/store/catalogs.rs:339-361,1770-1780,144-152",
           "summary": "provision_store_side: db.begin(); lock() runs pg_advisory_xact_lock($1,$2::int4) with CATALOG_LOCK_NAMESPACE; registration() reads the row FOR UPDATE; Gone returns OkfError::Busy before write_starter_files; Unprovisioned writes files and commits. create() calls mark_provisioned only after that returns. Note: Provisioned (row already finished) returns Ok(()) rather than aborting; unreachable in practice because only this create or recovery (after seeing the store side) sets it.",
@@ -79103,11 +79638,11 @@
           "recorded_at": "2026-11-23T19:51:38.607436731Z",
           "seal": {
             "by": "server",
-            "mac": "5a3613cbe97b31b0723e5e70f5758b96d2b685361fe1c9e63253fca97e689537"
+            "mac": "8c6abf0539fe184e8073e287994187462efb5a4c35370c1a64088c53ef3afc7c"
           }
         },
         {
-          "id": "EVD-1390",
+          "id": "EVD-1398",
           "kind": "test",
           "locator": "a_create_that_waited_behind_recovery_writes_nothing (provision_tests, passed)",
           "summary": "Recovery holds the lock after deleting the row; create's provision_store_side waits on an advisory lock (asserted via pg_locks), then returns Err(Busy), row is gone and document_count is 0. Also create_leaves_a_whole_catalog... asserts 2 documents and provisioned_at set after full create.",
@@ -79125,11 +79660,11 @@
           "recorded_at": "2026-11-23T19:51:38.667474690Z",
           "seal": {
             "by": "server",
-            "mac": "77552b81c8db0bb087dfa91438ad387a1c303b2f3cab8a63e6701c53f2d9c637"
+            "mac": "26b7e97c4abdda668998c41b717b99aa90e64763b90aff51ea2113e627d4a668"
           }
         },
         {
-          "id": "EVD-1417",
+          "id": "EVD-1425",
           "kind": "inspection",
           "locator": "src/store/catalogs.rs:339-361 at 6094e6f2",
           "summary": "Re-recorded on the committed file: lock, registration (Busy if Gone), write_starter_files, commit; create calls mark_provisioned after it.",
@@ -79147,7 +79682,7 @@
           "recorded_at": "2026-11-23T20:03:14.001806517Z",
           "seal": {
             "by": "server",
-            "mac": "7e814506c8d2828754f936d669a805b8e6789a3cbb7fff40a43b0329d35c24a8"
+            "mac": "d8f200e871b01dd7ef7e6b3977660c6e873646a7124762c4d1b507f1c0440009"
           }
         }
       ],
@@ -79157,13 +79692,13 @@
           "rationale": "Lock, registry check with Busy abort, write, commit and only then mark_provisioned are all in the code, and the waited-behind-recovery test asserts the abort with no rows written.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1389",
-            "EVD-1390"
+            "EVD-1397",
+            "EVD-1398"
           ],
           "recorded_at": "2026-11-23T19:53:07.140656065Z",
           "seal": {
             "by": "server",
-            "mac": "1d258c84728b5b5c77d09764843c0cdc3f5e8ba8e02a490705ae86ec779cfaf0"
+            "mac": "340236b0cf6a941b031d1cf723e424d2390832a0bc5b4915e0233b8bb1df75be"
           }
         },
         {
@@ -79171,13 +79706,13 @@
           "rationale": "Re-confirmed at 6094e6f2.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1417",
-            "EVD-1390"
+            "EVD-1425",
+            "EVD-1398"
           ],
           "recorded_at": "2026-11-23T20:03:31.212934527Z",
           "seal": {
             "by": "server",
-            "mac": "44c256ae27a0746220f1cd02f82f5eb3d31f57b1f7426e4168c9e35ceca2a195"
+            "mac": "b0450c6709969c58969553906110975a490b952672021ebcc2bb2e47c7c3ac15"
           }
         }
       ],
@@ -79185,11 +79720,11 @@
       "updated_at": "2026-11-23T20:03:31.212934527Z",
       "seal": {
         "by": "server",
-        "mac": "fab5bcc9b1225a2444d5a5e25065247e98408a2b7e0a158fe147176bc2ed5348"
+        "mac": "f7aa3cacb34477bf17fe1ef2d00478c15038a71d621c35d9e386a51968fabfc6"
       }
     },
     {
-      "id": "CLM-0980",
+      "id": "CLM-0988",
       "statement": "Account-side lookups and listings (catalogs::find, list, row_by_name, row_by_id, rows_by_names, page, ceiling_page) treat a row with provisioned_at NULL as absent.",
       "kind": "functional",
       "level": "component",
@@ -79197,7 +79732,7 @@
       "verification_method": "test",
       "source": "Issue #969: Lookups and listings treat NULL as absent",
       "derived_from": [
-        "CLM-0977"
+        "CLM-0985"
       ],
       "artifacts": [
         "src/store/catalogs.rs"
@@ -79210,7 +79745,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1391",
+          "id": "EVD-1399",
           "kind": "inspection",
           "locator": "src/store/catalogs.rs:1189-1221,1401,1429,1465,1499,1545-1555",
           "summary": "list, find, row_by_name, row_by_id, rows_by_names, page and ceiling_page (outer and both inner selects) all carry provisioned_at IS NOT NULL.",
@@ -79229,11 +79764,11 @@
           "recorded_at": "2026-11-23T19:51:38.725735011Z",
           "seal": {
             "by": "server",
-            "mac": "7f547707bb0d7760093264f35f98c54e2adfcbfcc63b19ce31b7905c1debb9fa"
+            "mac": "590fcde985d419166582668f44859742dd06757eb28269d6a58456b37a1eb419"
           }
         },
         {
-          "id": "EVD-1392",
+          "id": "EVD-1400",
           "kind": "test",
           "locator": "a_half_created_catalog_is_not_visible; catalogs_rows_tests an_unprovisioned_row_is_hidden_from_lookups_and_listings (provision_tests 10 passed)",
           "summary": "Test asserts find -> CatalogNotSelected, list empty, row_by_name None, row_by_id None, delete/set_owner/lock_by_name refused on a half-made row, and that its name is still taken. Page and ceiling_page are covered by the earlier Task 8 test (CLM-0915 evidence), not rerun here.",
@@ -79251,11 +79786,11 @@
           "recorded_at": "2026-11-23T19:51:38.793689356Z",
           "seal": {
             "by": "server",
-            "mac": "397ed7b768b24d1776e9d348e967b456ae29ee82b1e3ff43023d58f953863f89"
+            "mac": "c527e7b1973a203ae2d044af45bac4b162368af2bd7083c94f1a1414e02546b9"
           }
         },
         {
-          "id": "EVD-1418",
+          "id": "EVD-1426",
           "kind": "inspection",
           "locator": "src/store/catalogs.rs:1189-1225,1401,1429,1465,1499,1545-1555 at 6094e6f2",
           "summary": "Re-recorded on the committed file: the seven readers still carry provisioned_at IS NOT NULL.",
@@ -79273,7 +79808,7 @@
           "recorded_at": "2026-11-23T20:03:14.100795568Z",
           "seal": {
             "by": "server",
-            "mac": "afd83159e107ff269db2f38c92bab86f8e9c034ff70b9ea6058a577f29b31f3c"
+            "mac": "c7c409f1117f91ae8742a6b13a2985696023ac57942ca50c6cffd57ea67425d4"
           }
         }
       ],
@@ -79283,13 +79818,13 @@
           "rationale": "All seven readers filter; the visibility test and Task 8 rows test assert absence.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1391",
-            "EVD-1392"
+            "EVD-1399",
+            "EVD-1400"
           ],
           "recorded_at": "2026-11-23T19:53:07.238971546Z",
           "seal": {
             "by": "server",
-            "mac": "83ff7fb3e3812a2d217c28b0fe5357016725df5dd77dd8dc4b810fba09db5595"
+            "mac": "d14807594138887927b06358255f7d21f72c42e7693442111905357a804d468d"
           }
         },
         {
@@ -79297,13 +79832,13 @@
           "rationale": "Re-confirmed at 6094e6f2.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1418",
-            "EVD-1392"
+            "EVD-1426",
+            "EVD-1400"
           ],
           "recorded_at": "2026-11-23T20:03:31.272415710Z",
           "seal": {
             "by": "server",
-            "mac": "cb77852c5902f76dead96e114c402ca6a9b8bda5ce48b901d83e3d23e772b444"
+            "mac": "bdecb4b743e41a74c41c53201a12aa0615d2c324a389c70bf8f57749aff7b904"
           }
         }
       ],
@@ -79311,11 +79846,11 @@
       "updated_at": "2026-11-23T20:03:31.272415710Z",
       "seal": {
         "by": "server",
-        "mac": "5ca1bc14d26841f73c1117ba46060807e7c57f670765c00f988ed7bd82b83b74"
+        "mac": "04e94dfde76b825e36919765bab67b8e3b0bab9a20464b12cfc2f8832878feca"
       }
     },
     {
-      "id": "CLM-0981",
+      "id": "CLM-0989",
       "statement": "store_side_exists is the one function that checks whether a catalog's store side exists, and recovery uses it (no other store-side existence check in src).",
       "kind": "functional",
       "level": "unit",
@@ -79323,7 +79858,7 @@
       "verification_method": "analysis",
       "source": "Issue #969: The store-side existence check is one function, store_side_exists",
       "derived_from": [
-        "CLM-0977"
+        "CLM-0985"
       ],
       "artifacts": [
         "src/store/catalogs.rs"
@@ -79336,7 +79871,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1393",
+          "id": "EVD-1401",
           "kind": "analysis",
           "locator": "src/store/catalogs.rs:309-319,533; git grep -nE 'store_side_exists' src",
           "summary": "store_side_exists (SELECT EXISTS ... documents) is defined once at :309 and called once, from recover_holding at :533; no other existence check on documents for a catalog id exists in non-test src outside it (grep of 'EXISTS (SELECT 1 FROM documents' only matches the definition).",
@@ -79355,11 +79890,11 @@
           "recorded_at": "2026-11-23T19:51:38.855891655Z",
           "seal": {
             "by": "server",
-            "mac": "af98a923fc69efb6eda02d4fc1446d06d08e53c48610c135fceeb1f1e0da54a6"
+            "mac": "2ddc51f8938da52288651148415c5b62618a839381654c6e30c52fe9895defdd"
           }
         },
         {
-          "id": "EVD-1419",
+          "id": "EVD-1427",
           "kind": "analysis",
           "locator": "src/store/catalogs.rs:300-319,533 at 6094e6f2",
           "summary": "Re-recorded on the committed file: one definition, one call from recover_holding.",
@@ -79377,7 +79912,7 @@
           "recorded_at": "2026-11-23T20:03:14.188242593Z",
           "seal": {
             "by": "server",
-            "mac": "ea98629191a542680f6c0a4a26fc99a7a0f6c22a3191d8413c17473585e3ebaa"
+            "mac": "b0718f339bbf7477aa6598e7f68b8d7a2043a47df5ce9ed6804d9cf5857084f5"
           }
         }
       ],
@@ -79387,12 +79922,12 @@
           "rationale": "Single definition and single call site; no duplicate check found by grep.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1393"
+            "EVD-1401"
           ],
           "recorded_at": "2026-11-23T19:53:07.322717397Z",
           "seal": {
             "by": "server",
-            "mac": "3b3f9eab603deefac426a300221b18006f1a2521abacf0332de61b92a6fad482"
+            "mac": "1ea9e2331ebbce081229f467591bb34a76e3b0672303f69c620a7371bc5dc105"
           }
         },
         {
@@ -79400,12 +79935,12 @@
           "rationale": "Re-confirmed at 6094e6f2.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1419"
+            "EVD-1427"
           ],
           "recorded_at": "2026-11-23T20:03:31.339087627Z",
           "seal": {
             "by": "server",
-            "mac": "90be81f90ef1963e3d9097c91d6141573e8bb9dd1dee5a30c76a1b99d40c980c"
+            "mac": "c879614d5e680c8598ffc950e2acb1329f7b72c191df4b3c3aef0b25bfed3a40"
           }
         }
       ],
@@ -79413,11 +79948,11 @@
       "updated_at": "2026-11-23T20:03:31.339087627Z",
       "seal": {
         "by": "server",
-        "mac": "8ea5bb35ae42ce2ecb1f0eafca6d5823c811179887711faf2cbbdbdc4308709b"
+        "mac": "8b285cf5326c7389a8286cfe685e606abae1f54b6e84424efbf18e47f1828f0d"
       }
     },
     {
-      "id": "CLM-0982",
+      "id": "CLM-0990",
       "statement": "Task::ProvisionCatalogs (provision_catalogs) is scheduled every minute by the housekeeping ticker and looks only at unprovisioned rows created more than 60 seconds ago (the age is only a filter; recovery itself checks no age).",
       "kind": "functional",
       "level": "component",
@@ -79425,7 +79960,7 @@
       "verification_method": "test",
       "source": "Issue #969: ProvisionCatalogs housekeeping task runs every minute over unprovisioned rows older than one minute",
       "derived_from": [
-        "CLM-0977"
+        "CLM-0985"
       ],
       "artifacts": [
         "src/housekeeping.rs",
@@ -79439,7 +79974,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1394",
+          "id": "EVD-1402",
           "kind": "inspection",
           "locator": "src/housekeeping.rs:96-99,142,153,168,181,320-322,505-545; src/store/catalogs.rs:448-465",
           "summary": "cadence is 60 s; Task::ALL includes ProvisionCatalogs and tick() schedules every task in ALL per slot; provision_catalogs passes now-60s to catalogs::pending (provisioned_at IS NULL AND created_at < $1, LIMIT 100); recover itself checks no age.",
@@ -79457,11 +79992,11 @@
           "recorded_at": "2026-11-23T19:51:38.924306473Z",
           "seal": {
             "by": "server",
-            "mac": "a0081e0c94c50418324eb8d6a716ed5a5d34727bdcdecf628db522a488570ee0"
+            "mac": "40737bcad4738c17277310c45df314ccdd1a3a344c176ba2bd42958b133412a5"
           }
         },
         {
-          "id": "EVD-1395",
+          "id": "EVD-1403",
           "kind": "test",
           "locator": "tools/agentic/gate.sh narrow --jobs 4 --lib provision_catalogs_finishes (1 passed); provision_tests::pending_lists_only_old_unprovisioned_rows_oldest_first (passed)",
           "summary": "housekeeping test runs Task::ProvisionCatalogs: the 5-minute-old row with store side is finished, the old one without is removed, the young one is left alone; slot_at test pins the 60 s slot. pending test asserts only old unprovisioned rows, oldest first.",
@@ -79479,7 +80014,7 @@
           "recorded_at": "2026-11-23T19:51:39.002421736Z",
           "seal": {
             "by": "server",
-            "mac": "7a1c2a2cd1e7fd21024c3a744088bda068d29af24f0b8f1a35a34a8fd11865c1"
+            "mac": "b92abcbb285de7d557a8a377d842e7361d1f540cc303c223100e82d09da41400"
           }
         }
       ],
@@ -79489,13 +80024,13 @@
           "rationale": "Cadence, scheduling via Task::ALL, 60 s filter and no age check in recover are in code; the housekeeping test shows old rows handled and the young one spared.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1394",
-            "EVD-1395"
+            "EVD-1402",
+            "EVD-1403"
           ],
           "recorded_at": "2026-11-23T19:53:07.405404563Z",
           "seal": {
             "by": "server",
-            "mac": "358bb5e3d4d95fcf0ec4473bd655b2c23b51fc2583ae4331090c4e3cd1463f92"
+            "mac": "117a01baf343319c9677dd6d823561ce417e8c874e09436f8a683c8385570408"
           }
         }
       ],
@@ -79503,11 +80038,11 @@
       "updated_at": "2026-11-23T19:53:07.405404563Z",
       "seal": {
         "by": "server",
-        "mac": "8be3b307e5a85ba83dff9c36f34e5bb2e44897043d8091ffe24857bff56a90be"
+        "mac": "ca2e54c2eacf3f67bad90f91b76bd90ae47675822a125163bb442ff950e39dc1"
       }
     },
     {
-      "id": "CLM-0983",
+      "id": "CLM-0991",
       "statement": "catalogs::recover, holding the catalog's lock, sets provisioned_at when store_side_exists, otherwise records catalog.deleted with failed_create true in the audit details and deletes the registry row, committing before the lock is released.",
       "kind": "functional",
       "level": "unit",
@@ -79515,7 +80050,7 @@
       "verification_method": "test",
       "source": "Issue #969 / plan P9 recovery half: if the store side is present set provisioned_at, else delete the registry row and commit before releasing the lock; records the failed create in the audit details",
       "derived_from": [
-        "CLM-0977"
+        "CLM-0985"
       ],
       "artifacts": [
         "src/store/catalogs.rs"
@@ -79528,7 +80063,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1396",
+          "id": "EVD-1404",
           "kind": "inspection",
           "locator": "src/store/catalogs.rs:496-575",
           "summary": "recover_holding: one store tx; lock_people, lock(); registration must be Unprovisioned else Settled; if store_side_exists -> mark_provisioned_in (sets provisioned_at) else record_catalog(Action::CatalogDeleted, details {forced:false, generation:0, failed_create:true}) then DELETE FROM catalogs; hold awaited; tx.commit() while lock (xact-scoped) is still held.",
@@ -79547,11 +80082,11 @@
           "recorded_at": "2026-11-23T19:52:05.306994792Z",
           "seal": {
             "by": "server",
-            "mac": "8bb6fd9abd54146182e521412f4df1fd54fc3d4d714f52a3e4fa94f393c7407b"
+            "mac": "2db107acf5480574ed945102a03b89b484fe38a301b9860e94993a3506b57361"
           }
         },
         {
-          "id": "EVD-1397",
+          "id": "EVD-1405",
           "kind": "test",
           "locator": "provision_tests::provisioning_job_finishes_a_catalog_whose_store_side_exists; provisioning_job_removes_a_catalog_whose_store_side_never_happened; housekeeping::tests::provision_catalogs_finishes_or_removes_old_half_made_catalogs_and_spares_young_ones (all passed)",
           "summary": "Finish case: provisioned_at set after recover returns Finished. Remove case: Recovery::Removed, row gone, and the housekeeping test reads the audit entries: exactly one catalog.deleted for 'lost' with details.failed_create == true. a_create_stalled... shows recovery waits then sees the create's data (Finished).",
@@ -79569,11 +80104,11 @@
           "recorded_at": "2026-11-23T19:52:05.379753040Z",
           "seal": {
             "by": "server",
-            "mac": "ecab99edc9a35c938b5c5cf90e60c8cd43e793e84982c60f6965e2e18c9b98a7"
+            "mac": "6a8afda0cd995adfe2d886f518bbd06bc27beae62853876a94f4ec62fc5781da"
           }
         },
         {
-          "id": "EVD-1420",
+          "id": "EVD-1428",
           "kind": "inspection",
           "locator": "src/store/catalogs.rs:496-575 at 6094e6f2",
           "summary": "Re-recorded on the committed file: recover_holding finishes or removes (failed_create true) under the lock and commits before release; tests passed 10/10.",
@@ -79591,7 +80126,7 @@
           "recorded_at": "2026-11-23T20:03:14.290845131Z",
           "seal": {
             "by": "server",
-            "mac": "589daa2e36a083f2eabf370264657d7f26ab21f6f507405ae58cba402fd31eca"
+            "mac": "16eab63534b6fe66434449714c4930e7c66f3757edaf4a6ecf382b1e0fe721c7"
           }
         }
       ],
@@ -79601,13 +80136,13 @@
           "rationale": "recover_holding does the P9 recovery inside one transaction under the xact lock, commit before release; tests cover both branches and the failed_create audit detail.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1396",
-            "EVD-1397"
+            "EVD-1404",
+            "EVD-1405"
           ],
           "recorded_at": "2026-11-23T19:53:07.485865128Z",
           "seal": {
             "by": "server",
-            "mac": "72862f3773acea7a4fc8ccc4b0d4e9288e167cdb2314ebe28fb968fdd5e48233"
+            "mac": "23f942a9bc759a33bf0c7163ce9fa2771fb73689d66d43d679284db7d175d1d2"
           }
         },
         {
@@ -79615,13 +80150,13 @@
           "rationale": "Re-confirmed at 6094e6f2.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1420",
-            "EVD-1397"
+            "EVD-1428",
+            "EVD-1405"
           ],
           "recorded_at": "2026-11-23T20:03:31.418280463Z",
           "seal": {
             "by": "server",
-            "mac": "122038061cd6a19bb8ad09c10569731cf48abbcee1b8e94f423e4fd3bf4a6471"
+            "mac": "e298714c33b9e7e0d24184bd218b31b64519b1124069bc8e1aa92c8d69b72cf2"
           }
         }
       ],
@@ -79629,11 +80164,11 @@
       "updated_at": "2026-11-23T20:03:31.418280463Z",
       "seal": {
         "by": "server",
-        "mac": "8605e9f9820d7a7bc3e9bf49df38efec5082167c75c8584e883d2edebf25b6e6"
+        "mac": "7aeed0979f1674a79132b5dbe363dffacca89f0d78c8559edaa227a8d8d5ec03"
       }
     },
     {
-      "id": "CLM-0984",
+      "id": "CLM-0992",
       "statement": "Pool rule: create and recovery never hold a transaction on one handle while acquiring a connection on the other, and both complete on a pool of one connection.",
       "kind": "functional",
       "level": "component",
@@ -79641,7 +80176,7 @@
       "verification_method": "test",
       "source": "Issue #969: Pool rule ... create and recovery must work with a pool of one connection",
       "derived_from": [
-        "CLM-0977"
+        "CLM-0985"
       ],
       "artifacts": [
         "src/store/catalogs.rs",
@@ -79655,7 +80190,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1398",
+          "id": "EVD-1406",
           "kind": "test",
           "locator": "provision_tests::create_and_recovery_work_on_a_one_connection_pool (passed, 20 s timeouts)",
           "summary": "Opens a pool of max 1 connection; create, recover (Removed) and provision_store_side + recover (Finished) each complete under tokio timeout. Code: register commits before CatalogDb::begin; registration/store_side_exists/mark_provisioned_in all run on the store tx's own connection; housekeeping calls pending() (pool) before looping recover, never nested.",
@@ -79673,7 +80208,7 @@
           "recorded_at": "2026-11-23T19:52:05.438335121Z",
           "seal": {
             "by": "server",
-            "mac": "df85a2c59b7cac595d4a88dcb9773dad8f5d397d8cd1f711a05209b733c7f9b5"
+            "mac": "152bd4deaf80d446e7474e5c7670ba2f38cec052ff48f898e749d17c6bcecdfc"
           }
         }
       ],
@@ -79683,12 +80218,12 @@
           "rationale": "The one-connection pool test completes create and both recovery outcomes under timeout; code shows each step releases its connection first.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1398"
+            "EVD-1406"
           ],
           "recorded_at": "2026-11-23T19:53:07.551779484Z",
           "seal": {
             "by": "server",
-            "mac": "1e8e91da5e01efe0795e7858d10a452e558cbf39875f977a8aef0861ce014be9"
+            "mac": "a7340e336b7ca9b36955ebabb5ba0d4f231fd150b216909c039255e9eb3eb487"
           }
         }
       ],
@@ -79696,11 +80231,11 @@
       "updated_at": "2026-11-23T19:53:07.551779484Z",
       "seal": {
         "by": "server",
-        "mac": "9197934713927a997f79cd575cbbc2ebdba75d4e284084e7bb810c26f2e921ba"
+        "mac": "40fc76af54abe2bed6b2fee8b4f258ee225a1d65891e982ccbddfe1aab0b218d"
       }
     },
     {
-      "id": "CLM-0985",
+      "id": "CLM-0993",
       "statement": "The five named tests (a_half_created_catalog_is_not_visible, provisioning_job_finishes_a_catalog_whose_store_side_exists, provisioning_job_removes_a_catalog_whose_store_side_never_happened, a_create_stalled_past_the_interval_is_not_removed_while_it_holds_the_lock, a_create_that_waited_behind_recovery_writes_nothing) exist and pass, and the concurrency tests use no sleep.",
       "kind": "functional",
       "level": "artifact",
@@ -79708,7 +80243,7 @@
       "verification_method": "test",
       "source": "Issue #969: Named tests exist and pass; Concurrency tests must be deterministic (no sleeps)",
       "derived_from": [
-        "CLM-0977"
+        "CLM-0985"
       ],
       "artifacts": [
         "src/store/catalogs_provision_tests.rs"
@@ -79721,7 +80256,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1399",
+          "id": "EVD-1407",
           "kind": "test",
           "locator": "tools/agentic/gate.sh narrow --jobs 4 --lib provision_tests (10 passed, 0 failed)",
           "summary": "All five named tests ran and passed on a5d82ba, in a 10-test module. The two concurrency tests use Notify hold futures and wait_for_waiter_or_end (pg_locks poll with yield_now), not sleeps.",
@@ -79739,11 +80274,11 @@
           "recorded_at": "2026-11-23T19:52:05.499651976Z",
           "seal": {
             "by": "server",
-            "mac": "ac49469e53ee5ba3a486e2485ffb0e0f5f1e2c919e36b594b8981a847cc56a7d"
+            "mac": "c8490bc9e6060c6f24d22158e7f4a3785b6cd9d82966696de97bf6744a051002"
           }
         },
         {
-          "id": "EVD-1403",
+          "id": "EVD-1411",
           "kind": "analysis",
           "locator": "git grep -nE 'sleep\\(|Duration::from' src/store/catalogs_provision_tests.rs",
           "summary": "No sleep call in the provision test module (the one 'sleep' word is the doc comment 'with no sleep'); the only Duration is the 20 s timeout in the one-connection test.",
@@ -79762,7 +80297,7 @@
           "recorded_at": "2026-11-23T19:52:08.898357226Z",
           "seal": {
             "by": "server",
-            "mac": "fabc5cc0baa115d48af7552b1671d8e7462722d22470e7912616329b06487629"
+            "mac": "c4b7021edc827531d4e9c81dec1adb74bf415a92bb27760ae502c992aa21f862"
           }
         }
       ],
@@ -79772,13 +80307,13 @@
           "rationale": "I ran the module: 10 passed including all five names; no sleep calls exist.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1399",
-            "EVD-1403"
+            "EVD-1407",
+            "EVD-1411"
           ],
           "recorded_at": "2026-11-23T19:53:07.640420758Z",
           "seal": {
             "by": "server",
-            "mac": "76506cbb4a3396cc284bcc6d27f96215fb0a09300c86764d52f7538dfc038a75"
+            "mac": "d406eae17a0322aaf2cce9402f3497fee7de6fe0d6a730e1c6dc5d19fee5ee5c"
           }
         }
       ],
@@ -79786,11 +80321,11 @@
       "updated_at": "2026-11-23T19:53:07.640420758Z",
       "seal": {
         "by": "server",
-        "mac": "3ca49b2779774bae4671466f0bfa73c144a856631ce1dc3bdf63f8992a5f7fda"
+        "mac": "ac175288437249ffedea23a1f69d50b8c98e555682571942f0575493bfd94d54"
       }
     },
     {
-      "id": "CLM-0986",
+      "id": "CLM-0994",
       "statement": "Every other account-side reader of catalogs that a caller could use to see or act on a half-created catalog hides unprovisioned rows, with a test per fix or a stated reason the site is safe.",
       "kind": "security",
       "level": "component",
@@ -79798,7 +80333,7 @@
       "verification_method": "analysis",
       "source": "Issue #969: Other account-side readers of the catalogs table must hide unprovisioned rows ... with a test per fix or a stated reason a site is safe",
       "derived_from": [
-        "CLM-0977"
+        "CLM-0985"
       ],
       "artifacts": [
         "src/store/ceiling.rs",
@@ -79815,7 +80350,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1404",
+          "id": "EVD-1412",
           "kind": "inspection",
           "locator": "src/store/ceiling.rs:722-731 (member_access); src/http/api/catalogs.rs:688-700; src/auth.rs:495-519",
           "summary": "ceiling::member_access reads `SELECT member_access FROM catalogs WHERE name = $1` with no provisioned_at filter. GET /catalogs/{c}/member-access calls it when the principal is not an owner session; an Access::Admin key passes Principal::require_in without any directory lookup (auth.rs:511-514), so an admin key can read a half-created catalog's member_access. The diff fixed the sibling reads in this file but not this one, and neither PR body nor changelog gives a reason it is safe.",
@@ -79833,11 +80368,11 @@
           "recorded_at": "2026-11-23T19:52:21.607107611Z",
           "seal": {
             "by": "server",
-            "mac": "921bec2be05d85a71b8d1c01e8df79a8df0a5b9e56f47a46003c916fcb5d0495"
+            "mac": "b8e61088315aa9a2fb77c7e90efc9f6d65eed9ff74ca22472f2c45f4ce6f1c7c"
           }
         },
         {
-          "id": "EVD-1405",
+          "id": "EVD-1413",
           "kind": "analysis",
           "locator": "git grep -nE 'update_details|set_maintenance|team_access|member_access_as_owner|change_member_access|entitle|ceiling_page' src/store/catalogs_provision_tests.rs (zero for the writers)",
           "summary": "The only tests of hidden readers are in catalogs_provision_tests.rs. They cover find/list/rows/delete/set_owner/lock_by_name, ceiling_in, entitlements_in, highest, page, set_member_access, teams::find, keys::catalog_ids and repair. No test drives catalogs::update_details, catalogs::set_maintenance, ceiling::begin_entitlement (entitlement writes), ceiling::read_catalog_locked/team_access, or catalogs::ceiling_page against a half-made row, although each got a provisioned_at filter in this diff and the PR gives no reason they are untested.",
@@ -79856,11 +80391,11 @@
           "recorded_at": "2026-11-23T19:52:22.062309954Z",
           "seal": {
             "by": "server",
-            "mac": "dffb26f855214a4773cbe40dfbf0e192e98f5f83c45933065804db07cbf94fbd"
+            "mac": "e9b4df42716cb761e07328ba0e42c4f2f9360e52c2126078a9d3c2611bfb2183"
           }
         },
         {
-          "id": "EVD-1406",
+          "id": "EVD-1414",
           "kind": "inspection",
           "locator": "src/store/ceiling.rs:142-149,265-272,319-327,371-381,669-674,828-835,1296-1302,1375-1380; src/store/teams.rs:188-193; src/store/keys.rs:844-849; src/store/repair.rs:290-293; src/store/catalogs.rs:668-673,827-831,1127-1131",
           "summary": "The listed reader/writer sites each add provisioned_at IS NOT NULL. Sites left alone by id (unlocks.rs, oauth/codes.rs, changesets.rs joins, audit.rs, teams.rs count/delete lists, users.rs previews, labels.rs, export.rs) take ids or only count, and the PR's reason (ids are handed out only for provisioned catalogs; counting is the safe direction) holds on reading them; changesets.rs:675 name-to-id listing finds only catalogs with changesets, none exist for a half-made one. These fixes are present.",
@@ -79878,11 +80413,11 @@
           "recorded_at": "2026-11-23T19:52:23.991455341Z",
           "seal": {
             "by": "server",
-            "mac": "4da6ecb43011ce875b76ee6a34ca7855189740af7724ab4be39defb0df6db4c1"
+            "mac": "489242b035b904982ee35bdcec2166018c19125e5539494f24fe32deeef198c6"
           }
         },
         {
-          "id": "EVD-1407",
+          "id": "EVD-1415",
           "kind": "analysis",
           "locator": "src/store/catalogs_rows_tests.rs:226-234",
           "summary": "Correction to the previous search item: catalogs_rows_tests.rs already drives ceiling_page against a half-made row (Task 8), so ceiling_page is tested; the search's 4 hits are that plus a set_maintenance call at :51 that is test setup. Still untested against a half-made row: catalogs::update_details, catalogs::set_maintenance, ceiling::begin_entitlement (entitlement writes) and ceiling::read_catalog_locked / team_access.",
@@ -79900,11 +80435,11 @@
           "recorded_at": "2026-11-23T19:52:33.035062789Z",
           "seal": {
             "by": "server",
-            "mac": "d9a297f1ac1f9a136ec7a411962c5fef9a230dcde01a31d119a10167c59f17eb"
+            "mac": "a21085be4068594b1624217a8bb838058c2c2859881f26904ee434d73823f9cd"
           }
         },
         {
-          "id": "EVD-1414",
+          "id": "EVD-1422",
           "kind": "inspection",
           "locator": "src/store/ceiling.rs:724-736 (member_access at 6094e6f2)",
           "summary": "ceiling::member_access now selects with WHERE name = $1 AND provisioned_at IS NOT NULL, so a half-made catalog gives unknown_catalog even to an admin key.",
@@ -79922,11 +80457,11 @@
           "recorded_at": "2026-11-23T20:03:13.761646476Z",
           "seal": {
             "by": "server",
-            "mac": "ee5d9c08a4ec3ccb2385bac9e1e6c71eedab919214370f28f6add951769a04a8"
+            "mac": "a0d578b03922bb187355f2a8d57f7bdc57faea1b13716ee659947ecb7dd56961"
           }
         },
         {
-          "id": "EVD-1415",
+          "id": "EVD-1423",
           "kind": "test",
           "locator": "provision_tests::a_half_created_catalog_is_outside_every_ceiling (passed, 10/10 at 6094e6f2)",
           "summary": "The test now asserts on a half-made row: member_access -> CatalogNotSelected, team_access errs, entitle errs, update_details and set_maintenance -> CatalogNotSelected, plus the earlier ceiling_in, entitlements_in, highest, page and set_member_access cases; ceiling_page is covered in catalogs_rows_tests. Weakness: team_access and entitle are asserted only with is_err(), not a specific error.",
@@ -79944,7 +80479,7 @@
           "recorded_at": "2026-11-23T20:03:13.859063059Z",
           "seal": {
             "by": "server",
-            "mac": "36b1adf9e98d79fd0f0059c61402dcc6781d9ac7cda701783c186fad8f47d46e"
+            "mac": "df0911e8c0b1b6e0cfa58d14099c1f710bb374afdc613df39c033026de7dc10f"
           }
         }
       ],
@@ -79954,13 +80489,13 @@
           "rationale": "Most sites are fixed and the by-id sites have valid reasons, but ceiling::member_access (ceiling.rs:722-731) still reads a half-made catalog and is reachable by an admin key, and the filters in catalogs::update_details, set_maintenance, ceiling::begin_entitlement and read_catalog_locked have no test and no stated reason. Fix: add AND provisioned_at IS NOT NULL to ceiling::member_access (raising unknown_catalog) with a half-made-row test, and add half-made-row tests for update_details, set_maintenance, entitlement writes (begin_entitlement) and read_catalog_locked/team_access, or state in the PR why each is covered.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1404",
-            "EVD-1405"
+            "EVD-1412",
+            "EVD-1413"
           ],
           "recorded_at": "2026-11-23T19:53:07.967366704Z",
           "seal": {
             "by": "server",
-            "mac": "2f887b63fb66782d646c752bf5212dc68f70ab7e1fdf87b4314ba2079a8a16c2"
+            "mac": "b7eaaf18ab3274ff90c27b679ae5d4acd4aeff2bc4a082241fe5c58c50613f3a"
           }
         },
         {
@@ -79968,14 +80503,14 @@
           "rationale": "member_access is now filtered, and the test covers member_access, team_access, entitle, update_details and set_maintenance on a half-made row, with the other sites covered earlier or safe by id. team_access and entitle are asserted only as is_err (weak but passing).",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1414",
-            "EVD-1415",
-            "EVD-1406"
+            "EVD-1422",
+            "EVD-1423",
+            "EVD-1414"
           ],
           "recorded_at": "2026-11-23T20:03:31.078052826Z",
           "seal": {
             "by": "server",
-            "mac": "45e0157522d8c1f610e21c8ac9560c4115dea10db3ccf0abcc23e39f74bf2907"
+            "mac": "77ec9f441fcb3f155718bd37596041aed0209fe4d31683775ec7e0c63f10b769"
           }
         }
       ],
@@ -79983,11 +80518,11 @@
       "updated_at": "2026-11-23T20:03:31.078052826Z",
       "seal": {
         "by": "server",
-        "mac": "2bd4296a6a3e262002af32d7e80232b023d2daf7ee3e02b8bfe97087cafa1fc7"
+        "mac": "16d645ed993022027ad8d0857cd20963b74353952145bfb9a6299717b5dec9d2"
       }
     },
     {
-      "id": "CLM-0987",
+      "id": "CLM-0995",
       "statement": "The change adds no migration, adds a changelog entry under changelog/, updates docs/operations.md for the provision_catalogs task, and adds a dated 'Corrected (issue #969' note to the plan.",
       "kind": "documentation",
       "level": "artifact",
@@ -79995,7 +80530,7 @@
       "verification_method": "inspection",
       "source": "Issue #969: No migration; changelog entry in changelog/; docs/operations.md updated; plan corrected with a dated note",
       "derived_from": [
-        "CLM-0977"
+        "CLM-0985"
       ],
       "artifacts": [
         "docs/operations.md",
@@ -80010,7 +80545,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1400",
+          "id": "EVD-1408",
           "kind": "inspection",
           "locator": "git diff --stat origin/milestone/958-catalog-stores..HEAD; docs/operations.md:744-762; plan :364",
           "summary": "Diff touches no migrations path; adds changelog/2026-11-23T19-45-00Z-m21-task-10b-two-step-create.md; operations.md lists provision_catalogs in the housekeeping task list, the metrics table and a new 'Half-created catalogs' item (anchor #half-created-catalogs resolves); the plan has '> **Corrected (issue #969, 2026-11-23).**' under Task 10b.",
@@ -80028,7 +80563,7 @@
           "recorded_at": "2026-11-23T19:52:05.598827407Z",
           "seal": {
             "by": "server",
-            "mac": "f77ea14f0c88889d446827c8ef37be780f95605f96fb28aeee05b583dc52223f"
+            "mac": "53a489859e8465a4d5ec8ce46e1cfb839f13276007e0208656eb12b857ed615b"
           }
         }
       ],
@@ -80038,12 +80573,12 @@
           "rationale": "Diff contains the changelog, operations.md updates and dated plan note, and no migration.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1400"
+            "EVD-1408"
           ],
           "recorded_at": "2026-11-23T19:53:07.715594908Z",
           "seal": {
             "by": "server",
-            "mac": "34f2927cc3b9d5014b4d1936533c35eecddce975a332e0e7cd31b69dd2f8c615"
+            "mac": "cf09feb5b8d5cb55c7c82e384548c8f72c68c2083e6e86f4ee5a571dcdbab7a5"
           }
         }
       ],
@@ -80051,11 +80586,11 @@
       "updated_at": "2026-11-23T19:53:07.715594908Z",
       "seal": {
         "by": "server",
-        "mac": "7e75a256237d55e2ca57c311d8300b359a871f167c9699dcb3c0adac107a68aa"
+        "mac": "f372672ef97b2d95b6fe13635cd59fbf5fc440173ef01aef412f53eab80bccea"
       }
     },
     {
-      "id": "CLM-0988",
+      "id": "CLM-0996",
       "statement": "PR body: store_side_exists takes the store transaction's &mut PgConnection (not a CatalogDb) and the registry check runs on that same connection.",
       "kind": "functional",
       "level": "unit",
@@ -80063,7 +80598,7 @@
       "verification_method": "inspection",
       "source": "PR draft: `store_side_exists` takes the store transaction's `&mut PgConnection`, not a `CatalogDb`, and the registry check runs on that same connection",
       "derived_from": [
-        "CLM-0977"
+        "CLM-0985"
       ],
       "artifacts": [
         "src/store/catalogs.rs"
@@ -80076,7 +80611,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1401",
+          "id": "EVD-1409",
           "kind": "inspection",
           "locator": "src/store/catalogs.rs:309-312,339-345,533",
           "summary": "store_side_exists(catalog_db: &mut PgConnection, id) is called with &mut tx; registration(&mut tx, ..) takes &mut PgConnection and runs on the same tx in both provision_store_side and recover_holding.",
@@ -80095,11 +80630,11 @@
           "recorded_at": "2026-11-23T19:52:05.659177827Z",
           "seal": {
             "by": "server",
-            "mac": "97a14aeca4d2b662f915ab3e7232aebbf125af1365b61cae38ba99ecea71d927"
+            "mac": "a785cea757966842fe557534f7eed82f71088f502b01c2a65f6cbb3d95ed82a0"
           }
         },
         {
-          "id": "EVD-1421",
+          "id": "EVD-1429",
           "kind": "inspection",
           "locator": "src/store/catalogs.rs:309-316 at 6094e6f2",
           "summary": "Re-recorded on the committed file: store_side_exists takes &mut PgConnection, called with the store tx; registration uses the same tx.",
@@ -80117,7 +80652,7 @@
           "recorded_at": "2026-11-23T20:03:14.370622940Z",
           "seal": {
             "by": "server",
-            "mac": "3cb1c31e51098392840049d113dc74b3c9e9a8142a52589b2b972ec2ffd40ab9"
+            "mac": "cae476d554a64fcd5ceab1309da568263ad36ec2d450a785f7f28f1972a2e119"
           }
         }
       ],
@@ -80127,12 +80662,12 @@
           "rationale": "Signature and call sites match the PR statement.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1401"
+            "EVD-1409"
           ],
           "recorded_at": "2026-11-23T19:53:07.793481061Z",
           "seal": {
             "by": "server",
-            "mac": "c5548fd3c032c4faf5c0f860e3be66afd11cdad68b3d4839bafef10ee5847449"
+            "mac": "b69120a29d1625c1fa03e582c5dc10ac043134ac558bc41a1ddf23228e6191ac"
           }
         },
         {
@@ -80140,12 +80675,12 @@
           "rationale": "Re-confirmed at 6094e6f2.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1421"
+            "EVD-1429"
           ],
           "recorded_at": "2026-11-23T20:03:31.495911982Z",
           "seal": {
             "by": "server",
-            "mac": "6700195730e24c2ca28d9a8441bfea43b944b3f8bc48ff631b826cc6ebc0c1df"
+            "mac": "2cd9fa25ed2828856e017185dca8d7ec330c3794a266001d26a25515e8b14858"
           }
         }
       ],
@@ -80153,11 +80688,11 @@
       "updated_at": "2026-11-23T20:03:31.495911982Z",
       "seal": {
         "by": "server",
-        "mac": "e5929bd4545cd090220f4fd1fb8afbb73ed5030c9946aa46a436aadf53d55bdd"
+        "mac": "6f72f3d249fbb2f3e2e92a852cf129b4dabb49c785967574595d2aef905fa5af"
       }
     },
     {
-      "id": "CLM-0989",
+      "id": "CLM-0997",
       "statement": "PR body: the housekeeping task runs through the existing scheduling ticker (Task::ALL), so the unique slot key gives one replica per slot.",
       "kind": "functional",
       "level": "unit",
@@ -80165,7 +80700,7 @@
       "verification_method": "inspection",
       "source": "PR draft: run through the existing apalis scheduling, so one replica runs each slot",
       "derived_from": [
-        "CLM-0977"
+        "CLM-0985"
       ],
       "artifacts": [
         "src/housekeeping.rs"
@@ -80178,7 +80713,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1402",
+          "id": "EVD-1410",
           "kind": "inspection",
           "locator": "src/housekeeping.rs:318-333 (tick), schedule()",
           "summary": "tick() iterates Task::ALL (now 6 incl. ProvisionCatalogs) calling schedule(pool, task, slot_at(now)); the dispatch in run() routes Task::ProvisionCatalogs to provision_catalogs. The unique-key-per-slot mechanism is pre-existing and documented at docs/operations.md:~733; I did not rerun a multi-replica test.",
@@ -80196,7 +80731,7 @@
           "recorded_at": "2026-11-23T19:52:05.719722258Z",
           "seal": {
             "by": "server",
-            "mac": "b763c49437fdc69532c69ccfc29d4f83aac2af4bc93a7500febeeb5130b9187f"
+            "mac": "3724e20025c72598718b45627d76b95ecd120f91a3560205c42222ba28606185"
           }
         }
       ],
@@ -80206,12 +80741,12 @@
           "rationale": "The task is in Task::ALL, which tick schedules per slot through the existing unique-key mechanism; the mechanism itself was not retested.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1402"
+            "EVD-1410"
           ],
           "recorded_at": "2026-11-23T19:53:07.886371876Z",
           "seal": {
             "by": "server",
-            "mac": "f015ee66dcd26038c7538b4642e3c81779ae533ba3941b5d525a2de5313d0b93"
+            "mac": "32000fd70d97e0987141bd0ec26a71a1c08fce84970f9a1c6ea06cec1b7ea26b"
           }
         }
       ],
@@ -80219,11 +80754,11 @@
       "updated_at": "2026-11-23T19:53:07.886371876Z",
       "seal": {
         "by": "server",
-        "mac": "9ff0b74a6468a77ad3a7cfab7bc51cabce16d2a1c86c03058d14a255e812bfb0"
+        "mac": "6978dde06f6df4a4e12e0c1ee2b0ea3de5ff16ef1be849c4ec5681d5b5e17f31"
       }
     },
     {
-      "id": "CLM-0990",
+      "id": "CLM-0998",
       "statement": "catalogs::register inserts the new catalogs row with provisioned_at NULL (store from placement::choose), and only mark_provisioned (step 3 of create, or recovery) sets provisioned_at.",
       "kind": "functional",
       "level": "unit",
@@ -80231,7 +80766,7 @@
       "verification_method": "test",
       "source": "Issue #969; replaces retired CLM-0934 (issue #968 wording 'with provisioned_at set')",
       "derived_from": [
-        "CLM-0977"
+        "CLM-0985"
       ],
       "artifacts": [
         "src/store/catalogs.rs",
@@ -80245,7 +80780,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1412",
+          "id": "EVD-1420",
           "kind": "inspection",
           "locator": "src/store/catalogs.rs:203-222,377-410; git grep -n \"SET provisioned_at\" src",
           "summary": "register's INSERT binds provisioned_at as literal NULL; the only non-test UPDATE setting provisioned_at is in mark_provisioned_in (line 391), reached from create step 3 and from recover_holding.",
@@ -80263,11 +80798,11 @@
           "recorded_at": "2026-11-23T20:03:13.415108419Z",
           "seal": {
             "by": "server",
-            "mac": "b97e574e284e1cb332dbc6c7a09ad7d5ecf3ecc25ef22a2287db88e881bf754c"
+            "mac": "cad4915ca1f2b528f55c46cda1bc0f76256cf018b3e252c82785e7ae7c561e85"
           }
         },
         {
-          "id": "EVD-1413",
+          "id": "EVD-1421",
           "kind": "test",
           "locator": "tools/agentic/gate.sh narrow --jobs 4 --lib provision_tests (10 passed at 6094e6f2)",
           "summary": "half_made registers without finishing and the row is hidden (a_half_created_catalog_is_not_visible); create_leaves_a_whole_catalog_and_announces_it_once reads provisioned_at = Some(now) only after full create; recovery tests show provisioned_at set by recover.",
@@ -80285,7 +80820,7 @@
           "recorded_at": "2026-11-23T20:03:13.653378341Z",
           "seal": {
             "by": "server",
-            "mac": "a990f222a81d259162dddfe25d4ec82fe52780e2ce0ef69fdf03d035f61be099"
+            "mac": "412b57823e80ac0fb3d8888d6f45270dfe9dcbb61e6de46988ad044c73c6d34c"
           }
         }
       ],
@@ -80295,13 +80830,13 @@
           "rationale": "Insert writes NULL; only mark_provisioned_in sets provisioned_at; tests pass.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1412",
-            "EVD-1413"
+            "EVD-1420",
+            "EVD-1421"
           ],
           "recorded_at": "2026-11-23T20:03:30.995801975Z",
           "seal": {
             "by": "server",
-            "mac": "131f0d25eec8afbb4688c1a015fa8978b94391e9d0e16142579a210fd16a5b1a"
+            "mac": "895f958d350707694318c3fdbbed08ddef33259c1cf1fe29bf57c4395158f637"
           }
         }
       ],
@@ -80309,7 +80844,7 @@
       "updated_at": "2026-11-23T20:03:30.995801975Z",
       "seal": {
         "by": "server",
-        "mac": "ed443ebee01136300f58c70a32ba6554e97211c9a0a6ecf95d550a62228f5878"
+        "mac": "eabd1ee8357e90e951da8b4c086367ef2b5b3758013746b228cfe134b4a16b59"
       }
     }
   ]
