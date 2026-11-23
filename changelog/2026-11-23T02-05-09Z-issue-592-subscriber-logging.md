@@ -16,7 +16,9 @@
 ## Added
 - Test `subscribe_disconnect_grace_failure_and_end_are_logged`: scripts
   five subscriptions through `run` and asserts each line's level, text and
-  subscriber name, and that no `redis://` appears. With the subscribe-failure
+  subscriber name, and that no `redis://` appears. A repeated `Disconnected` adds no second
+  loss warning, and the recovery line's `disconnected_ms` is checked on a paused
+  clock (7 s). With the subscribe-failure
   `warn` lowered to `debug` it fails; restored, it passes.
 
 ## Decisions

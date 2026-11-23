@@ -902,8 +902,14 @@ mod log_tests {
         async fn message(&self, _payload: &[u8]) {}
     }
 
-    /// Yields its events, then ends the stream or waits forever.
-    struct Script(VecDeque<SubscriptionEvent>, bool);
+    /// Yields its events, each after its delay on the (paused) clock, then
+    /// ends the stream or waits forever.
+    struct Script(VecDeque<(Duration, SubscriptionEvent)>, bool);
+
+    /// An event with no delay.
+    fn now(event: SubscriptionEvent) -> (Duration, SubscriptionEvent) {
+        (Duration::ZERO, event)
+    }
 
     #[async_trait::async_trait]
     impl Events for Script {
@@ -913,15 +919,18 @@ mod log_tests {
         )]
         async fn next(&mut self) -> Option<SubscriptionEvent> {
             match self.0.pop_front() {
-                Some(event) => Some(event),
+                Some((delay, event)) => {
+                    tokio::time::sleep(delay).await;
+                    Some(event)
+                }
                 None if self.1 => None,
                 None => std::future::pending().await,
             }
         }
     }
 
-    /// Attempt 1: `Subscribed`, `Disconnected`, `Subscribed`, then the stream
-    /// ends. Attempt 2: `Disconnected` and silence (replaced after the grace).
+    /// Attempt 1: `Subscribed`, `Disconnected`, a second `Disconnected` 2 s
+    /// later, `Subscribed` 5 s after that (a 7 s loss), then the stream ends. Attempt 2: `Disconnected` and silence (replaced after the grace).
     /// Attempt 3: fails. Attempt 4: `Subscribed`, then the stream ends. Attempt 5 stops the loop.
     struct Lifetimes {
         attempts: Mutex<usize>,
@@ -945,12 +954,19 @@ mod log_tests {
             use SubscriptionEvent::{Disconnected, Subscribed};
             match attempt {
                 1 => Ok(Script(
-                    [Subscribed, Disconnected, Subscribed].into_iter().collect(),
+                    [
+                        now(Subscribed),
+                        now(Disconnected),
+                        (Duration::from_secs(2), Disconnected),
+                        (Duration::from_secs(5), Subscribed),
+                    ]
+                    .into_iter()
+                    .collect(),
                     true,
                 )),
-                2 => Ok(Script([Disconnected].into_iter().collect(), false)),
+                2 => Ok(Script([now(Disconnected)].into_iter().collect(), false)),
                 3 => Err(redis::RedisError::from((redis::ErrorKind::Io, "refused"))),
-                4 => Ok(Script([Subscribed].into_iter().collect(), true)),
+                4 => Ok(Script([now(Subscribed)].into_iter().collect(), true)),
                 _ => {
                     self.shutdown.cancel();
                     Ok(Script(VecDeque::new(), false))
@@ -958,6 +974,9 @@ mod log_tests {
             }
         }
     }
+
+    /// Long enough that the 7 s loss of attempt 1 is inside it.
+    const GRACE: Duration = Duration::from_secs(60);
 
     /// Runs the loop through the four scripted lives and returns its log.
     async fn logged_lives() -> String {
@@ -977,17 +996,11 @@ mod log_tests {
             shutdown: shutdown.clone(),
         };
         tokio::time::timeout(
-            Duration::from_secs(60),
-            run(
-                &Quiet,
-                &redis,
-                &source,
-                Duration::from_millis(50),
-                &shutdown,
-            ),
+            Duration::from_secs(600),
+            run(&Quiet, &redis, &source, GRACE, &shutdown),
         )
         .await
-        .expect("the loop stops within 60 s");
+        .expect("the loop stops within 600 s (paused clock)");
         capture.text()
     }
 
@@ -1006,7 +1019,25 @@ mod log_tests {
         };
         assert_eq!(count("INFO", "pub/sub subscribed"), 3, "{logged}");
         assert_eq!(count("INFO", "resubscribe=true"), 2, "{logged}");
+        // Two losses (attempts 1 and 2); attempt 1's repeated `Disconnected`
+        // adds no warning.
         assert_eq!(count("WARN", "connection lost"), 2, "{logged}");
+        // The recovery line carries the loss's length on the paused clock,
+        // counted from the first `Disconnected`.
+        // (The timer rounds each sleep up to a millisecond, so allow a few.)
+        let reported: Vec<u64> = lines
+            .iter()
+            .filter(|line| line.contains("INFO"))
+            .filter_map(|line| line.split("disconnected_ms=").nth(1))
+            .map(|rest| {
+                let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+                digits.parse().expect("a number after disconnected_ms=")
+            })
+            .collect();
+        assert!(
+            matches!(reported.as_slice(), [ms] if (7000..7010).contains(ms)),
+            "{reported:?} in {logged}"
+        );
         assert_eq!(count("WARN", "past the grace"), 1, "{logged}");
         assert_eq!(count("WARN", "subscribe failed"), 1, "{logged}");
         assert_eq!(count("WARN", "subscription ended"), 3, "{logged}");
