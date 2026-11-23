@@ -222,7 +222,7 @@ Each release ends deployable: after Task 6 (types only, rolling), after Task 10 
 
 **Files:** create `src/stores/mod.rs`; modify `src/lib.rs`, `src/app.rs`, `src/error.rs`.
 
-- [ ] Add the types of "Shared interfaces" (not `Stores` yet). For release 1, `App` gets `accounts()` and a temporary `App::main_store() -> CatalogDb` that wraps the same pool with store name `main`. `App::pool()` stays and is marked `#[deprecated(note = "use accounts() or catalog_db()")]`, with the deprecation allowed crate-wide until Task 6.
+- [ ] Add the types of "Shared interfaces" (not `Stores` yet). For release 1, `App` gets `accounts()` and a temporary `App::main_store() -> &CatalogDb` that wraps the same pool with store name `main`. `App::pool()` stays and is marked `#[deprecated(note = "use accounts() or catalog_db()")]`, with the deprecation allowed crate-wide until Task 6.
 - [ ] Add `OkfError::StoreUnavailable { store: String }`, mapped to 503 in HTTP and to a tool error saying the catalog's data is temporarily unavailable. The message names the store only in the local log half (`split_event!`), never to the caller.
 - [ ] Tests: `store_name_parse_accepts_slugs_and_refuses_the_rest`; `main_store_and_accounts_reach_the_same_database_in_release_one`; `store_unavailable_is_503_and_hides_the_store_name`.
 
