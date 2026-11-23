@@ -226,3 +226,52 @@ async fn the_fanout_cap_follows_its_setting() {
     assert_eq!(over, StatusCode::BAD_REQUEST);
     assert_eq!(at, StatusCode::OK, "{body}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn search_naming_more_catalogs_than_the_cap_is_refused() {
+    let test = app_with_new(
+        &["a", "b", "c"],
+        Config {
+            search_fanout_max: 2,
+            ..Config::default()
+        },
+    )
+    .await;
+    let root = stored_secret(&test, "root", Access::Admin, &[], false).await;
+
+    let (over, body) = send(
+        &test,
+        "GET",
+        "/api/v1/search?q=x&catalogs=a,b,c",
+        Some(&root),
+        None,
+    )
+    .await;
+    let (at, at_body) = send(
+        &test,
+        "GET",
+        "/api/v1/search?q=x&catalogs=a,b",
+        Some(&root),
+        None,
+    )
+    .await;
+    let (repeated, repeated_body) = send(
+        &test,
+        "GET",
+        "/api/v1/search?q=x&catalogs=a,b,a,b,a",
+        Some(&root),
+        None,
+    )
+    .await;
+
+    assert_eq!(over, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "InvalidPath", "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("at most 2")),
+        "{body}"
+    );
+    assert_eq!(at, StatusCode::OK, "{at_body}");
+    assert_eq!(repeated, StatusCode::OK, "{repeated_body}");
+}
