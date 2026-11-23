@@ -595,8 +595,9 @@ back to memory, because that would split the state between replicas.
 - **Subscriber log lines.** Each subscriber (`subscriber="bridge"` for the
   `admin_generation` channel, `subscriber="catalog"` for catalog
   announcements) logs at `info` every time it is subscribed (`resubscribe`
-  is `true` after the first; `disconnected_ms` says how long a connection
-  loss lasted), and at `warn` when the connection is lost, when a lost
+  is `true` after the first, also when a replaced subscription is followed
+  by a new one; `disconnected_ms` says how long a connection loss within
+  one subscription lasted), and at `warn` when the connection is lost, when a lost
   connection outlasts the 10-second grace and the subscription is replaced,
   when the subscription ends and when a subscribe fails. A replica with
   `warn` lines and no later `info` line is not hearing announcements. No

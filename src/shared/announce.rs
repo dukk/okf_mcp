@@ -440,14 +440,14 @@ async fn run<H: Handler, S: Source>(
     shutdown: &CancellationToken,
 ) {
     let mut backoff = Backoff::new(BACKOFF_MIN, BACKOFF_MAX);
+    // Whether any subscription of this loop has been reported before.
+    let mut subscribed_before = false;
     while !shutdown.is_cancelled() {
         match source.subscribe().await {
             Ok(mut subscription) => {
                 // When the library reported the connection lost, until it
                 // reports the subscription again.
                 let mut disconnected_at: Option<tokio::time::Instant> = None;
-                // Whether this loop has reported the subscription before.
-                let mut subscribed_before = false;
                 loop {
                     // Never ready while connected; `pending` waits forever.
                     let replace_at = async {
@@ -922,7 +922,7 @@ mod log_tests {
 
     /// Attempt 1: `Subscribed`, `Disconnected`, `Subscribed`, then the stream
     /// ends. Attempt 2: `Disconnected` and silence (replaced after the grace).
-    /// Attempt 3: fails. Attempt 4: the stream ends. Attempt 5 stops the loop.
+    /// Attempt 3: fails. Attempt 4: `Subscribed`, then the stream ends. Attempt 5 stops the loop.
     struct Lifetimes {
         attempts: Mutex<usize>,
         shutdown: CancellationToken,
@@ -950,7 +950,7 @@ mod log_tests {
                 )),
                 2 => Ok(Script([Disconnected].into_iter().collect(), false)),
                 3 => Err(redis::RedisError::from((redis::ErrorKind::Io, "refused"))),
-                4 => Ok(Script(VecDeque::new(), true)),
+                4 => Ok(Script([Subscribed].into_iter().collect(), true)),
                 _ => {
                     self.shutdown.cancel();
                     Ok(Script(VecDeque::new(), false))
@@ -1004,8 +1004,8 @@ mod log_tests {
                 .filter(|line| line.contains(level) && line.contains(text))
                 .count()
         };
-        assert_eq!(count("INFO", "pub/sub subscribed"), 2, "{logged}");
-        assert_eq!(count("INFO", "resubscribe=true"), 1, "{logged}");
+        assert_eq!(count("INFO", "pub/sub subscribed"), 3, "{logged}");
+        assert_eq!(count("INFO", "resubscribe=true"), 2, "{logged}");
         assert_eq!(count("WARN", "connection lost"), 2, "{logged}");
         assert_eq!(count("WARN", "past the grace"), 1, "{logged}");
         assert_eq!(count("WARN", "subscribe failed"), 1, "{logged}");

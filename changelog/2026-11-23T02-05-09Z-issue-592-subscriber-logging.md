@@ -5,8 +5,9 @@
   now logs the subscription's life, each line carrying
   `subscriber="catalog"` or `subscriber="bridge"` (the new
   `Handler::NAME`) and nothing else a payload, key or URL could leak:
-  - `info` on every `Subscribed`, with `resubscribe` (false for the loop's
-    first) and `disconnected_ms` when a loss preceded it;
+  - `info` on every `Subscribed`, with `resubscribe` (false only for the loop's
+    first, across replaced subscriptions too) and `disconnected_ms` when a
+    loss within that subscription preceded it;
   - `warn` when the library reports the connection lost (once per loss),
     when the grace expires and the subscription is replaced, when the
     stream ends, and when a subscribe fails.
@@ -14,7 +15,7 @@
 
 ## Added
 - Test `subscribe_disconnect_grace_failure_and_end_are_logged`: scripts
-  four subscriptions through `run` and asserts each line's level, text and
+  five subscriptions through `run` and asserts each line's level, text and
   subscriber name, and that no `redis://` appears. With the subscribe-failure
   `warn` lowered to `debug` it fails; restored, it passes.
 
