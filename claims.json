@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 640,
+  "next_claim_seq": 646,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "defe5482bf72b00a7bda324a17e178ee71977d6f423b69e44fee24b97fe4e44a"
+    "mac": "127f8eee47309777a063c3ab1d552425d004cf6209f600dbeddcfdee7309a8ee"
   },
-  "next_evidence_seq": 807,
+  "next_evidence_seq": 813,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "d6cd98a3d85a8dfcbc8b316c01347c97b10a3669940fbe9949e2b63ae86c6169"
+    "mac": "b233bb6b163c473262ad249cd208941d688e13cb778f600f3388f40aaaca2e2f"
   },
   "claims": [
     {
@@ -49825,6 +49825,391 @@
       "seal": {
         "by": "server",
         "mac": "2c111d69877ba24c23827adcbde053265a5ab9f0ccd8beaefd43b78752c3ad77"
+      }
+    },
+    {
+      "id": "CLM-0640",
+      "statement": "On the Import & export page, when the chosen catalog's owner team is suspended and the caller is not an admin, no usable import control is shown (panel disabled with a short note), while an admin still gets a working import.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/647",
+      "derived_from": [],
+      "artifacts": [
+        "src/http/ui/js/pages/transfer.js"
+      ],
+      "tags": [
+        "from-issue:647"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0812",
+          "kind": "analysis",
+          "locator": "children of CLM-0640",
+          "summary": "Code (0641, 0642), the browser journey (0643), server agreement (0644) and docs (0645) together cover the issue: non-admin on a suspended catalog gets a disabled panel and note, admin keeps a working import, and a journey proves both.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T05:53:16.422173688Z",
+          "seal": {
+            "by": "server",
+            "mac": "a023395bec24ca1d47e10f68e7bf924ba491065e50c5b120f45f6ce53f0af802"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All children supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0812"
+          ],
+          "recorded_at": "2026-11-23T05:53:25.916533563Z",
+          "seal": {
+            "by": "server",
+            "mac": "1957bcc10b8e6a81a476f7dea711e54aa2e55c2b4d4fd6e55cde15920e1526a3"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:53:00.908201305Z",
+      "updated_at": "2026-11-23T05:53:25.916533563Z",
+      "seal": {
+        "by": "server",
+        "mac": "b975c28c6c6eefc4b0cd1e90af3a84827a0024b12a5cff4fde17562c3dab35d4"
+      }
+    },
+    {
+      "id": "CLM-0641",
+      "statement": "transfer.js decides the block from the `suspended` field of the /catalogs list entry for the chosen catalog plus store.canOn('admin', chosen), and disables the import fieldset and Import button and shows a note when blocked.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"uses the `suspended` field ({team, notice} or null) of the `/catalogs` list the page already loads, plus `store.canOn('admin', catalog)`; the controls sit in a `<fieldset disabled>` and the Import button is disabled while blocked\"",
+      "derived_from": [
+        "CLM-0640"
+      ],
+      "artifacts": [
+        "src/http/ui/js/pages/transfer.js"
+      ],
+      "tags": [
+        "from-issue:647"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0807",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/transfer.js:126,188-203; src/http/api/catalogs.rs:92-94,138; src/http/ui/js/core/store.js:54",
+          "summary": "importBlocked = !!current().suspended && !store.canOn('admin', chosen); current() reads the /catalogs entry (API serialises suspended: Option<SuspensionInfo> {team, notice}). showImport sets note hidden=!blocked, fieldset disabled=blocked, button disabled=busy||!file||blocked. The button is also guarded at lines 141 and 149.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/transfer.js",
+              "lines": {
+                "start": 126,
+                "end": 210
+              },
+              "commit": "afeb88afe2dc705b16396e8d126b9b4defa67192"
+            }
+          },
+          "recorded_at": "2026-11-23T05:53:16.223065549Z",
+          "seal": {
+            "by": "server",
+            "mac": "64dffc89f57e71c8348e76950a69a8191e5a5fd0afe5951ef2a4851e75967f8c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code reads the list's suspended field and canOn('admin'), and disables fieldset, button and shows note.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0807"
+          ],
+          "recorded_at": "2026-11-23T05:53:25.740921705Z",
+          "seal": {
+            "by": "server",
+            "mac": "fefac320cdd0f8bc6c22d7079d514f6500076d5a115d5a0dd47512de0ed8a79d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:53:00.908201305Z",
+      "updated_at": "2026-11-23T05:53:25.740921705Z",
+      "seal": {
+        "by": "server",
+        "mac": "3d218c13c146e78e2cec74ad089b5f29f926574f582d1498b9649d076edb7301"
+      }
+    },
+    {
+      "id": "CLM-0642",
+      "statement": "The blocked state follows the catalog picker and is recomputed after an import (showImport is called from the picker change handler and after the catalogs reload).",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"Follows the picker and refreshes after an import.\"",
+      "derived_from": [
+        "CLM-0640"
+      ],
+      "artifacts": [
+        "src/http/ui/js/pages/transfer.js"
+      ],
+      "tags": [
+        "from-issue:647"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0808",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/transfer.js:168,178-182",
+          "summary": "Picker change handler calls showImport() after updating chosen; after a successful import the catalogs are re-fetched and showImport() is called. showImport recomputes from current().suspended each time.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/transfer.js",
+              "lines": {
+                "start": 165,
+                "end": 183
+              },
+              "commit": "afeb88afe2dc705b16396e8d126b9b4defa67192"
+            }
+          },
+          "recorded_at": "2026-11-23T05:53:16.265526713Z",
+          "seal": {
+            "by": "server",
+            "mac": "57e8777baf8f9ded5613fa72c8f8553c20b707d4e8a7eb7c53008108210c46bf"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "showImport is called on picker change and after the post-import reload.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0808"
+          ],
+          "recorded_at": "2026-11-23T05:53:25.775950896Z",
+          "seal": {
+            "by": "server",
+            "mac": "e654c84607684da60ab7760b6ee22104e5733e5ab5ee4ee33cbdfd9196e926f4"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:53:00.908201305Z",
+      "updated_at": "2026-11-23T05:53:25.775950896Z",
+      "seal": {
+        "by": "server",
+        "mac": "474aa25b16dc00ed4d7490563ad270aea48311b4a35664fa248b76f7500be60a"
+      }
+    },
+    {
+      "id": "CLM-0643",
+      "statement": "A browser journey exists in which a writer on a suspended catalog sees the note, a disabled Import button, a disabled fieldset and file input (even after a script sets a file), and an admin on the same catalog has enabled controls and completes an import.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/647 : \"add a browser journey (writer on suspended catalog sees no usable import control; admin still does)\"",
+      "derived_from": [
+        "CLM-0640"
+      ],
+      "artifacts": [
+        "tests/ui_e2e/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:647"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0809",
+          "kind": "test",
+          "locator": "cargo test --test ui_e2e a_suspended_catalog_disables_import",
+          "summary": "Ran on head afeb88a: 1 passed, 0 failed; 8.59s and no 'skipping browser journey' message, so Chromium ran. Journey asserts writer {note:true,button:true,fieldset:true,file:true} even after a scripted file choice, and admin fieldset/file enabled, import completes and generation +1.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/catalogs.rs",
+              "lines": {
+                "start": 638,
+                "end": 747
+              },
+              "commit": "afeb88afe2dc705b16396e8d126b9b4defa67192"
+            }
+          },
+          "recorded_at": "2026-11-23T05:53:16.304105349Z",
+          "seal": {
+            "by": "server",
+            "mac": "545baa80935fdfe6d8b1402c8c77cba2b45aeb7af420369ba227e3098fd471b2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "I ran the journey; it passed with a real browser and asserts both roles' control states.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0809"
+          ],
+          "recorded_at": "2026-11-23T05:53:25.808660337Z",
+          "seal": {
+            "by": "server",
+            "mac": "20aef3bad56cd19514c59d6e5b51eae97e85d167b5ecada36df52ad8dcf0ce4e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:53:00.908201305Z",
+      "updated_at": "2026-11-23T05:53:25.808660337Z",
+      "seal": {
+        "by": "server",
+        "mac": "0165579ca241e5d676a5629896ca05f4b80637584055f100d8c81daa24ae1a69"
+      }
+    },
+    {
+      "id": "CLM-0644",
+      "statement": "The server allows export of a suspended catalog and refuses import by a non-admin writer with Suspended, so export is correctly left unchanged and the UI block mirrors the server.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"Export is the only other control; the server allows export on a suspended catalog, so it is unchanged.\"",
+      "derived_from": [
+        "CLM-0640"
+      ],
+      "artifacts": [
+        "src/http/archives.rs"
+      ],
+      "tags": [
+        "from-issue:647"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0810",
+          "kind": "test",
+          "locator": "cargo test --lib export_stays_open_and_only_an_admin_imports_while_suspended; src/http/archives.rs:344,491",
+          "summary": "Existing server test passes (1 passed): a suspended catalog still exports, a writer's import is refused with error Suspended, an admin imports. Handler comments at 344 (export open) and 491 (non-admin cannot import) agree; export handler has no suspension check.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/archives.rs",
+              "lines": {
+                "start": 1083,
+                "end": 1135
+              },
+              "commit": "afeb88afe2dc705b16396e8d126b9b4defa67192"
+            }
+          },
+          "recorded_at": "2026-11-23T05:53:16.340140064Z",
+          "seal": {
+            "by": "server",
+            "mac": "e3a64920b5a6845b1a352eef19566bc33c88d6e15e079ae3991f40fdcaff6135"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Server test passes and shows export open, writer import refused as Suspended, admin import allowed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0810"
+          ],
+          "recorded_at": "2026-11-23T05:53:25.841958381Z",
+          "seal": {
+            "by": "server",
+            "mac": "f2c8a0e8a5c3a878b0bc17fdc59636798e951bfe106c721b7bf1dd435ec3a795"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:53:00.908201305Z",
+      "updated_at": "2026-11-23T05:53:25.841958381Z",
+      "seal": {
+        "by": "server",
+        "mac": "8a8e274b71c0ae4c84d5293dc4fe3e72eedb720943c5b39b5142b32d0b467a04"
+      }
+    },
+    {
+      "id": "CLM-0645",
+      "statement": "README.md and docs/operations.md state that a suspended catalog's import is admin-only, the page shows a disabled panel with a note, and export still works.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"`src/http/ui/styles.css`, README, `docs/operations.md`, changelog entry.\"",
+      "derived_from": [
+        "CLM-0640"
+      ],
+      "artifacts": [
+        "README.md",
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:647"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0811",
+          "kind": "inspection",
+          "locator": "docs/operations.md:4088-4090; README.md:431",
+          "summary": "operations.md states only an admin can import while the owner team is suspended, others see the panel disabled with a note, and export still works. README.md:431 states only that import is admin-only and the page says so (does not mention export).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 4085,
+                "end": 4092
+              },
+              "commit": "afeb88afe2dc705b16396e8d126b9b4defa67192"
+            }
+          },
+          "recorded_at": "2026-11-23T05:53:16.382593868Z",
+          "seal": {
+            "by": "server",
+            "mac": "6d554d0e6330818c365697ea46b74710e3281854c186479312b8e3c65472997e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Read together, operations.md carries all three points and README states admin-only and the page note; the PR only says both were updated.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0811"
+          ],
+          "recorded_at": "2026-11-23T05:53:25.878681700Z",
+          "seal": {
+            "by": "server",
+            "mac": "106c2f1c102b320f4a784141a67ace47179d7a13e6111338e2ba81c3f50ff0fb"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:53:00.908201305Z",
+      "updated_at": "2026-11-23T05:53:25.878681700Z",
+      "seal": {
+        "by": "server",
+        "mac": "de47f220d1111cfa7578851cf4c6f97c33f79c3a3ac4014b7cf580660cb7dbc1"
       }
     }
   ]
