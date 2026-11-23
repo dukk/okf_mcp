@@ -1180,7 +1180,7 @@ async fn a_catalog_imported_through_the_store_is_served_on_both_replicas() {
         now: Utc::now(),
     };
     let report = okf_mcp::store::import::import(
-        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), a.db.pool.clone()),
+        &okf_mcp::stores::CatalogDb::main_in(&a.db.pool),
         "main",
         files(&[("b.md", "---\ntype: Note\n---\n# B\n")]),
         &options,

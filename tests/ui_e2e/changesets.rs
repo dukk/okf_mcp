@@ -186,7 +186,7 @@ fn click_handle(ui: &crate::harness::Ui, handle: &str) {
 /// The (actor, message) of every revision of Alpha, oldest first.
 async fn alpha_revisions(server: &TestServer) -> Vec<(String, String)> {
     sqlx::query_as(
-        "SELECT actor, COALESCE(message, '') FROM revisions \
+        "SELECT actor, COALESCE(message, '') FROM catalog.revisions \
          WHERE path = 'systems/alpha.md' ORDER BY revision",
     )
     .fetch_all(&server.db.pool)

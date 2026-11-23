@@ -75,7 +75,7 @@ async fn submit(
 }
 
 async fn snapshot(pool: &PgPool, catalog: i64) -> serde_json::Value {
-    sqlx::query_scalar("SELECT jsonb_build_array((SELECT jsonb_agg(to_jsonb(w) ORDER BY id) FROM maintenance_work w WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM maintenance_runs r WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM maintenance_findings f WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(e) ORDER BY work_id,finding_id,ordinal) FROM maintenance_evidence e WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(s)) FROM maintenance_state s WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(q) ORDER BY operation,idempotency_key) FROM maintenance_requests q WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(d) ORDER BY path) FROM documents d WHERE catalog_id=$1), (SELECT to_jsonb(c) FROM catalogs c WHERE id=$1))")
+    sqlx::query_scalar("SELECT jsonb_build_array((SELECT jsonb_agg(to_jsonb(w) ORDER BY id) FROM catalog.maintenance_work w WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM catalog.maintenance_runs r WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM catalog.maintenance_findings f WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(e) ORDER BY work_id,finding_id,ordinal) FROM catalog.maintenance_evidence e WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(s)) FROM catalog.maintenance_state s WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(q) ORDER BY operation,idempotency_key) FROM catalog.maintenance_requests q WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(d) ORDER BY path) FROM catalog.documents d WHERE catalog_id=$1), (SELECT to_jsonb(c) FROM catalogs c WHERE id=$1))")
         .bind(catalog).fetch_one(pool).await.unwrap()
 }
 
@@ -140,10 +140,10 @@ async fn maintenance_submit_is_atomic_and_idempotent() {
         Err(OkfError::NotFound { .. })
     ));
     assert_eq!(snapshot(&db.pool, catalog).await, stored);
-    let counts: (i64,i64,String) = sqlx::query_as("SELECT (SELECT count(*) FROM maintenance_findings WHERE catalog_id=$1),(SELECT count(*) FROM maintenance_evidence WHERE catalog_id=$1),(SELECT state FROM maintenance_runs WHERE id=$2)")
+    let counts: (i64,i64,String) = sqlx::query_as("SELECT (SELECT count(*) FROM catalog.maintenance_findings WHERE catalog_id=$1),(SELECT count(*) FROM catalog.maintenance_evidence WHERE catalog_id=$1),(SELECT state FROM catalog.maintenance_runs WHERE id=$2)")
         .bind(catalog).bind(&lease.run_id).fetch_one(&db.pool).await.unwrap();
     assert_eq!(counts, (2, 3, "completed".into()));
-    let cursors = candidates::cursors(&mut db.pool.acquire().await.unwrap(), catalog)
+    let cursors = candidates::cursors(&mut db.store().acquire().await.unwrap(), catalog)
         .await
         .unwrap();
     assert_eq!(cursors.changed, "a.md");
@@ -179,7 +179,7 @@ async fn maintenance_inconclusive_never_refreshes_support() {
         )
         .await
         .unwrap();
-        let rows = candidates::load(&mut db.pool.acquire().await.unwrap(), catalog, at)
+        let rows = candidates::load(&mut db.store().acquire().await.unwrap(), catalog, at)
             .await
             .unwrap();
         assert_eq!(rows[0].reported_supported, Some((1, t0())));
@@ -194,7 +194,7 @@ async fn maintenance_historical_report_does_not_cover_new_revision() {
     let catalog = setup(&db.pool, &["a.md"]).await;
     let lease = claim(&db.pool, catalog, "first", t0()).await;
     revision(&db.pool, catalog, "a.md", 2, t0(), "Body revised").await;
-    let cursors_before = candidates::cursors(&mut db.pool.acquire().await.unwrap(), catalog)
+    let cursors_before = candidates::cursors(&mut db.store().acquire().await.unwrap(), catalog)
         .await
         .unwrap();
     let result = submit(
@@ -221,24 +221,25 @@ async fn maintenance_historical_report_does_not_cover_new_revision() {
         Some(Assessment::SupportedCurrent)
     );
     assert_eq!(stored.work[0].evidence, report(&lease).evidence);
-    let reason: String = sqlx::query_scalar("SELECT reason FROM maintenance_work WHERE id=$1")
-        .bind(&lease.work_id)
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
+    let reason: String =
+        sqlx::query_scalar("SELECT reason FROM catalog.maintenance_work WHERE id=$1")
+            .bind(&lease.work_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
     assert_eq!(reason, "source_changed");
-    let payload: serde_json::Value = sqlx::query_scalar("SELECT request FROM maintenance_requests WHERE catalog_id=$1 AND operation='submit' AND idempotency_key='historical'").bind(catalog).fetch_one(&db.pool).await.unwrap();
+    let payload: serde_json::Value = sqlx::query_scalar("SELECT request FROM catalog.maintenance_requests WHERE catalog_id=$1 AND operation='submit' AND idempotency_key='historical'").bind(catalog).fetch_one(&db.pool).await.unwrap();
     assert_eq!(
         payload["submission"],
         serde_json::to_value(report(&lease)).unwrap()
     );
     assert_eq!(
-        candidates::cursors(&mut db.pool.acquire().await.unwrap(), catalog)
+        candidates::cursors(&mut db.store().acquire().await.unwrap(), catalog)
             .await
             .unwrap(),
         cursors_before
     );
-    let rows = candidates::load(&mut db.pool.acquire().await.unwrap(), catalog, t0())
+    let rows = candidates::load(&mut db.store().acquire().await.unwrap(), catalog, t0())
         .await
         .unwrap();
     assert!(!rows[0].changed_done);
@@ -302,12 +303,12 @@ async fn maintenance_submit_all_evidence_controls_effective_support() {
     submit(&db.pool, catalog, &lease, "support", &input, t0())
         .await
         .unwrap();
-    let rows = candidates::load(&mut db.pool.acquire().await.unwrap(), catalog, t0())
+    let rows = candidates::load(&mut db.store().acquire().await.unwrap(), catalog, t0())
         .await
         .unwrap();
     assert_eq!(rows[0].reported_supported, Some((1, t0())));
     revision(&db.pool, catalog, "b.md", 2, t0(), "Body revised").await;
-    let rows = candidates::load(&mut db.pool.acquire().await.unwrap(), catalog, t0())
+    let rows = candidates::load(&mut db.store().acquire().await.unwrap(), catalog, t0())
         .await
         .unwrap();
     assert_eq!(rows[0].reported_supported, None);
@@ -330,19 +331,19 @@ async fn maintenance_submit_all_evidence_controls_effective_support() {
         .unwrap();
     assert_eq!(result.outcome, WorkOutcome::Completed);
     assert!(result.outdated);
-    let rows = candidates::load(&mut db.pool.acquire().await.unwrap(), catalog, later)
+    let rows = candidates::load(&mut db.store().acquire().await.unwrap(), catalog, later)
         .await
         .unwrap();
     assert_eq!(rows[0].reported_supported, None);
     assert_eq!(rows[0].last_aging_completed, Some(later));
     // Even if an import restores the old revision as current, a report that was
     // already outdated at submission is not a new current-support assessment.
-    sqlx::query("UPDATE documents SET revision=1 WHERE catalog_id=$1 AND path='b.md'")
+    sqlx::query("UPDATE catalog.documents SET revision=1 WHERE catalog_id=$1 AND path='b.md'")
         .bind(catalog)
         .execute(&db.pool)
         .await
         .unwrap();
-    let rows = candidates::load(&mut db.pool.acquire().await.unwrap(), catalog, later)
+    let rows = candidates::load(&mut db.store().acquire().await.unwrap(), catalog, later)
         .await
         .unwrap();
     assert_eq!(rows[0].reported_supported, None);
@@ -422,7 +423,7 @@ async fn maintenance_submit_context_and_state_guards() {
         Err(OkfError::Busy { .. })
     ));
     let state: (String, Option<String>) =
-        sqlx::query_as("SELECT state,end_reason FROM maintenance_runs WHERE id=$1")
+        sqlx::query_as("SELECT state,end_reason FROM catalog.maintenance_runs WHERE id=$1")
             .bind(&newer.run_id)
             .fetch_one(&db.pool)
             .await
@@ -467,7 +468,7 @@ async fn maintenance_submit_concurrent_replay_and_double_completion() {
     );
     assert_eq!(a.unwrap(), b.unwrap());
     let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM maintenance_findings WHERE catalog_id=$1")
+        sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_findings WHERE catalog_id=$1")
             .bind(catalog)
             .fetch_one(&db.pool)
             .await
@@ -508,8 +509,8 @@ async fn maintenance_submit_rolls_back_late_database_errors() {
     // Both failures occur after earlier writes; no receipt, counter, evidence,
     // finding, work or cursor change may escape the transaction.
     for (create, drop) in [
-        ("CREATE TRIGGER reject_report BEFORE INSERT ON maintenance_findings FOR EACH ROW WHEN (NEW.assertion = 'second') EXECUTE FUNCTION reject_report()", "DROP TRIGGER reject_report ON maintenance_findings"),
-        ("CREATE TRIGGER reject_report BEFORE INSERT ON maintenance_requests FOR EACH ROW WHEN (NEW.operation = 'submit') EXECUTE FUNCTION reject_report()", "DROP TRIGGER reject_report ON maintenance_requests"),
+        ("CREATE TRIGGER reject_report BEFORE INSERT ON catalog.maintenance_findings FOR EACH ROW WHEN (NEW.assertion = 'second') EXECUTE FUNCTION reject_report()", "DROP TRIGGER reject_report ON catalog.maintenance_findings"),
+        ("CREATE TRIGGER reject_report BEFORE INSERT ON catalog.maintenance_requests FOR EACH ROW WHEN (NEW.operation = 'submit') EXECUTE FUNCTION reject_report()", "DROP TRIGGER reject_report ON catalog.maintenance_requests"),
     ] {
         sqlx::query(create)
             .execute(&db.pool).await.unwrap();
@@ -544,15 +545,17 @@ async fn maintenance_submit_waits_for_source_pins_and_observes_winning_revision(
         path: "b.md".into(),
         revision: 1,
     }));
-    let mut publisher = db.pool.begin().await.unwrap();
-    sqlx::query("INSERT INTO revisions (catalog_id,path,revision,op,content,executable,actor,message,created_at) VALUES ($1,'b.md',2,'import',$2,false,'publisher','edit',$3)")
+    let mut publisher = db.store().begin().await.unwrap();
+    sqlx::query("INSERT INTO catalog.revisions (catalog_id,path,revision,op,content,executable,actor,message,created_at) VALUES ($1,'b.md',2,'import',$2,false,'publisher','edit',$3)")
         .bind(catalog).bind(b"Body updated".as_slice()).bind(t0()).execute(&mut *publisher).await.unwrap();
-    sqlx::query("UPDATE documents SET revision=2,content=$2 WHERE catalog_id=$1 AND path='b.md'")
-        .bind(catalog)
-        .bind(b"Body updated".as_slice())
-        .execute(&mut *publisher)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE catalog.documents SET revision=2,content=$2 WHERE catalog_id=$1 AND path='b.md'",
+    )
+    .bind(catalog)
+    .bind(b"Body updated".as_slice())
+    .execute(&mut *publisher)
+    .await
+    .unwrap();
     let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
         .fetch_one(&mut *publisher)
         .await
@@ -565,7 +568,7 @@ async fn maintenance_submit_waits_for_source_pins_and_observes_winning_revision(
     let receipt = submission.await.unwrap().unwrap();
     assert_eq!(receipt.outcome, WorkOutcome::Completed);
     assert!(receipt.outdated);
-    let rows = candidates::load(&mut db.pool.acquire().await.unwrap(), catalog, t0())
+    let rows = candidates::load(&mut db.store().acquire().await.unwrap(), catalog, t0())
         .await
         .unwrap();
     assert_eq!(rows[0].reported_supported, None);
@@ -617,13 +620,14 @@ async fn maintenance_submit_cursors_preserve_other_completed_lanes() {
     );
     a_result.unwrap();
     b_result.unwrap();
-    let state: String = sqlx::query_scalar("SELECT state FROM maintenance_runs WHERE id=$1")
-        .bind(&batch.run_id)
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM catalog.maintenance_runs WHERE id=$1")
+            .bind(&batch.run_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
     assert_eq!(state, "running");
-    let before = candidates::cursors(&mut db.pool.acquire().await.unwrap(), catalog)
+    let before = candidates::cursors(&mut db.store().acquire().await.unwrap(), catalog)
         .await
         .unwrap();
     assert_eq!(before.expiry, "a.md");
@@ -631,14 +635,14 @@ async fn maintenance_submit_cursors_preserve_other_completed_lanes() {
     let mut rc = report(c);
     rc.assessment = Assessment::NotAssessed;
     submit(&db.pool, catalog, c, "c", &rc, t0()).await.unwrap();
-    let after = candidates::cursors(&mut db.pool.acquire().await.unwrap(), catalog)
+    let after = candidates::cursors(&mut db.store().acquire().await.unwrap(), catalog)
         .await
         .unwrap();
     assert_eq!(after.expiry, before.expiry);
     assert_eq!(after.verification, before.verification);
     assert_eq!(after.next_expiry, before.next_expiry);
     assert_eq!(after.changed, "c.md");
-    let result: (String, i32, i64) = sqlx::query_as("SELECT state,primary_count,(SELECT count(*) FROM maintenance_work WHERE run_id=$1 AND outcome='completed') FROM maintenance_runs WHERE id=$1")
+    let result: (String, i32, i64) = sqlx::query_as("SELECT state,primary_count,(SELECT count(*) FROM catalog.maintenance_work WHERE run_id=$1 AND outcome='completed') FROM catalog.maintenance_runs WHERE id=$1")
         .bind(&batch.run_id).fetch_one(&db.pool).await.unwrap();
     assert_eq!(result, ("completed".into(), 3, 3));
 }
@@ -676,18 +680,18 @@ async fn maintenance_submit_assessment_pins_and_outdated_findings_never_certify_
     submit(&db.pool, catalog, b, "b", &input, t0())
         .await
         .unwrap();
-    let rows = candidates::load(&mut db.pool.acquire().await.unwrap(), catalog, t0())
+    let rows = candidates::load(&mut db.store().acquire().await.unwrap(), catalog, t0())
         .await
         .unwrap();
     assert_eq!(rows[0].reported_supported, Some((1, t0())));
     assert_eq!(rows[1].reported_supported, None);
-    sqlx::query("UPDATE documents SET deleted_at=$2 WHERE catalog_id=$1 AND path='b.md'")
+    sqlx::query("UPDATE catalog.documents SET deleted_at=$2 WHERE catalog_id=$1 AND path='b.md'")
         .bind(catalog)
         .bind(t0())
         .execute(&db.pool)
         .await
         .unwrap();
-    let rows = candidates::load(&mut db.pool.acquire().await.unwrap(), catalog, t0())
+    let rows = candidates::load(&mut db.store().acquire().await.unwrap(), catalog, t0())
         .await
         .unwrap();
     assert_eq!(rows[0].reported_supported, None);

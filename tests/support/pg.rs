@@ -119,6 +119,23 @@ pub struct TestDb {
 }
 
 impl TestDb {
+    /// A pool on this database whose connections see only schema `catalog`,
+    /// as a store's pool does: for tests that call store-layer functions
+    /// with a bare pool. Lazy, with the same limit as [`TestDb::pool`].
+    pub fn store(&self) -> PgPool {
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(self.pool.options().get_max_connections())
+            .after_connect(|connection, _meta| {
+                Box::pin(async move {
+                    sqlx::query("SET search_path = catalog")
+                        .execute(connection)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .connect_lazy_with((*self.pool.connect_options()).clone())
+    }
+
     /// Creates an empty database (no migrations), for tests of migrating.
     ///
     /// # Panics

@@ -59,27 +59,37 @@ where
         now,
         expect_catalog_id,
     } = *options;
-    let mut tx = db.begin().await?;
-    // Must be the transaction's first statement. Under the default
-    // READ COMMITTED each query would see its own snapshot.
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
-    let found = catalogs::find(&mut *tx, catalog).await?;
+    // The registry facts first, on the account database: the catalog's id
+    // and its owner team's audit id (the entry belongs to the team that
+    // owned what was exported, even if the catalog moves or is deleted
+    // before the entry is written). A plain read (every team has its
+    // `audit_teams` row from creation, migration 0014), since a read-only
+    // transaction cannot run `audit_team_ref`.
+    let mut found = catalogs::find(db.accounts().executor(), catalog).await?;
     catalogs::check_incarnation(catalog, found.id, expect_catalog_id)?;
-    let rows = documents::published(&mut *tx, found.id).await?;
-    // The owner team's audit id, in the same snapshot as the rows: the
-    // entry belongs to the team that owned what was exported, even if the
-    // catalog moves or is deleted before the entry is written. A plain read
-    // (every team has its `audit_teams` row from creation, migration 0014),
-    // since a read-only transaction cannot run `audit_team_ref`.
     let team: Option<i64> = sqlx::query_scalar(
         "SELECT a.id FROM catalogs c JOIN audit_teams a ON a.team_id = c.owner_team_id \
          WHERE c.id = $1",
     )
     .bind(found.id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(db.accounts().executor())
     .await?;
+    let mut tx = db.begin().await?;
+    // Must be the store transaction's first statement. Under the default
+    // READ COMMITTED each query would see its own snapshot.
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    // The generation and the rows are one snapshot of the store.
+    let generation: Option<i64> =
+        sqlx::query_scalar("SELECT generation FROM catalog_state WHERE id = $1")
+            .bind(found.id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    found.generation = generation.ok_or_else(|| OkfError::CatalogNotSelected {
+        catalog: catalog.to_string(),
+    })?;
+    let rows = documents::published(&mut *tx, found.id).await?;
     // Nothing was written; ending the transaction now frees its connection
     // before the (possibly long) compression.
     tx.commit().await?;
@@ -146,8 +156,8 @@ struct Exported<'a> {
 /// entry resolves only the actor (and its credential's owner).
 ///
 /// # Arguments
-/// * `db` - the store the export read. Release 1 records on its pool, which is also
-///   the account database.
+/// * `db` - the store the export read; the entry is an account row, so it
+///   goes through the store handle's account database.
 /// * `exported` - what was exported, and its scope then.
 /// * `audit` - who exports.
 /// * `now` - when.
@@ -161,7 +171,7 @@ async fn record_export(
     audit: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<(), OkfError> {
-    let mut tx = db.begin().await?;
+    let mut tx = db.accounts().begin().await?;
     audit::lock_people(&mut tx, audit, &People::default()).await?;
     // `into_iter().collect()` turns the `Option` into a zero- or one-item Vec.
     let teams: Vec<i64> = exported.scope.team.into_iter().collect();
@@ -229,7 +239,7 @@ mod tests {
             now,
         };
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             files.clone(),
             &options,
@@ -251,7 +261,7 @@ mod tests {
             now: later,
         };
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             files.clone(),
             &options,

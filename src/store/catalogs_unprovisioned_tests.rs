@@ -64,8 +64,9 @@ async fn a_half_created_catalog_is_not_visible() {
         Err(OkfError::CatalogNotSelected { .. })
     ));
     let mut conn = db.pool.acquire().await.unwrap();
+    let mut store = db.pool.acquire().await.unwrap();
     assert!(matches!(
-        lock_by_name(&mut conn, "half").await,
+        lock_by_name(&mut conn, &mut store, "half").await,
         Err(OkfError::CatalogNotSelected { .. })
     ));
 }

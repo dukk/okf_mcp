@@ -674,7 +674,7 @@ async fn nothing_secret_is_exported_or_scraped() {
     .await
     .expect("create the mail trigger");
     sqlx::query(
-        "CREATE TRIGGER zq_refuse_changesets BEFORE INSERT ON changesets \
+        "CREATE TRIGGER zq_refuse_changesets BEFORE INSERT ON catalog.changesets \
          FOR EACH ROW EXECUTE FUNCTION zq_refuse()",
     )
     .execute(pool)

@@ -986,7 +986,12 @@ impl ToolContext {
         // By the changeset's `catalogs.id`: that incarnation, never one
         // created since under its name. A catalog deleted since, or one
         // whose data does not build, resolves no handle.
-        let catalog = catalogs::row_by_id(self.app.accounts().executor(), row.catalog_id)
+        // The registry row carries no generation; the store's state row does.
+        let catalog = catalogs::row_by_id(self.app.accounts().executor(), row.catalog_id).await?;
+        let catalog = self
+            .app
+            .directory()
+            .with_generation(catalog)
             .await?
             .ok_or_else(unknown)?;
         let state = match self.held_state(&catalog).await {
@@ -1269,7 +1274,7 @@ mod tests {
             .await
             .unwrap()
             .changeset;
-        let mut tx = test.app.accounts().executor().begin().await.unwrap();
+        let mut tx = test.app.main_db().await.begin().await.unwrap();
         for (handle, closed) in [
             (&discarded, ChangesetState::Discarded),
             (&published, ChangesetState::Published),

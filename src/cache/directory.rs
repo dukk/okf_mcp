@@ -21,7 +21,7 @@
 //! every method takes `&self`. `Option<Arc<CatalogRow>>` is "a row or
 //! `None`", with the row shared between callers instead of copied.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -36,6 +36,7 @@ use crate::cache::{Bounded, CacheName, Limit};
 use crate::error::OkfError;
 use crate::invalidate::Invalidation;
 use crate::store::catalogs::{self, CatalogRow};
+use crate::stores::{CatalogDb, StoreName, Stores};
 use crate::telemetry::metrics::Metrics;
 
 /// How long a name with no catalog is remembered (spec Decision 6).
@@ -158,6 +159,11 @@ pub fn parse_cursor(cursor: Option<&str>) -> Result<Option<String>, OkfError> {
 /// Catalog rows by name, with absent names remembered briefly.
 pub struct CatalogDirectory {
     pool: PgPool,
+    // Where each catalog's generation is read: its store's `catalog_state`.
+    // `None` until [`CatalogDirectory::with_stores`] (the tests): the
+    // `main` store in the account database, through `fallback`.
+    stores: Option<Stores>,
+    fallback: CatalogDb,
     // `None` is a name with no catalog. It is dropped from here at once (see
     // `remember_absent`) and kept in `absent` instead, for the shorter time.
     rows: Bounded<String, Loaded>,
@@ -209,12 +215,73 @@ impl CatalogDirectory {
         metrics: Metrics,
     ) -> Self {
         Self {
+            fallback: CatalogDb::main_in(&pool),
             pool,
+            stores: None,
             rows: Bounded::new(CacheName::Directory, Limit::Entries(entries), ttl)
                 .with_metrics(metrics),
             absent: Bounded::new(CacheName::Directory, Limit::Entries(entries), absent_ttl),
             meta_changes: AtomicU64::new(0),
         }
+    }
+
+    /// Reads each row's generation (the floor the catalog cache checks its
+    /// state against) from the catalog's store, from `stores`. Without
+    /// this the directory reads the `main` store in the account database.
+    ///
+    /// # Arguments
+    /// * `stores` - the registry of stores.
+    ///
+    /// # Returns
+    /// The directory.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn with_stores(mut self, stores: Stores) -> Self {
+        self.stores = Some(stores);
+        self
+    }
+
+    /// Sets each row's `generation` from its store's `catalog_state`: the
+    /// registry rows no longer carry it. A catalog with no state row keeps 0.
+    ///
+    /// # Errors
+    /// [`OkfError::StoreUnavailable`] if a store cannot be opened;
+    /// [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn fill_generations(&self, rows: &mut [CatalogRow]) -> Result<(), OkfError> {
+        let mut by_store: HashMap<StoreName, Vec<i64>> = HashMap::new();
+        for row in rows.iter() {
+            by_store.entry(row.store.clone()).or_default().push(row.id);
+        }
+        let mut generations: HashMap<i64, i64> = HashMap::with_capacity(rows.len());
+        for (store, ids) in by_store {
+            let db = match &self.stores {
+                // Boxed: opening a pool is a deep future, and this sits on every
+                // request's path.
+                Some(stores) => Box::pin(stores.get(&store)).await?,
+                None => self.fallback.clone(),
+            };
+            generations.extend(catalogs::generations(db.executor(), &ids).await?);
+        }
+        for row in rows.iter_mut() {
+            row.generation = generations.get(&row.id).copied().unwrap_or(0);
+        }
+        Ok(())
+    }
+
+    /// [`CatalogDirectory::fill_generations`] for one row.
+    ///
+    /// # Errors
+    /// As [`CatalogDirectory::fill_generations`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn with_generation(
+        &self,
+        row: Option<CatalogRow>,
+    ) -> Result<Option<CatalogRow>, OkfError> {
+        let Some(row) = row else { return Ok(None) };
+        let mut rows = [row];
+        self.fill_generations(&mut rows).await?;
+        let [row] = rows;
+        Ok(Some(row))
     }
 
     /// The row of catalog `name`, read from the database once however many
@@ -234,7 +301,8 @@ impl CatalogDirectory {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn resolve(&self, name: &str) -> Result<Option<Arc<CatalogRow>>, OkfError> {
         self.resolve_by(name, || async {
-            Ok(catalogs::row_by_name(&self.pool, name).await?.map(Arc::new))
+            let row = catalogs::row_by_name(&self.pool, name).await?;
+            Ok(self.with_generation(row).await?.map(Arc::new))
         })
         .await
     }
@@ -337,7 +405,8 @@ impl CatalogDirectory {
             }
         }
         if !missing.is_empty() {
-            let rows = catalogs::rows_by_names(&self.pool, &missing).await?;
+            let mut rows = catalogs::rows_by_names(&self.pool, &missing).await?;
+            self.fill_generations(&mut rows).await?;
             found.extend(rows.into_iter().map(Arc::new));
         }
         found.sort_by(|left, right| left.name.cmp(&right.name));
@@ -447,9 +516,11 @@ impl CatalogDirectory {
                 };
                 let teams: Vec<String> = gates.teams.iter().cloned().collect();
                 let entitled: Vec<i64> = gates.entitled.keys().copied().collect();
-                catalogs::ceiling_page(&self.pool, &teams, &entitled, after.as_deref(), fetch)
-                    .await?
-                    .into_iter()
+                let mut rows =
+                    catalogs::ceiling_page(&self.pool, &teams, &entitled, after.as_deref(), fetch)
+                        .await?;
+                self.fill_generations(&mut rows).await?;
+                rows.into_iter()
                     .map(Arc::new)
                     // Each row checked as every access check does: the
                     // query and `level_on` agree, and this keeps it so.
@@ -457,11 +528,9 @@ impl CatalogDirectory {
                     .collect()
             }
             (None, Reach::All | Reach::Catalogs(_)) => {
-                catalogs::page(&self.pool, after.as_deref(), fetch)
-                    .await?
-                    .into_iter()
-                    .map(Arc::new)
-                    .collect()
+                let mut rows = catalogs::page(&self.pool, after.as_deref(), fetch).await?;
+                self.fill_generations(&mut rows).await?;
+                rows.into_iter().map(Arc::new).collect()
             }
         };
         // A `u32` always fits a `usize` on the 64-bit targets this builds for.

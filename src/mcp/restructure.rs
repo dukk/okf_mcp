@@ -316,7 +316,7 @@ mod tests {
     /// The entries of the changeset `handle` names.
     async fn entries(test: &TestApp, handle: &str) -> Vec<EntryRow> {
         let row = changeset_row(test, handle).await;
-        changesets::entries(test.app.accounts().executor(), row.id)
+        changesets::entries(test.app.main_db().await.executor(), row.id)
             .await
             .unwrap()
     }

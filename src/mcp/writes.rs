@@ -1101,7 +1101,7 @@ mod tests {
             OkfError::EditMismatch { matches: 0, .. }
         ));
         let entries = changesets::entries(
-            test.app.accounts().executor(),
+            test.app.main_db().await.executor(),
             changeset_row(&test, &handle).await.id,
         )
         .await
@@ -1240,7 +1240,7 @@ mod bookkeeping_tests {
     /// The entry for `path` of the changeset `handle` names.
     async fn entry(test: &TestApp, handle: &str, path: &str) -> EntryRow {
         let row = changeset_row(test, handle).await;
-        changesets::entries(test.app.accounts().executor(), row.id)
+        changesets::entries(test.app.main_db().await.executor(), row.id)
             .await
             .unwrap()
             .into_iter()
@@ -1512,10 +1512,12 @@ mod bookkeeping_tests {
         assert_eq!(no_source.kind(), "Refused", "{no_source}");
         // `apply` rolls back on an op error: the changeset holds nothing.
         let row = changeset_row(&test, &handle).await;
-        assert!(changesets::entries(test.app.accounts().executor(), row.id)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            changesets::entries(test.app.main_db().await.executor(), row.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2470,7 +2472,7 @@ mod folder_summary_tests {
     /// The entry for `path` of the changeset `handle` names.
     async fn entry(test: &TestApp, handle: &str, path: &str) -> crate::store::changesets::EntryRow {
         let row = changeset_row(test, handle).await;
-        changesets::entries(test.app.accounts().executor(), row.id)
+        changesets::entries(test.app.main_db().await.executor(), row.id)
             .await
             .unwrap()
             .into_iter()

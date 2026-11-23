@@ -141,7 +141,7 @@ async fn state_of(test: &TestApp, handle: &str) -> ChangesetState {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_publish_holding_its_changeset_finishes_before_its_users_deletion() {
-    // Arrange: alice's changeset, and a holder of the catalog row, so the
+    // Arrange: alice's changeset, and a holder of the catalog state row, so the
     // publish stops at its generation bump, after its changeset lock.
     let test = pg().await;
     let alice = Arc::new(user_context(&test, "alice", Access::Write, false).await);
@@ -156,12 +156,12 @@ async fn a_publish_holding_its_changeset_finishes_before_its_users_deletion() {
         .id();
     let mut holder = test
         .app
-        .accounts()
-        .executor()
+        .main_db()
+        .await
         .begin()
         .await
         .expect("begin the holder");
-    sqlx::query("SELECT id FROM catalogs WHERE id = $1 FOR NO KEY UPDATE")
+    sqlx::query("SELECT id FROM catalog_state WHERE id = $1 FOR NO KEY UPDATE")
         .bind(catalog_id)
         .execute(&mut *holder)
         .await
@@ -260,12 +260,12 @@ async fn a_publish_holding_its_changeset_finishes_before_its_users_own_deletion(
         .id();
     let mut holder = test
         .app
-        .accounts()
-        .executor()
+        .main_db()
+        .await
         .begin()
         .await
         .expect("begin the holder");
-    sqlx::query("SELECT id FROM catalogs WHERE id = $1 FOR NO KEY UPDATE")
+    sqlx::query("SELECT id FROM catalog_state WHERE id = $1 FOR NO KEY UPDATE")
         .bind(catalog_id)
         .execute(&mut *holder)
         .await
@@ -302,12 +302,12 @@ async fn an_admins_discard_holding_a_changeset_finishes_before_its_owners_deleti
     let changeset_id = changeset_row(&test, &handle).await.id;
     let mut holder = test
         .app
-        .accounts()
-        .executor()
+        .main_db()
+        .await
         .begin()
         .await
         .expect("begin the holder");
-    sqlx::query("SELECT path FROM changeset_entries WHERE changeset_id = $1 FOR UPDATE")
+    sqlx::query("SELECT path FROM catalog.changeset_entries WHERE changeset_id = $1 FOR UPDATE")
         .bind(changeset_id)
         .execute(&mut *holder)
         .await
@@ -346,12 +346,12 @@ async fn a_revert_holding_its_changeset_finishes_before_its_users_deletion() {
     let changeset_id = changeset_row(&test, &handle).await.id;
     let mut holder = test
         .app
-        .accounts()
-        .executor()
+        .main_db()
+        .await
         .begin()
         .await
         .expect("begin the holder");
-    sqlx::query("SELECT path FROM changeset_entries WHERE changeset_id = $1 FOR UPDATE")
+    sqlx::query("SELECT path FROM catalog.changeset_entries WHERE changeset_id = $1 FOR UPDATE")
         .bind(changeset_id)
         .execute(&mut *holder)
         .await

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{PgConnection, Row};
 
-use super::{evidence, lock, receipt, refused, replay, runs, validate};
+use super::{evidence, lock, receipt, refused, replay, runs, validate, RunWatch};
 use crate::error::OkfError;
 use crate::maintenance::types::{
     new_id, Actor, Disposition, Evidence, FindingInput, Lane, Receipt, RevisionPin, Submission,
@@ -442,6 +442,7 @@ pub async fn submit(
     // The catalog lock protects identity; state serializes maintenance writes.
     // Source row locks below exclude concurrent publication of the cited pins.
     lock(&mut tx, catalog_id, now).await?;
+    let watch = RunWatch::open(&mut tx, catalog_id).await?;
     let run_id: String =
         sqlx::query_scalar("SELECT run_id FROM maintenance_work WHERE catalog_id=$1 AND id=$2")
             .bind(catalog_id)
@@ -480,7 +481,7 @@ pub async fn submit(
     if now >= deadline || now >= expiry {
         runs::expire_submission(&mut tx, catalog_id, &run_id, work_id, now, now >= deadline)
             .await?;
-        tx.commit().await?;
+        watch.commit(tx, db, None).await?;
         return Err(stale());
     }
     // Do not call generic recovery here: a changed primary with a valid lease
@@ -574,6 +575,6 @@ pub async fn submit(
         &result,
     )
     .await?;
-    tx.commit().await?;
+    watch.commit(tx, db, None).await?;
     Ok(result)
 }

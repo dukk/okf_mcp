@@ -1067,13 +1067,14 @@ async fn stale_unlock_of_a_replaced_main(test: &TestApp) -> (String, i64, i64) {
 
 /// The replacement's (generation, live document paths and contents).
 async fn replacement_contents(test: &TestApp, id: i64) -> (i64, Vec<(String, Vec<u8>)>) {
-    let generation = sqlx::query_scalar("SELECT generation FROM catalogs WHERE id = $1")
-        .bind(id)
-        .fetch_one(test.app.accounts().executor())
-        .await
-        .unwrap();
+    let generation =
+        sqlx::query_scalar("SELECT generation FROM catalog.catalog_state WHERE id = $1")
+            .bind(id)
+            .fetch_one(test.app.accounts().executor())
+            .await
+            .unwrap();
     let documents = sqlx::query_as(
-        "SELECT path, content FROM documents \
+        "SELECT path, content FROM catalog.documents \
          WHERE catalog_id = $1 AND deleted_at IS NULL ORDER BY path",
     )
     .bind(id)
@@ -1164,7 +1165,7 @@ async fn old_unlock_against_a_new_map(
     import_private_index(test).await;
     let replacement = catalog_id(test, "main").await;
     crate::mcp::testing::store_key(test, "acme-writer").await;
-    let mut conn = test.app.accounts().executor().acquire().await.unwrap();
+    let mut conn = test.app.main_db().await.executor().acquire().await.unwrap();
     let opened = crate::store::changesets::open(
         &mut conn,
         replacement,
@@ -1194,7 +1195,7 @@ async fn an_old_unlocked_principal_opens_no_changeset_in_the_replacement() {
 
     let refused = open_main(&ctx).await;
     let opened: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM changesets WHERE catalog_id = $1 AND key_id <> 'acme-writer'",
+        "SELECT count(*) FROM catalog.changesets WHERE catalog_id = $1 AND key_id <> 'acme-writer'",
     )
     .bind(replacement)
     .fetch_one(test.app.accounts().executor())

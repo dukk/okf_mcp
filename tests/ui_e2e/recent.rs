@@ -45,10 +45,7 @@ async fn publish(server: &TestServer, catalog: &str, entries: Files, actor: &str
     };
     crate::support::server::applied(&server.app, async {
         import(
-            &okf_mcp::stores::CatalogDb::new(
-                okf_mcp::stores::StoreName::main(),
-                server.db.pool.clone(),
-            ),
+            &okf_mcp::stores::CatalogDb::main_in(&server.db.pool),
             catalog,
             entries,
             &options,
@@ -76,7 +73,7 @@ async fn server() -> (TestServer, String) {
     let edited = ALPHA.replace("Nothing yet.", "Two settings.");
     publish(&server, "main", main_catalog(&edited, false), "editor").await;
     sqlx::query(
-        "DELETE FROM revisions WHERE catalog_id = (SELECT id FROM catalogs WHERE name = 'empty')",
+        "DELETE FROM catalog.revisions WHERE catalog_id = (SELECT id FROM catalogs WHERE name = 'empty')",
     )
     .execute(&server.db.pool)
     .await
@@ -109,7 +106,7 @@ async fn add_late(pool: &sqlx::PgPool, app: &std::sync::Arc<okf_mcp::app::App>) 
     };
     crate::support::server::applied(app, async {
         import(
-            &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), pool.clone()),
+            &okf_mcp::stores::CatalogDb::main_in(pool),
             "main",
             entries,
             &options,

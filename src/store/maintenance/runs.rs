@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::Row;
 
-use super::{candidates, lease_end, lock, receipt, recover, refused, replay, validate};
+use super::{candidates, lease_end, lock, receipt, recover, refused, replay, validate, RunWatch};
 use crate::error::OkfError;
 use crate::maintenance::select;
 use crate::maintenance::types::{new_id, Disposition};
@@ -477,6 +477,7 @@ pub async fn claim(
         .await?;
     let mut tx = db.begin().await?;
     lock(&mut tx, catalog_id, now).await?;
+    let watch = RunWatch::open(&mut tx, catalog_id).await?;
     if let Some(previous) = replay(
         &mut tx,
         catalog_id,
@@ -546,7 +547,7 @@ pub async fn claim(
         &result,
     )
     .await?;
-    tx.commit().await?;
+    watch.commit(tx, db, Some(&result.run_id)).await?;
     Ok(result)
 }
 
@@ -572,6 +573,7 @@ pub async fn renew(
     let payload = json!({"work_id": work_id, "token": token});
     let mut tx = db.begin().await?;
     lock(&mut tx, catalog_id, now).await?;
+    let watch = RunWatch::open(&mut tx, catalog_id).await?;
     // Ownership is checked before replay; old tokens must not cross credential boundaries.
     let row = sqlx::query("SELECT w.run_id,w.path,w.revision,w.lanes,w.lease_token,w.lease_expires_at,w.outcome,r.credential_id,r.state,r.deadline FROM maintenance_work w JOIN maintenance_runs r ON r.catalog_id=w.catalog_id AND r.id=w.run_id WHERE w.catalog_id=$1 AND w.id=$2 FOR UPDATE OF r,w")
         .bind(catalog_id).bind(work_id).fetch_optional(&mut *tx).await?;
@@ -609,7 +611,7 @@ pub async fn renew(
         || now >= expiry
         || now >= deadline
     {
-        tx.commit().await?;
+        watch.commit(tx, db, None).await?;
         return Err(refused("maintenance lease has expired or ended"));
     }
     let current: Option<i32> = sqlx::query_scalar(
@@ -625,7 +627,7 @@ pub async fn renew(
         let run_id: String = row.try_get("run_id")?;
         sqlx::query("UPDATE maintenance_runs SET state='completed', ended_at=$3 WHERE catalog_id=$1 AND id=$2 AND state='running' AND NOT EXISTS (SELECT 1 FROM maintenance_work WHERE catalog_id=$1 AND run_id=$2 AND outcome IS NULL)")
             .bind(catalog_id).bind(&run_id).bind(now).execute(&mut *tx).await?;
-        tx.commit().await?;
+        watch.commit(tx, db, None).await?;
         return Err(refused("maintenance source changed"));
     }
     let renewed = lease_end(now, deadline);
@@ -666,7 +668,7 @@ pub async fn renew(
         &result,
     )
     .await?;
-    tx.commit().await?;
+    watch.commit(tx, db, None).await?;
     Ok(result)
 }
 
@@ -700,6 +702,7 @@ pub async fn close(
     let payload = json!({"run_id":run_id,"state":desired,"rationale":rationale,"may_close_others":may_close_others});
     let mut tx = db.begin().await?;
     lock(&mut tx, catalog_id, now).await?;
+    let watch = RunWatch::open(&mut tx, catalog_id).await?;
     let owner: Option<String> = sqlx::query_scalar(
         "SELECT credential_id FROM maintenance_runs WHERE catalog_id=$1 AND id=$2 FOR UPDATE",
     )
@@ -737,7 +740,7 @@ pub async fn close(
         let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM maintenance_work WHERE catalog_id=$1 AND run_id=$2 AND outcome IS NULL")
             .bind(catalog_id).bind(run_id).fetch_one(&mut *tx).await?;
         if desired == RunState::Completed && remaining > 0 {
-            tx.commit().await?;
+            watch.commit(tx, db, None).await?;
             return Err(refused("cannot complete a run with active work"));
         }
         if remaining > 0 {
@@ -756,7 +759,7 @@ pub async fn close(
         || status == "completed" && desired == RunState::Completed)
         && (status != "failed" || now < row.try_get::<DateTime<Utc>, _>("deadline")?)
     {
-        tx.commit().await?;
+        watch.commit(tx, db, None).await?;
         return Err(refused("maintenance run already ended"));
     }
     let result = summary(&mut tx, catalog_id, run_id).await?;
@@ -770,6 +773,6 @@ pub async fn close(
         &result,
     )
     .await?;
-    tx.commit().await?;
+    watch.commit(tx, db, None).await?;
     Ok(result)
 }

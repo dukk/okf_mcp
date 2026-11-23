@@ -108,7 +108,7 @@ async fn seed(catalogs_and_files: &[(&str, &[(&str, &str)])], imported: DateTime
             now: imported,
         };
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             name,
             files(entries),
             &options,
@@ -572,7 +572,7 @@ pub(crate) async fn open_at(
         .unwrap()
         .expect("a loaded catalog");
     let principal = ctx.principal();
-    let mut tx = test.app.accounts().executor().begin().await.expect("begin");
+    let mut tx = test.app.main_db().await.begin().await.expect("begin");
     changesets::lock_catalog(&mut tx, state.id())
         .await
         .expect("lock the catalog");
@@ -595,7 +595,7 @@ pub(crate) async fn open_at(
 /// # Panics
 /// If there is no such changeset or the store fails.
 pub(crate) async fn changeset_row(test: &TestApp, handle: &str) -> ChangesetRow {
-    changesets::by_handle(test.app.accounts().executor(), handle)
+    changesets::by_handle(test.app.main_db().await.executor(), handle)
         .await
         .expect("read the changeset")
         .expect("the changeset exists")
@@ -638,7 +638,7 @@ pub(crate) async fn pending_entry(
         executable: false,
         replay: None,
     };
-    let mut tx = test.app.accounts().executor().begin().await.expect("begin");
+    let mut tx = test.app.main_db().await.begin().await.expect("begin");
     changesets::lock_catalog(&mut tx, changeset.catalog_id)
         .await
         .expect("lock the catalog");

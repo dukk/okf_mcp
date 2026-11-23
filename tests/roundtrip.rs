@@ -49,7 +49,7 @@ async fn round_trip(files: &Files) -> (Files, ImportReport) {
         now: Utc::now(),
     };
     import(
-        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), db.pool.clone()),
+        &okf_mcp::stores::CatalogDb::main_in(&db.pool),
         "rt",
         files.clone(),
         &first,
@@ -58,7 +58,7 @@ async fn round_trip(files: &Files) -> (Files, ImportReport) {
     .unwrap();
 
     let (tarball, _generation) = export::export(
-        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), db.pool.clone()),
+        &okf_mcp::stores::CatalogDb::main_in(&db.pool),
         "rt",
         Vec::new(),
         &export::ExportOptions {
@@ -80,7 +80,7 @@ async fn round_trip(files: &Files) -> (Files, ImportReport) {
         now: Utc::now(),
     };
     let report = import(
-        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), db.pool.clone()),
+        &okf_mcp::stores::CatalogDb::main_in(&db.pool),
         "rt",
         exported.clone(),
         &again,

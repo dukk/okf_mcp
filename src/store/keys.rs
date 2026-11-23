@@ -2692,7 +2692,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut tx = db.pool.begin().await.unwrap();
+        let mut tx = crate::stores::CatalogDb::main_of(&db.pool)
+            .begin()
+            .await
+            .unwrap();
         let old_changeset = crate::store::changesets::open(
             &mut tx,
             work_catalog.id,
@@ -2704,7 +2707,7 @@ mod tests {
         .unwrap();
         tx.commit().await.unwrap();
         sqlx::query(
-            "INSERT INTO revisions \
+            "INSERT INTO catalog.revisions \
              (catalog_id, path, revision, op, content, executable, actor, changeset_id, \
               message, created_at) \
              VALUES ($1, 'owned.md', 1, 'create', $2, false, $3, $4, 'original publish', $5)",

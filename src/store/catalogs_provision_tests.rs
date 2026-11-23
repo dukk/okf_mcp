@@ -45,7 +45,7 @@ async fn half_made(pool: &PgPool, name: &str) -> (Catalog, Pending) {
 }
 
 async fn document_count(pool: &PgPool, id: i64) -> i64 {
-    sqlx::query_scalar("SELECT count(*) FROM documents WHERE catalog_id = $1")
+    sqlx::query_scalar("SELECT count(*) FROM catalog.documents WHERE catalog_id = $1")
         .bind(id)
         .fetch_one(pool)
         .await
@@ -107,12 +107,13 @@ async fn a_half_created_catalog_is_not_visible() {
         Err(OkfError::CatalogNotSelected { .. })
     ));
     let mut conn = db.pool.acquire().await.unwrap();
+    let mut store = db.pool.acquire().await.unwrap();
     assert!(matches!(
-        lock_by_name(&mut conn, "half").await,
+        lock_by_name(&mut conn, &mut store, "half").await,
         Err(OkfError::CatalogNotSelected { .. })
     ));
     // The name is taken, though: a second create is refused.
-    drop(conn);
+    drop((conn, store));
     let again = create(&db.pool, &new_catalog("half"), &actor, now()).await;
     assert!(matches!(again, Err(OkfError::Refused { .. })), "{again:?}");
 }
@@ -341,7 +342,7 @@ async fn create_and_recovery_work_on_a_one_connection_pool() {
 /// provisioned filter.
 async fn find_half(pool: &PgPool, id: i64) -> Catalog {
     sqlx::query_as::<_, Catalog>(
-        "SELECT id, name, display_name, description, generation, created_at, \
+        "SELECT id, name, display_name, description, 0::bigint AS generation, created_at, \
                 NULL::text AS owner_team FROM catalogs WHERE id = $1",
     )
     .bind(id)

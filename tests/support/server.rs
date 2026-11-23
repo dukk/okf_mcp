@@ -301,10 +301,7 @@ impl TestServer {
                 now: Utc::now(),
             };
             import(
-                &okf_mcp::stores::CatalogDb::new(
-                    okf_mcp::stores::StoreName::main(),
-                    db.pool.clone(),
-                ),
+                &okf_mcp::stores::CatalogDb::main_in(&db.pool),
                 name,
                 files,
                 &options,

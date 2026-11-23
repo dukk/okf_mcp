@@ -90,7 +90,7 @@ async fn history_resolves_a_user_actor_to_a_label_and_others_to_null() {
         &[
             "INSERT INTO users (name, display_name, created_at) \
              VALUES ('tester', 'Alice Example', now())",
-            "UPDATE revisions SET actor = 'claude-code/x' WHERE path = 'b.md'",
+            "UPDATE catalog.revisions SET actor = 'claude-code/x' WHERE path = 'b.md'",
         ],
     )
     .await;

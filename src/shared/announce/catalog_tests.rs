@@ -145,7 +145,7 @@ async fn stored_generation(app: &App, name: &str) -> CatalogGeneration {
         .expect("the catalog");
     CatalogGeneration {
         catalog_id: row.id,
-        generation: row.generation,
+        generation: catalogs::test_generation(app.accounts().executor(), name).await,
     }
 }
 
@@ -482,7 +482,7 @@ async fn pending_changes_refuses_a_snapshot_behind_a_base_it_cannot_catch_up_to(
     let on_a = writer(&a, "alice", "pg").await;
     let handle = open(&on_a).await;
     edit(&on_a, &handle, "/index.md", "- systems", "- the systems").await;
-    sqlx::query("UPDATE changeset_entries SET base_revision = base_revision + 5")
+    sqlx::query("UPDATE catalog.changeset_entries SET base_revision = base_revision + 5")
         .execute(a.app.accounts().executor())
         .await
         .expect("move the base ahead");
@@ -532,8 +532,8 @@ async fn an_edit_on_a_lagging_replica_records_the_fresh_base_and_publishes_clean
     edit(&on_b, &handle, "/index.md", "# PG", "# Postgres").await;
 
     let base: Option<i32> = sqlx::query_scalar(
-        "SELECT e.base_revision FROM changeset_entries e \
-         JOIN changesets c ON c.id = e.changeset_id WHERE c.handle = $1",
+        "SELECT e.base_revision FROM catalog.changeset_entries e \
+         JOIN catalog.changesets c ON c.id = e.changeset_id WHERE c.handle = $1",
     )
     .bind(&handle)
     .fetch_one(a.app.accounts().executor())

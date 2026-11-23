@@ -31,15 +31,38 @@ use super::credentials::Environment;
 use super::credentials::{
     is_auth_failure, spawn_keeper, Credential, CredentialSource, Keeper, Providers, Refresh,
 };
-use super::{CatalogDb, StoreName};
+use super::{AccountDb, CatalogDb, StoreName};
 use crate::error::OkfError;
 use crate::store::stores::{self, StoreLocation, StoreRow};
 use crate::telemetry::subscriber::split_event;
 
-/// The `search_path` of every store pool. Until the catalog tables move
-/// into their own schema (Task 11) they are in `public`; that task changes
-/// this one constant to `catalog`.
-pub const STORE_SEARCH_PATH: &str = "public";
+/// The `search_path` of every store pool: the catalog's own schema, so a
+/// query for an account table sent to a store fails with "relation does
+/// not exist" even when the store is the account database (plan decision
+/// P1). It is set when a connection is made (`after_connect`), not in the
+/// connect options, so a pool that gets new options (a credential
+/// refresh) keeps it.
+pub const STORE_SEARCH_PATH: &str = "catalog";
+
+/// Points a new store connection at [`STORE_SEARCH_PATH`]. Runs once per
+/// physical connection, from the pool's `after_connect` hook (also for the
+/// handles [`CatalogDb::main_in`] builds).
+///
+/// # Arguments
+/// * `connection` - the connection just made.
+///
+/// # Errors
+/// [`sqlx::Error`] if the statement fails (the connection is then dropped).
+#[tracing::instrument(level = "trace", skip_all)]
+pub(super) async fn set_search_path(
+    connection: &mut sqlx::PgConnection,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_catalog.set_config('search_path', $1, false)")
+        .bind(STORE_SEARCH_PATH)
+        .execute(connection)
+        .await?;
+    Ok(())
+}
 
 /// The most stores the registry keeps open at once: a bound on memory for a
 /// registry that is meant to hold a handful.
@@ -351,6 +374,15 @@ impl Stores {
         self.open_row(row).await
     }
 
+    /// The account database this registry reads its rows from.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "clones a reference-counted pool")
+    )]
+    pub fn accounts(&self) -> AccountDb {
+        AccountDb::new(self.inner.accounts.clone())
+    }
+
     /// Opens a pool from a row, which need not be stored yet: the part of
     /// [`Stores::open`] after the row is read, shared with [`Stores::check`].
     ///
@@ -368,7 +400,7 @@ impl Stores {
         // A credential that changes is kept current for as long as this
         // entry lives.
         let keeper = source.and_then(|source| spawn_keeper(source, base, pool.clone()));
-        let db = CatalogDb::new(row.name, pool);
+        let db = CatalogDb::new(row.name, pool, self.accounts());
         Ok(Arc::new(OpenStore {
             db,
             _keeper: keeper,
@@ -475,15 +507,7 @@ impl Stores {
             .acquire_timeout(settings.connect_timeout)
             // `Box::pin(async move { .. })` is the shape sqlx wants for an
             // async callback; it runs once per new physical connection.
-            .after_connect(|connection, _meta| {
-                Box::pin(async move {
-                    sqlx::query("SELECT pg_catalog.set_config('search_path', $1, false)")
-                        .bind(STORE_SEARCH_PATH)
-                        .execute(connection)
-                        .await?;
-                    Ok(())
-                })
-            });
+            .after_connect(|connection, _meta| Box::pin(set_search_path(connection)));
         // `connect_with` opens one connection now, so an unreachable store
         // fails here and not on the first query. The pool's own acquire
         // timeout already bounds it; the outer timeout is a belt for a
@@ -1304,6 +1328,68 @@ mod tests {
         let mut second = store.executor().acquire().await.unwrap();
         assert_eq!(current_user(&store, &mut second).await, role);
         assert_eq!(secrets.calls.load(Ordering::SeqCst), 2);
+
+        drop((first, second));
+        stores.forget_all().await;
+        drop_role(&db.pool, &role).await;
+    }
+
+    /// Issue #970: a credential refresh replaces the pool's connect options,
+    /// and a connection made under the new options still sees schema
+    /// `catalog` only (the hook is on the pool, not in the options).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_keeps_its_search_path_after_a_credential_refresh() {
+        let db = crate::db::test_db().await;
+        let role = make_role(&db.pool, "pw-1").await;
+        let secrets = MockSecrets::holding(&format!(
+            r#"{{"username":"{role}","password":"pw-1","engine":"postgres"}}"#
+        ));
+        let stores = Stores::with_providers(
+            db.pool.clone(),
+            settings(),
+            Providers::new(
+                Arc::new(|_| None),
+                Arc::clone(&secrets) as Arc<dyn SecretReader>,
+                Arc::new(ClockSigner::plain(&Arc::new(AtomicU64::new(0)))),
+            ),
+        );
+        add_row(&db.pool, "shared-1", "secrets-manager", EXAMPLE_ARN).await;
+        let name = StoreName::parse("shared-1").unwrap();
+        let store = stores.get(&name).await.unwrap();
+        // One connection stays busy, so the reads below need a new one.
+        let mut first = store.executor().acquire().await.unwrap();
+        let before: String = sqlx::query_scalar("SHOW search_path")
+            .fetch_one(&mut *first)
+            .await
+            .unwrap();
+        let mut refreshes = stores.credential_task(&name).await.unwrap();
+
+        set_password(&db.pool, &role, "pw-2").await;
+        secrets.set(Ok(format!(r#"{{"username":"{role}","password":"pw-2"}}"#)));
+        store.begin().await.unwrap_err();
+        refreshes.wait_for(|count| *count >= 1).await.unwrap();
+        let mut second = store.executor().acquire().await.unwrap();
+        let after: String = sqlx::query_scalar("SHOW search_path")
+            .fetch_one(&mut *second)
+            .await
+            .unwrap();
+        let account_table = sqlx::query("SELECT 1 FROM users")
+            .fetch_all(&mut *second)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            (before.as_str(), after.as_str()),
+            (STORE_SEARCH_PATH, STORE_SEARCH_PATH)
+        );
+        assert_eq!(
+            account_table
+                .as_database_error()
+                .and_then(|error| error.code())
+                .as_deref(),
+            Some("42P01"),
+            "{account_table:?}"
+        );
 
         drop((first, second));
         stores.forget_all().await;

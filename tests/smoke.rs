@@ -170,7 +170,7 @@ async fn storage_round_trip_on_a_real_catalog() {
         now: Utc::now(),
     };
     let report = import(
-        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), db.pool.clone()),
+        &okf_mcp::stores::CatalogDb::main_in(&db.pool),
         "pg",
         files,
         &options,
@@ -190,12 +190,9 @@ async fn storage_round_trip_on_a_real_catalog() {
         .await
         .unwrap()
         .expect("pg");
-    let state = CatalogState::load(
-        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), db.pool.clone()),
-        &row,
-    )
-    .await
-    .unwrap();
+    let state = CatalogState::load(&okf_mcp::stores::CatalogDb::main_in(&db.pool), &row)
+        .await
+        .unwrap();
     eprintln!("load snapshot: {:?}", started.elapsed());
     // `current()` hands out an `Arc` (a shared pointer) to the loaded
     // snapshot, so the borrows below stay valid while `state` could swap.
@@ -227,7 +224,7 @@ async fn storage_round_trip_on_a_real_catalog() {
 
     let started = Instant::now();
     let (tarball, _generation) = export::export(
-        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), db.pool.clone()),
+        &okf_mcp::stores::CatalogDb::main_in(&db.pool),
         "pg",
         Vec::new(),
         &export::ExportOptions {

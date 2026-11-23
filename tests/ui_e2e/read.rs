@@ -1806,7 +1806,7 @@ async fn publish(
     };
     crate::support::server::applied(app, async {
         import(
-            &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), pool.clone()),
+            &okf_mcp::stores::CatalogDb::main_in(pool),
             catalog,
             entries,
             &options,
@@ -2517,7 +2517,7 @@ async fn serve_a_sample_catalog_for_the_visual_check() {
         .collect();
     publish_as(&server, "alex", files(&kept)).await;
     let actors: Vec<String> =
-        sqlx::query_scalar("SELECT DISTINCT actor FROM revisions ORDER BY actor")
+        sqlx::query_scalar("SELECT DISTINCT actor FROM catalog.revisions ORDER BY actor")
             .fetch_all(&server.db.pool)
             .await
             .expect("read the actors");
@@ -2546,8 +2546,8 @@ async fn serve_a_sample_catalog_for_the_visual_check() {
 /// If the update fails.
 async fn pin_the_seed_actor(server: &TestServer) {
     for statement in [
-        "UPDATE documents SET updated_by = 'owner' WHERE updated_by NOT IN ('tester', 'sam', 'alex')",
-        "UPDATE revisions SET actor = 'owner' WHERE actor NOT IN ('tester', 'sam', 'alex')",
+        "UPDATE catalog.documents SET updated_by = 'owner' WHERE updated_by NOT IN ('tester', 'sam', 'alex')",
+        "UPDATE catalog.revisions SET actor = 'owner' WHERE actor NOT IN ('tester', 'sam', 'alex')",
     ] {
         sqlx::query(statement)
             .execute(&server.db.pool)
@@ -2569,10 +2569,7 @@ async fn publish_as(server: &TestServer, actor: &str, entries: okf_mcp::archive:
     };
     crate::support::server::applied(&server.app, async {
         import(
-            &okf_mcp::stores::CatalogDb::new(
-                okf_mcp::stores::StoreName::main(),
-                server.db.pool.clone(),
-            ),
+            &okf_mcp::stores::CatalogDb::main_in(&server.db.pool),
             "notes",
             entries,
             &options,

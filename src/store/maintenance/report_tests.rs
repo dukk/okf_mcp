@@ -66,12 +66,12 @@ async fn fixture(pool: &PgPool, catalog: i64, key: &str) -> (Lease, String) {
 }
 
 async fn maintenance_snapshot(pool: &PgPool, catalog: i64) -> Value {
-    sqlx::query_scalar("SELECT jsonb_build_array((SELECT jsonb_agg(to_jsonb(d) ORDER BY id) FROM maintenance_dispositions d WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(q) ORDER BY credential_id,operation,idempotency_key) FROM maintenance_requests q WHERE catalog_id=$1),(SELECT to_jsonb(s) FROM maintenance_state s WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM maintenance_runs r WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(w) ORDER BY id) FROM maintenance_work w WHERE catalog_id=$1))")
+    sqlx::query_scalar("SELECT jsonb_build_array((SELECT jsonb_agg(to_jsonb(d) ORDER BY id) FROM catalog.maintenance_dispositions d WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(q) ORDER BY credential_id,operation,idempotency_key) FROM catalog.maintenance_requests q WHERE catalog_id=$1),(SELECT to_jsonb(s) FROM catalog.maintenance_state s WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM catalog.maintenance_runs r WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(w) ORDER BY id) FROM catalog.maintenance_work w WHERE catalog_id=$1))")
         .bind(catalog).fetch_one(pool).await.unwrap()
 }
 
 async fn canonical(pool: &PgPool, catalog: i64) -> Value {
-    sqlx::query_scalar("SELECT jsonb_build_array((SELECT jsonb_agg(to_jsonb(d) ORDER BY path) FROM documents d WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(r) ORDER BY path,revision) FROM revisions r WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM changesets c WHERE catalog_id=$1),(SELECT to_jsonb(c) FROM catalogs c WHERE id=$1))")
+    sqlx::query_scalar("SELECT jsonb_build_array((SELECT jsonb_agg(to_jsonb(d) ORDER BY path) FROM catalog.documents d WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(r) ORDER BY path,revision) FROM catalog.revisions r WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM catalog.changesets c WHERE catalog_id=$1),(SELECT to_jsonb(c) FROM catalogs c WHERE id=$1))")
         .bind(catalog).fetch_one(pool).await.unwrap()
 }
 
@@ -337,7 +337,7 @@ async fn maintenance_disposition_rejects_invalid_text_and_ids_atomically() {
             .is_empty()
     );
     let requests: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM maintenance_requests WHERE catalog_id=$1 AND operation='dispose'",
+        "SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id=$1 AND operation='dispose'",
     )
     .bind(catalog)
     .fetch_one(&db.pool)
@@ -376,7 +376,7 @@ async fn maintenance_report_outdated_tracks_all_evidence() {
             .outdated
     );
     // Restore only the neighbor's current pointer to isolate the assessment/primary pin.
-    sqlx::query("UPDATE documents SET revision=1 WHERE catalog_id=$1 AND path='b.md'")
+    sqlx::query("UPDATE catalog.documents SET revision=1 WHERE catalog_id=$1 AND path='b.md'")
         .bind(catalog)
         .execute(&db.pool)
         .await
@@ -387,7 +387,7 @@ async fn maintenance_report_outdated_tracks_all_evidence() {
             .unwrap()
             .outdated
     );
-    sqlx::query("UPDATE documents SET deleted_at=$2 WHERE catalog_id=$1 AND path='a.md'")
+    sqlx::query("UPDATE catalog.documents SET deleted_at=$2 WHERE catalog_id=$1 AND path='a.md'")
         .bind(catalog)
         .bind(t0())
         .execute(&db.pool)
@@ -399,7 +399,7 @@ async fn maintenance_report_outdated_tracks_all_evidence() {
             .unwrap()
             .outdated
     );
-    sqlx::query("DELETE FROM documents WHERE catalog_id=$1 AND path='a.md'")
+    sqlx::query("DELETE FROM catalog.documents WHERE catalog_id=$1 AND path='a.md'")
         .bind(catalog)
         .execute(&db.pool)
         .await
@@ -578,7 +578,7 @@ async fn maintenance_report_pages_are_catalog_scoped() {
     .items
     .is_empty());
     // Unequal timestamps must outrank ID ordering, including cursor continuation.
-    sqlx::query("UPDATE maintenance_runs SET created_at=$3 WHERE catalog_id=$1 AND id=$2")
+    sqlx::query("UPDATE catalog.maintenance_runs SET created_at=$3 WHERE catalog_id=$1 AND id=$2")
         .bind(catalog)
         .bind(&all.items[1].id)
         .bind(t0() - Duration::seconds(1))
@@ -609,13 +609,15 @@ async fn maintenance_report_pages_are_catalog_scoped() {
             .id,
         all.items[0].id
     );
-    sqlx::query("UPDATE maintenance_findings SET created_at=$3 WHERE catalog_id=$1 AND id=$2")
-        .bind(catalog)
-        .bind(&findings.items[1].id)
-        .bind(t0() - Duration::seconds(1))
-        .execute(&db.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE catalog.maintenance_findings SET created_at=$3 WHERE catalog_id=$1 AND id=$2",
+    )
+    .bind(catalog)
+    .bind(&findings.items[1].id)
+    .bind(t0() - Duration::seconds(1))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     let by_time = reports::list_findings(&CatalogDb::main_of(&db.pool), catalog, None, 1)
         .await
         .unwrap();
@@ -660,7 +662,9 @@ async fn maintenance_report_pages_are_catalog_scoped() {
     .await
     .unwrap();
     assert_eq!(decision.dispositions.len(), 1);
-    sqlx::query("DELETE FROM catalogs WHERE id=$1")
+    // The catalog's data goes with its state row (the registry row is the
+    // account side's, and is deleted by `catalogs::delete`).
+    sqlx::query("DELETE FROM catalog.catalog_state WHERE id=$1")
         .bind(catalog)
         .execute(&db.pool)
         .await
@@ -682,7 +686,7 @@ async fn maintenance_report_pages_are_catalog_scoped() {
             .items
             .is_empty()
     );
-    let count: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM maintenance_runs WHERE catalog_id=$1) + (SELECT count(*) FROM maintenance_work WHERE catalog_id=$1) + (SELECT count(*) FROM maintenance_findings WHERE catalog_id=$1) + (SELECT count(*) FROM maintenance_evidence WHERE catalog_id=$1) + (SELECT count(*) FROM maintenance_dispositions WHERE catalog_id=$1) + (SELECT count(*) FROM maintenance_requests WHERE catalog_id=$1)").bind(catalog).fetch_one(&db.pool).await.unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM catalog.maintenance_runs WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_work WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_findings WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_evidence WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_dispositions WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id=$1)").bind(catalog).fetch_one(&db.pool).await.unwrap();
     assert_eq!(count, 0);
     assert_eq!(
         reports::get_finding(&CatalogDb::main_of(&db.pool), foreign, &foreign_finding)
@@ -743,7 +747,7 @@ async fn maintenance_disposition_concurrent_retry_is_one_append() {
         result
     );
     let credentials: Vec<String> = sqlx::query_scalar(
-        "SELECT credential_id FROM maintenance_dispositions WHERE catalog_id=$1 AND finding_id=$2",
+        "SELECT credential_id FROM catalog.maintenance_dispositions WHERE catalog_id=$1 AND finding_id=$2",
     )
     .bind(catalog)
     .bind(&id)
@@ -848,7 +852,7 @@ async fn maintenance_report_assessment_and_sibling_pins_and_dto_contracts() {
             .unwrap()
             .outdated
     );
-    sqlx::query("UPDATE documents SET revision=1 WHERE catalog_id=$1 AND path='c.md'")
+    sqlx::query("UPDATE catalog.documents SET revision=1 WHERE catalog_id=$1 AND path='c.md'")
         .bind(catalog)
         .execute(&db.pool)
         .await
@@ -1161,7 +1165,7 @@ async fn runs_page_newest_first_with_a_descending_cursor() {
     let (second, _) = fixture(&db.pool, catalog, "second").await;
     // Make the later-created fixture also the earlier by time, so the
     // order is not just the ID order.
-    sqlx::query("UPDATE maintenance_runs SET created_at=$3 WHERE catalog_id=$1 AND id=$2")
+    sqlx::query("UPDATE catalog.maintenance_runs SET created_at=$3 WHERE catalog_id=$1 AND id=$2")
         .bind(catalog)
         .bind(&second.run_id)
         .bind(t0() - Duration::seconds(5))

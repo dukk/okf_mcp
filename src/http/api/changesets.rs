@@ -242,7 +242,7 @@ mod tests {
     /// The (actor, message) of `path`'s revision `revision` in `main`.
     async fn revision_of(test: &TestApp, path: &str, revision: i32) -> (String, String) {
         sqlx::query_as(
-            "SELECT r.actor, r.message FROM revisions r JOIN catalogs c ON c.id = r.catalog_id \
+            "SELECT r.actor, r.message FROM catalog.revisions r JOIN catalogs c ON c.id = r.catalog_id \
              WHERE c.name = 'main' AND r.path = $1 AND r.revision = $2",
         )
         .bind(path)
