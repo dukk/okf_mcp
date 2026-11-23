@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 610,
+  "next_claim_seq": 624,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "e264447984b64ce153eea4fea4304e6d60e0a7d6ac551dd2477b966b41701402"
+    "mac": "965f878e17cb419f36d6154142782a0d6df4573dd3a937dbc41f1bb9cf8d5968"
   },
-  "next_evidence_seq": 775,
+  "next_evidence_seq": 789,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "d0e8cdb74a21547ade322cca982db7ff71b70d532e7b9c07966980d850718f0e"
+    "mac": "38a8de7454b2d0cf7eeb8686f01e6ec0a6d862ad0a6ec0018d4c9f59d39b6ca4"
   },
   "claims": [
     {
@@ -47843,6 +47843,886 @@
       "seal": {
         "by": "server",
         "mac": "44a38d0ae683e94bb6dad6b82b5697160246bf5ff2bf2f4c032712071f9c802a"
+      }
+    },
+    {
+      "id": "CLM-0610",
+      "statement": "Issue #639 is resolved: the lock-wait test helpers wait_for_source_lock and blocked_in_lock_people decide that the code is blocked from pg_locks lock identity, not from pg_stat_activity query text.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/639",
+      "derived_from": [],
+      "artifacts": [
+        "src/test_locks.rs",
+        "src/store/maintenance/tests.rs",
+        "src/store/keys/audit_tests.rs"
+      ],
+      "tags": [
+        "from-issue:639"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [],
+      "verdicts": [],
+      "created_at": "2026-11-23T04:41:59.820125113Z",
+      "updated_at": "2026-11-23T04:41:59.820125113Z",
+      "seal": {
+        "by": "server",
+        "mac": "5ff7df3ced171298d0166d319e49ad636b27b24e272a86017256ae0ddf075036"
+      }
+    },
+    {
+      "id": "CLM-0611",
+      "statement": "wait_for_source_lock no longer reads pg_stat_activity or matches query text, and waits through the shared pg_locks helper for the 'documents' table with the blocker as holder.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Issue #639: 'wait_for_source_lock matches query LIKE %FOR SHARE% ... Use #638's approach: wait on pg_locks'; PR body: 'wait_for_source_lock matches the documents table'",
+      "derived_from": [
+        "CLM-0610"
+      ],
+      "artifacts": [
+        "src/store/maintenance/tests.rs"
+      ],
+      "tags": [
+        "from-issue:639"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0775",
+          "kind": "test",
+          "locator": "src/store/maintenance/tests.rs:2135; tools/agentic/gate.sh narrow --lib -- maintenance_renew_obsolete_source / maintenance_claim_defers_newly / maintenance_submit_waits_for_source_pins",
+          "summary": "wait_for_source_lock body is one call to expect_row_lock_waiter(pool, blocker_pid, \"documents\"); no pg_stat_activity text. The three tests calling it each ran and passed (1 passed each). Maintenance locks documents rows FOR SHARE (runs.rs:472,593; reports.rs:512).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/tests.rs",
+              "lines": {
+                "start": 2123,
+                "end": 2137
+              },
+              "commit": "b024d4cff4a5d87e0ab8a02d5f80eff6d23fb480"
+            }
+          },
+          "recorded_at": "2026-11-23T04:42:32.118842457Z",
+          "seal": {
+            "by": "server",
+            "mac": "bd53964216c73f84ad0a00c8826bfefc0f57d2d2135a64106f423ea37d71cc9c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The helper body is a single delegation to the pg_locks helper with table documents, and its three calling tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0775"
+          ],
+          "recorded_at": "2026-11-23T04:43:01.153904884Z",
+          "seal": {
+            "by": "server",
+            "mac": "1f5332816f29e2fd84b5a55bc303f02d336a1718a17dddc9099053a233d3c6aa"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:41:59.820125113Z",
+      "updated_at": "2026-11-23T04:43:01.153904884Z",
+      "seal": {
+        "by": "server",
+        "mac": "7157fa77aae1e1a11ef32a327c36a89e26f6bd7b55bdc8048da5dec12f631012"
+      }
+    },
+    {
+      "id": "CLM-0612",
+      "statement": "blocked_in_lock_people no longer reads pg_stat_activity or matches query text, and waits through the shared pg_locks helper for the 'users' table with the holder as blocker.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Issue #639: 'blocked_in_lock_people matches the exact text ... FOR KEY SHARE'; PR body: 'blocked_in_lock_people matches users (FOR KEY SHARE)'",
+      "derived_from": [
+        "CLM-0610"
+      ],
+      "artifacts": [
+        "src/store/keys/audit_tests.rs"
+      ],
+      "tags": [
+        "from-issue:639"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0776",
+          "kind": "test",
+          "locator": "src/store/keys/audit_tests.rs:311-318; tools/agentic/gate.sh narrow --lib -- store::keys::audit_tests (11 passed)",
+          "summary": "blocked_in_lock_people calls wait_row_lock_waiter(pool, holder_pid, \"users\", 10 s); the old pg_stat_activity query is deleted. The module's 11 tests, including the four that call it (owner/grant snapshot mismatch, owner deleted while revoke/assign locks), passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/keys/audit_tests.rs",
+              "lines": {
+                "start": 295,
+                "end": 319
+              },
+              "commit": "b024d4cff4a5d87e0ab8a02d5f80eff6d23fb480"
+            }
+          },
+          "recorded_at": "2026-11-23T04:42:32.170761377Z",
+          "seal": {
+            "by": "server",
+            "mac": "a16985f8e7397cba5482cb3b62473e7087926756f8a28ee85bad6b6d6bd62790"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "blocked_in_lock_people delegates to the pg_locks helper with table users; the old text query is gone and the 4 tests using it pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0776"
+          ],
+          "recorded_at": "2026-11-23T04:43:01.209326826Z",
+          "seal": {
+            "by": "server",
+            "mac": "ec93601c60505735f7cc8148d611c4526f476da7d942dea1fb9e9fa9f2797622"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:41:59.820125113Z",
+      "updated_at": "2026-11-23T04:43:01.209326826Z",
+      "seal": {
+        "by": "server",
+        "mac": "37540c094538b0b81bb8c97b8a767d0c14f0e8de11d89aec629fe9955ec6e46a"
+      }
+    },
+    {
+      "id": "CLM-0613",
+      "statement": "The shared helper waits for an ungranted lock with $1 = ANY(pg_blocking_pids(pid)) and checks lock identity (locktype plus the table's relation and database), not query text.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Issue #639: 'wait on pg_locks for an ungranted lock held up by the blocker ($1 = ANY(pg_blocking_pids(pid))), and check the lock identity (locktype plus the relation...) rather than the query text'",
+      "derived_from": [
+        "CLM-0610"
+      ],
+      "artifacts": [
+        "src/test_locks.rs"
+      ],
+      "tags": [
+        "from-issue:639"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0777",
+          "kind": "inspection",
+          "locator": "src/test_locks.rs:105-119",
+          "summary": "Query selects from pg_locks w where locktype='transactionid' AND NOT granted AND $1 = ANY(pg_blocking_pids(w.pid)), joined to a granted 'tuple' lock of the same pid with relation = $2::regclass and database = current database. No query text is read.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/test_locks.rs",
+              "lines": {
+                "start": 103,
+                "end": 128
+              },
+              "commit": "b024d4cff4a5d87e0ab8a02d5f80eff6d23fb480"
+            }
+          },
+          "recorded_at": "2026-11-23T04:42:32.210884377Z",
+          "seal": {
+            "by": "server",
+            "mac": "a7e4353d6c21a0ae12f423142adac378286824f10d695c142af16c1f36f8c014"
+          }
+        },
+        {
+          "id": "EVD-0778",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib --jobs 4 -- test_locks (3 passed)",
+          "summary": "The helper finds a real FOR SHARE waiter behind a FOR UPDATE holder by table, and rejects another table and another holder pid, so identity is checked against a live Postgres.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T04:42:32.243770292Z",
+          "seal": {
+            "by": "server",
+            "mac": "90e2a7cd542b6c4f52b06bdcc086aee4485f24bd8c1e52e58413019f8423401c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The query reads pg_locks for an ungranted lock blocked by the holder and joins a granted tuple lock on the given relation and database; the tests show it matches and rejects as intended.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0777",
+            "EVD-0778"
+          ],
+          "recorded_at": "2026-11-23T04:43:01.245646701Z",
+          "seal": {
+            "by": "server",
+            "mac": "763d33c23efc9d5b9c9e9a08768ac9f17b48ad94fe1b514a1b5ea63f380715b0"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:41:59.820125113Z",
+      "updated_at": "2026-11-23T04:43:01.245646701Z",
+      "seal": {
+        "by": "server",
+        "mac": "f2cd7d126fa498c9d4c1ddd721e9ae438e3552101efd0b808bf8274dc706e1ed"
+      }
+    },
+    {
+      "id": "CLM-0614",
+      "statement": "The pg_locks wait logic is shared in src/test_locks.rs and both helpers call it; no second copy of the wait query exists in maintenance/tests.rs or keys/audit_tests.rs.",
+      "kind": "non_functional",
+      "level": "component",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #639: 'Consider moving it into a shared test helper'; PR body: 'through a shared helper module'",
+      "derived_from": [
+        "CLM-0610"
+      ],
+      "artifacts": [
+        "src/test_locks.rs",
+        "src/store/maintenance/tests.rs",
+        "src/store/keys/audit_tests.rs",
+        "src/store/maintenance/final_tests.rs"
+      ],
+      "tags": [
+        "from-issue:639"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0788",
+          "kind": "inspection",
+          "locator": "git grep -nE \"FROM pg_stat_activity|pg_blocking_pids\" src/store/maintenance/tests.rs src/store/keys/audit_tests.rs",
+          "summary": "No pg_stat_activity query or pg_blocking_pids in the two helper files (the two remaining pg_stat_activity hits are doc comments naming it). wait_for_source_lock -> expect_row_lock_waiter; blocked_in_lock_people -> wait_row_lock_waiter; final_tests.rs:11 imports wait_waiter from crate::test_locks and its old definition is deleted. The one wait query per kind lives in src/test_locks.rs. final_tests.rs:310 keeps its own pg_stat_activity query inside the existing test maintenance_final_lock_probe_ignores_stale_activity_text, whose purpose is to show the stale text.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "FROM pg_stat_activity|pg_blocking_pids",
+              "scope": [
+                "src/store/keys/audit_tests.rs",
+                "src/store/maintenance/tests.rs"
+              ],
+              "hits": 0,
+              "commit": "b024d4cff4a5d87e0ab8a02d5f80eff6d23fb480"
+            }
+          },
+          "recorded_at": "2026-11-23T04:42:37.014970571Z",
+          "seal": {
+            "by": "server",
+            "mac": "90ad6cca086b6b2bcff930e2adc32edc0a62175e3409088b574ab3228c78ffaf"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both helpers delegate to src/test_locks.rs and neither helper file holds its own wait query; the maintenance_final probe test keeps its query by design.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0788"
+          ],
+          "recorded_at": "2026-11-23T04:43:01.281273394Z",
+          "seal": {
+            "by": "server",
+            "mac": "8209ec058fecc940b337debaf37125dede8cbbfc9f6b70b0a4c14a626b230b2c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:41:59.820125113Z",
+      "updated_at": "2026-11-23T04:43:01.281273394Z",
+      "seal": {
+        "by": "server",
+        "mac": "0b2fb924a8ce4796b3ab1f5e2882001862cba6cbdc15c2f3b485bc6ed017a43c"
+      }
+    },
+    {
+      "id": "CLM-0615",
+      "statement": "blocked_in_lock_people has its own tokio::time::timeout of 10 s and panics, when it expires, with a message naming what it waited for (a users row held by the holder backend in lock_people).",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Issue #639: 'Give blocked_in_lock_people its own timeout'; PR body: 'has its own 10 s timeout and a message naming what it waited for'",
+      "derived_from": [
+        "CLM-0610"
+      ],
+      "artifacts": [
+        "src/store/keys/audit_tests.rs",
+        "src/test_locks.rs"
+      ],
+      "tags": [
+        "from-issue:639"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0779",
+          "kind": "inspection",
+          "locator": "src/test_locks.rs:103-128 and src/store/keys/audit_tests.rs:311-318",
+          "summary": "wait_row_lock_waiter wraps its loop in tokio::time::timeout(limit) and returns None on expiry; blocked_in_lock_people passes Duration::from_secs(10) and unwrap_or_else panics with \"no backend waited in lock_people for a users row held by backend {holder_pid}\". The timeout is the helper's own, not the callers'. The expiry path was not run (not exercised by a passing test).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/keys/audit_tests.rs",
+              "lines": {
+                "start": 311,
+                "end": 318
+              },
+              "commit": "b024d4cff4a5d87e0ab8a02d5f80eff6d23fb480"
+            }
+          },
+          "recorded_at": "2026-11-23T04:42:32.300715417Z",
+          "seal": {
+            "by": "server",
+            "mac": "9d611c17c2a1ace1e32cfa69190654375e28081b4df465dbcfda52301cb2cad7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The code wraps the wait in its own 10 s tokio timeout and panics with a message naming the users row and holder. The expiry path itself was not run, but the code shows it directly.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0779"
+          ],
+          "recorded_at": "2026-11-23T04:43:01.317125588Z",
+          "seal": {
+            "by": "server",
+            "mac": "2fc2373897e874b85de35f29c5c245fdb577a9acb16ea8ddbb4cfe611a91c6a3"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:41:59.820125113Z",
+      "updated_at": "2026-11-23T04:43:01.317125588Z",
+      "seal": {
+        "by": "server",
+        "mac": "78640e0cd2045a30a533514da2e8aae5823df91efc0591463f7620c43327d07b"
+      }
+    },
+    {
+      "id": "CLM-0616",
+      "statement": "Waiter and wait_waiter moved from maintenance/final_tests.rs to src/test_locks.rs with an unchanged query and logic.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: '`Waiter`/`wait_waiter` moved from `maintenance/final_tests.rs` unchanged'",
+      "derived_from": [
+        "CLM-0610"
+      ],
+      "artifacts": [
+        "src/test_locks.rs",
+        "src/store/maintenance/final_tests.rs"
+      ],
+      "tags": [
+        "from-issue:639",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0780",
+          "kind": "inspection",
+          "locator": "git diff origin/main..HEAD -- src/store/maintenance/final_tests.rs; src/test_locks.rs:18-72",
+          "summary": "The removed and added SQL, loop, result struct and expect message are identical. Differences: fields became pub(crate), the 10 s literal became the WAIT_LIMIT constant, and the doc paragraph on pg_stat_activity staleness moved to the module doc. Behavior is unchanged; \"unchanged\" is slightly loose about visibility and docs.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/test_locks.rs",
+              "lines": {
+                "start": 18,
+                "end": 72
+              },
+              "commit": "b024d4cff4a5d87e0ab8a02d5f80eff6d23fb480"
+            }
+          },
+          "recorded_at": "2026-11-23T04:42:32.334394205Z",
+          "seal": {
+            "by": "server",
+            "mac": "9dac6d7e5d7f472e25ac0bb3c4cc80c2cbfc324866b9d8d2a23df41964eb4542"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Query and logic are identical; only visibility, a constant and doc placement changed, which does not affect behavior.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0780"
+          ],
+          "recorded_at": "2026-11-23T04:43:01.352930731Z",
+          "seal": {
+            "by": "server",
+            "mac": "dd2d7270a5382e3b9a5aff594810dcbe0705453d5b9e2432d7593b7051fbb986"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:41:59.820125113Z",
+      "updated_at": "2026-11-23T04:43:01.352930731Z",
+      "seal": {
+        "by": "server",
+        "mac": "0aa666ee0a13c41c0ca4b676c8c675bffbbfa25d923995ff2968470a6b727a47"
+      }
+    },
+    {
+      "id": "CLM-0617",
+      "statement": "A row-lock waiter shows in pg_locks as a granted tuple lock on the table plus an ungranted transactionid lock behind the holder, and the helper requires both with the holder in pg_blocking_pids.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'A row-lock waiter shows in pg_locks as a granted tuple lock on the table plus an ungranted transactionid lock behind the holder (confirmed by dumping pg_locks). The helper requires both, with the holder in pg_blocking_pids.'",
+      "derived_from": [
+        "CLM-0610"
+      ],
+      "artifacts": [
+        "src/test_locks.rs"
+      ],
+      "tags": [
+        "from-issue:639",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0781",
+          "kind": "test",
+          "locator": "src/test_locks.rs:105-119; test_locks::tests::a_row_lock_waiter_is_found_by_its_table (passed)",
+          "summary": "The query requires both a granted tuple lock on the relation and an ungranted transactionid lock blocked by the holder. A real FOR SHARE waiter behind FOR UPDATE satisfies it in the passing test, so the two-lock shape holds on the test Postgres. I did not dump pg_locks myself; the shape is inferred from the passing test plus the changelog description.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/test_locks.rs",
+              "lines": {
+                "start": 105,
+                "end": 119
+              },
+              "commit": "b024d4cff4a5d87e0ab8a02d5f80eff6d23fb480"
+            }
+          },
+          "recorded_at": "2026-11-23T04:42:32.368298165Z",
+          "seal": {
+            "by": "server",
+            "mac": "2f9d369d35eca80dfe1d8edcbcef81826f723de1ff0ea0f223d45a6d3d94b07e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The helper requires both locks as stated and finds a real waiter in a passing test, which would fail if the shape were different.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0781"
+          ],
+          "recorded_at": "2026-11-23T04:43:01.388722574Z",
+          "seal": {
+            "by": "server",
+            "mac": "0cedc0b7c86f3ca26b8980eab61ba4dd987b5df4ba7a758832543a659f4ccfcc"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:41:59.820125113Z",
+      "updated_at": "2026-11-23T04:43:01.388722574Z",
+      "seal": {
+        "by": "server",
+        "mac": "611b1b6dd5204f8a4a69c3816e8fd543517edaac3b96f670cf918bcaf9c93006"
+      }
+    },
+    {
+      "id": "CLM-0618",
+      "statement": "The three tests in test_locks show a waiter is found by its table, is not matched for another table, and is not matched behind another holder.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'Three tests in test_locks (found by table, not by another table, not behind another holder)'",
+      "derived_from": [
+        "CLM-0610"
+      ],
+      "artifacts": [
+        "src/test_locks.rs"
+      ],
+      "tags": [
+        "from-issue:639",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0782",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib --jobs 4 -- test_locks (3 passed); src/test_locks.rs:188-228",
+          "summary": "Three tests ran and passed. Assertions: found-by-table asserts pid != holder; other-table asserts wait_row_lock_waiter(lock_probe_b) == None after the lock_probe_a waiter is confirmed queued; other-holder asserts None for holder_pid + 1 (an arbitrary pid, which could in principle be a live backend, but it cannot be blocking this waiter).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/test_locks.rs",
+              "lines": {
+                "start": 188,
+                "end": 228
+              },
+              "commit": "b024d4cff4a5d87e0ab8a02d5f80eff6d23fb480"
+            }
+          },
+          "recorded_at": "2026-11-23T04:42:32.422657786Z",
+          "seal": {
+            "by": "server",
+            "mac": "294523b6706d61551cb21d9471110799250279c6e9ea920eecf16d60b30549d2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The three tests exist, assert what the description says, and pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0782"
+          ],
+          "recorded_at": "2026-11-23T04:43:01.434563978Z",
+          "seal": {
+            "by": "server",
+            "mac": "3e322ffee4cf8fbdc7f0db7d0bc61de0aba994e275817b4e977565c78f0ddb8c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:41:59.820125113Z",
+      "updated_at": "2026-11-23T04:43:01.434563978Z",
+      "seal": {
+        "by": "server",
+        "mac": "414ce043e45b1592296cd27e47a5c426b8435316b682e1f9a716e5223455eea4"
+      }
+    },
+    {
+      "id": "CLM-0619",
+      "statement": "The 7 tests that use the two helpers (3 maintenance tests, 4 key audit tests) plus test_locks and maintenance_final pass on the head commit.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'Repeat runs (3x) of the 7 affected tests plus test_locks and maintenance_final: all passed.'",
+      "derived_from": [
+        "CLM-0610"
+      ],
+      "artifacts": [
+        "src/test_locks.rs"
+      ],
+      "tags": [
+        "from-issue:639",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0783",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib --jobs 4 -- test_locks | maintenance_final | maintenance_renew_obsolete_source | maintenance_claim_defers_newly | maintenance_submit_waits_for_source_pins | store::keys::audit_tests",
+          "summary": "One run each on head b024d4c: test_locks 3 passed, maintenance_final 7 passed, the three maintenance tests 1 passed each, key audit_tests 11 passed (includes the 4 using blocked_in_lock_people). All 7 affected tests: 3 maintenance + 4 audit confirmed by call-site count. I ran each once, not 3 times, so the repeat count itself is unchecked.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T04:42:32.460068904Z",
+          "seal": {
+            "by": "server",
+            "mac": "ba26fb64b929eeade275b01dbbb31a1ab0e09910275dfdde6655f36028f207a7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every named test group passed on head; the 7-test count matches the call sites.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0783"
+          ],
+          "recorded_at": "2026-11-23T04:43:01.470369481Z",
+          "seal": {
+            "by": "server",
+            "mac": "420ed2702a54389100aaa0c1584b58f7c7a2b4441a766be1240e607788565dc5"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:41:59.820125113Z",
+      "updated_at": "2026-11-23T04:43:01.470369481Z",
+      "seal": {
+        "by": "server",
+        "mac": "136daeeea22755db946084c69920c48ec874b96d11574f3f2099200936c73c09"
+      }
+    },
+    {
+      "id": "CLM-0620",
+      "statement": "tools/agentic/gate.sh fmt, lint, dylint and test all passed on the head commit with 2850 passed and 2 ignored.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "source": "PR body: 'tools/agentic/gate.sh fmt, lint, dylint, test: all passed (2850 passed, 2 ignored).'",
+      "derived_from": [
+        "CLM-0610"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:639",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0784",
+          "kind": "other",
+          "locator": "tools/agentic/gate.sh narrow --lib -- test_locks (listing: 3 run, 2849 filtered out)",
+          "summary": "The lib has 2852 tests (3 run + 2849 filtered), consistent with 2850 passed + 2 ignored. I was told not to run the full gates (fmt, lint, dylint, test), so the pass itself is unchecked.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T04:42:32.495675651Z",
+          "seal": {
+            "by": "server",
+            "mac": "3b8ff662edc6595cde1db273064d465854005c41534f31e23812d64373176e02"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The 2852 test total is consistent with 2850 passed + 2 ignored, but the full gates were not rerun. Fix: rerun tools/agentic/gate.sh fmt, lint, dylint and test on the head commit and compare the counts to the description.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0784"
+          ],
+          "recorded_at": "2026-11-23T04:43:01.507254569Z",
+          "seal": {
+            "by": "server",
+            "mac": "294dc03b0456e5e9f15e645eb385b66bd337bc264b5f7fbd8a30e8034a0db08c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:41:59.820125113Z",
+      "updated_at": "2026-11-23T04:43:01.507254569Z",
+      "seal": {
+        "by": "server",
+        "mac": "3269c41bd02c3f9686132426c4658133cbf2b6c944e2692795557b78ab51ae29"
+      }
+    },
+    {
+      "id": "CLM-0621",
+      "statement": "Pointing the helpers at the wrong tables (catalogs / teams) makes all 7 tests that use them time out with their messages.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "demonstration",
+      "source": "PR body: 'Negative check, reverted: pointing the helpers at catalogs / teams made all 7 tests time out with their messages.'",
+      "derived_from": [
+        "CLM-0610"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:639",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0785",
+          "kind": "other",
+          "locator": "PR body Validation; changelog/*issue-639-lock-wait-helpers.md \"Tests\"",
+          "summary": "The check edited source then reverted it; I may not modify source, so I could not repeat it. The wrong-table behavior is partly shown by test_locks::a_row_lock_waiter_on_another_table_does_not_match (None for another table), but the 7-test timeout run is not reproduced.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T04:42:32.530768557Z",
+          "seal": {
+            "by": "server",
+            "mac": "f20ffa407300f1c5e7da24780530299e7e5b1331d6a81fe6635cc76f3e0f1421"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The check needed a temporary source edit and was not repeatable under read-only rules. Fix: on a scratch checkout, point wait_for_source_lock at catalogs and blocked_in_lock_people at teams, run the 7 tests and confirm each times out with its message.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0785"
+          ],
+          "recorded_at": "2026-11-23T04:43:01.543928746Z",
+          "seal": {
+            "by": "server",
+            "mac": "c747c3e5a2783e9b9c37360c451cdf8dc90303e84aba84cf1638d325114954b8"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:41:59.820125113Z",
+      "updated_at": "2026-11-23T04:43:01.543928746Z",
+      "seal": {
+        "by": "server",
+        "mac": "69bfd4616b80b71881f689af0765fb9c7c466fddf900ec321d9b5d1a8fced655"
+      }
+    },
+    {
+      "id": "CLM-0622",
+      "statement": "The PR adds a changelog entry describing the change (changelog/ file for issue 639).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: 'changelog entry'",
+      "derived_from": [
+        "CLM-0610"
+      ],
+      "artifacts": [
+        "changelog/"
+      ],
+      "tags": [
+        "from-issue:639",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0786",
+          "kind": "inspection",
+          "locator": "changelog/*-issue-639-lock-wait-helpers.md",
+          "summary": "git diff --stat shows a new 34-line changelog file for issue 639 (2026-11-23T04-31-00Z), describing the new module, the two helpers, the lock identity and the tests.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "Issue #639",
+              "scope": [
+                "changelog"
+              ],
+              "hits": 1,
+              "commit": "b024d4cff4a5d87e0ab8a02d5f80eff6d23fb480"
+            }
+          },
+          "recorded_at": "2026-11-23T04:42:32.575298460Z",
+          "seal": {
+            "by": "server",
+            "mac": "60257954f77365d8bd217d5e6b4747b3bda4ea0ef0046381615033820cef01c9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The changelog file exists in the diff and covers the change.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0786"
+          ],
+          "recorded_at": "2026-11-23T04:43:01.579949500Z",
+          "seal": {
+            "by": "server",
+            "mac": "c2e6243c901bb8fa70086d70d77ff2dbfae1c0f00342d7912c94aed240c46b60"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:41:59.820125113Z",
+      "updated_at": "2026-11-23T04:43:01.579949500Z",
+      "seal": {
+        "by": "server",
+        "mac": "5b8e41602b0a6cc630d830da069bc58b7bcaaa019388ad882b39ca0bf1a66eb0"
+      }
+    },
+    {
+      "id": "CLM-0623",
+      "statement": "The helper's only identity check is the table: it does not distinguish lock mode or row.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: 'Known limit: the table is the whole identity of a row wait; it does not distinguish lock mode or row.'",
+      "derived_from": [
+        "CLM-0610"
+      ],
+      "artifacts": [
+        "src/test_locks.rs"
+      ],
+      "tags": [
+        "from-issue:639",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0787",
+          "kind": "inspection",
+          "locator": "src/test_locks.rs:105-112",
+          "summary": "The query constrains pid, locktype, granted, relation, database and blocker. It does not constrain lock mode or tuple/row, so any row wait on the table behind the same holder matches.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/test_locks.rs",
+              "lines": {
+                "start": 105,
+                "end": 112
+              },
+              "commit": "b024d4cff4a5d87e0ab8a02d5f80eff6d23fb480"
+            }
+          },
+          "recorded_at": "2026-11-23T04:42:32.615064138Z",
+          "seal": {
+            "by": "server",
+            "mac": "77f19419deef3be644f4589e946d07c631fa27570073e401b80255296d37204b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The query has no lock-mode or row condition, so the stated limit is accurate.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0787"
+          ],
+          "recorded_at": "2026-11-23T04:43:01.616133975Z",
+          "seal": {
+            "by": "server",
+            "mac": "655588ee175737da7cfac14e5a3ee16ca63167755272f894ef7acd424237183b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:41:59.820125113Z",
+      "updated_at": "2026-11-23T04:43:01.616133975Z",
+      "seal": {
+        "by": "server",
+        "mac": "0e109067bb0b8b2d67113cef5545b11b90233ffcfb3f14a762d69262b61ce5cb"
       }
     }
   ]
