@@ -73,14 +73,18 @@
 
 The spec already carries these: P1 is its Decision 5, P2 Decision 7, P3 Decision 13, P4-P6 Decisions 16-18.
 
-- **P1 (refines Decision 5): pools are never shared.** Every pool sets its `search_path` at connect (`public` for the account pool, `catalog` for a store pool), so a catalog query sent to the account pool, or an account query sent to a store, fails with "relation does not exist" even when the store lives in the account database. A single-database install therefore opens two pools to one database. The store pool's size is the new config key `store_max_connections` (default 8), beside the existing `database_max_connections` (account pool).
+- **P1 (refines Decision 5): pools are never shared.** Every pool sets its `search_path` at connect (`public` for the account pool, `catalog` for a store pool), so an unqualified catalog query sent to the account pool, or an unqualified account query sent to a store, fails with "relation does not exist" even when the store lives in the account database. Two rules keep that true (review of PR #956):
+  - **No table name exists in both schemas.** The store's audit table is `catalog_audit_entries`, not a second `audit_entries`, so an unqualified audit DELETE on the wrong pool fails instead of pruning the wrong log. A test lists table names in `public` and `catalog` and asserts they don't overlap: `no_table_name_is_in_both_schemas`.
+  - **Rust SQL never names a schema.** Only migrations write `catalog.` or `public.`. A test scans `src/` for schema-qualified table names in SQL literals and fails on one: `production_sql_never_qualifies_a_schema`.
+
+  This is a test-time guard against mistakes, not a security boundary: one database user can still reach both schemas when they share a database. Separate privileges per side are out of scope. A single-database install therefore opens two pools to one database. The store pool's size is the new config key `store_max_connections` (default 8), beside the existing `database_max_connections` (account pool).
 - **P2 (refines Decision 7): types at the entry points, search_path behind them.** `AccountDb` and `CatalogDb` make call sites in routes, tools, the CLI and jobs pick the right database at compile time. Store-layer helpers that take `&mut PgConnection` are not type-checked against the wrong side; the search_path isolation of P1 catches those at test time, from Task 11 on.
 - **P3 (refines Decision 13): first-match reads fail rather than skip.** A tool that answers from the first selected catalog holding a path (`get_concept`, `history`, `read_document` without `catalog`) returns `StoreUnavailable` when a catalog earlier in the order is on an unreachable store, instead of answering from a later one; the earlier catalog might have held the answer. Merging reads (`search`, catalog listings) return their results plus `unavailable`.
-- **P4: which audit actions live on a store.** Actions recorded inside a catalog-store transaction go to `catalog.audit_entries`: `catalog.published`, `catalog.imported`, `catalog.repaired`, `catalog.reverted`, `catalog.changeset_discarded`, `catalog.maintenance_run`. All others, including `catalog.created`, `catalog.deleted`, `catalog.exported`, `catalog.admin_read` and the unlock actions, stay in the account database. Task 12 confirms the list against the code and corrects it here if a write site differs.
-- **P5: catalog audit outlives the catalog.** Deleting a catalog's store data (Task 13) leaves its `catalog.audit_entries` rows; they are pruned by `audit_retention_days`, per store, like account audit.
+- **P4: which audit actions live on a store.** Actions recorded inside a catalog-store transaction go to `catalog.catalog_audit_entries`: `catalog.published`, `catalog.imported`, `catalog.repaired`, `catalog.reverted`, `catalog.changeset_discarded`, `catalog.maintenance_run`. All others, including `catalog.created`, `catalog.deleted`, `catalog.exported`, `catalog.admin_read` and the unlock actions, stay in the account database. Task 12 confirms the list against the code and corrects it here if a write site differs.
+- **P5: catalog audit outlives the catalog.** Deleting a catalog's store data (Task 13) leaves its `catalog.catalog_audit_entries` rows; they are pruned by `audit_retention_days`, per store, like account audit.
 - **P6: a deleted catalog's name stays reserved until its store data is gone.** `catalogs.deleted_at` marks the registry row; the cleanup job removes the row after the store side is deleted, and only then can the name be reused.
 
-- **P7 (from review of PR #956): catalog-event entries written before the split stay in the account audit table.** The append-only trigger forbids deleting recent entries, and suspending it would weaken the guarantee it exists for. The merged view reads both tables, so each entry still appears exactly once. Only entries written after the split go to `catalog.audit_entries`.
+- **P7 (from review of PR #956): catalog-event entries written before the split stay in the account audit table.** The append-only trigger forbids deleting recent entries, and suspending it would weaken the guarantee it exists for. The merged view reads both tables, so each entry still appears exactly once. Only entries written after the split go to `catalog.catalog_audit_entries`.
 - **P8 (from review of PR #956): separate stores stay disabled until the whole epic has landed.** Until Task 20, adding a store with location `host` is refused, so `main` (inside the account database) is the only store that can hold catalogs. Each release can therefore be deployed without a half-built path to a separate database. Task 20 lifts the restriction once the end-to-end test passes.
 - **P9 (from review of PR #956): create and recovery coordinate through the catalog's lock on the store.** Both take `pg_advisory_xact_lock(CATALOG_LOCK_NAMESPACE, id)` on the store, the publish lock that already exists.
   - Create's store transaction, holding it, first checks on the account database that the registry row still exists and is unprovisioned. It aborts if not.
@@ -290,6 +294,14 @@ CREATE TABLE stores (
 );
 INSERT INTO stores (name, location_kind, created_at)
     VALUES ('main', 'account-database', now());
+-- No two store names for one database (review of PR #956): only one
+-- account-database row, and one row per host, port and database name.
+-- Task 14 adds the check for aliases these can't see (two host names for
+-- one server, or a host row pointing at the account database).
+CREATE UNIQUE INDEX stores_one_account_database ON stores (location_kind)
+    WHERE location_kind = 'account-database';
+CREATE UNIQUE INDEX stores_one_row_per_database ON stores (lower(host), port, database)
+    WHERE location_kind = 'host';
 
 -- The default store for new catalogs (spec Decision 6).
 INSERT INTO server_settings (key, value, updated_at, updated_by)
@@ -313,7 +325,7 @@ CREATE INDEX catalogs_unprovisioned ON catalogs (created_at) WHERE provisioned_a
 ```
 
 - [ ] The same migration widens `audit_entries.target_kind` to include `store` and adds a `WHEN 'store'` arm to `audit_entries_target_shape` (`target_name IS NOT NULL`, the other target columns NULL), for Task 10's actions. Copy the constraint's current text from the latest migration that redefines it, so nothing else changes.
-- [ ] Tests: `a_release_one_create_after_0036_lands_on_main_provisioned` (an insert naming only today's columns); `migration_0036_puts_every_catalog_on_main_provisioned`; `stores_refuses_a_host_row_without_a_credential_reference`; `stores_refuses_an_account_database_row_with_a_host`.
+- [ ] Tests: `a_release_one_create_after_0036_lands_on_main_provisioned` (an insert naming only today's columns); `migration_0036_puts_every_catalog_on_main_provisioned`; `stores_refuses_a_host_row_without_a_credential_reference`; `stores_refuses_an_account_database_row_with_a_host`; `a_second_account_database_store_is_refused`; `a_second_row_for_the_same_host_port_and_database_is_refused`.
 
 ### Task 8: `Stores`, the registry in code
 
@@ -336,8 +348,8 @@ CREATE INDEX catalogs_unprovisioned ON catalogs (created_at) WHERE provisioned_a
 
 - [ ] `env`: the reference names an environment variable holding the password; the user is the URL's or the row's. Decide the row shape for the database user name at task start (a `user` column added by this task's migration, or part of `credential_ref`), and correct this plan.
 - [ ] `secrets-manager`: the reference is a secret ARN whose value is JSON with `username` and `password`, the format RDS-managed secrets use. Fetched at pool open, and again when a connection attempt fails authentication. Never logged.
-- [ ] `iam`: an RDS IAM auth token for the row's host, port and user, signed from the server's AWS credentials (the `aws-config` chain already used for SES). Tokens last 15 minutes, so the pool fetches a fresh one for each new connection (sqlx `PgConnectOptions` per connect, through a custom connect callback or a short `max_lifetime`; pick one at task start and record why).
-- [ ] Tests, with the AWS clients behind a trait and mocked: `secrets_manager_credential_is_read_from_the_secret_json`; `iam_credential_signs_a_token_per_connection`; `a_credential_never_appears_in_logs_or_errors` (captures tracing output during a failed connect).
+- [ ] `iam`: an RDS IAM auth token for the row's host, port and user, signed from the server's AWS credentials (the `aws-config` chain already used for SES). Tokens last 15 minutes, and a pool's connect options (with the password) are what every new physical connection uses, so retiring connections early does not help. The pool's options must carry a token that is still valid whenever a connection opens: a refresh task per IAM store replaces them with a freshly signed token every 10 minutes through sqlx's `Pool::set_connect_options`, and a connection attempt that fails authentication triggers one immediate refresh and retry. Confirm `set_connect_options` in sqlx 0.9 at task start; if it is missing, wrap the pool so each physical connection is opened with a fresh token, and record which.
+- [ ] Tests, with the AWS clients behind a trait and mocked: `secrets_manager_credential_is_read_from_the_secret_json`; `iam_replacement_connection_after_the_first_token_expires_uses_a_fresh_token` (a mocked signer whose tokens expire after a test-controlled interval and a test Postgres whose password changes with them: open a connection, expire the token, open another, and assert it authenticates); `iam_auth_failure_refreshes_once_and_retries`; `a_credential_never_appears_in_logs_or_errors` (captures tracing output during a failed connect).
 
 ### Task 10: placement and the admin surface
 
@@ -461,7 +473,7 @@ CREATE TABLE store_cleanups (
 -- Catalog-event audit entries (spec Decision 10, P4). Identity columns are
 -- the account database's audit_people / audit_credentials / audit_teams ids
 -- as plain values: no foreign keys across the line.
-CREATE TABLE catalog.audit_entries (
+CREATE TABLE catalog.catalog_audit_entries (
     id                    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     at                    timestamptz NOT NULL,
     catalog_id            bigint NOT NULL,
@@ -477,14 +489,14 @@ CREATE TABLE catalog.audit_entries (
     details               jsonb NOT NULL DEFAULT '{}'::jsonb
                               CHECK (jsonb_typeof(details) = 'object')
 );
-CREATE INDEX catalog_audit_entries_at ON catalog.audit_entries (at);
-CREATE INDEX catalog_audit_entries_teams ON catalog.audit_entries USING gin (teams);
+CREATE INDEX catalog_audit_entries_at ON catalog.catalog_audit_entries (at);
+CREATE INDEX catalog_audit_entries_teams ON catalog.catalog_audit_entries USING gin (teams);
 
 -- Append-only, as the account table is. A store has no server_settings, so
 -- the prune job passes the retention period in a transaction-local setting
 -- (SET LOCAL okf.audit_retention_days); without it, 400 days. Never less
 -- than 30, whatever is passed.
-CREATE FUNCTION catalog.audit_entries_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION catalog.catalog_audit_entries_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
     retention integer;
 BEGIN
@@ -500,16 +512,16 @@ BEGIN
     RETURN OLD;
 END
 $$;
-CREATE TRIGGER audit_entries_append_only BEFORE UPDATE OR DELETE ON catalog.audit_entries
-    FOR EACH ROW EXECUTE FUNCTION catalog.audit_entries_append_only();
-CREATE TRIGGER audit_entries_no_truncate BEFORE TRUNCATE ON catalog.audit_entries
-    FOR EACH STATEMENT EXECUTE FUNCTION catalog.audit_entries_append_only();
+CREATE TRIGGER catalog_audit_entries_append_only BEFORE UPDATE OR DELETE ON catalog.catalog_audit_entries
+    FOR EACH ROW EXECUTE FUNCTION catalog.catalog_audit_entries_append_only();
+CREATE TRIGGER catalog_audit_entries_no_truncate BEFORE TRUNCATE ON catalog.catalog_audit_entries
+    FOR EACH STATEMENT EXECUTE FUNCTION catalog.catalog_audit_entries_append_only();
 
 -- Entries written before the split stay in the account table (P7).
 ```
 
   Entries written before the split are not moved (P7). The view reads both tables, so they still appear, exactly once.
-- [ ] Write path: before a catalog transaction begins, the caller resolves the actor's `audit_people`, `audit_credentials` and `audit_teams` ids on the account database (today's `audit::lock_people` / `audit_person()` work, in its own account transaction). It passes them in; the catalog transaction inserts into `catalog.audit_entries`. `audit::record` gains a sibling `audit::record_catalog(conn, &ResolvedActor, &CatalogEntry, now)`. The P4 write sites switch to it, including Task 11's maintenance-run write, which now runs in the store transaction that ends the run.
+- [ ] Write path: before a catalog transaction begins, the caller resolves the actor's `audit_people`, `audit_credentials` and `audit_teams` ids on the account database (today's `audit::lock_people` / `audit_person()` work, in its own account transaction). It passes them in; the catalog transaction inserts into `catalog.catalog_audit_entries`. `audit::record` gains a sibling `audit::record_catalog(conn, &ResolvedActor, &CatalogEntry, now)`. The P4 write sites switch to it, including Task 11's maintenance-run write, which now runs in the store transaction that ends the run.
 - [ ] Read path: the owner and admin views query the account database and every store in `Stores::all()`, concurrently, with the same `teams` filter visibility uses today (`src/store/audit.rs:1856`), so entries stay visible after their catalog is deleted or transferred, each with the same filter and limit. They merge by `(at, store, id)` descending. The cursor encodes `(at, store, id)`, with the account database as store `""`, and stays signed and opaque as today. Retention pruning covers both tables (Task 16).
 - [ ] Tests: `a_publish_writes_its_audit_entry_on_the_store`; `a_failed_publish_writes_no_audit_entry`; `entries_from_before_the_split_appear_once_in_the_view`; `store_audit_refuses_update_and_recent_delete`; `store_audit_prune_honours_the_passed_retention_and_its_floor`; `audit_view_pages_across_two_stores_and_accounts_without_gaps_or_repeats`; `audit_view_keeps_entries_after_the_last_catalog_on_a_store_is_deleted`; `audit_view_keeps_entries_after_a_catalog_is_transferred`; `forgetting_a_person_clears_their_name_in_store_entries_too` (the view resolves names through the account database).
 
@@ -524,7 +536,7 @@ CREATE TRIGGER audit_entries_no_truncate BEFORE TRUNCATE ON catalog.audit_entrie
   4. Commit the store transaction. If step 3 failed, roll it back instead, and nothing changed.
 
   A crash between 3 and 4 leaves the store side unmarked, but the registry row is deleted and cleanup removes the data anyway. A writer that waited in step 1 gets the row after commit, sees `deleted_at`, and fails with `NotFound`. Every write path checks `catalog_state.deleted_at` after taking its lock (one helper, `changesets::lock_catalog`).
-- [ ] `CleanupStores` drains `store_cleanups` per store. For a catalog it deletes the `catalog_state` row, cascading to the catalog's data but not `catalog.audit_entries` (P5), then the registry row. The name is reusable only after that (P6). It also rescans `catalogs.deleted_at` rows with no pending cleanup, as a backstop.
+- [ ] `CleanupStores` drains `store_cleanups` per store. For a catalog it deletes the `catalog_state` row, cascading to the catalog's data but not `catalog.catalog_audit_entries` (P5), then the registry row. The name is reusable only after that (P6). It also rescans `catalogs.deleted_at` rows with no pending cleanup, as a backstop.
 - [ ] Key, user and team deletion (P13): the deleting account transaction writes one `store_cleanups` row per affected key per store in `Stores::all()`, in the same transaction, so a crash after commit can't lose the cleanup. A user's or team's deletion writes rows for each of its keys, read before they are deleted. `CleanupStores` discards those keys' open changesets on each store. A store that can't be reached is retried (`attempts` counts tries; a row past 20 attempts is logged at error level each run and kept), and the deletion itself never waits on it.
 - [ ] Tests: `a_deleted_catalog_disappears_before_its_store_data_is_gone`; `cleanup_removes_the_store_data_then_the_registry_row`; `a_deleted_catalogs_name_is_reserved_until_cleanup`; `catalog_audit_survives_catalog_deletion`; `deleting_a_key_discards_its_changesets_on_every_store`; `cleanup_retries_an_unreachable_store_without_blocking_others`; `an_edit_racing_a_delete_either_lands_first_and_blocks_it_or_fails_after` (barrier between delete's steps 1 and 3, an edit started meanwhile); `a_delete_without_force_never_discards_work_written_during_it`; `a_key_deletion_crashing_after_commit_still_cleans_up_its_changesets` (drop the connection after commit, before the job runs, then run `CleanupStores`).
 
@@ -535,8 +547,9 @@ CREATE TRIGGER audit_entries_no_truncate BEFORE TRUNCATE ON catalog.audit_entrie
 - [ ] `CATALOG_MIGRATOR` is `migrate!("./migrations/catalog")` with its history table set to `catalog._sqlx_migrations` (`dangerous_set_table_name`). `db::migrate_store(conn)` runs it under the existing advisory lock, after creating schema `catalog` if absent.
 - [ ] The baseline is the `catalog` schema exactly as migrations 0037 and 0038 leave it: `catalog_state`, the moved tables with their indexes and constraints, and `audit_entries`. Generate it from a schema-only dump of a migrated database, then edit it into readable SQL.
 - [ ] Adoption: when `catalog.catalog_state` exists and `catalog._sqlx_migrations` has no rows, insert the baseline's history row (version, description, checksum from the embedded migration, `success = true`) instead of running it, in the same locked connection.
+- [ ] **Store identity.** The catalog baseline adds `catalog.store_identity (name text PRIMARY KEY)`, holding one row: the name of the store the database belongs to. Migrating or adopting writes it if absent (`main` on the account database at adoption). Adding a store connects to it, migrates it, then refuses if its `store_identity` row names another store, or if the target holds the account tables (`public.stores` exists), which means it is the account database under another name. `Stores::get` checks the row on first open and refuses a mismatch with `StoreUnavailable`, logged with both names. Each physical database therefore answers to one store name, whatever host name reached it.
 - [ ] `Stores::get` migrates a store the first time its pool opens in this process. `okf-mcp stores migrate` migrates every store and reports each one's result.
-- [ ] Tests: `adopted_schema_equals_a_fresh_store_schema` (compares `pg_dump --schema-only --schema=catalog` of both, after removing the history table's rows, or compares the information_schema and `pg_indexes` contents); `adoption_runs_once_under_concurrent_starts`; `a_fresh_store_gets_the_baseline`; `migrate_stores_reports_an_unreachable_store_and_continues`.
+- [ ] Tests: `adopted_schema_equals_a_fresh_store_schema` (compares `pg_dump --schema-only --schema=catalog` of both, after removing the history table's rows, or compares the information_schema and `pg_indexes` contents); `adoption_runs_once_under_concurrent_starts`; `a_fresh_store_gets_the_baseline`; `migrate_stores_reports_an_unreachable_store_and_continues`; `adding_a_store_that_aliases_another_is_refused` (a second host name for an already registered database); `adding_the_account_database_as_a_host_store_is_refused`.
 
 ### Task 15: the test harness runs catalog tests on a separate store
 

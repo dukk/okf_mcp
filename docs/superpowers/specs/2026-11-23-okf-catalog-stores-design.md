@@ -57,7 +57,10 @@ a second store.
 
 1. **A store is one Postgres database.** It may share a server (or the
    account database itself) with other stores. The registry never names a
-   host or database; it names a store.
+   host or database; it names a store. Each database answers to one
+   store name: only one store may be the account database, and a store
+   records its own name inside its database, so registering it again under
+   another name or host is refused.
 2. **Stores are rows, not config.** A `stores` table in the account
    database holds: name, location, credential reference. Config holds only
    the account database's URL, which the server needs to start. Adding a
@@ -78,7 +81,9 @@ a second store.
    own `search_path` (`public` for the account pool, `catalog` for a store
    pool), so a query sent to the wrong one fails instead of quietly
    working. A single-database install therefore opens two pools to one
-   database.
+   database. For this to hold, no table name exists in both schemas, and
+   server code never names a schema. It guards against mistakes; it is not
+   a security boundary.
 6. **Placement.** A new catalog goes to its owner team's pinned store if
    the team has one, else to the current default store. Both live in the
    account database and change at runtime through the admin API or CLI,
@@ -101,7 +106,7 @@ a second store.
    checked in code, and deletions clean up through jobs (Decision 11).
 10. **Catalog audit lives on the catalog's store.** An audit entry written
     inside a catalog-store transaction goes to that store's
-    `catalog.audit_entries`. Every other entry (sign-ins, keys, teams,
+    `catalog.catalog_audit_entries`. Every other entry (sign-ins, keys, teams,
     settings, unlocks, read-access counts) stays in the account database.
     Catalog entries refer to people, credentials and teams by the ids of
     the account database's `audit_people`, `audit_credentials` and
@@ -156,7 +161,7 @@ a second store.
     `catalog.deleted`, `catalog.exported`, `catalog.admin_read` and the
     unlock actions, stay in the account database.
 17. **Catalog audit outlives the catalog.** Deleting a catalog's store data
-    leaves its `catalog.audit_entries` rows; they are pruned by the audit
+    leaves its `catalog.catalog_audit_entries` rows; they are pruned by the audit
     retention setting, per store, like account audit.
 18. **A deleted catalog's name stays reserved until its store data is
     gone.** The registry row is marked deleted at once and removed only
@@ -172,7 +177,7 @@ a second store.
 | `api_keys`, `key_catalogs`, `user_catalogs`, `sign_in_codes`, `sign_in_code_catalogs` | `documents`, `revisions` |
 | OAuth clients and tokens | `changesets`, `changeset_entries` |
 | `catalogs` (the registry), `stores`, placement | `maintenance_*` |
-| `unlocks` (tallies already run in their own statement, `src/app.rs:424`) | `audit_entries` for catalog events |
+| `unlocks` (tallies already run in their own statement, `src/app.rs:424`) | `catalog_audit_entries` (catalog events) |
 | `audit_people`, `audit_credentials`, `audit_teams`, account `audit_entries`, `audit_access_counts` | |
 | `feedback`, `server_settings`, `server_state`, `server_keys`, `cluster_stats`, `apalis.*` | |
 
@@ -261,7 +266,7 @@ Three releases, each deployable alone:
    creates `catalog.catalog_state` from `catalogs.generation`, drops the
    foreign keys that cross the line, replaces the maintenance audit
    triggers (they read account tables) with a write from Rust, and creates
-   `catalog.audit_entries` with its own append-only guard. Catalog-event
+   `catalog.catalog_audit_entries` with its own append-only guard. Catalog-event
    entries written before the split stay in the account table: the
    append-only guard forbids deleting recent ones, and the merged view
    shows each entry once either way. The server then
