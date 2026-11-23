@@ -5,10 +5,10 @@
     "by": "server",
     "mac": "e58df8864c0dcbedd91b51fc4da46fa9a71737dfbdc336807d453bb04c995009"
   },
-  "next_evidence_seq": 859,
+  "next_evidence_seq": 864,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "38a3a3b0c53768c9b2ef25036823e0749b39acd4893edb163b1457ab7bea5c72"
+    "mac": "d4a81d7bdb0e2e3b6a00651f00fdc4417e851d6456f4593f717cfcb16c0dc181"
   },
   "claims": [
     {
@@ -52252,6 +52252,28 @@
             "by": "server",
             "mac": "7b48ac1ced0bfb230cd40ffbb099f3a7d114faaa48710b21b4668b1f526c0026"
           }
+        },
+        {
+          "id": "EVD-0862",
+          "kind": "analysis",
+          "locator": "src/catalog.rs:272-276,345-353,430-445; git grep 'rebuilds.lock(' src",
+          "summary": "At 6ac5f26 refresh calls refresh_to directly after generation_in(pool) (connection released); refresh_locked takes no lock and has no rebuilds parameter. git grep 'rebuilds.lock(' src gives two hits: refresh_to (production) and the test refreshes_of_two_states_share_the_rebuild_lock. The diff since 469ae23 touches only refresh/refresh_at and the test, so the earlier caller review stands.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 272,
+                "end": 276
+              },
+              "commit": "6ac5f26ed9b49c3f786f2c8867d8257bc29a8d8c"
+            }
+          },
+          "recorded_at": "2026-11-23T07:36:05.223896752Z",
+          "seal": {
+            "by": "server",
+            "mac": "607584472a985119df8480d1ed33aa766c826857262c10e67219fb789bb93d4b"
+          }
         }
       ],
       "verdicts": [
@@ -52268,13 +52290,26 @@
             "by": "server",
             "mac": "54dada5e8da5424b71c579af64167b197f45ee3c697590025addccfa559f0691"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 6ac5f26: refresh_locked takes no lock, refresh reaches the lock with no connection held.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0862"
+          ],
+          "recorded_at": "2026-11-23T07:36:12.061017591Z",
+          "seal": {
+            "by": "server",
+            "mac": "097739bbeab669e8607ae0c8d2921de09a3681a5a4b35ed2529d4c433018d1f1"
+          }
         }
       ],
       "created_at": "2026-11-23T07:17:33.220112894Z",
-      "updated_at": "2026-11-23T07:18:10.006234678Z",
+      "updated_at": "2026-11-23T07:36:12.061017591Z",
       "seal": {
         "by": "server",
-        "mac": "1303904fc2688ca3aeef417c6041f7f397630dac76ef7413e810727aee011b75"
+        "mac": "402716dd46cfff2d7c2bd02d841110fac76b9ce9cfe0b9d27bccf90ab8bd5625"
       }
     },
     {
@@ -52342,6 +52377,28 @@
             "by": "server",
             "mac": "ff223b2a0f416aeb66b3ce6a01b1e1e09e02110065b38ea7c2235ae843a6115c"
           }
+        },
+        {
+          "id": "EVD-0863",
+          "kind": "test",
+          "locator": "src/catalog.rs:662-672; gate.sh narrow ... a_refresh_waiting_for_a_connection (4 passed) at 6ac5f26",
+          "summary": "The reworked test still asserts the publish's refresh_locked returned true and state.current().generation() == generation after the race; passes at 6ac5f26. refresh_locked and current_base are unchanged since 469ae23.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 662,
+                "end": 672
+              },
+              "commit": "6ac5f26ed9b49c3f786f2c8867d8257bc29a8d8c"
+            }
+          },
+          "recorded_at": "2026-11-23T07:36:20.869993120Z",
+          "seal": {
+            "by": "server",
+            "mac": "dba0a803bd562b18cf3feb8dcd130e7e20796b4b7eea59631c2fbfc7c25c6a10"
+          }
         }
       ],
       "verdicts": [
@@ -52358,13 +52415,27 @@
             "by": "server",
             "mac": "6af3b95911215309b14b09bcce1aadeeca7c17b54b31bb8d7c347d03398508ff"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 6ac5f26: code unchanged, reworked test still asserts the publisher's swap.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0851",
+            "EVD-0863"
+          ],
+          "recorded_at": "2026-11-23T07:36:23.094140917Z",
+          "seal": {
+            "by": "server",
+            "mac": "d31ae4f19422baa4fe64f532490cec77945f88f4d13e3bf43a2d087b773d436d"
+          }
         }
       ],
       "created_at": "2026-11-23T07:17:33.220112894Z",
-      "updated_at": "2026-11-23T07:18:10.058171458Z",
+      "updated_at": "2026-11-23T07:36:23.094140917Z",
       "seal": {
         "by": "server",
-        "mac": "3ff6b5fc57ec150949ceb84839705e3cf31690c2deda7137ae507c4a998380d9"
+        "mac": "b8d6e94cbf8e047b7c8177518c7bd9efe319dc6d2d155fd9c612f5b3ba4fdf31"
       }
     },
     {
@@ -52498,6 +52569,28 @@
             "by": "server",
             "mac": "5505b72ccf2f642da66e25e0f0c4f90b10b796b626dc991b57dce0fc798aaf24"
           }
+        },
+        {
+          "id": "EVD-0859",
+          "kind": "test",
+          "locator": "src/catalog.rs:583-675; gate.sh narrow --jobs 4 --lib -- a_refresh_waiting_for_a_connection a_swap_never_moves concurrent_refreshes refreshes_of_two_states (4 passed) at 6ac5f26",
+          "summary": "Test now: pool of 2, 8 s acquire timeout, both connections held; refresh_to is called with a load step that sends on a oneshot under the lock before build's pool acquire; the test waits up to 4 s for the signal, asserts the refresher is unfinished, runs refresh_locked under a 4 s timeout, then awaits the refresher within 4 s after dropping connections and checks the generation. No sleep remains. Matches the claim; passes. That run took 50 s wall while a build ran in parallel, so the 2.7 s earlier is the quiet figure.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 583,
+                "end": 675
+              },
+              "commit": "6ac5f26ed9b49c3f786f2c8867d8257bc29a8d8c"
+            }
+          },
+          "recorded_at": "2026-11-23T07:36:01.504414385Z",
+          "seal": {
+            "by": "server",
+            "mac": "f99bdbb0d0a63777279f62b10873bd225c8400fe347d1b7732322f0ff4b0587c"
+          }
         }
       ],
       "verdicts": [
@@ -52513,13 +52606,26 @@
             "by": "server",
             "mac": "31820f4c46d4ad5f0469cac2bebd5f8cd76816066aa03ac3454c35e1f13b50ab"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 6ac5f26: the signalled version matches the statement and passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0859"
+          ],
+          "recorded_at": "2026-11-23T07:36:12.121453639Z",
+          "seal": {
+            "by": "server",
+            "mac": "49838bee41f688bd6854560cb3b14758ee03ebd935e60e05cf23ab25479bde76"
+          }
         }
       ],
       "created_at": "2026-11-23T07:17:33.220112894Z",
-      "updated_at": "2026-11-23T07:18:10.142983979Z",
+      "updated_at": "2026-11-23T07:36:12.121453639Z",
       "seal": {
         "by": "server",
-        "mac": "ce257927b2d77ad8642bcfecfaf531bf0f98a15f4255ea863f710c6c8401c021"
+        "mac": "d447a254b66aa75e3c1ded3cf3bb20870d1a421a178717e460066fece158f579"
       }
     },
     {
@@ -52564,6 +52670,28 @@
             "by": "server",
             "mac": "13020a0d5b9a26c8cc99fa10b3f5b8dcd420006754e3f0a354b277e654cc2a07"
           }
+        },
+        {
+          "id": "EVD-0860",
+          "kind": "test",
+          "locator": "scratch worktree at 6ac5f26 with refresh_locked taking `rebuilds` and going through refresh_to again: gate.sh narrow --jobs 4 --lib a_refresh_waiting_for_a_connection",
+          "summary": "One mutation run fails the reworked test: 'the publish's refresh is not held up by the queued refresh: Elapsed(())', 0 passed, 1 failed (9.10 s). Head passes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 648,
+                "end": 660
+              },
+              "commit": "6ac5f26ed9b49c3f786f2c8867d8257bc29a8d8c"
+            }
+          },
+          "recorded_at": "2026-11-23T07:36:01.560836296Z",
+          "seal": {
+            "by": "server",
+            "mac": "b7d52ee8168f13d08e0ba446639da2385ea65c0bb101a73cf9bd2bf23bebf95a"
+          }
         }
       ],
       "verdicts": [
@@ -52579,13 +52707,26 @@
             "by": "server",
             "mac": "c867419a8a3945522382cfeeecb19d6c1f1d9fd7dd7933b47727c2f4e57bd4f7"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 6ac5f26: mutation run fails the reworked test with Elapsed; head passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0860"
+          ],
+          "recorded_at": "2026-11-23T07:36:12.168642233Z",
+          "seal": {
+            "by": "server",
+            "mac": "6255538683bc638aad5d574ccce586ef07b85410d74508ff2db8f6d05e2e951c"
+          }
         }
       ],
       "created_at": "2026-11-23T07:17:33.220112894Z",
-      "updated_at": "2026-11-23T07:21:26.535046364Z",
+      "updated_at": "2026-11-23T07:36:12.168642233Z",
       "seal": {
         "by": "server",
-        "mac": "02395b1ca80fed03509eb60742c252cf8ab36ada1c8b97bf523f68f5f6637e2c"
+        "mac": "756a4fec684cf90e98316900a753594e993ab8d957cea07b9bbb1875b706e385"
       }
     },
     {
@@ -52629,6 +52770,24 @@
             "by": "server",
             "mac": "4e3df6207631263bafb25a45c14250e424ce23550b08358bf66e63affb89b140"
           }
+        },
+        {
+          "id": "EVD-0861",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T07-08-50Z-issue-671-refresh-lock-order.md Tests section; git grep refresh_at",
+          "summary": "The changelog's Tests section now describes the signalled refresh_to rather than the sleep, and the rule text is unchanged. refresh_at no longer appears in src or the changelog (the only src hits are the unrelated oidc.rs field refresh_at). The draft PR body target/i671-logs/pr-671-body.md line 13 still lists refresh_at under Changes, which is stale.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T07-08-50Z-issue-671-refresh-lock-order.md",
+              "commit": "6ac5f26ed9b49c3f786f2c8867d8257bc29a8d8c"
+            }
+          },
+          "recorded_at": "2026-11-23T07:36:01.607075376Z",
+          "seal": {
+            "by": "server",
+            "mac": "90ee94781e6e46c7c335029fb76197a4e4577c468aa60f3b6cdb0f112f988c72"
+          }
         }
       ],
       "verdicts": [
@@ -52644,13 +52803,26 @@
             "by": "server",
             "mac": "1d6630e63cf6f11b2970fbd6ca017c94817cd8240a0ef37e88696ec1616d9c10"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 6ac5f26: changelog and docs state the rule; refresh_at is gone from code and changelog.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0861"
+          ],
+          "recorded_at": "2026-11-23T07:36:12.220763618Z",
+          "seal": {
+            "by": "server",
+            "mac": "f3a90a2eb65065edcbe5ec46593355f91723e53cd7f5a115322bd9fb9925cdef"
+          }
         }
       ],
       "created_at": "2026-11-23T07:17:33.220112894Z",
-      "updated_at": "2026-11-23T07:18:10.185398159Z",
+      "updated_at": "2026-11-23T07:36:12.220763618Z",
       "seal": {
         "by": "server",
-        "mac": "dfe83139250096f1611d904c968a6bc7a4c3b1cb20ab4b204da7675249e0a8e9"
+        "mac": "3e6323f61988dc083eab8cbec23dd76d33ee5f0daedfb1818ab7c22224e1d1c5"
       }
     }
   ]
