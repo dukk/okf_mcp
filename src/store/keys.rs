@@ -2767,9 +2767,14 @@ mod tests {
         );
         assert_eq!(historical.key_name.as_deref(), Some("claude"));
         assert_eq!(historical.changeset.actor, terminal.actor);
-        let revisions = crate::store::history::revisions(&db.pool, work_catalog.id, "owned.md", 20)
-            .await
-            .unwrap();
+        let revisions = crate::store::history::revisions(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            work_catalog.id,
+            "owned.md",
+            20,
+        )
+        .await
+        .unwrap();
         assert_eq!(revisions.len(), 1);
         assert_eq!(revisions[0].actor, terminal.actor);
         assert_eq!(revisions[0].message, "original publish");

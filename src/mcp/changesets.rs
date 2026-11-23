@@ -727,7 +727,7 @@ pub(crate) async fn revert(
     // The history is the changeset's catalog's; `apply` resolves the handle
     // again under its locks.
     let state = ctx.changeset(&changeset, Access::Write).await?.state;
-    let stored = history::content_at(ctx.app().pool(), state.id(), &path, revision)
+    let stored = history::content_at(ctx.app().main_store(), state.id(), &path, revision)
         .await?
         .ok_or_else(|| OkfError::NotFound {
             path: format!("/{path} (revision {revision})"),
@@ -805,8 +805,8 @@ pub(crate) async fn pending_changes(
     use crate::store::changesets;
 
     let Pinned { state, row } = ctx.changeset(&params.changeset, Access::Read).await?;
-    let pool = ctx.app().pool();
-    let entries = changesets::entries(pool, row.id).await?;
+    let store = ctx.app().main_store();
+    let entries = changesets::entries(store.executor(), row.id).await?;
     // An entry made on another replica (or before this one's snapshot moved)
     // can have a base newer than the snapshot here: refresh before diffing,
     // or the diff would be against older text (issue #659).
@@ -817,7 +817,7 @@ pub(crate) async fn pending_changes(
     // diff is against what the entries were made on.
     let before = state.current().generation();
     let loaded = state
-        .current_covering(pool, ctx.app().rebuild_locks(), bases)
+        .current_covering(store, ctx.app().rebuild_locks(), bases)
         .await?;
     ctx.app()
         .catalog_cache()
@@ -1758,7 +1758,7 @@ mod publish_tests {
         assert!(published_text(&test, "a.md")
             .await
             .ends_with("# A\n\nNew.\n"));
-        let rows = history::revisions(test.app.pool(), state.id(), "a.md", 5)
+        let rows = history::revisions(test.app.main_store(), state.id(), "a.md", 5)
             .await
             .unwrap();
         assert_eq!(
@@ -1856,7 +1856,7 @@ mod publish_tests {
             "the publish rolled back"
         );
         let state = test.app.catalog("pg").await.unwrap().unwrap();
-        let rows = history::revisions(test.app.pool(), state.id(), "a.md", 5)
+        let rows = history::revisions(test.app.main_store(), state.id(), "a.md", 5)
             .await
             .unwrap();
         assert_eq!(rows.len(), 1, "no revision was written");
@@ -1880,7 +1880,7 @@ mod publish_tests {
         assert!(published.report.published);
         assert_eq!(state_of(&test, &handle).await, ChangesetState::Published);
         let state = test.app.catalog("pg").await.unwrap().unwrap();
-        let rows = history::revisions(test.app.pool(), state.id(), "a.md", 5)
+        let rows = history::revisions(test.app.main_store(), state.id(), "a.md", 5)
             .await
             .unwrap();
         // The publishing key's actor, not the opener's.
@@ -2938,7 +2938,7 @@ mod changes_tests {
             .await
             .unwrap()
             .unwrap()
-            .refresh(test.app.pool(), test.app.rebuild_locks())
+            .refresh(test.app.main_store(), test.app.rebuild_locks())
             .await
             .unwrap();
     }
@@ -3730,10 +3730,10 @@ mod restructure_publish_tests {
             ]
         );
         assert!(published.report.replayed.is_empty());
-        let old = history::revisions(test.app.pool(), state.id(), "infra/x.md", 5)
+        let old = history::revisions(test.app.main_store(), state.id(), "infra/x.md", 5)
             .await
             .unwrap();
-        let new = history::revisions(test.app.pool(), state.id(), "infra/z.md", 5)
+        let new = history::revisions(test.app.main_store(), state.id(), "infra/z.md", 5)
             .await
             .unwrap();
         // Each path keeps its own history (plan Decision 16).

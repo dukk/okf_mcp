@@ -873,7 +873,7 @@ impl ToolContext {
                     .app
                     .overlays()
                     .get(
-                        self.app.pool(),
+                        self.app.main_store(),
                         self.app.rebuild_locks(),
                         state,
                         &pinned.row,
@@ -975,7 +975,7 @@ impl ToolContext {
         let unknown = || OkfError::UnknownChangeset {
             changeset: handle.to_string(),
         };
-        let row = changesets::by_handle(self.app.pool(), handle)
+        let row = changesets::by_handle(self.app.main_store().executor(), handle)
             .await?
             .ok_or_else(unknown)?;
         // By the changeset's `catalogs.id`: that incarnation, never one

@@ -366,7 +366,7 @@ async fn export_catalog(
     // Only now is the name admitted: the span and the metrics take the
     // loaded catalog's own name, never the path segment.
     transfer.admit(resolved_catalog(&transfer.span, &app, &name).await);
-    let exported = export(app.pool(), &name, Vec::new(), &options).await;
+    let exported = export(app.main_store(), &name, Vec::new(), &options).await;
     transfer.finish(
         exported
             .as_ref()

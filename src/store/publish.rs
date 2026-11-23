@@ -19,7 +19,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::Serialize;
-use sqlx::{PgConnection, PgPool};
+use sqlx::PgConnection;
 use tracing::Instrument;
 
 use crate::app::App;
@@ -37,6 +37,7 @@ use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
 use crate::store::catalogs::{self, is_unique_violation, CatalogGeneration};
 use crate::store::changesets::{self, ChangesetRow, ChangesetState, EntryRow};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
+use crate::stores::CatalogDb;
 use crate::telemetry::metrics::Outcome;
 use crate::telemetry::subscriber::split_event;
 
@@ -196,7 +197,7 @@ async fn publish_locked(
         message,
     } = *input;
     // Step 1, before any lock: an empty changeset never waits for one.
-    if changesets::entries(app.pool(), changeset.id)
+    if changesets::entries(app.main_store().executor(), changeset.id)
         .await?
         .is_empty()
     {
@@ -269,7 +270,7 @@ async fn publish_locked(
             // sees only what is committed, and report the revision there now.
             Err(OkfError::Conflict { files }) => {
                 tx.rollback().await?;
-                let files = with_current_revisions(app.pool(), state.id(), files).await?;
+                let files = with_current_revisions(app.main_store(), state.id(), files).await?;
                 return Err(OkfError::Conflict { files });
             }
             Err(error) => return Err(error),
@@ -333,7 +334,7 @@ async fn publish_locked(
     // the next use retries it (it checks the snapshot against the catalog's
     // row), and the next publish refreshes first. `publish` then has the
     // catalog cache weigh the new snapshot.
-    if let Err(error) = state.refresh(app.pool(), app.rebuild_locks()).await {
+    if let Err(error) = state.refresh(app.main_store(), app.rebuild_locks()).await {
         split_event!(
             error,
             { catalog = %state.name(), kind = error.kind(), },
@@ -808,13 +809,18 @@ fn as_conflict(error: OkfError, path: &str, expected: Option<i32>) -> OkfError {
 }
 
 /// Fills in each conflicting file's live revision as committed now, for the
-/// backstop's conflict (read on the pool, after the publish rolled back).
+/// backstop's conflict (read on the store's pool, after the publish rolled back).
+///
+/// # Arguments
+/// * `db` - the catalog's store.
+/// * `catalog_id` - the catalog.
+/// * `files` - the conflicting files.
 ///
 /// # Errors
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "publish.with_current_revisions", catalog_id = catalog_id))]
 async fn with_current_revisions(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     mut files: Vec<ConflictFile>,
 ) -> Result<Vec<ConflictFile>, OkfError> {
@@ -826,7 +832,7 @@ async fn with_current_revisions(
         )
         .bind(catalog_id)
         .bind(file.path.trim_start_matches('/'))
-        .fetch_optional(pool)
+        .fetch_optional(db.executor())
         .await?;
     }
     Ok(files)
@@ -988,7 +994,7 @@ mod tests {
         let first = test.app.catalog("pg").await.unwrap().expect("pg is loaded");
         let second = Arc::new(
             CatalogState::load(
-                test.app.pool(),
+                test.app.main_store(),
                 &test.app.catalog_row("pg").await.unwrap().expect("pg"),
             )
             .await

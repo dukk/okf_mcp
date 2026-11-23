@@ -459,14 +459,14 @@ async fn revision(
     .await?;
     let state = ctx.one(Some(&found.catalog)).await?;
     let stored = found.path.trim_start_matches('/');
-    let current = content_at(app.pool(), state.id(), stored, revision)
+    let current = content_at(app.main_store(), state.id(), stored, revision)
         .await?
         .ok_or_else(|| OkfError::NotFound {
             path: format!("{} (revision {revision})", found.path),
         })?;
     let previous = if revision > 1 {
         // `and_then`: a missing row or a deletion both mean "no text before".
-        content_at(app.pool(), state.id(), stored, revision - 1)
+        content_at(app.main_store(), state.id(), stored, revision - 1)
             .await?
             .and_then(|row| row.content)
     } else {
@@ -565,7 +565,7 @@ async fn recent_changes(
     // `transpose` turns Option<Result<..>> into Result<Option<..>> for `?`.
     let after = query.after.as_deref().map(parse_cursor).transpose()?;
     let limit = query.limit.unwrap_or(RECENT_DEFAULT);
-    let page = recent(app.pool(), state.id(), after.as_ref(), limit).await?;
+    let page = recent(app.main_store(), state.id(), after.as_ref(), limit).await?;
     let mut wanted = Wanted::default();
     for row in &page.rows {
         wanted.user(&row.actor);

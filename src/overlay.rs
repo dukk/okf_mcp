@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use sqlx::{PgConnection, PgExecutor, PgPool};
+use sqlx::{PgConnection, PgExecutor};
 
 use crate::cache::catalogs::weight;
 use crate::cache::{Bounded, CacheName, Limit};
@@ -29,6 +29,7 @@ use crate::okf::analysis::lint::{lint, CommitTimes, LintReport};
 use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
 use crate::store::changesets::{self, ChangesetRow, EntryRow};
+use crate::stores::CatalogDb;
 use crate::telemetry::metrics::Metrics;
 
 /// A catalog's published state with one changeset's entries applied.
@@ -331,12 +332,12 @@ impl Overlays {
 
     /// The overlay of `changeset` on `state`'s current published state,
     /// for a read: the cached one if it was built at this `version` and
-    /// `generation`, else a new one (its entries read now from `pool`).
+    /// `generation`, else a new one (its entries read now from `db`).
     /// Concurrent misses on one changeset build it once: the others wait,
     /// then find it cached.
     ///
     /// # Arguments
-    /// * `pool` - where to read the entries.
+    /// * `db` - the catalog's store, where to read the entries.
     /// * `rebuilds` - the rebuild locks (`App::rebuild_locks`), for the
     ///   refresh of a snapshot behind the entries.
     /// * `state` - the changeset's catalog.
@@ -350,7 +351,7 @@ impl Overlays {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn get(
         &self,
-        pool: &PgPool,
+        db: &CatalogDb,
         rebuilds: &KeyedLocks,
         state: &CatalogState,
         changeset: &ChangesetRow,
@@ -387,7 +388,7 @@ impl Overlays {
             .build(
                 changeset.id,
                 || async {
-                    let entries = changesets::entries(pool, changeset.id).await?;
+                    let entries = changesets::entries(db.executor(), changeset.id).await?;
                     // Unlike `get_in`, a read may take a second connection:
                     // so before building, bring a snapshot that is behind
                     // the entries' bases up to date (an entry made on
@@ -397,7 +398,7 @@ impl Overlays {
                     let bases = entries
                         .iter()
                         .map(|entry| (entry.path.as_str(), entry.base_revision));
-                    let base = state.current_covering(pool, rebuilds, bases).await?;
+                    let base = state.current_covering(db, rebuilds, bases).await?;
                     Ok(Arc::new(build_overlay(base, changeset, entries).await?))
                 },
                 supersedes,
@@ -651,16 +652,31 @@ mod tests {
         let first_row = pending_entry(&test, &handle, &edit("# One\n")).await;
 
         let first = overlays
-            .get(pool, rebuilds, &state, &first_row)
+            .get(
+                &crate::stores::CatalogDb::main_of(pool),
+                rebuilds,
+                &state,
+                &first_row,
+            )
             .await
             .unwrap();
         let again = overlays
-            .get(pool, rebuilds, &state, &first_row)
+            .get(
+                &crate::stores::CatalogDb::main_of(pool),
+                rebuilds,
+                &state,
+                &first_row,
+            )
             .await
             .unwrap();
         let second_row = pending_entry(&test, &handle, &edit("# Two\n")).await;
         let after_edit = overlays
-            .get(pool, rebuilds, &state, &second_row)
+            .get(
+                &crate::stores::CatalogDb::main_of(pool),
+                rebuilds,
+                &state,
+                &second_row,
+            )
             .await
             .unwrap();
         let options = ImportOptions {
@@ -681,14 +697,27 @@ mod tests {
         )
         .await
         .unwrap();
-        state.refresh(pool, rebuilds).await.unwrap();
+        state
+            .refresh(&crate::stores::CatalogDb::main_of(pool), rebuilds)
+            .await
+            .unwrap();
         let after_import = overlays
-            .get(pool, rebuilds, &state, &second_row)
+            .get(
+                &crate::stores::CatalogDb::main_of(pool),
+                rebuilds,
+                &state,
+                &second_row,
+            )
             .await
             .unwrap();
         overlays.forget(second_row.id).await;
         let after_forget = overlays
-            .get(pool, rebuilds, &state, &second_row)
+            .get(
+                &crate::stores::CatalogDb::main_of(pool),
+                rebuilds,
+                &state,
+                &second_row,
+            )
             .await
             .unwrap();
 
@@ -918,7 +947,7 @@ mod tests {
                 tokio::spawn(async move {
                     let state = app.catalog("pg").await.unwrap().unwrap();
                     app.overlays()
-                        .get(app.pool(), app.rebuild_locks(), &state, &row)
+                        .get(app.main_store(), app.rebuild_locks(), &state, &row)
                         .await
                         .unwrap()
                 })
@@ -974,7 +1003,7 @@ mod tests {
             let (app, row, state) = (Arc::clone(&test.app), Arc::clone(&row), Arc::clone(&state));
             tokio::spawn(async move {
                 app.overlays()
-                    .get(app.pool(), app.rebuild_locks(), &state, &row)
+                    .get(app.main_store(), app.rebuild_locks(), &state, &row)
                     .await
             })
         };
@@ -1032,7 +1061,7 @@ mod tests {
             let (app, row, state) = (Arc::clone(&test.app), Arc::clone(&row), Arc::clone(&state));
             tokio::spawn(async move {
                 app.overlays()
-                    .get(app.pool(), app.rebuild_locks(), &state, &row)
+                    .get(app.main_store(), app.rebuild_locks(), &state, &row)
                     .await
             })
         };
@@ -1082,10 +1111,33 @@ mod tests {
 
         // Act: a miss that builds, then a hit, then a build that fails (the
         // new entry's path is below a published file).
-        overlays.get(pool, rebuilds, &state, &row).await.unwrap();
-        overlays.get(pool, rebuilds, &state, &row).await.unwrap();
+        overlays
+            .get(
+                &crate::stores::CatalogDb::main_of(pool),
+                rebuilds,
+                &state,
+                &row,
+            )
+            .await
+            .unwrap();
+        overlays
+            .get(
+                &crate::stores::CatalogDb::main_of(pool),
+                rebuilds,
+                &state,
+                &row,
+            )
+            .await
+            .unwrap();
         let clash = pending_entry(&test, &handle, &edit("a.md/c.md")).await;
-        let failed = overlays.get(pool, rebuilds, &state, &clash).await;
+        let failed = overlays
+            .get(
+                &crate::stores::CatalogDb::main_of(pool),
+                rebuilds,
+                &state,
+                &clash,
+            )
+            .await;
 
         // Assert: one request per call (the second lookup under the build
         // lock is not counted).

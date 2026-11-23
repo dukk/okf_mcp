@@ -153,10 +153,15 @@ async fn maintenance_evidence_uses_exact_revision_bytes() {
     assert!(evidence::validate(&mut conn, catalog, &cited)
         .await
         .unwrap());
-    let stored = crate::store::history::content_at(&db.pool, catalog, "a.md", 2)
-        .await
-        .unwrap()
-        .unwrap();
+    let stored = crate::store::history::content_at(
+        &crate::stores::CatalogDb::main_of(&db.pool),
+        catalog,
+        "a.md",
+        2,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(stored.content.unwrap(), source.as_bytes());
     assert!(evidence::read(&db.pool, catalog + 1, &pin).await.is_err());
     sqlx::query("INSERT INTO revisions (catalog_id,path,revision,op,content,executable,actor,message,created_at) VALUES ($1,'gone.md',2,'delete',NULL,false,'test','deleted',$2)")
