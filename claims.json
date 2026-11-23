@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 729,
+  "next_claim_seq": 743,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "4833e2e9ab729b48904addf0e9916c68879df6007e8a4a9de5c2a02e9695ff28"
+    "mac": "a3104be1c0f3239cbc2e6734aa9bdc549b07ada2f632a789db221b2ce3ead07f"
   },
-  "next_evidence_seq": 977,
+  "next_evidence_seq": 994,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "65d8ea74f12cb6ec4164d80f752235903adb959fb0bd40dedc89295332b15b18"
+    "mac": "fd20b6222a1148c7aac64b1dc28020f617cb040b1d5231f5646b6c94a0b12092"
   },
   "claims": [
     {
@@ -24726,6 +24726,28 @@
             "by": "server",
             "mac": "b1c87ee8f474c079534af325c98e15ff5ad98f8f3db0e474bd8c5cd96efd8f04"
           }
+        },
+        {
+          "id": "EVD-0990",
+          "kind": "inspection",
+          "locator": "docs/reference/tools.md:424,628; src/mcp/reports.rs:32,245,276 at 74e7b46",
+          "summary": "Re-audit on 74e7b46: oldest and sprawl rows still say default 5 and DEFAULT_N = 5 is used by both handlers. This PR changes only line 462 of tools.md (publish description); reports.rs untouched.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/reference/tools.md",
+              "lines": {
+                "start": 424,
+                "end": 424
+              },
+              "commit": "74e7b469599d8697a77a2184f7f2c258ca39cd48"
+            }
+          },
+          "recorded_at": "2026-11-23T12:01:14.404120052Z",
+          "seal": {
+            "by": "server",
+            "mac": "6c56796e14515381950064a6cf4a144cfcaebd42f0ac66a32af547fce77dc3c0"
+          }
         }
       ],
       "verdicts": [
@@ -24767,13 +24789,26 @@
             "by": "server",
             "mac": "cdfcb9d7f4574e116eb2c3bf9ba6d17f424c90f25198cf2540d8c5fe4583bfe8"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audit on 74e7b46: defaults unchanged by this PR.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0990"
+          ],
+          "recorded_at": "2026-11-23T12:01:19.556405778Z",
+          "seal": {
+            "by": "server",
+            "mac": "3def1e4207d48ab3c296d18321dc881265c3db60e6bdd0366054c41d15c3e941"
+          }
         }
       ],
       "created_at": "2026-11-21T19:08:08.066114433Z",
-      "updated_at": "2026-11-22T17:58:19.985506479Z",
+      "updated_at": "2026-11-23T12:01:19.556405778Z",
       "seal": {
         "by": "server",
-        "mac": "a324365eaf57058fe001ca9da9d57c7c6e5fed3de3d86159da2a0a255e48e024"
+        "mac": "b2f64318eb7b7c8e2dd1ed7bf7a1758262b15aa2b7a5b02c6835b3fa6ff2c5b3"
       }
     },
     {
@@ -32692,6 +32727,28 @@
             "by": "server",
             "mac": "ed92da026482dbc26d36efd7c11b6e353b35b80f1730eba88bc229a89122bd53"
           }
+        },
+        {
+          "id": "EVD-0991",
+          "kind": "inspection",
+          "locator": "docs/reference/tools.md:462 at 74e7b46",
+          "summary": "Re-audit on 74e7b46: the publish entry still says the stamp, review, question, unquestion, add_source and remove_source edits are replayed onto the new text; this PR only inserted a parenthetical about pre-existing lint errors.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/reference/tools.md",
+              "lines": {
+                "start": 462,
+                "end": 462
+              },
+              "commit": "74e7b469599d8697a77a2184f7f2c258ca39cd48"
+            }
+          },
+          "recorded_at": "2026-11-23T12:01:14.454188236Z",
+          "seal": {
+            "by": "server",
+            "mac": "45c8068eb278e8dc26a8db4a6ff93683469f21b8047fc0bb44a46cab49a9d654"
+          }
         }
       ],
       "verdicts": [
@@ -32707,13 +32764,26 @@
             "by": "server",
             "mac": "7b549ab87199afb5f3a25768cfd447bf446471de43925fcf48c4ff5e606d8444"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audit on 74e7b46: replay wording kept; PR only adds a lint parenthetical.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0991"
+          ],
+          "recorded_at": "2026-11-23T12:01:19.616378119Z",
+          "seal": {
+            "by": "server",
+            "mac": "234ca16b27d2510f783969b2b08627085750c13928149e804756a5e2e10002de"
+          }
         }
       ],
       "created_at": "2026-11-22T16:54:27.317160226Z",
-      "updated_at": "2026-11-22T16:55:19.071634124Z",
+      "updated_at": "2026-11-23T12:01:19.616378119Z",
       "seal": {
         "by": "server",
-        "mac": "8fd9b2bc9781e699d66d81ac4ea4dbe4beb4f8dad021a6459dd2aeb163cf4231"
+        "mac": "330d70f10728e0bc5248dad5ba9deaaf510df4e32434a5f7413dceae546fcaf9"
       }
     },
     {
@@ -57754,6 +57824,935 @@
       "seal": {
         "by": "server",
         "mac": "3676f3144aa5918626372b6e84c0d2ae69d06ca023e831df0b6e4f544a402412"
+      }
+    },
+    {
+      "id": "CLM-0729",
+      "statement": "Issue #952 is delivered: a publish is no longer refused for lint errors a changed file already has in the published catalog, while errors the changeset introduces still refuse.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/952",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:952"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0993",
+          "kind": "analysis",
+          "locator": "CLM-0730 through CLM-0742",
+          "summary": "Every child claim (acceptance 1-3, mechanism, docs, tests, gates) is supported.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T12:01:49.676398695Z",
+          "seal": {
+            "by": "server",
+            "mac": "c99853f107de737fff423ec14d03d1312cd0a2d1b7a9ca2c06b037a04ad3d330"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All child claims supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0993"
+          ],
+          "recorded_at": "2026-11-23T12:01:53.505271019Z",
+          "seal": {
+            "by": "server",
+            "mac": "43dd6a54c3d79ea9419c1ec048d199ef7f80c47e02073d08a70c41dba4ff529a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:59:53.332734935Z",
+      "updated_at": "2026-11-23T12:01:53.505271019Z",
+      "seal": {
+        "by": "server",
+        "mac": "fc6ceea8a7a9ae5ad8d5e28683c715523db9a4058beb4eaa981b3c63f8a422fd"
+      }
+    },
+    {
+      "id": "CLM-0730",
+      "statement": "A catalog whose log.md has a pre-existing broken angle-bracket link accepts a publish that adds a log entry, and the old finding is reported as a warning.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #952 Acceptance, bullet 1",
+      "derived_from": [
+        "CLM-0729"
+      ],
+      "artifacts": [
+        "src/store/publish.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:952"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0977",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow old_broken_link (2 passed)",
+          "summary": "Ran on head 74e7b46. a_logged_publish_over_an_old_broken_link_in_log_md_reports_it_as_a_warning seeds log.md with ([x](<a b.md>), ...), adds one log entry, publishes: report.published true, log.md contains the new entry, warnings hold a broken-link finding for log.md naming a b.md. Passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets.rs",
+              "lines": {
+                "start": 2517,
+                "end": 2547
+              },
+              "commit": "74e7b469599d8697a77a2184f7f2c258ca39cd48"
+            }
+          },
+          "recorded_at": "2026-11-23T12:00:23.995797225Z",
+          "seal": {
+            "by": "server",
+            "mac": "45f50058ccf87a4a96d5ed72f07a8f4c8db08ed75298964d744a4f5da440779b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test seeds the issue's log.md, appends a log entry, publishes; asserts success, entry text, and the old finding as a warning. Ran and passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0977"
+          ],
+          "recorded_at": "2026-11-23T12:00:46.891996180Z",
+          "seal": {
+            "by": "server",
+            "mac": "e443c53652316400658617979f6ac377f5b2917ab983501cce5993392596af84"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:59:53.332734935Z",
+      "updated_at": "2026-11-23T12:00:46.891996180Z",
+      "seal": {
+        "by": "server",
+        "mac": "fd7802a404c59fde873f2d58f7cd7c29278fef52992ab5d6b6148b119cae2305"
+      }
+    },
+    {
+      "id": "CLM-0731",
+      "statement": "A new broken link in the changeset's own lines is still an error (publish refused with LintFailed), including when it has the same target as an old finding.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #952 Acceptance, bullet 2",
+      "derived_from": [
+        "CLM-0729"
+      ],
+      "artifacts": [
+        "src/store/publish.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:952"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0978",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow a_new_broken_link_in_a_log_entry (1 passed)",
+          "summary": "Ran on head 74e7b46. Test adds a log entry with a new [y](<a b.md>) (same target as the old finding) beside the old one; publish returns LintFailed with exactly 1 error (log.md, broken-link), one broken-link warning, and the changeset stays Open. Passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets.rs",
+              "lines": {
+                "start": 2549,
+                "end": 2569
+              },
+              "commit": "74e7b469599d8697a77a2184f7f2c258ca39cd48"
+            }
+          },
+          "recorded_at": "2026-11-23T12:00:24.047450595Z",
+          "seal": {
+            "by": "server",
+            "mac": "f8df1b67424a540913ef7abfe6b37afae236f1befd206fff0bb8009fd2ff0f81"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "New identical-target broken link in a log entry still yields LintFailed with one error and an open changeset. Ran and passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0978"
+          ],
+          "recorded_at": "2026-11-23T12:00:46.965737692Z",
+          "seal": {
+            "by": "server",
+            "mac": "1dba9738d03c134c95dbd6d978a360cf2086de0d25e21a951309ad868e355189"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:59:53.332734935Z",
+      "updated_at": "2026-11-23T12:00:46.965737692Z",
+      "seal": {
+        "by": "server",
+        "mac": "a12c10da512483bc0414856961d0451824012a1092bba6d1a51efcffb20697fb"
+      }
+    },
+    {
+      "id": "CLM-0732",
+      "statement": "A test reproduces the scenario: log.md holding ([x](<a b.md>), ...) from before, then log plus publish.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Issue #952 Acceptance, bullet 3",
+      "derived_from": [
+        "CLM-0729"
+      ],
+      "artifacts": [
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:952"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0979",
+          "kind": "test",
+          "locator": "src/mcp/changesets.rs:2517 pg_with_old_broken_links + :2525 test (passed)",
+          "summary": "The fixture's log.md holds \"* **Update:** was ([x](<a b.md>), ...)\" (the issue's scenario), then log_entry plus publish_as(.., \"log\") run and assert success; the test passed when I ran it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets.rs",
+              "lines": {
+                "start": 2517,
+                "end": 2528
+              },
+              "commit": "74e7b469599d8697a77a2184f7f2c258ca39cd48"
+            }
+          },
+          "recorded_at": "2026-11-23T12:00:24.097675518Z",
+          "seal": {
+            "by": "server",
+            "mac": "e306044fc9bcac71541684b2fe2c28af450f28283d761246ff880e81e08cf75c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Fixture and test reproduce the issue's scenario (log.md with ([x](<a b.md>), ...), log, publish) and assert the fixed outcome.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0979"
+          ],
+          "recorded_at": "2026-11-23T12:00:47.042356278Z",
+          "seal": {
+            "by": "server",
+            "mac": "3962259065e5730b72128b229ce3b134f39e15a0e38a8b3d1697e97b74e3f24b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:59:53.332734935Z",
+      "updated_at": "2026-11-23T12:00:47.042356278Z",
+      "seal": {
+        "by": "server",
+        "mac": "44ab7346d889af3d33cc5002602cdf06a8b91180c393e2049d838dce92517119"
+      }
+    },
+    {
+      "id": "CLM-0733",
+      "statement": "split_lint compares errors in changed files with the published catalog's errors via demote_preexisting, matching on file, rule and message and never on line number.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"`split_lint` (`src/store/publish.rs`) compares errors in changed files with the published catalog's errors via `demote_preexisting`.\" and \"Matching rule: file, rule and message, never line number\"",
+      "derived_from": [
+        "CLM-0730"
+      ],
+      "artifacts": [
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:952",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0980",
+          "kind": "inspection",
+          "locator": "src/store/publish.rs:611-680",
+          "summary": "split_lint calls demote_preexisting(errors, || base.lint(now).errors); the key is the tuple (file, rule, message), line is not part of it. Unit test a_published_error_excuses_the_same_error_on_a_moved_line (line 3 vs 9) passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 611,
+                "end": 680
+              },
+              "commit": "74e7b469599d8697a77a2184f7f2c258ca39cd48"
+            }
+          },
+          "recorded_at": "2026-11-23T12:00:24.147259798Z",
+          "seal": {
+            "by": "server",
+            "mac": "28cba0e74025c347f1ef3baddf114251a5c43c56e1573fea471685eaf6bdbb80"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code keys on (file, rule, message) and split_lint calls demote_preexisting with the published catalog's lint; moved-line unit test passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0980"
+          ],
+          "recorded_at": "2026-11-23T12:00:47.134748227Z",
+          "seal": {
+            "by": "server",
+            "mac": "502189c275b74b0be6c04a0df1c583380d36c1e0c058a686b59183795485aecb"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:59:53.332734935Z",
+      "updated_at": "2026-11-23T12:00:47.134748227Z",
+      "seal": {
+        "by": "server",
+        "mac": "4e74cb4c6bd837d6de3d5e817467bd7b53e621b9f71ce2255800a9a671015f6c"
+      }
+    },
+    {
+      "id": "CLM-0734",
+      "statement": "Matching is by count: one published finding excuses at most one finding in the result, so one old broken link plus one new identical one yields one new error.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"by count, so one published finding excuses at most one in the result (one old broken link plus one new identical one is one new error)\"",
+      "derived_from": [
+        "CLM-0731"
+      ],
+      "artifacts": [
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:952",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0981",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow published_error (3 passed): one_published_error_excuses_only_one_of_two_identical_errors; plus a_new_broken_link_in_a_log_entry_is_still_refused_beside_an_old_one",
+          "summary": "Unit test asserts (new.len, old.len) == (1,1) with the new one being line 8; the MCP test asserts one error end to end. The code decrements a per-key counter (publish.rs:670-676). All passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 879,
+                "end": 888
+              },
+              "commit": "74e7b469599d8697a77a2184f7f2c258ca39cd48"
+            }
+          },
+          "recorded_at": "2026-11-23T12:00:24.197382461Z",
+          "seal": {
+            "by": "server",
+            "mac": "d66bae532579d686f4024f3a460dcfb811ade915675937fbafa272097f74a635"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Counter-based matching; unit test and end-to-end test assert 1 new error from 1 old plus 1 new identical.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0981"
+          ],
+          "recorded_at": "2026-11-23T12:00:47.234398870Z",
+          "seal": {
+            "by": "server",
+            "mac": "b35cbb47f4a0c39ecd0880072a907750e0ed7a20507a8a4c6de9aca930f9cd40"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:59:53.332734935Z",
+      "updated_at": "2026-11-23T12:00:47.234398870Z",
+      "seal": {
+        "by": "server",
+        "mac": "f675be5580ec31f7a969a6807270f3af95e4f0851e17142065bb1e6889dc71a7"
+      }
+    },
+    {
+      "id": "CLM-0735",
+      "statement": "A demoted finding's message ends with \"(already in the published file)\".",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"A demoted finding's message ends with \\\"(already in the published file)\\\".\"",
+      "derived_from": [
+        "CLM-0730"
+      ],
+      "artifacts": [
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:952",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0982",
+          "kind": "test",
+          "locator": "src/store/publish.rs:676 and :876 (a_published_error_excuses_the_same_error_on_a_moved_line, passed)",
+          "summary": "demote_preexisting appends \" (already in the published file)\" to each demoted finding; the unit test asserts old[0].message.ends_with(that text) and passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 866,
+                "end": 877
+              },
+              "commit": "74e7b469599d8697a77a2184f7f2c258ca39cd48"
+            }
+          },
+          "recorded_at": "2026-11-23T12:00:24.246363549Z",
+          "seal": {
+            "by": "server",
+            "mac": "0637adde5333f0df5235f4b358cef270bf60dc356a5b0796b12383c4c7b84153"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code appends the suffix and a unit test asserts ends_with on it; passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0982"
+          ],
+          "recorded_at": "2026-11-23T12:00:47.353926755Z",
+          "seal": {
+            "by": "server",
+            "mac": "fe5cfbfe12dabf6b7a5e07fe01966d1730607f30d6d9d5ca170a27801c7da9d6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:59:53.332734935Z",
+      "updated_at": "2026-11-23T12:00:47.353926755Z",
+      "seal": {
+        "by": "server",
+        "mac": "d3c3f72be9a4da92c87e554fd6769171d62df722086dfe5a0b8e635b52b98772"
+      }
+    },
+    {
+      "id": "CLM-0736",
+      "statement": "The published catalog is linted only when a changed file has an error.",
+      "kind": "performance",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"The published catalog is linted only when a changed file has an error.\"",
+      "derived_from": [
+        "CLM-0729"
+      ],
+      "artifacts": [
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:952",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0983",
+          "kind": "analysis",
+          "locator": "src/store/publish.rs:625-630",
+          "summary": "base.lint(now) is inside the closure passed to demote_preexisting, which is called only under `if !errors.is_empty()`, and the closure is invoked once. Errors counted are only those in changed files (after partition). No test asserts laziness, but the code shows it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 620,
+                "end": 632
+              },
+              "commit": "74e7b469599d8697a77a2184f7f2c258ca39cd48"
+            }
+          },
+          "recorded_at": "2026-11-23T12:00:24.295409326Z",
+          "seal": {
+            "by": "server",
+            "mac": "3e673c4a8a36ccd8baee8f8d2120a3e095fd10cd00599d6d5e31465b149cda40"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The published lint is a lazy closure invoked only inside the non-empty-errors branch.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0983"
+          ],
+          "recorded_at": "2026-11-23T12:00:47.460298619Z",
+          "seal": {
+            "by": "server",
+            "mac": "e3fe4e2f9c66e11fa5361d67a041dca4cef09103bdc1ddad809347ae7c681b57"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:59:53.332734935Z",
+      "updated_at": "2026-11-23T12:00:47.460298619Z",
+      "seal": {
+        "by": "server",
+        "mac": "b88acababf9ee8f91e1e7c7b6045f3bf0b23dda4fa3dc99e34cbcf26afb6d90b"
+      }
+    },
+    {
+      "id": "CLM-0737",
+      "statement": "The demotion rule sits in publish::check, shared by the MCP publish tool and the HTTP changesets API, and no other path lints changed files for refusal.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"The rule sits in `publish::check`, shared by the MCP `publish` tool and the HTTP changesets API; no other path lints changed files for refusal.\"",
+      "derived_from": [
+        "CLM-0729"
+      ],
+      "artifacts": [
+        "src/store/publish.rs",
+        "src/http/api/changesets.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:952",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0984",
+          "kind": "analysis",
+          "locator": "src/store/publish.rs:253 (check call), src/http/api/changesets.rs:121-133 (publish_one -> mcp publish), git grep '\\.lint(' src",
+          "summary": "The only refusing lint of changed files is split_lint inside check(), called from publish (line 253). HTTP publish_one calls the shared mcp publish, which calls store::publish::publish. Other .lint( callers are mcp/reports.rs (advice report), overlay.rs delegation and a catalog.rs test; none refuse a publish. Not covered by an HTTP-level test of the new behavior.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 250,
+                "end": 256
+              },
+              "commit": "74e7b469599d8697a77a2184f7f2c258ca39cd48"
+            }
+          },
+          "recorded_at": "2026-11-23T12:00:24.345936761Z",
+          "seal": {
+            "by": "server",
+            "mac": "d6af202584910c6cc6953d49cd951a73279709963694b73779b83d838d9ebd29"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Single refusing lint path is check(); HTTP route delegates to the same publish. Other lint callers do not refuse.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0984"
+          ],
+          "recorded_at": "2026-11-23T12:00:47.533929651Z",
+          "seal": {
+            "by": "server",
+            "mac": "3d0c66c563a9a4ad462a3ac4655adb421b649e42c094eff824cb10c0067f7749"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:59:53.332734935Z",
+      "updated_at": "2026-11-23T12:00:47.533929651Z",
+      "seal": {
+        "by": "server",
+        "mac": "c8e7dc045cd4d6ae4cf85287beb3bdf4cdacdfdc0b45729ceaa90201b8f8501e"
+      }
+    },
+    {
+      "id": "CLM-0738",
+      "statement": "The tool description, docs/reference/tools.md and the PublishReport warnings field doc were updated to say an error the published file already has is a warning.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"Tool description, `docs/reference/tools.md` and the `warnings` field doc updated.\"",
+      "derived_from": [
+        "CLM-0729"
+      ],
+      "artifacts": [
+        "docs/reference/tools.md",
+        "src/mcp/changesets.rs",
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:952",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0985",
+          "kind": "inspection",
+          "locator": "src/mcp/changesets.rs:441-444; docs/reference/tools.md:462; src/store/publish.rs:50-51",
+          "summary": "All three texts changed in the diff: the tool description and tools.md add \"(an error the published file already has is a warning, not a refusal)\", and the warnings field doc lists errors in changed files the published file already had.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/reference/tools.md",
+              "lines": {
+                "start": 462,
+                "end": 462
+              },
+              "commit": "74e7b469599d8697a77a2184f7f2c258ca39cd48"
+            }
+          },
+          "recorded_at": "2026-11-23T12:00:24.395639882Z",
+          "seal": {
+            "by": "server",
+            "mac": "2ff245cd7080dae4aa6dc5b0fa930476986f7463c538b5470f1e33a9d273bb0a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All three texts are changed in the diff as stated.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0985"
+          ],
+          "recorded_at": "2026-11-23T12:00:47.617402888Z",
+          "seal": {
+            "by": "server",
+            "mac": "9c76930768a9e502aab5033e7098dc940aa7d2830985d9eca276ba2a86c0d218"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:59:53.332734935Z",
+      "updated_at": "2026-11-23T12:00:47.617402888Z",
+      "seal": {
+        "by": "server",
+        "mac": "ee89166ea3270e9c826c1fcb0a0c0c0da27eb1ca52dc8ac6c8d40c1ef738c9a9"
+      }
+    },
+    {
+      "id": "CLM-0739",
+      "statement": "Unit tests cover the matching: a moved line, the count rule, and another message or file.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"unit tests for the matching (moved line, count, other message or file)\"",
+      "derived_from": [
+        "CLM-0729"
+      ],
+      "artifacts": [
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:952",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0986",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow published_error (3 passed)",
+          "summary": "Three unit tests: moved line (3 vs 9) excused; count (one published vs two identical -> 1 new, 1 old); other message and other file not excused (2 new, 0 old). Each asserts the outcome; all passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 867,
+                "end": 898
+              },
+              "commit": "74e7b469599d8697a77a2184f7f2c258ca39cd48"
+            }
+          },
+          "recorded_at": "2026-11-23T12:00:24.445415443Z",
+          "seal": {
+            "by": "server",
+            "mac": "9ea7e4690ee8822f7c28c2e7bbaef7bf2b63d8e9108aff0ad18d527ed5055a12"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Three unit tests cover the listed cases with asserting outcomes; passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0986"
+          ],
+          "recorded_at": "2026-11-23T12:00:47.702062431Z",
+          "seal": {
+            "by": "server",
+            "mac": "b4a7388d5630878864974b95c304f8f8b53d584f6134dfa23d8ab5c2c4fd568e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:59:53.332734935Z",
+      "updated_at": "2026-11-23T12:00:47.702062431Z",
+      "seal": {
+        "by": "server",
+        "mac": "5170c148d6a522a293a31c11aed096b1e8bf636d8a2757c8c9d54ec1273162e6"
+      }
+    },
+    {
+      "id": "CLM-0740",
+      "statement": "MCP tests cover a logged publish over an old broken link in log.md (succeeds, warning), a new identical broken link in a log entry (refused, one error), and an edited concept holding an old broken link (succeeds, warning).",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"MCP tests for a logged publish over an old broken link in `log.md` (succeeds, warning), a new identical broken link in a log entry (refused, one error), and an edited concept holding an old broken link (succeeds, warning).\"",
+      "derived_from": [
+        "CLM-0729"
+      ],
+      "artifacts": [
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:952",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0987",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow old_broken_link (2 passed); narrow a_new_broken_link_in_a_log_entry (1 passed)",
+          "summary": "The three tests exist at changesets.rs:2525, 2550, 2572 and assert what the description says: success plus log.md warning; LintFailed with 1 error; success plus old.md broken-link warning after a concept body edit. All passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets.rs",
+              "lines": {
+                "start": 2524,
+                "end": 2592
+              },
+              "commit": "74e7b469599d8697a77a2184f7f2c258ca39cd48"
+            }
+          },
+          "recorded_at": "2026-11-23T12:00:24.494888653Z",
+          "seal": {
+            "by": "server",
+            "mac": "258fd872468c23b8f23b63283e6afc74702b0f0a09cea2e237000323e7f402c4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Three MCP tests exist with the described assertions; all passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0987"
+          ],
+          "recorded_at": "2026-11-23T12:00:47.780177394Z",
+          "seal": {
+            "by": "server",
+            "mac": "5d6d1aadcec4d6e7f6f0ccbd4ef833ee66f07f3d236bf86d760544abb213d381"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:59:53.332734935Z",
+      "updated_at": "2026-11-23T12:00:47.780177394Z",
+      "seal": {
+        "by": "server",
+        "mac": "0aee8e1d602dd46869872adf0bf47555c3de607c769ce21414b667a8dc375349"
+      }
+    },
+    {
+      "id": "CLM-0741",
+      "statement": "tools/agentic/gate.sh fmt, lint and dylint pass on the head commit.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"`tools/agentic/gate.sh fmt`, `lint`, `dylint`: pass.\"",
+      "derived_from": [
+        "CLM-0729"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:952",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0988",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh fmt; gate.sh lint; gate.sh dylint (all exit 0)",
+          "summary": "Ran each on head 74e7b46 in the worktree: fmt exit 0 (cargo fmt --all --check), lint exit 0 (finished, docs generated), dylint exit 0 (finished). Counts not printed.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T12:00:24.540224953Z",
+          "seal": {
+            "by": "server",
+            "mac": "fda398d1c7d08aba4845eafd34f50f9babe70a490ed94886a8522ba58b4c2785"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reran the three gates on head; all exit 0.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0988"
+          ],
+          "recorded_at": "2026-11-23T12:00:47.868669665Z",
+          "seal": {
+            "by": "server",
+            "mac": "3e40e29475a389a28e1a7d9616643b887f241e990a5440209834233d895ca1c6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:59:53.332734935Z",
+      "updated_at": "2026-11-23T12:00:47.868669665Z",
+      "seal": {
+        "by": "server",
+        "mac": "8e9bf1b529fb0c5ea0fc22275cd2e1857bb2e9713b3c2e4bc7fd06af54e1de01"
+      }
+    },
+    {
+      "id": "CLM-0742",
+      "statement": "tools/agentic/gate.sh test passes on the head commit with 3381 passed and 0 failed.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"`tools/agentic/gate.sh test`: pass (3381 passed, 0 failed).\"",
+      "derived_from": [
+        "CLM-0729"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:952",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0989",
+          "kind": "other",
+          "locator": "not rerun: gate.sh test has a 75 minute limit, longer than a foreground call may run",
+          "summary": "I did not rerun the full suite. The 6 new tests pass narrowly (3 unit, 3 MCP). The 3381 count and the earlier flake on #898 rest on the author's report only.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T12:00:24.585682374Z",
+          "seal": {
+            "by": "server",
+            "mac": "b2f4529b5bab0ec424e73fd1dc4252f2ea060416a888bb1e1551ebbfe6b63295"
+          }
+        },
+        {
+          "id": "EVD-0992",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh test on head 74e7b46, log target/i952-logs/test.log",
+          "summary": "Full gate exit 0: 3381 passed, 0 failed (summed over test result lines). An earlier run on the same head failed two console UI tests (known flake #898); the rerun passed.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T12:01:45.335792576Z",
+          "seal": {
+            "by": "server",
+            "mac": "c89b4a2432e64fd15a1ad08b28c4194ef4e2f09f2ef3c5e1d6e291a27ca80d7e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Full suite not rerun by the auditor (limit exceeds a foreground call); only the 6 new tests were run. Fix: run tools/agentic/gate.sh test on head 74e7b46 and record its passed/failed counts (the stated 3381 passed, 0 failed) as test evidence.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0989"
+          ],
+          "recorded_at": "2026-11-23T12:00:47.944549767Z",
+          "seal": {
+            "by": "server",
+            "mac": "9cf32c097738676fe20031bf6ffb1a0375a4c8803adca78bcf25adf299f0c751"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Implementer ran the full test gate on the audited head; exit 0, 3381 passed, 0 failed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0992"
+          ],
+          "recorded_at": "2026-11-23T12:01:49.631074033Z",
+          "seal": {
+            "by": "server",
+            "mac": "2543f183ac6363312c3713b7bee99e9389b509009ed3b4a47e7d8bab59dc04db"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:59:53.332734935Z",
+      "updated_at": "2026-11-23T12:01:49.631074033Z",
+      "seal": {
+        "by": "server",
+        "mac": "e4ff6f895fdbff95d4ff7e91152f637e81d0e21708412f038d16b48a14400cb1"
       }
     }
   ]
