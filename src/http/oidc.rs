@@ -1948,6 +1948,80 @@ mod tests {
         assert_eq!(browser.cookie(FLOW_COOKIE), None);
     }
 
+    /// When the swap of the session's link index fails (the index space's
+    /// keys refused with `NOPERM`, the flow's allowed), the link start
+    /// answers 503 and the flow it just stored is removed at once (issue
+    /// #588): no flow key waits out its TTL.
+    async fn a_failed_link_index_swap_removes_the_stored_flow(redis: TestRedis) {
+        let shared_server = [SERVER_URL_VAR, CLUSTER_URL_VAR]
+            .iter()
+            .any(|var| std::env::var(var).is_ok_and(|url| !url.is_empty()));
+        if shared_server {
+            // Restricting the default user would break every test sharing it.
+            return;
+        }
+        let idp = idp::start().await;
+        let (a, _b, redis) = oidc_pair(&idp, "OKF_TEST_OIDC_SECRET_ORPHAN", redis).await;
+        user_with_password(&a, "alice", "alice@example.com", Some(PASSWORD)).await;
+        let mut browser = Browser::signed_in(&a, "alice@example.com", PASSWORD).await;
+        let client = redis::Client::open(redis.url.as_str()).expect("the test redis URL");
+        let mut admin = client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("an admin connection");
+        let _: () = redis::cmd("ACL")
+            .arg("SETUSER")
+            .arg("okf-test-admin")
+            .arg("on")
+            .arg("nopass")
+            .arg("+@all")
+            .arg("~*")
+            .arg("&*")
+            .query_async(&mut admin)
+            .await
+            .expect("create the admin user");
+        let _: () = redis::cmd("AUTH")
+            .arg("okf-test-admin")
+            .arg("unused")
+            .query_async(&mut admin)
+            .await
+            .expect("authenticate as the admin user");
+        // The apps may touch only the flow and rate-limit keys: the link
+        // index's `SET` is refused.
+        let _: () = redis::cmd("ACL")
+            .arg("SETUSER")
+            .arg("default")
+            .arg("resetkeys")
+            .arg("~*oidc:flow:*")
+            .arg("~*ratelimit:*")
+            .query_async(&mut admin)
+            .await
+            .expect("restrict the default user's keys");
+
+        let refused = browser
+            .send_to(
+                &a.app,
+                "POST",
+                "/api/v1/me/identities/example/link",
+                Payload::Json(json!({})),
+            )
+            .await;
+        let keys = redis_keys(&a.app, &redis.prefix).await;
+
+        assert_eq!(
+            refused.status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{}",
+            refused.text()
+        );
+        assert_eq!(
+            in_space(&keys, &redis.prefix, "oidc:flow"),
+            0,
+            "no orphan flow stays: {keys:?}"
+        );
+        assert_eq!(in_space(&keys, &redis.prefix, "oidc:link"), 0, "{keys:?}");
+    }
+
     // `macro_rules!` writes a standalone and a cluster `#[tokio::test]` for
     // every body named (Python: a parametrized test).
     macro_rules! in_both_modes {
@@ -1984,5 +2058,6 @@ mod tests {
         a_link_flow_finishes_only_in_its_session_across_replicas,
         a_redis_outage_fails_closed_and_keeps_the_flow_cookie,
         a_flow_refused_by_redis_finishes_once_redis_answers_again,
+        a_failed_link_index_swap_removes_the_stored_flow,
     );
 }

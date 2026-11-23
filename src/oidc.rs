@@ -444,7 +444,19 @@ impl OidcProviders {
         if let Some(key) = session_key {
             // One atomic swap of the session's pointer, in memory (under the
             // map's lock) or in Redis (`SET ... GET`).
-            match self.link_flows.replace(&key, id, now).await? {
+            let swap = match self.link_flows.replace(&key, id, now).await {
+                Ok(swap) => swap,
+                Err(error) => {
+                    // The flow just stored has no index entry and its cookie
+                    // is never sent (the start fails closed): remove it now
+                    // rather than leave it until its TTL. Best effort: a
+                    // failed removal is already counted as a Redis `remove`
+                    // error, and the swap's error is the one returned.
+                    let _ = self.flows.remove(id).await;
+                    return Err(error);
+                }
+            };
+            match swap {
                 Swap::Swapped(Some(stale)) => self.flows.remove_stale(&stale).await?,
                 Swap::Swapped(None) => {}
                 // The index is full: keep the map bounded by refusing.
