@@ -20,7 +20,7 @@
 - `unlocks.js`, `keys.js` (the keys list and the codes list) and `audit.js`
   keep their own counters. Each carries extra state with its counter
   (`settled`, `view.latest`, stale markers, label reads), so moving them is
-  not a mechanical swap, and none has a held-answer journey yet.
+  not a mechanical swap. Moving them is left to a separate issue.
 
 ## Tests
 
