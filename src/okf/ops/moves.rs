@@ -316,6 +316,43 @@ mod tests {
     }
 
     #[test]
+    fn a_cross_folder_move_carries_an_angle_bracket_listing_with_its_brackets() {
+        // `old_dir != new_dir`, so the listing goes through `relinked_bullet`.
+        // The second case repeats `(time.md)` in the label, which must stay.
+        for (listing, carried) in [
+            (
+                "* [Time](<time.md>) - the clock",
+                "* [Time](<wall%20clock.md>) - the clock",
+            ),
+            (
+                "* [Time (time.md)](<time.md#ports> \"t\") - the clock",
+                "* [Time (time.md)](<wall%20clock.md#ports> \"t\") - the clock",
+            ),
+        ] {
+            let mut files: BTreeMap<&str, String> =
+                FILES.iter().map(|(p, t)| (*p, (*t).to_string())).collect();
+            files.insert(
+                "infra/index.md",
+                format!("# Infra\n\n# Concepts\n\n{listing}\n"),
+            );
+            files.insert("other/index.md", "# Other\n\n# Concepts\n".to_string());
+            let workspace =
+                MemWorkspace::from_files(files.iter().map(|(path, text)| (*path, text.as_str())));
+
+            move_concept(&workspace, "infra/time.md", "other/wall clock.md", None).unwrap();
+
+            assert_eq!(
+                text(&workspace, "infra/index.md"),
+                "# Infra\n\n# Concepts\n\n"
+            );
+            assert_eq!(
+                text(&workspace, "other/index.md"),
+                format!("# Other\n\n# Concepts\n\n{carried}\n")
+            );
+        }
+    }
+
+    #[test]
     fn a_moved_name_with_unicode_whitespace_or_a_colon_still_resolves_everywhere() {
         // Within the folder and into a new one (which carries the listing);
         // every written destination must still parse as a link and resolve
