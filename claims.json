@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 566,
+  "next_claim_seq": 583,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "28d84af9d01fab8567f7bbe714e74d25a2bd2bf6314605cbd74cdf6cc9529d34"
+    "mac": "ba193a918259a71537052d0889d91b719c6e8a273e6dd1f903bb98b807d4bea8"
   },
-  "next_evidence_seq": 721,
+  "next_evidence_seq": 748,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "7bc977ba47a14ec9d66a9492bb80c22c1ef0528db4279900ad025468fefa6f62"
+    "mac": "d6f58b2da3280fa96103851c6dabbe48d713ed4a30aa2c479286b5e56052fd5d"
   },
   "claims": [
     {
@@ -44767,6 +44767,1373 @@
       "seal": {
         "by": "server",
         "mac": "484dab1d3d593866a3f11ab5f5df4407bfd253449f9542aba03d5de1771d0f6c"
+      }
+    },
+    {
+      "id": "CLM-0566",
+      "statement": "Issue #592 is delivered: the shared pub/sub subscriber loop logs (re)subscribe at info and disconnect, grace expiry and subscribe failure at warn, leaking no URL, payload or key.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/592 'log at info on (re)subscribe and at warn on disconnect, grace expiry and subscribe failure, with no URL, channel payload or key'",
+      "derived_from": [],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0740",
+          "kind": "analysis",
+          "locator": "children of CLM-0566",
+          "summary": "Refuted children: CLM-0567 (resubscribe flag and disconnected_ms reset for each fresh subscription) and CLM-0580 (docs bullet repeats that). Warn on disconnect, grace expiry, subscribe failure and stream end, and the no-leak rule, are supported.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-23T02:20:44.654047406Z",
+          "seal": {
+            "by": "server",
+            "mac": "e44780ae345e5daadfc9176f4f0b5dc40ed1a34c434946623a4b84c4af79f2fc"
+          }
+        },
+        {
+          "id": "EVD-0746",
+          "kind": "analysis",
+          "locator": "children of CLM-0566",
+          "summary": "The previously refuted children CLM-0567 and CLM-0580 are now supported at 2f7bb0c, so every behavior child (info on subscribe, warns on loss, grace, failure, end; no leak; NAME; no poll; no gauge; test hygiene; changelog; docs) is supported. CLM-0582 (dylint and full test run) remains not_enough_info and is about validation, not about the issue's behavior.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T02:26:26.353663953Z",
+          "seal": {
+            "by": "server",
+            "mac": "d5f27eb1b5484841909d397e1e104512d046f84889148d463e6f507763d7cd9b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "All warn cases and the no-leak rule hold, but the info (re)subscribe line reports resubscribe=false for the first Subscribed of any replaced subscription. Fix: hoist subscribed_before above the `while` loop in run(), add a test case where a Subscribed follows a grace replacement and asserts resubscribe=true.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0740"
+          ],
+          "recorded_at": "2026-11-23T02:20:47.552456169Z",
+          "seal": {
+            "by": "server",
+            "mac": "7ef93622acd31a835414aea5b294f415361355c22df51e5736eef87db3aace6f"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "With the resubscribe flag fixed, all behavior children are supported at 2f7bb0c.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0746"
+          ],
+          "recorded_at": "2026-11-23T02:26:30.184565304Z",
+          "seal": {
+            "by": "server",
+            "mac": "cbe531c5fa71298258f0038a53701b352154b94f98236ee25b5269e41ed3c1a1"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:26:30.184565304Z",
+      "seal": {
+        "by": "server",
+        "mac": "c4090b54d898b17e4e0a5672888cd6a3a915cc2ad83530c16bfd7cc70938c139"
+      }
+    },
+    {
+      "id": "CLM-0567",
+      "statement": "run() in src/shared/announce.rs emits a tracing info event on every SubscriptionEvent::Subscribed, carrying resubscribe (false for the loop's first Subscribed, true afterwards) and disconnected_ms.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #592: 'log at info on (re)subscribe'; PR body: 'info on every Subscribed, with resubscribe (false for the first) and disconnected_ms after a loss.'",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0721",
+          "kind": "inspection",
+          "locator": "src/shared/announce.rs:440-450,476-490",
+          "summary": "info is emitted on every Subscribed with resubscribe=subscribed_before and disconnected_ms, but `let mut subscribed_before = false` (and disconnected_at) is declared inside the `Ok(mut subscription)` arm, so it resets for every fresh subscription: the first Subscribed after a grace replacement, stream end or failed subscribe logs resubscribe=false and no disconnected_ms, though it is a resubscribe. The comment says 'this loop'; the docs say 'resubscribe is true after the first'.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 440,
+                "end": 490
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.260192887Z",
+          "seal": {
+            "by": "server",
+            "mac": "4bf66eecda0663cf1797410a131b7001cce99493bc9928c27e07540ae1cb65aa"
+          }
+        },
+        {
+          "id": "EVD-0722",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow subscribe_disconnect_grace_failure_and_end_are_logged (1 passed); src/shared/announce.rs:1007-1008",
+          "summary": "The test only scripts Subscribed events inside attempt 1 (Subscribed, Disconnected, Subscribed), so it asserts resubscribe=true once within one subscription. Attempts 2-4 never emit Subscribed, so no case checks the first Subscribed of a replaced subscription, where the code logs resubscribe=false.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 1005,
+                "end": 1012
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.305260073Z",
+          "seal": {
+            "by": "server",
+            "mac": "9c17ac96f86154691d3b89df6d28bb96fc1bdb8a23d6e030e994cfe645c2b5d8"
+          }
+        },
+        {
+          "id": "EVD-0741",
+          "kind": "inspection",
+          "locator": "src/shared/announce.rs:442-444,479-488 at 2f7bb0c",
+          "summary": "`subscribed_before` is now declared above the `while` loop (line 444) and set after each info line, so only the loop's first Subscribed logs resubscribe=false, including across replaced subscriptions. disconnected_at stays per subscription, which the docs now state.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 442,
+                "end": 488
+              },
+              "commit": "2f7bb0cc249426dbd650e556a2495e31e1ec2ad1"
+            }
+          },
+          "recorded_at": "2026-11-23T02:26:16.015207056Z",
+          "seal": {
+            "by": "server",
+            "mac": "ee5fa0f980605defe2056242d88a89395dc8f7814956959faa4f3fc5920391bf"
+          }
+        },
+        {
+          "id": "EVD-0742",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow subscribe_disconnect_grace_failure_and_end_are_logged (1 passed); announce.rs:950-953,1007-1008",
+          "summary": "Attempt 4 now emits Subscribed in a fresh subscription after a grace replacement and a failed subscribe; the test asserts 3 info lines and 2 with resubscribe=true, so a flag reset per subscription would give 1 and fail.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 1005,
+                "end": 1012
+              },
+              "commit": "2f7bb0cc249426dbd650e556a2495e31e1ec2ad1"
+            }
+          },
+          "recorded_at": "2026-11-23T02:26:16.091210574Z",
+          "seal": {
+            "by": "server",
+            "mac": "07a38d357955d7b692bde7ee01d05e56ccf844c8bf0325b6f2b1e720a2190813"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "info is logged on every Subscribed, but resubscribe and disconnected_ms are tracked per subscription, not per loop, so after a grace replacement, stream end or failed subscribe the first Subscribed of the new subscription reports resubscribe=false. That is the exact (re)subscribe case operators need to see, and the test does not script it. Fix: move `subscribed_before` out of the `Ok(subscription)` arm to just above the `while` loop (and keep the loss start time across a replacement so disconnected_ms covers the whole outage), then extend the log test so a Subscribed after a grace replacement asserts resubscribe=true.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0721"
+          ],
+          "recorded_at": "2026-11-23T02:20:43.302889419Z",
+          "seal": {
+            "by": "server",
+            "mac": "1b54cd6d46e7921dfab02072cf441e4f3cb332812745b05b82659ed58dfd3bdb"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Flag now lives across subscriptions and the test covers a Subscribed after a replaced subscription.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0741",
+            "EVD-0742"
+          ],
+          "recorded_at": "2026-11-23T02:26:25.955909574Z",
+          "seal": {
+            "by": "server",
+            "mac": "60d513b5cbc8cd6f0d552d032567e2058e73f56a20dd78cdd3a2a5df164d5715"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:26:25.955909574Z",
+      "seal": {
+        "by": "server",
+        "mac": "b59d7e14813ebcc0cb68991cb4007be22a556a3e1f6d55bf01abd0d2f11925b0"
+      }
+    },
+    {
+      "id": "CLM-0568",
+      "statement": "run() emits a warn when the library reports Disconnected, once per loss (not again for repeated Disconnected before the next Subscribed).",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #592: 'warn on disconnect'; PR body: 'warn when the connection is lost (once per loss)'",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0723",
+          "kind": "inspection",
+          "locator": "src/shared/announce.rs:494-506",
+          "summary": "On Disconnected the warn is inside `if disconnected_at.is_none()` and sets disconnected_at, so repeats before the next Subscribed (which clears it) do not log again.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 494,
+                "end": 506
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.348439829Z",
+          "seal": {
+            "by": "server",
+            "mac": "97da89140e558a579539c393c947382e8fdbce7a7f787ef5536689cf552b23f8"
+          }
+        },
+        {
+          "id": "EVD-0724",
+          "kind": "test",
+          "locator": "cargo test via tools/agentic/gate.sh narrow subscribe_disconnect_grace_failure_and_end_are_logged (1 passed); announce.rs:1009",
+          "summary": "Asserts exactly 2 WARN 'connection lost' lines for two scripted losses (attempts 1 and 2). No repeated Disconnected is scripted, so the once-per-loss guard is covered by code reading only.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 1009,
+                "end": 1009
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.392844152Z",
+          "seal": {
+            "by": "server",
+            "mac": "a5c93a1c1127a49acb98de49b7a2ef7626b50b5972ef012c83b3490376d63238"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The is_none guard logs once per loss; the test confirms two warns for two losses.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0723",
+            "EVD-0724"
+          ],
+          "recorded_at": "2026-11-23T02:20:43.452531035Z",
+          "seal": {
+            "by": "server",
+            "mac": "3f20bcdd7dfd802cb079a7e5908a08ddda5d0713b468117bf9f689c2458c224c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:20:43.452531035Z",
+      "seal": {
+        "by": "server",
+        "mac": "fd7dd037763a8e2f69a2fec50629b06f6bafb5061ca764be7faf6c748ee57150"
+      }
+    },
+    {
+      "id": "CLM-0569",
+      "statement": "run() emits a warn when a subscription stays disconnected past the grace and is replaced.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #592: 'warn on ... grace expiry'; PR body: 'warn when ... the grace expires and the subscription is replaced'",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0725",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow subscribe_disconnect_grace_failure_and_end_are_logged (1 passed); announce.rs:461-470,1010",
+          "summary": "The replace_at arm logs warn 'stayed disconnected past the grace; replacing it'; attempt 2 (Disconnected then silence, grace 50 ms on paused clock) yields exactly 1 WARN 'past the grace' in the test.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 461,
+                "end": 472
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.437245324Z",
+          "seal": {
+            "by": "server",
+            "mac": "ced0c875ed4dcae73c39f9cdb3020a3236869b2266e52348ba454f9925c50cd2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code warns in the grace arm and the test asserts exactly one such warn.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0725"
+          ],
+          "recorded_at": "2026-11-23T02:20:43.546307404Z",
+          "seal": {
+            "by": "server",
+            "mac": "a5519ac69e02fd1944d34dfd14ee7c8d835337fe989f135805097f02d7386ce5"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:20:43.546307404Z",
+      "seal": {
+        "by": "server",
+        "mac": "5fad943815ba344e672577d40388cc5155a422d331244e59d773327c0b918885"
+      }
+    },
+    {
+      "id": "CLM-0570",
+      "statement": "run() emits a warn when subscribing fails (the Err branch).",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #592: 'warn on ... subscribe failure'; PR body: 'warn when ... a subscribe fails'",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0726",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow subscribe_disconnect_grace_failure_and_end_are_logged (1 passed); announce.rs:517-524,1011",
+          "summary": "The Err arm logs warn 'pub/sub subscribe failed; retrying after a backoff'; attempt 3 returns Err and the test asserts exactly 1 WARN 'subscribe failed'.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 517,
+                "end": 525
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.486103478Z",
+          "seal": {
+            "by": "server",
+            "mac": "394379fbaad4131485a34e3311426d264da2c9407d18b479496933e2bcf8cc52"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Err arm warns; the test fails a subscribe and asserts one WARN.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0726"
+          ],
+          "recorded_at": "2026-11-23T02:20:43.621755165Z",
+          "seal": {
+            "by": "server",
+            "mac": "28cf8ab6149ec1bee47c9db07f4844b196b0d0fdc91233787f1498cf06d09d43"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:20:43.621755165Z",
+      "seal": {
+        "by": "server",
+        "mac": "4f9b1bebdf0d1bb5939712156be9f4278d6f17eb3e437cd448ef0f7c4069f2e2"
+      }
+    },
+    {
+      "id": "CLM-0571",
+      "statement": "run() emits a warn when the subscription stream ends (event None).",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'warn when ... the stream ends'",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0727",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow subscribe_disconnect_grace_failure_and_end_are_logged (1 passed); announce.rs:507-513,1012",
+          "summary": "The None arm logs warn 'pub/sub subscription ended'; the test asserts 3 (attempt 1 end, attempt 2 grace drop, attempt 4 end), as its comment explains.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 507,
+                "end": 513
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.529389245Z",
+          "seal": {
+            "by": "server",
+            "mac": "d2c02c7d5c2d5221798a459023667654c988330ae8b3577f25d7076dcec0dce2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "None arm warns; the test counts 3 ended lines for the three scripted endings.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0727"
+          ],
+          "recorded_at": "2026-11-23T02:20:43.699864139Z",
+          "seal": {
+            "by": "server",
+            "mac": "723e33d9befd54406c01e9b620640419fe00f21379f7fc152b21b3bf4be1daa3"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:20:43.699864139Z",
+      "seal": {
+        "by": "server",
+        "mac": "c6becf3c278b6275a0e59c0a54401117161c448e86adae6b8500345310cba626"
+      }
+    },
+    {
+      "id": "CLM-0572",
+      "statement": "None of the new log lines carries the Redis URL, a channel payload or a key: their only fields are subscriber (a fixed NAME), grace_ms, resubscribe and disconnected_ms, and no error text is attached.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "Issue #592: 'with no URL, channel payload or key'; PR body: 'No Redis URL, channel payload or key appears in any of these lines (a test asserts no redis://).'",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0728",
+          "kind": "analysis",
+          "locator": "git diff origin/main..HEAD -- src (5 tracing macros: announce.rs:464,479,498,509,520)",
+          "summary": "All five added macros carry only subscriber=H::NAME (const 'bridge'/'catalog'), grace_ms, resubscribe (bool), disconnected_ms (u64) and a static message; none formats an error, payload, key or URL. The subscribe Err branch still calls redis.failed, which logs the error, but that call is pre-existing and not part of the new lines. The test asserts no 'redis://' in the captured output.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 461,
+                "end": 525
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.574072669Z",
+          "seal": {
+            "by": "server",
+            "mac": "162957e935ca6467b09daaaf753d5aeecbeaf7cf948461bc84eaddccb80b23ff"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The five new lines carry only fixed names and numbers and no error text; the test also checks for redis://.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0728"
+          ],
+          "recorded_at": "2026-11-23T02:20:43.775374751Z",
+          "seal": {
+            "by": "server",
+            "mac": "71b3739115a61753195ec6e0474fd372dadaf514130ee2ce4792ef994ebda75b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:20:43.775374751Z",
+      "seal": {
+        "by": "server",
+        "mac": "625c2494031ba22e55a0529e0c0338e0c20e050772007c01767acfc54e2936d8"
+      }
+    },
+    {
+      "id": "CLM-0573",
+      "statement": "A new Handler::NAME associated constant is \"bridge\" for AdminChanges and \"catalog\" for Snapshots, and each new log line carries it as subscriber.",
+      "kind": "interface",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: 'New Handler::NAME constant names the subscriber' and 'each line carries subscriber=\"catalog\" or subscriber=\"bridge\"'",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0729",
+          "kind": "inspection",
+          "locator": "src/shared/announce.rs:280,302,322 and the five tracing macros",
+          "summary": "Trait Handler declares const NAME; AdminChanges sets \"bridge\" (line 302), Snapshots \"catalog\" (line 322); every new macro passes subscriber = H::NAME.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 300,
+                "end": 323
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.621369526Z",
+          "seal": {
+            "by": "server",
+            "mac": "e9f938f5dd7034a1338a03b8569301cc0ff9d5051ba181bba22df979c9089398"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "NAME constants are set as claimed and used by every macro.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0729"
+          ],
+          "recorded_at": "2026-11-23T02:20:43.855484314Z",
+          "seal": {
+            "by": "server",
+            "mac": "792cb0092ae2fbed1584ce86ed6e839a89a30cf721751e33e5aa07583841af95"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:20:43.855484314Z",
+      "seal": {
+        "by": "server",
+        "mac": "b22eab073c1779b1699cbc126f2f3541b71385ffc3c9e0d99244a1ce08e7de6e"
+      }
+    },
+    {
+      "id": "CLM-0574",
+      "statement": "The change does not reintroduce a poll: no added line in src/ mentions or implements polling.",
+      "kind": "constraint",
+      "level": "software",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Requirement note: 'the relies on the poll wording is outdated, do not reintroduce a poll'; PR body: 'no poll was added'",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0730",
+          "kind": "analysis",
+          "locator": "git diff origin/main..HEAD -- src | grep -niE '^\\+.*poll' (0 lines)",
+          "summary": "No added line in src/ mentions polling; the diff adds only log macros, NAME, duration_ms and a test module. The docs bullet says there is no gauge and does not mention a poll.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 440,
+                "end": 525
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.663234066Z",
+          "seal": {
+            "by": "server",
+            "mac": "14a7e5a97584ceb7d1450aafdf3e2660ccfbefcc17fc309f087195d2938727e0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Zero added lines mention a poll.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0730"
+          ],
+          "recorded_at": "2026-11-23T02:20:43.944620971Z",
+          "seal": {
+            "by": "server",
+            "mac": "e1d81cb46178556e28cec54fb38bdf17a594df4ddaeeeb369e2d31724da8f0fe"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:20:43.944620971Z",
+      "seal": {
+        "by": "server",
+        "mac": "bc22c77c91dbfea2085bc7e6dfe844150fd23de1d26b24f43403b473ece60b2a"
+      }
+    },
+    {
+      "id": "CLM-0575",
+      "statement": "No subscribed gauge was added, and the PR's reason is true: metrics are named in Metrics::ALL_FAMILIES and the documented metrics table, with a test comparing the list to the instruments, and okf_redis_errors_total{operation=\"subscribe\"} is incremented on Disconnected, stream end and subscribe failure.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "PR body: 'No gauge: it would need an entry in the exported-family list, the documented metrics table and their tests, and okf_redis_errors_total{operation=\"subscribe\"} already counts losses.'",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "src/telemetry/metrics.rs",
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0731",
+          "kind": "analysis",
+          "locator": "src/telemetry/metrics.rs:249-267,1366-1378; src/shared/announce.rs:496,508,519; docs/operations.md:1393",
+          "summary": "ALL_FAMILIES is compared with the registry by a unit test (line 1366), the metrics table in docs/operations.md lists each family, and redis.count/failed(RedisOp::Subscribe) runs on Disconnected, stream end and subscribe Err, feeding okf_redis_errors_total{operation=subscribe}. No gauge was added in the diff. The reason holds.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/telemetry/metrics.rs",
+              "lines": {
+                "start": 1360,
+                "end": 1378
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.708907495Z",
+          "seal": {
+            "by": "server",
+            "mac": "7535e1f4ae613ff57834970fbe50d084b1dce06dc2f88589b7ad786d74bb7c8f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "No gauge in the diff; the family list, its test, the doc table and the subscribe error counter exist as described.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0731"
+          ],
+          "recorded_at": "2026-11-23T02:20:44.039316104Z",
+          "seal": {
+            "by": "server",
+            "mac": "e14a0453389a841be674591fd082d2d171b5e8f4c8ed1e4596e4ced0c53bc508"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:20:44.039316104Z",
+      "seal": {
+        "by": "server",
+        "mac": "aa914935d0570f6c93a02e21adc852c36929f1ad4c378f5a9da4b20e9ff4c424"
+      }
+    },
+    {
+      "id": "CLM-0576",
+      "statement": "The log-asserting test installs its subscriber with crate::test_tracing::set_default and the new code uses no raw set_default, with_default or Dispatch::new.",
+      "kind": "constraint",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Requirement note: 'tests asserting on logs must install subscribers via crate::test_tracing, never raw set_default/with_default/Dispatch::new'",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0732",
+          "kind": "analysis",
+          "locator": "grep -nE 'set_default|with_default|Dispatch::new' src/shared/announce.rs (only line 971)",
+          "summary": "The only subscriber install is `crate::test_tracing::set_default(subscriber)` at line 971; the file has no raw tracing set_default, with_default or Dispatch::new. Capture is only a writer.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 964,
+                "end": 972
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.749442829Z",
+          "seal": {
+            "by": "server",
+            "mac": "672ee5cd15a153d6d047bef23558df3c411e66b1c7e2acad48ef8dc9c52d3144"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Only crate::test_tracing::set_default is used.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0732"
+          ],
+          "recorded_at": "2026-11-23T02:20:44.120629623Z",
+          "seal": {
+            "by": "server",
+            "mac": "417ecf95fa1558cd1fe0bc56dace9f96d939850937b2175efaa54281492f99f7"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:20:44.120629623Z",
+      "seal": {
+        "by": "server",
+        "mac": "c0df7cf3dabdc5f25c439163e1be99e6fb3e382766b8c9e1d248193b694d2dcb"
+      }
+    },
+    {
+      "id": "CLM-0577",
+      "statement": "Test subscribe_disconnect_grace_failure_and_end_are_logged scripts four subscriptions through run() and asserts each line's level, text and subscriber name, and that no redis:// appears; it passes at head.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'Test subscribe_disconnect_grace_failure_and_end_are_logged scripts four subscriptions and asserts levels, text and subscriber name.'",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0733",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow subscribe_disconnect_grace_failure_and_end_are_logged",
+          "summary": "1 passed, 0 failed at head 91dd2d5. Source scripts attempts 1-4 (plus a 5th that cancels) and asserts level+text counts, subscriber=\"catalog\" on every pub/sub line and no redis://.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 996,
+                "end": 1022
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.790671396Z",
+          "seal": {
+            "by": "server",
+            "mac": "fd919376c5557b3450b1ec4c9424e9808c14e07a5ab06b4c146b59ad1a8e5fbd"
+          }
+        },
+        {
+          "id": "EVD-0743",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow subscribe_disconnect_grace_failure_and_end_are_logged at 2f7bb0c",
+          "summary": "1 passed, 0 failed at head 2f7bb0c; five scripted attempts (the fifth only cancels), asserts info 3 / resubscribe=true 2 / warns as before / subscriber name / no redis://.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 1000,
+                "end": 1022
+              },
+              "commit": "2f7bb0cc249426dbd650e556a2495e31e1ec2ad1"
+            }
+          },
+          "recorded_at": "2026-11-23T02:26:16.137020317Z",
+          "seal": {
+            "by": "server",
+            "mac": "430c9ac986f0f72939de6bd5347e237fbbe8d2be462e188b0ec146f3708ff3e2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test passes at head and asserts what the description says (although it misses the replaced-subscription resubscribe case).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0733"
+          ],
+          "recorded_at": "2026-11-23T02:20:44.205164748Z",
+          "seal": {
+            "by": "server",
+            "mac": "059241d8a112561c71e205aa871c7e90faaf2a07f8d3888ebb51dce9f8819098"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Test passes at 2f7bb0c and asserts level, text, subscriber and no redis:// across five scripted attempts.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0743"
+          ],
+          "recorded_at": "2026-11-23T02:26:26.156221715Z",
+          "seal": {
+            "by": "server",
+            "mac": "87145e24e3dd66ee26cf4a7da271a4c1d672475ff2aa78bace4a0c25fe282dd2"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:26:26.156221715Z",
+      "seal": {
+        "by": "server",
+        "mac": "54d2db9991b8c4949769e39c9f0301dbca11a3320501df7900a3b645b197ce45"
+      }
+    },
+    {
+      "id": "CLM-0578",
+      "statement": "Lowering the subscribe-failure warn to debug makes that test fail.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "PR body: 'Revert check: lowering the subscribe-failure warn to debug makes it fail.'",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0734",
+          "kind": "analysis",
+          "locator": "src/shared/announce.rs:1011",
+          "summary": "Not re-run (source must not be modified). Reading: the test counts lines containing both \"WARN\" and \"subscribe failed\"; the fmt subscriber has no level filter and prints DEBUG for debug events, so lowering the macro to debug makes that count 0 against the asserted 1 and the test fails. Reasoning is sound but is not an executed mutation.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 1011,
+                "end": 1011
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.830500226Z",
+          "seal": {
+            "by": "server",
+            "mac": "70905f26ac04b436085ff74a9f02849957326d9a09e27e196890d4ab0ed85cee"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "By reading the assertion, a debug-level event no longer matches \"WARN\", so the test fails; the mutation itself was not executed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0734"
+          ],
+          "recorded_at": "2026-11-23T02:20:44.289657232Z",
+          "seal": {
+            "by": "server",
+            "mac": "456cb7e9075385e8cfd1ddc74405ca0485e2b942bbfcb1df3e363d1d9a8bf77e"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Still supported by assertion reading on the unchanged line; the author reports an executed mutation on the earlier head, which I did not reproduce.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0734"
+          ],
+          "recorded_at": "2026-11-23T02:26:30.239468284Z",
+          "seal": {
+            "by": "server",
+            "mac": "d375f3d0e4283513cf24e8ef1cbab777c75e654b2a8b345961056a68b5327b74"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:26:30.239468284Z",
+      "seal": {
+        "by": "server",
+        "mac": "e8b92cefdd57b5408bc3129ab3968252957e23f9a7c2c7691c98a0ac430013f4"
+      }
+    },
+    {
+      "id": "CLM-0579",
+      "statement": "A changelog entry for the change exists under changelog/, date-stamped in its file name.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Requirement note: 'a changelog entry under changelog/'; PR body: 'Changelog entry added.'",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T02-05-09Z-issue-592-subscriber-logging.md"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0735",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T02-05-09Z-issue-592-subscriber-logging.md",
+          "summary": "New 29-line file with a timestamped name under changelog/, covering Changed, Added and Decisions for #592. Its text states resubscribe is false 'for the loop's first', matching the (refuted) claim about resubscribe semantics.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T02-05-09Z-issue-592-subscriber-logging.md",
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.870937550Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa28c78406c584de07a5d5c3f027fa4ff9baff419de67647247ea2e7ccbef423"
+          }
+        },
+        {
+          "id": "EVD-0745",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T02-05-09Z-issue-592-subscriber-logging.md at 2f7bb0c",
+          "summary": "Entry still present, now says false only for the loop's first (across replaced subscriptions) and five scripted subscriptions, both matching the code and test.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T02-05-09Z-issue-592-subscriber-logging.md",
+              "commit": "2f7bb0cc249426dbd650e556a2495e31e1ec2ad1"
+            }
+          },
+          "recorded_at": "2026-11-23T02:26:16.218676524Z",
+          "seal": {
+            "by": "server",
+            "mac": "9faeb2e0881bd80e835bc9150aa7b5d656759d4409faddb1dc2eed8034eae7d7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "File exists under changelog/ with a timestamped name.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0735"
+          ],
+          "recorded_at": "2026-11-23T02:20:44.374339928Z",
+          "seal": {
+            "by": "server",
+            "mac": "3443aef4126c25525fc1da654ba820abd4814d46810ef6065ffd8fa65a6d0198"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Changelog entry exists and matches the fixed behavior.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0745"
+          ],
+          "recorded_at": "2026-11-23T02:26:26.243858683Z",
+          "seal": {
+            "by": "server",
+            "mac": "c855f28332e0aad13171bd7fb51f2dbddb4e6bcd22cfe4a69985989a63527416"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:26:26.243858683Z",
+      "seal": {
+        "by": "server",
+        "mac": "c0637c0172b3116e4d28bada3f4a70728dfdc55e5b09d9bd47098ce2d89aa321"
+      }
+    },
+    {
+      "id": "CLM-0580",
+      "statement": "docs/operations.md gains a 'Subscriber log lines' bullet that matches the code's levels and fields.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: 'docs/operations.md: \"Subscriber log lines\" bullet.'",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0736",
+          "kind": "inspection",
+          "locator": "docs/operations.md:595-604",
+          "summary": "The bullet exists. Info/warn levels, the subscriber values, the 10 s grace, no URL/payload/key and no-gauge statements match the code. Its claim 'resubscribe is true after the first' holds only within one subscription: after a grace replacement or stream end the first Subscribed logs resubscribe=false.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 595,
+                "end": 604
+              },
+              "commit": "91dd2d57bbdbfcbdd60e2a0b01279544b189ef8e"
+            }
+          },
+          "recorded_at": "2026-11-23T02:20:00.912402719Z",
+          "seal": {
+            "by": "server",
+            "mac": "b4efad65f3f725e7d9c7535bab09ac3c9880d4186766ecb1aa930fa02b58f74d"
+          }
+        },
+        {
+          "id": "EVD-0744",
+          "kind": "inspection",
+          "locator": "docs/operations.md:595-606 at 2f7bb0c",
+          "summary": "The bullet now says resubscribe is true after the first, also when a replaced subscription is followed by a new one, and that disconnected_ms covers a loss within one subscription. This matches the code at announce.rs:444-488; levels, subscriber values and grace unchanged and correct.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 595,
+                "end": 606
+              },
+              "commit": "2f7bb0cc249426dbd650e556a2495e31e1ec2ad1"
+            }
+          },
+          "recorded_at": "2026-11-23T02:26:16.178021466Z",
+          "seal": {
+            "by": "server",
+            "mac": "f70026985542d25c7df391bd4e82d856654b8ccad6d54ad18ea945c80ac1a9c7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The bullet says resubscribe is true after the first Subscribed, which the code does not do after a replaced subscription (same defect as the info-log claim). Everything else in the bullet matches. Fix: after the code fix that keeps subscribed_before across subscriptions, leave the bullet as is; if the code stays, reword it to 'true after the first within one subscription'.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0736"
+          ],
+          "recorded_at": "2026-11-23T02:20:43.375098395Z",
+          "seal": {
+            "by": "server",
+            "mac": "419653bc34b819e9dec77f4187c0c092cfc4a714a25eb70077bf48c0015ddd6f"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Reworded bullet matches the fixed code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0744"
+          ],
+          "recorded_at": "2026-11-23T02:26:26.077207032Z",
+          "seal": {
+            "by": "server",
+            "mac": "f1fd1d359e2fe0f45a3a93abb522a32464788700fc4e54be2ee9b91af57d9ca7"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:26:26.077207032Z",
+      "seal": {
+        "by": "server",
+        "mac": "00591cf835252a535d41cb507c933caa46217681697efab7601aded7447e5d60"
+      }
+    },
+    {
+      "id": "CLM-0581",
+      "statement": "gate.sh fmt and gate.sh lint pass at head.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "source": "PR body: 'gate.sh fmt, lint, dylint, test: all pass.' (fmt and lint part)",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0737",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh fmt; tools/agentic/gate.sh lint",
+          "summary": "fmt ran `cargo fmt --all --check` clean; lint ran `cargo doc --no-deps` with -D warnings and finished (the tail showed no clippy output beyond Finished; clippy line itself not seen).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T02:20:00.949445516Z",
+          "seal": {
+            "by": "server",
+            "mac": "329aa1cefbfeee16f51b2f8e5cf9de53ccf04407ae8df85018da16f86068c7aa"
+          }
+        },
+        {
+          "id": "EVD-0739",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh lint",
+          "summary": "Output starts `cargo clippy --all-targets -- -D warnings` and finishes with no warnings or errors, then cargo doc -D warnings finishes; with fmt clean.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T02:20:14.719106834Z",
+          "seal": {
+            "by": "server",
+            "mac": "dceba9960ac472297d86206598cc2dbe843d12337d27ea1532175c2195fe92f2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "fmt, clippy -D warnings and doc -D warnings all ran clean at head.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0737",
+            "EVD-0739"
+          ],
+          "recorded_at": "2026-11-23T02:20:44.472575748Z",
+          "seal": {
+            "by": "server",
+            "mac": "2bd6a0385aa2bcdcb7173a2fe498ddd1238c726c801158005b6e9b1e2015146d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:20:44.472575748Z",
+      "seal": {
+        "by": "server",
+        "mac": "214bfb0965ecca78fd7df69beea21a515a5a6d3a44b6611f8bff05d04e79ec06"
+      }
+    },
+    {
+      "id": "CLM-0582",
+      "statement": "gate.sh dylint and the full gate.sh test pass at head.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "source": "PR body: 'gate.sh fmt, lint, dylint, test: all pass.' (dylint and test part)",
+      "derived_from": [
+        "CLM-0566"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:592"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0738",
+          "kind": "other",
+          "locator": "not run",
+          "summary": "dylint and the full test suite were not run: the audit brief forbids the full suite. Only the new test and one neighbouring catalog test passed.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T02:20:00.986963225Z",
+          "seal": {
+            "by": "server",
+            "mac": "f5b2fee58a295656f179617a64a3f2aaa29505bab598d628ad1cccd9667ee7c3"
+          }
+        },
+        {
+          "id": "EVD-0747",
+          "kind": "log",
+          "locator": "target/i592-logs/dylint.log and test.log (written 21:25-21:29, after commit 2f7bb0c at 21:24; src clean vs HEAD)",
+          "summary": "I read the logs, not the author's report. dylint.log: checked okf_mcp v0.27.0 and Finished, no warnings. test.log: 3332 passed, 0 failed, 21 ignored summed over all `test result` lines (lib 2836 passed, 0 failed, 2 ignored), no FAILED or panicked lines, and it includes shared::announce::log_tests::subscribe_disconnect_grace_failure_and_end_are_logged ... ok. Not a rerun by me, and the log is a file the author produced.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T02:29:37.104403953Z",
+          "seal": {
+            "by": "server",
+            "mac": "e457d3ec86cdfbf2f16a5eade3d5b3503087da18a61cc0acb797e352a9872a0c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The brief forbids running the full suite or dylint here. Fix: run tools/agentic/gate.sh dylint and gate.sh test on the head commit and cite the pass counts in the PR.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0738"
+          ],
+          "recorded_at": "2026-11-23T02:20:44.564372467Z",
+          "seal": {
+            "by": "server",
+            "mac": "4fbb372a1f097afbb9254e41b6e6455ecaa107c9bd70557c38d398daf22b56b8"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The dylint and test logs, timestamped after the head commit, show a clean dylint and 0 failures across the suite including the new test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0747"
+          ],
+          "recorded_at": "2026-11-23T02:29:40.561269668Z",
+          "seal": {
+            "by": "server",
+            "mac": "90888a38b3c843976ddca44a4eb738d140471af49354053291ddba88b680bd07"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T02:19:13.233877046Z",
+      "updated_at": "2026-11-23T02:29:40.561269668Z",
+      "seal": {
+        "by": "server",
+        "mac": "c0b252d803ff9443bfa91f82a58834f85fb544f3e1af678d232d5e91f47e2ad3"
       }
     }
   ]
