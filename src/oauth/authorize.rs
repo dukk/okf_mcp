@@ -1231,9 +1231,12 @@ async fn finish(
     let mut decision = Decision::start();
     let brand = app.settings().brand();
     // The request is spent once the grant exists, whatever happens next. A
-    // Redis failure stops here (spec Decision 16): the grant stays and can
-    // be revoked, and the person starts again from their client.
+    // Redis failure stops here (spec Decision 16), and no code is minted, so
+    // the grant just created can never be used: revoke it (issue #589), so
+    // the user's grant list shows no consent that never completed. The
+    // person starts again from their client.
     if let Err(error) = oauth.pending.remove(pending_id).await {
+        revoke_unused_grant(app, &grant_id).await;
         return server_error(&error, &brand);
     }
     // The credential cache reads the new grant on first use, so nothing
@@ -1282,6 +1285,30 @@ async fn finish(
         (pending.state.as_deref(), &oauth.settings.issuer),
         Hop::Forward,
     )
+}
+
+/// Revokes the grant this request created and could not finish with a code,
+/// by its own id: a grant that existed before the request is never touched,
+/// because both ways of creating one (`redeem`, `create_self_issued`) insert
+/// a new row. Best effort: a failure is logged, and the grant, which no code
+/// leads to, stays until it is revoked by hand or goes idle.
+///
+/// # Arguments
+/// * `app` - the application.
+/// * `grant_id` - the grant the approval created.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn revoke_unused_grant(app: &App, grant_id: &str) {
+    let audit = crate::store::audit::AuditActor::system("oauth");
+    if let Err(error) =
+        crate::store::keys::revoke_by_id(app.pool(), grant_id, &audit, app.clock().now()).await
+    {
+        split_event!(
+            warn,
+            { grant = %grant_id, },
+            { %error, },
+            "could not revoke a grant whose consent did not complete"
+        );
+    }
 }
 
 /// `action=consent`: a signed-in person's approval, its nonce already spent
@@ -3653,7 +3680,7 @@ mod tests {
         use axum::http::StatusCode;
 
         use super::super::{consent_change, ConsentForm, BAD_CODE, BUSY, EXPIRED};
-        use super::{oauth_grants, param, signed_in, user_page, READ_MAIN};
+        use super::{oauth_grants, param, signed_in, user_page, TestApp, READ_MAIN};
         use crate::db::redis_support::{TestRedis, CLUSTER_URL_VAR, SERVER_URL_VAR};
         use crate::oauth::state::MAX_FAILED_ATTEMPTS;
         use crate::oauth::testing::{
@@ -3662,7 +3689,7 @@ mod tests {
         };
         use crate::shared::ephemeral::Keyspace;
         use crate::shared::hashed;
-        use crate::store::keys::Access;
+        use crate::store::keys::{self as key_rows, Access, KeyKind};
 
         /// Every body's bound (`lessons.md`: every wait is bounded).
         const BOUND: Duration = Duration::from_secs(120);
@@ -3990,10 +4017,24 @@ mod tests {
             Some(admin)
         }
 
+        /// The ids of the OAuth grants that are not revoked: the user's grant
+        /// list.
+        async fn live_grants(test: &TestApp) -> Vec<String> {
+            key_rows::list(test.app.pool())
+                .await
+                .expect("list the grants")
+                .into_iter()
+                .filter(|row| row.kind == KeyKind::OAuth && row.revoked_at.is_none())
+                .map(|row| row.id)
+                .collect()
+        }
+
         /// When the removal after a successful update fails (`DEL` refused
         /// with `NOPERM`, `GET` and the compare-and-set still allowed), Deny
         /// and Approve answer the busy page: Deny does not forward the
-        /// denial, and Approve mints no authorization code.
+        /// denial, and Approve mints no authorization code. The grant the
+        /// failed approval created is revoked (issue #589), and a grant made
+        /// by an earlier, completed consent is left as it was.
         async fn a_failed_removal_answers_the_busy_page(server: TestRedis) {
             let Some(mut admin) = admin_of(&server).await else {
                 eprintln!("skipped: a shared Redis's default user cannot be restricted");
@@ -4010,6 +4051,38 @@ mod tests {
                 .await;
                 (hidden(&page, "pending"), hidden(&page, "csrf"))
             };
+            // An earlier consent that completed: its grant must survive.
+            let (earlier, earlier_csrf) = start().await;
+            let earlier_code = sign_in_code(&a, Access::Read).await;
+            let (_, _, earlier_summary) = send_on(
+                &b,
+                "POST",
+                "/oauth/authorize",
+                Some(code_form(&earlier, &earlier_csrf, &earlier_code)),
+                None,
+            )
+            .await;
+            let (earlier_status, earlier_headers, earlier_page) = send_on(
+                &b,
+                "POST",
+                "/oauth/authorize",
+                Some(form(&[
+                    ("pending", &earlier),
+                    ("csrf", &earlier_csrf),
+                    ("summary", &hidden(&earlier_summary, "summary")),
+                    ("action", "approve"),
+                ])),
+                None,
+            )
+            .await;
+            let earlier_target = forwarded(earlier_status, &earlier_headers, &earlier_page);
+            assert!(
+                param(&earlier_target, "code").is_some(),
+                "the earlier consent completed"
+            );
+            let before = live_grants(&a).await;
+            assert_eq!(before.len(), 1, "one grant before the failed approval");
+
             let (denied, denied_csrf) = start().await;
             let (approved, approved_csrf) = start().await;
             let code = sign_in_code(&a, Access::Read).await;
@@ -4032,17 +4105,23 @@ mod tests {
                 ("summary", &hidden(&summary, "summary")),
                 ("action", "approve"),
             ]);
+            let stored_codes = async |admin: &mut redis::aio::MultiplexedConnection| {
+                let mut keys: Vec<String> = redis::cmd("KEYS")
+                    .arg("*oauth:code:*")
+                    .query_async(admin)
+                    .await
+                    .expect("KEYS");
+                keys.sort();
+                keys
+            };
+            let codes_before = stored_codes(&mut admin).await;
             default_user_may(&mut admin, "-del").await;
 
             let refused_deny =
                 send_on(&b, "POST", "/oauth/authorize", Some(deny.clone()), None).await;
             let refused_approval =
                 send_on(&b, "POST", "/oauth/authorize", Some(approval), None).await;
-            let codes: Vec<String> = redis::cmd("KEYS")
-                .arg("*oauth:code:*")
-                .query_async(&mut admin)
-                .await
-                .expect("KEYS");
+            let codes = stored_codes(&mut admin).await;
             default_user_may(&mut admin, "+del").await;
             let later_deny = send_on(&b, "POST", "/oauth/authorize", Some(deny), None).await;
 
@@ -4068,9 +4147,14 @@ mod tests {
                 !refused_approval.2.contains("code="),
                 "no code is forwarded"
             );
-            assert!(
-                codes.is_empty(),
-                "no authorization code was stored: {codes:?}"
+            assert_eq!(
+                codes, codes_before,
+                "no authorization code was stored by the refused approval"
+            );
+            assert_eq!(
+                live_grants(&a).await,
+                before,
+                "the failed approval's grant is revoked and the earlier one survives"
             );
             // The denied request stayed, so the Deny goes through once Redis
             // accepts the removal again.
