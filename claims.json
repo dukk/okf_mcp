@@ -5,10 +5,10 @@
     "by": "server",
     "mac": "f302c1c074fcdb8dbb7418e6e0d380111dbb6ce9d6a324e45169e3d6640addcd"
   },
-  "next_evidence_seq": 1336,
+  "next_evidence_seq": 1340,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "5ebc136e19c07f97a4da5c343e804d85b8f92080432206cf35c67ef3fdad7dce"
+    "mac": "024edcb0520a4628baae96451575da29de7b4904202faf211558629d4113e809"
   },
   "claims": [
     {
@@ -74463,6 +74463,18 @@
             "by": "server",
             "mac": "2d8dd376c8a8bebb869a3a8e164df4909cb565c5b0d9cd7f1493fd222e6e6620"
           }
+        },
+        {
+          "id": "EVD-1339",
+          "kind": "analysis",
+          "locator": "list_claims tag from-issue:968 (CLM-0925..CLM-0943)",
+          "summary": "All 18 child claims (placement refusal, connect-check, no secret leakage, transactional audit/invalidation, admin-only routes, no removal route, placement choose, no moves, no migration, named tests, CLI, audit actions, docs, test and lint gates) currently carry verdict supported after the re-judgement of CLM-0932, CLM-0942 and CLM-0943.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T19:13:59.386547384Z",
+          "seal": {
+            "by": "server",
+            "mac": "9d13874f7edd4ca0ba045bec904db13c570c8a186764f21c4a985a1fdd1fe86c"
+          }
         }
       ],
       "verdicts": [
@@ -74476,13 +74488,26 @@
             "by": "server",
             "mac": "375ff0f585c68f59f723d97cb192f530254d75ffacbf3040634448a52f17e30c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Every child claim is supported with evidence; gates and the previously vacuous provisioner test are now confirmed. Caveat: delivery against the plan's Task 10 is judged via children, not a separate read of the plan.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1339"
+          ],
+          "recorded_at": "2026-11-23T19:14:03.116567002Z",
+          "seal": {
+            "by": "server",
+            "mac": "bf44ab9e5ae8baa4d06b6d20c9c89c49fb7849bd23c7580a2faea5d9e0127dbe"
+          }
         }
       ],
       "created_at": "2026-11-23T18:55:41.188670885Z",
-      "updated_at": "2026-11-23T18:59:35.508658714Z",
+      "updated_at": "2026-11-23T19:14:03.116567002Z",
       "seal": {
         "by": "server",
-        "mac": "965cf13a8c75e59199e16a1bfa55676608b03320952891e78e2942b24e653019"
+        "mac": "5b59e3cc9ba782f36762267889f5a82a41eced0a6383a818a4580fae0d84e84a"
       }
     },
     {
@@ -75177,6 +75202,28 @@
             "by": "server",
             "mac": "2068acd328d1c49d59fe28d50656d6b86895f3ef9a2cd9a25e688b18818409d7"
           }
+        },
+        {
+          "id": "EVD-1338",
+          "kind": "test",
+          "locator": "src/http/api/stores.rs:392-429 a_provisioner_key_reaches_none_of_the_store_routes; gate.sh narrow --lib (both tests)",
+          "summary": "Supersedes EVD-1314's summary for the provisioner test (that text predates the fix, when the test returned before asserting). Now the test asserts key creation returns 200, takes created[\"secret\"], and asserts 403 on five routes: GET and POST /stores, PUT /settings/default_store, PUT and DELETE /teams/main/store. I ran it and store_admin_endpoints_refuse_non_admin_credentials: each 1 passed, 0 failed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/stores.rs",
+              "lines": {
+                "start": 392,
+                "end": 429
+              },
+              "commit": "53e227b85a0d38b0e2d3c88fad035e72235b47d7"
+            }
+          },
+          "recorded_at": "2026-11-23T19:13:49.872109878Z",
+          "seal": {
+            "by": "server",
+            "mac": "6a0507df6850de15c3c0fdec0f1712ce2e8241f3db29dc3d7ee36c9b79abbfaf"
+          }
         }
       ],
       "verdicts": [
@@ -75194,13 +75241,28 @@
             "by": "server",
             "mac": "cc961d691d29085869837b27279c4da660b2db03efb24d9c21ab428e9824ddba"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Handlers gate on require_admin/require_every_catalog (EVD-1313), routes absent from PROVISIONER_ROUTES (EVD-1315), and the fixed provisioner test now genuinely asserts 403 on five routes and passes (EVD-1338). EVD-1314 summary is stale.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1313",
+            "EVD-1315",
+            "EVD-1338"
+          ],
+          "recorded_at": "2026-11-23T19:13:55.116786106Z",
+          "seal": {
+            "by": "server",
+            "mac": "85b73992262267f72cf54886fd06f99a6592fa4897ae77994bea037049d1ecde"
+          }
         }
       ],
       "created_at": "2026-11-23T18:55:41.188670885Z",
-      "updated_at": "2026-11-23T18:58:12.424589151Z",
+      "updated_at": "2026-11-23T19:13:55.116786106Z",
       "seal": {
         "by": "server",
-        "mac": "0f359e13ef80544e4d6ae3c2733a512f378e7f073db861c3b9fde5b3f920990b"
+        "mac": "4e288a1396ceb01ad14a665364f1f26860934cf66a089a2410c6b8b4abae831f"
       }
     },
     {
@@ -75904,6 +75966,18 @@
             "by": "server",
             "mac": "463b2449b6d57ad73ba03d67c447c76834624d256224de5a7f973f5bbf64f784"
           }
+        },
+        {
+          "id": "EVD-1336",
+          "kind": "log",
+          "locator": "target/i968-logs/test3.log (mtime 14:11:42, no source file newer; git status clean at 53e227b)",
+          "summary": "awk sum over 28 'test result:' lines: 3444 passed, 0 failed, 21 ignored; no 'FAILED' line; log ends with test=0.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T19:13:49.729968642Z",
+          "seal": {
+            "by": "server",
+            "mac": "ebc80d7ae025520c3882f006b3b1fb57ac741acb2e3f1b106f0c999c064f7e10"
+          }
         }
       ],
       "verdicts": [
@@ -75919,13 +75993,26 @@
             "by": "server",
             "mac": "fa1f6254a3c347fad154cc66b491c0625d3a29e7c4ce3d5dacb396c6543aac82"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Independent sum of test3.log equals the claim; exit line test=0; tree unchanged since.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1336"
+          ],
+          "recorded_at": "2026-11-23T19:13:54.978792091Z",
+          "seal": {
+            "by": "server",
+            "mac": "4c6a58f24b1a891b4a0f5b84a54d0a2be8b57f60d12fae415264f10a49f2bd56"
+          }
         }
       ],
       "created_at": "2026-11-23T18:55:41.188670885Z",
-      "updated_at": "2026-11-23T18:58:13.243648229Z",
+      "updated_at": "2026-11-23T19:13:54.978792091Z",
       "seal": {
         "by": "server",
-        "mac": "ea9706a8c236e4a5e9d6e0b9540af187fa128382133a74be9a25039ee5c647d2"
+        "mac": "0ed70bd43b4aba6ee9cee79d8878991a0bc68e3cad369fb214770d0eb62162e5"
       }
     },
     {
@@ -75958,6 +76045,18 @@
             "by": "server",
             "mac": "3a14c360ade4f339e1dc635b69a04e63b735fd1858698e9dfd57d610158cad61"
           }
+        },
+        {
+          "id": "EVD-1337",
+          "kind": "log",
+          "locator": "target/i968-logs/fmt3.log, lint3.log, dylint3.log",
+          "summary": "lint3.log: clippy -D warnings Finished, cargo doc -D warnings Finished, ends lint=0. dylint3.log: cargo dylint uninstrumented_fn Finished, ends dylint=0, no warnings/errors. fmt3.log: 'cargo fmt --all --check' with no diff output and no exit-status line (clean by empty output; exit 0 reported by author, not recorded in log). Logs postdate last source edit.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T19:13:49.801411092Z",
+          "seal": {
+            "by": "server",
+            "mac": "57bf853ee38f6aac4c9dec236b512484f29945afc4c31d7dcc12fd97129492a9"
+          }
         }
       ],
       "verdicts": [
@@ -75973,13 +76072,26 @@
             "by": "server",
             "mac": "6540c23c184fd14b33ead5db5c9877b419c8e0c6fd31e44f5ddc4396f82bcad0"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "lint (clippy+doc) and dylint logs show clean Finished and exit 0; fmt log is empty after a --check run (no diff), though it carries no explicit exit line.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1337"
+          ],
+          "recorded_at": "2026-11-23T19:13:55.047939859Z",
+          "seal": {
+            "by": "server",
+            "mac": "d39b13e73856a7adeb3f01e7e08528a1c0b843fe2458b9a4ee0dd97d9527ecec"
+          }
         }
       ],
       "created_at": "2026-11-23T18:55:41.188670885Z",
-      "updated_at": "2026-11-23T18:58:13.327083014Z",
+      "updated_at": "2026-11-23T19:13:55.047939859Z",
       "seal": {
         "by": "server",
-        "mac": "749d390227e3be5169086b3ae66cc7636fcbc356b58e14f8d90f65413a13c653"
+        "mac": "3cb5a1ee1e5161fb01cda9888f9d5a763b8c9744e999d7813aa5c432f829a663"
       }
     }
   ]
