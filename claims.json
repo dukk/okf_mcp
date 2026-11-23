@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 533,
+  "next_claim_seq": 546,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "20bbba5e9b31b600e95df5119bcdccf4b7c24435f0b9a379a583b60c3df8ecbe"
+    "mac": "a1789f1ec82b1ce950a1ce813a3d1d64e7f6709fcef0ad4abab6e10d19654ad7"
   },
-  "next_evidence_seq": 681,
+  "next_evidence_seq": 695,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "f2e5830f9970dbee5b8537170fc231f7975096a8742110438c48959cd952d08e"
+    "mac": "fc04c0607931312ff0532220204ded6a912dc01d77d7b4c5648ebdff4caafdc5"
   },
   "claims": [
     {
@@ -42480,6 +42480,861 @@
       "seal": {
         "by": "server",
         "mac": "1d62a4d4d4b4e54ff485aa1dffa4bf8eacf5e485107e24c995cd15dd96445e10"
+      }
+    },
+    {
+      "id": "CLM-0533",
+      "statement": "Issue #589 is resolved: when the final pending-authorization removal in oauth finish fails, the grant the approval created no longer stays in the user's grant list.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/589 (OAuth consent: clean up the grant when the final pending removal fails)",
+      "derived_from": [],
+      "artifacts": [
+        "src/oauth/authorize.rs"
+      ],
+      "tags": [
+        "from-issue:589"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [],
+      "verdicts": [],
+      "created_at": "2026-11-23T00:32:42.543528623Z",
+      "updated_at": "2026-11-23T00:32:42.543528623Z",
+      "seal": {
+        "by": "server",
+        "mac": "3eb0fea3febfa16e4654c84621c7780137c0935eee53d3578481415e17eb0c04"
+      }
+    },
+    {
+      "id": "CLM-0534",
+      "statement": "finish revokes the grant it was given when oauth.pending.remove returns an error.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #589 possible fix; PR body: \"`finish` calls it when `oauth.pending.remove` fails.\"",
+      "source_anchor": {
+        "path": "src/oauth/authorize.rs",
+        "lines": {
+          "start": 1238,
+          "end": 1241
+        },
+        "commit": "eef159457fad58a4dc15181d8868290cf2ca3468"
+      },
+      "derived_from": [
+        "CLM-0533"
+      ],
+      "artifacts": [
+        "src/oauth/authorize.rs"
+      ],
+      "tags": [
+        "from-issue:589"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0681",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_failed_removal_answers_the_busy_page",
+          "summary": "Ran on head eef1594: 2 passed (standalone and cluster), 0 failed. The test denies DEL in Redis so pending.remove fails, then asserts live OAuth grants equal the pre-approval set (authorize.rs:4155), which fails if the new grant is not revoked.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/authorize.rs",
+              "lines": {
+                "start": 4150,
+                "end": 4160
+              },
+              "commit": "eef159457fad58a4dc15181d8868290cf2ca3468"
+            }
+          },
+          "recorded_at": "2026-11-23T00:33:11.561456984Z",
+          "seal": {
+            "by": "server",
+            "mac": "112205bc7c3d83ce116417e76d9f802220550b2494e9396ae3d86bdbbbdfc25d"
+          }
+        },
+        {
+          "id": "EVD-0682",
+          "kind": "inspection",
+          "locator": "src/oauth/authorize.rs:1238-1241",
+          "summary": "The Err branch of oauth.pending.remove calls revoke_unused_grant(app, &grant_id).await then returns server_error. grant_id is the id returned by redeem / create_self_issued, passed into finish.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/authorize.rs",
+              "lines": {
+                "start": 1238,
+                "end": 1241
+              },
+              "commit": "eef159457fad58a4dc15181d8868290cf2ca3468"
+            }
+          },
+          "recorded_at": "2026-11-23T00:33:11.605400236Z",
+          "seal": {
+            "by": "server",
+            "mac": "2c51502b2737dbf447178f896d5fde0e039c313adcd4b83ba65ac6df584f541b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code calls revoke_unused_grant on the remove-failure branch and the narrow test, which fails the grant-list assertion otherwise, passes in both modes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0681",
+            "EVD-0682"
+          ],
+          "recorded_at": "2026-11-23T00:33:30.681050973Z",
+          "seal": {
+            "by": "server",
+            "mac": "223f2c4f1ce550392d7fc5c1fd48ca3e2d1184ff9014a0e10d3ef8b0f51add46"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:32:42.543528623Z",
+      "updated_at": "2026-11-23T00:33:30.681050973Z",
+      "seal": {
+        "by": "server",
+        "mac": "fb6f5eebf3a18239edbf9e4b685f4aeb427f61bd8ed047f64382dbe4c3d2d5db"
+      }
+    },
+    {
+      "id": "CLM-0535",
+      "statement": "When the final removal fails, the request still answers the 503 busy page and mints no authorization code.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #589 / brief: \"no code minted, the 503 busy page preserved\"",
+      "derived_from": [
+        "CLM-0533"
+      ],
+      "artifacts": [
+        "src/oauth/authorize.rs"
+      ],
+      "tags": [
+        "from-issue:589"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0683",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_failed_removal_answers_the_busy_page",
+          "summary": "Same run (2 passed). The test asserts the refused approval answers 503 busy page without code= and that the stored oauth:code keys equal those before (authorize.rs ~4138-4150). Code path: server_error returned before codes.insert at ~1260.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/authorize.rs",
+              "lines": {
+                "start": 4128,
+                "end": 4152
+              },
+              "commit": "eef159457fad58a4dc15181d8868290cf2ca3468"
+            }
+          },
+          "recorded_at": "2026-11-23T00:33:11.643054976Z",
+          "seal": {
+            "by": "server",
+            "mac": "4954e96969f297769d48a13c5e105c1cf77cbd1941f1473f0e8f2b42ce3dd049"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test asserts busy 503 answer, no code= in the body and unchanged stored code keys; code returns server_error before code insertion.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0683"
+          ],
+          "recorded_at": "2026-11-23T00:33:30.748595894Z",
+          "seal": {
+            "by": "server",
+            "mac": "5f6e5dbf02e0d5ae1c2987c2a430eee582c88c01ef52161ec7b1972807a0e5e9"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:32:42.543528623Z",
+      "updated_at": "2026-11-23T00:33:30.748595894Z",
+      "seal": {
+        "by": "server",
+        "mac": "8513f084e3b1e7649d03391c40ccfa82558a8a88f509c148564800e24a308ac8"
+      }
+    },
+    {
+      "id": "CLM-0536",
+      "statement": "The cleanup never removes or downgrades a grant that existed before the request: it revokes only the row id the approval just created.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Brief: \"cleanup must never remove or downgrade a pre-existing grant\"; PR body: \"A pre-existing grant is never touched\"",
+      "derived_from": [
+        "CLM-0533"
+      ],
+      "artifacts": [
+        "src/oauth/authorize.rs",
+        "src/store/oauth/codes.rs",
+        "src/store/oauth/grants.rs"
+      ],
+      "tags": [
+        "from-issue:589"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0684",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_failed_removal_answers_the_busy_page",
+          "summary": "The test first completes an earlier consent (one live grant), then the refused approval; it asserts live grants == [earlier id] afterwards, so the pre-existing grant is neither revoked nor removed. 2 passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/authorize.rs",
+              "lines": {
+                "start": 4051,
+                "end": 4085
+              },
+              "commit": "eef159457fad58a4dc15181d8868290cf2ca3468"
+            }
+          },
+          "recorded_at": "2026-11-23T00:33:11.681740061Z",
+          "seal": {
+            "by": "server",
+            "mac": "c6408ec0f15c74028d423e91f5295944fa0667c1180afd30d8d6efb47bc07b71"
+          }
+        },
+        {
+          "id": "EVD-0685",
+          "kind": "inspection",
+          "locator": "src/store/keys.rs:1299-1322 (revoke_with, Selector::Exact)",
+          "summary": "revoke_by_id runs UPDATE api_keys SET revoked_at WHERE id = $1 only: one exact row, only sets revoked_at, never changes access or catalogs, so no downgrade of any other row.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/keys.rs",
+              "lines": {
+                "start": 1299,
+                "end": 1322
+              },
+              "commit": "eef159457fad58a4dc15181d8868290cf2ca3468"
+            }
+          },
+          "recorded_at": "2026-11-23T00:33:11.718592738Z",
+          "seal": {
+            "by": "server",
+            "mac": "d27832d88994cad89ed41a0def9d8c301fba0bdb68a236545349cd4aa9410425"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Revocation is by exact id of a freshly inserted row; the test proves an earlier live grant survives the refused approval.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0684",
+            "EVD-0685"
+          ],
+          "recorded_at": "2026-11-23T00:33:30.786582286Z",
+          "seal": {
+            "by": "server",
+            "mac": "10c5856b0c07c71c861940e67685540c925c3b8b76b157da75ca3a563f46b13d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:32:42.543528623Z",
+      "updated_at": "2026-11-23T00:33:30.786582286Z",
+      "seal": {
+        "by": "server",
+        "mac": "1b7e09b416bdb39f17767a4b32dc56b0cbe05da18f8efb6aa22cbe937f0fc300"
+      }
+    },
+    {
+      "id": "CLM-0537",
+      "statement": "The successful-consent path through finish is unchanged: the only non-test change in the diff is the revoke call and helper on the removal-failure branch.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Brief: \"no change to what a successful consent does\"; PR body: \"The success path and the 503 page are unchanged and no code is minted.\"",
+      "derived_from": [
+        "CLM-0533"
+      ],
+      "artifacts": [
+        "src/oauth/authorize.rs"
+      ],
+      "tags": [
+        "from-issue:589"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0686",
+          "kind": "analysis",
+          "locator": "git diff origin/main..HEAD -- src/oauth/authorize.rs (non-test hunks)",
+          "summary": "Non-test hunks: a comment rewrite and the added revoke_unused_grant call inside `if let Err` of pending.remove, plus the new fn revoke_unused_grant. Everything after that branch (cache bridge, code generation, codes.insert, back_to_client) is untouched. No other semantic hunk.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/authorize.rs",
+              "lines": {
+                "start": 1230,
+                "end": 1290
+              },
+              "commit": "eef159457fad58a4dc15181d8868290cf2ca3468"
+            }
+          },
+          "recorded_at": "2026-11-23T00:33:11.757242033Z",
+          "seal": {
+            "by": "server",
+            "mac": "cc5edaeca7262b711b09da7f5009dd5fd6be61e5321c864787a4a18d69892224"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Diff reading shows the only semantic non-test change sits on the Err branch; the success path after it is untouched.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0686"
+          ],
+          "recorded_at": "2026-11-23T00:33:30.825605133Z",
+          "seal": {
+            "by": "server",
+            "mac": "846d288c37a9670df9475b0d94e06dce201de6ad7c39096a2a232c9908d8a682"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:32:42.543528623Z",
+      "updated_at": "2026-11-23T00:33:30.825605133Z",
+      "seal": {
+        "by": "server",
+        "mac": "e65b8dcd62f1a214a455aa5fce9badf47efcafc06f74493a7cf3d65e3aa4d223"
+      }
+    },
+    {
+      "id": "CLM-0538",
+      "statement": "a_failed_removal_answers_the_busy_page asserts that after the refused approval the live OAuth grants equal those from before it (the earlier completed consent's grant only).",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Issue #589: \"Extend a_failed_removal_answers_the_busy_page to assert no grant remains\"; PR body: \"asserts that after the refused approval the live OAuth grants are exactly the earlier grant\"",
+      "derived_from": [
+        "CLM-0533"
+      ],
+      "artifacts": [
+        "src/oauth/authorize.rs"
+      ],
+      "tags": [
+        "from-issue:589"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0687",
+          "kind": "inspection",
+          "locator": "src/oauth/authorize.rs:4153-4158",
+          "summary": "assert_eq!(live_grants(&a).await, before, ...) where live_grants lists key_rows with kind OAuth and revoked_at None, and before was captured with len 1 after the earlier consent. Read the assertion, not just the name; the test passes (2 passed).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/authorize.rs",
+              "lines": {
+                "start": 4153,
+                "end": 4158
+              },
+              "commit": "eef159457fad58a4dc15181d8868290cf2ca3468"
+            }
+          },
+          "recorded_at": "2026-11-23T00:33:11.801288185Z",
+          "seal": {
+            "by": "server",
+            "mac": "9cf7ed17ad21b63b079779a98112c51fb9bda17cd55d8438ebbd134f9869f2e6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The assertion at authorize.rs:4153 compares live OAuth grants to the pre-approval set; passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0687"
+          ],
+          "recorded_at": "2026-11-23T00:33:30.872915202Z",
+          "seal": {
+            "by": "server",
+            "mac": "ee1c372df5ff28a38b53f0554385b1614b7fcf4f050a9aa40eccf709b89670be"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:32:42.543528623Z",
+      "updated_at": "2026-11-23T00:33:30.872915202Z",
+      "seal": {
+        "by": "server",
+        "mac": "3eb5b045c41838f35c2fad43af6ee6726ff665bd850da1c4f5506b1878f67fe5"
+      }
+    },
+    {
+      "id": "CLM-0539",
+      "statement": "revoke_unused_grant revokes by id through keys::revoke_by_id with the system actor \"oauth\"; on error it logs and the answer is unchanged.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"new `revoke_unused_grant` revokes one grant by its id (`keys::revoke_by_id`, system actor `oauth`), best effort; a failure is logged and the answer is unchanged.\"",
+      "derived_from": [
+        "CLM-0533"
+      ],
+      "artifacts": [
+        "src/oauth/authorize.rs"
+      ],
+      "tags": [
+        "from-issue:589"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0688",
+          "kind": "inspection",
+          "locator": "src/oauth/authorize.rs:1299-1312",
+          "summary": "revoke_unused_grant builds AuditActor::system(\"oauth\"), calls keys::revoke_by_id(pool, grant_id, &audit, now); on Err it emits split_event!(warn, ...) and returns unit, so the caller's answer is unchanged.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/authorize.rs",
+              "lines": {
+                "start": 1299,
+                "end": 1312
+              },
+              "commit": "eef159457fad58a4dc15181d8868290cf2ca3468"
+            }
+          },
+          "recorded_at": "2026-11-23T00:33:11.838935375Z",
+          "seal": {
+            "by": "server",
+            "mac": "8907ace5693c6fc7bb7ff65607c8e346fa6da2f7dea8427a5b762e235f0e8374"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Function body matches the description exactly.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0688"
+          ],
+          "recorded_at": "2026-11-23T00:33:30.917028834Z",
+          "seal": {
+            "by": "server",
+            "mac": "a185dba65d1912d01ee01aa4052310abdb2e4f671dfaa1fe347f364e84450af0"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:32:42.543528623Z",
+      "updated_at": "2026-11-23T00:33:30.917028834Z",
+      "seal": {
+        "by": "server",
+        "mac": "6dba3043b654c4362add03bd1c4667b54231f025692c8bc331e8831e1b5ee866"
+      }
+    },
+    {
+      "id": "CLM-0540",
+      "statement": "redeem and create_self_issued each INSERT a new api_keys row for the grant rather than reusing or updating an existing one.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "PR body: \"`redeem` and `create_self_issued` always insert a new row\"",
+      "derived_from": [
+        "CLM-0533"
+      ],
+      "artifacts": [
+        "src/store/oauth/codes.rs",
+        "src/store/oauth/grants.rs"
+      ],
+      "tags": [
+        "from-issue:589"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0689",
+          "kind": "inspection",
+          "locator": "src/store/oauth/codes.rs:630-640; src/store/oauth/grants.rs:273-285",
+          "summary": "Both functions run a plain INSERT INTO api_keys ... (redeem RETURNING id; create_self_issued likewise) with no ON CONFLICT or update of an existing row, and finish is called only from approve (redeem) and the consent path (create_self_issued).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/oauth/codes.rs",
+              "lines": {
+                "start": 630,
+                "end": 640
+              },
+              "commit": "eef159457fad58a4dc15181d8868290cf2ca3468"
+            }
+          },
+          "recorded_at": "2026-11-23T00:33:11.872859007Z",
+          "seal": {
+            "by": "server",
+            "mac": "62bbd1faabf25107d4b0e2ba07943ed9adc046aebb5841fb9bd8fd70999fa5aa"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both are plain INSERTs of a new api_keys row.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0689"
+          ],
+          "recorded_at": "2026-11-23T00:33:30.953641839Z",
+          "seal": {
+            "by": "server",
+            "mac": "e71096240aded21a482ea984464377e355fa4f0135408c7c13a31ecae5932705"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:32:42.543528623Z",
+      "updated_at": "2026-11-23T00:33:30.953641839Z",
+      "seal": {
+        "by": "server",
+        "mac": "e740cc4654bf914b46d204d1c62808d487c417e0c324cc2fb5f0b5c8f5ddee85"
+      }
+    },
+    {
+      "id": "CLM-0541",
+      "statement": "The grant is revoked (revoked_at set and a revocation audited), not deleted.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"Revoked rather than deleted, so the audit trail stays.\"",
+      "derived_from": [
+        "CLM-0533"
+      ],
+      "artifacts": [
+        "src/store/keys.rs"
+      ],
+      "tags": [
+        "from-issue:589"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0690",
+          "kind": "inspection",
+          "locator": "src/store/keys.rs:1308-1319",
+          "summary": "revoke_with does UPDATE api_keys SET revoked_at and record_revocation (audit); no DELETE. The new test's live_grants filter on revoked_at confirms the row is revoked.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/keys.rs",
+              "lines": {
+                "start": 1308,
+                "end": 1319
+              },
+              "commit": "eef159457fad58a4dc15181d8868290cf2ca3468"
+            }
+          },
+          "recorded_at": "2026-11-23T00:33:11.910102035Z",
+          "seal": {
+            "by": "server",
+            "mac": "c91b7353967981fb1f60da56ff96d25faa1d8b73c0603ab6fe583edc20fe2238"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "UPDATE revoked_at plus audit record; no delete.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0690"
+          ],
+          "recorded_at": "2026-11-23T00:33:30.995094809Z",
+          "seal": {
+            "by": "server",
+            "mac": "6bed392a39622245fa4a1c599f03ea74781188cebcee0ac91bb0b7c341854b49"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:32:42.543528623Z",
+      "updated_at": "2026-11-23T00:33:30.995094809Z",
+      "seal": {
+        "by": "server",
+        "mac": "5558d4a87ab3c6b5b6c0a9f4d51a20da344e7a86d8e2afcbb6c54d79cf22b533"
+      }
+    },
+    {
+      "id": "CLM-0542",
+      "statement": "In the sign-in-code path redeem spends the code in the same transaction that creates the grant, and the pending request must survive a wrong code, so the pending removal cannot move earlier.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"In the sign-in-code path `redeem` spends the code in the same transaction that creates the grant, and the pending request must survive a wrong code for another try\"",
+      "derived_from": [
+        "CLM-0533"
+      ],
+      "artifacts": [
+        "src/store/oauth/codes.rs",
+        "src/oauth/authorize.rs"
+      ],
+      "tags": [
+        "from-issue:589"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0691",
+          "kind": "inspection",
+          "locator": "src/store/oauth/codes.rs:600-660; src/oauth/authorize.rs:1040-1060",
+          "summary": "redeem opens one tx, INSERTs the grant (632) and UPDATEs sign_in_codes redeemed_at/grant_id (652) before commit. failed_attempt keeps the pending request (updates attempts, re-shows code page) so a wrong code retries on the same pending.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/oauth/codes.rs",
+              "lines": {
+                "start": 630,
+                "end": 655
+              },
+              "commit": "eef159457fad58a4dc15181d8868290cf2ca3468"
+            }
+          },
+          "recorded_at": "2026-11-23T00:33:11.951015731Z",
+          "seal": {
+            "by": "server",
+            "mac": "4ed26cc22a79e612db1fef3c3d6a706efb89b34b6d3a265fbefd8299b5c67a37"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Same-transaction insert and code spend confirmed; failed_attempt keeps pending.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0691"
+          ],
+          "recorded_at": "2026-11-23T00:33:31.033698504Z",
+          "seal": {
+            "by": "server",
+            "mac": "28298a70a03d73802552cca9d9b8053c97f8694257fba4ac74c09dd93342a1ab"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:32:42.543528623Z",
+      "updated_at": "2026-11-23T00:33:31.033698504Z",
+      "seal": {
+        "by": "server",
+        "mac": "8848ac2dae869e30006cfee718d2ab99bc5260b425c37d336c027c3cceb20c32"
+      }
+    },
+    {
+      "id": "CLM-0543",
+      "statement": "When the authorization code cannot be stored (full map or Redis error) the grant still stays (not changed by this PR).",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"Not changed (follow-up candidate): when the authorization code cannot be stored (full map or Redis error) the grant also stays.\"",
+      "derived_from": [
+        "CLM-0533"
+      ],
+      "artifacts": [
+        "src/oauth/authorize.rs"
+      ],
+      "tags": [
+        "from-issue:589"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0692",
+          "kind": "inspection",
+          "locator": "src/oauth/authorize.rs:1266-1280",
+          "summary": "`if !stored` returns the busy page with no revoke_unused_grant call; the comment states the grant stays. The diff does not touch this block.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/authorize.rs",
+              "lines": {
+                "start": 1266,
+                "end": 1280
+              },
+              "commit": "eef159457fad58a4dc15181d8868290cf2ca3468"
+            }
+          },
+          "recorded_at": "2026-11-23T00:33:11.988922763Z",
+          "seal": {
+            "by": "server",
+            "mac": "c59707386e81dd97701f2b07f0830e0f11feb47eb3ab74c7e419b292ffff8d96"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The !stored branch has no cleanup and is untouched.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0692"
+          ],
+          "recorded_at": "2026-11-23T00:33:31.078997873Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa24288ed0440b5ed6f9d7f981bd0b5381a24339c103c30b8bca8a3f47207e95"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:32:42.543528623Z",
+      "updated_at": "2026-11-23T00:33:31.078997873Z",
+      "seal": {
+        "by": "server",
+        "mac": "b0123dd9367d064059f249c75cfced1c05aa2b3ebaad1a8c3b925ce80353a113"
+      }
+    },
+    {
+      "id": "CLM-0544",
+      "statement": "tools/agentic/gate.sh fmt passes on the head commit.",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "source": "PR body: \"`tools/agentic/gate.sh fmt`, `lint`, `dylint`: passed.\"",
+      "derived_from": [
+        "CLM-0533"
+      ],
+      "artifacts": [
+        "src/oauth/authorize.rs"
+      ],
+      "tags": [
+        "from-issue:589"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0693",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh fmt",
+          "summary": "Reran on head: ran `cargo fmt --all --check`, no diff output, exit clean.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T00:33:12.025082516Z",
+          "seal": {
+            "by": "server",
+            "mac": "cb7a0c645ddf3e2d3cc52d5c5e4b23bed482dcb61358e2c201dd624082c27912"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reran fmt gate on head; clean.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0693"
+          ],
+          "recorded_at": "2026-11-23T00:33:31.119984640Z",
+          "seal": {
+            "by": "server",
+            "mac": "65340eaa9a9948930388663c21b1779996644f19c663e589b11adb9b4f8f3821"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:32:42.543528623Z",
+      "updated_at": "2026-11-23T00:33:31.119984640Z",
+      "seal": {
+        "by": "server",
+        "mac": "82d9fea035d15a1728a4c54684b194bc106e10e97f06e6d2beca22c020887799"
+      }
+    },
+    {
+      "id": "CLM-0545",
+      "statement": "tools/agentic/gate.sh lint and dylint pass on the head commit.",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "source": "PR body: \"`tools/agentic/gate.sh fmt`, `lint`, `dylint`: passed.\"",
+      "derived_from": [
+        "CLM-0533"
+      ],
+      "artifacts": [
+        "src/oauth/authorize.rs"
+      ],
+      "tags": [
+        "from-issue:589"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0694",
+          "kind": "other",
+          "locator": "tools/agentic/gate.sh lint / dylint (not run by auditor)",
+          "summary": "Not rerun: heavy, and a full gate was running separately. No evidence either way beyond the author's statement.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T00:33:12.074373374Z",
+          "seal": {
+            "by": "server",
+            "mac": "5bb0d026dcd77d01af9b73723450eeb4c9436c69d256562ae9577f91adee2eda"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The auditor did not run lint or dylint (heavy, full gate running separately), so only the author's statement exists. Fix: run tools/agentic/gate.sh lint and tools/agentic/gate.sh dylint on the head commit and record the exit status.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [],
+          "recorded_at": "2026-11-23T00:33:31.166827976Z",
+          "seal": {
+            "by": "server",
+            "mac": "854f5e6535a6fb6b1a71fd777c9d15ce2c9f7a6ea3e86e0cd2d570bec8274075"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:32:42.543528623Z",
+      "updated_at": "2026-11-23T00:33:31.166827976Z",
+      "seal": {
+        "by": "server",
+        "mac": "01d836e628b8ab70d5d40ac4807a5c0a05907a367b2190599339dcf4599c869a"
       }
     }
   ]
