@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 671,
+  "next_claim_seq": 673,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "fce854ac6b0c777dc59cbf9f35b3a3b9d0c0d336b973a4aa5d59b7b973662644"
+    "mac": "237248fc17c11f3beb98e67ac39afece70c006243d6ca3ed05dfb5b98d995258"
   },
-  "next_evidence_seq": 842,
+  "next_evidence_seq": 849,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "d8b704322c137bfefdd84532b6a41a05ecf861b1d2f0d215238b1736f91e951a"
+    "mac": "b7cc9849e9be9566b90f67c81456fe1573b311a3c46873b44bab52ab181800a9"
   },
   "claims": [
     {
@@ -51027,14 +51027,40 @@
             "by": "server",
             "mac": "a8dd4ec60cc11bb8f39a3eebda951528b8dfa5bdcd7f36d735577d8d8bd26935"
           }
+        },
+        {
+          "id": "EVD-0848",
+          "kind": "analysis",
+          "locator": "children of CLM-0658",
+          "summary": "All active children are now supported: 0659-0667, 0669, 0671, 0672 (0668 and 0670 retired and replaced by 0671 and 0672). Together they show the four loads use latest(), the journeys exist and fail without the guard, and the changelog and PR text are accurate.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T06:41:14.310293741Z",
+          "seal": {
+            "by": "server",
+            "mac": "e029090e4634dc0349ca2764ae025bd15ce20fd644be0ab4b90c21a58c304600"
+          }
         }
       ],
-      "verdicts": [],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every active child is supported after the fixes; the earlier refutation is kept in the history.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0848"
+          ],
+          "recorded_at": "2026-11-23T06:41:17.279312044Z",
+          "seal": {
+            "by": "server",
+            "mac": "84154d3f664e246c0c2c9a18cfaaf37cb8870bd34cd73e7a49e757df53b34750"
+          }
+        }
+      ],
       "created_at": "2026-11-23T06:38:10.351347639Z",
-      "updated_at": "2026-11-23T06:39:10.051750834Z",
+      "updated_at": "2026-11-23T06:41:17.279312044Z",
       "seal": {
         "by": "server",
-        "mac": "9a2ce4caf805183f4df9ca438f23c7344c63c624f034c79b100e844caaee8805"
+        "mac": "3fda5c806313f5039cae76a2c640db3daf65d16e951f2c2b81dc3cf88a1bda55"
       }
     },
     {
@@ -51569,6 +51595,18 @@
             "by": "server",
             "mac": "02716b6a268dec64594327769234ddfd7b188965d23559fc03fdd47c080948c9"
           }
+        },
+        {
+          "id": "EVD-0845",
+          "kind": "log",
+          "locator": "/home/pgrace/repos/okf_mcp/.worktrees/okf-mcp-665/target/i665-logs/revert.log (lines 6-46)",
+          "summary": "Author-run log, read by me, not re-run. Of the six older_list_read journeys, the changesets, my_grants and my_keys ones FAILED with \"the older read redrew the changesets/my grants/my keys table\" (changesets.rs:402, self_service.rs:987 and :953); catalogs, teams, users (#664) passed; result \"3 passed; 3 failed\". The messages and panic lines match the journeys' assertions. The log does not record which edit was made to each page, and target/ is untracked, so the revert itself is not independently shown.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T06:40:49.806655311Z",
+          "seal": {
+            "by": "server",
+            "mac": "0c8a801dd4fce0007e8f8edac1caf15b11d8501d5624a51548d6c54868abb3ec"
+          }
         }
       ],
       "verdicts": [
@@ -51584,13 +51622,26 @@
             "by": "server",
             "mac": "80802d6bc299dc79d1dbe65888959ff3aa8863dd85c9001415beb44194acfde2"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The log shows exactly the three journeys failing with the quoted messages and the three #664 journeys passing, which matches the claim. I did not re-run it and the log does not show the edits made, so this rests on the author's log; the failing assertions are the ones I read in the journeys.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0845"
+          ],
+          "recorded_at": "2026-11-23T06:41:02.000670637Z",
+          "seal": {
+            "by": "server",
+            "mac": "ff63a6c8925958e19cd517389dc33cec7c707a3ff9f1cc42e1d9890222ce8912"
+          }
         }
       ],
       "created_at": "2026-11-23T06:38:10.351347639Z",
-      "updated_at": "2026-11-23T06:39:05.042807048Z",
+      "updated_at": "2026-11-23T06:41:02.000670637Z",
       "seal": {
         "by": "server",
-        "mac": "c4790679d93ce644f91ae1e5ff4756e02f4c8e56598d347dd8558a2a2a757f80"
+        "mac": "6d5e7e53dc9382c98f9f97397270e92e54d8fa4f13f5751a2669bff210150b3a"
       }
     },
     {
@@ -51635,6 +51686,28 @@
             "by": "server",
             "mac": "2bdebce25d7cb96fce06750d51a67741b14295dc49c0e39f39f37025c79754d9"
           }
+        },
+        {
+          "id": "EVD-0842",
+          "kind": "log",
+          "locator": "git log -2 --format='%H %cI'; ls changelog/ | tail -1",
+          "summary": "Entry is now changelog/2026-11-23T06-40-29Z-issue-665-console-latest-guard.md (renamed, 2 lines changed). HEAD 5e35fcd commit time is 2026-11-23T01:40:29-05:00 = 06:40:29Z; clock at check 06:40:38Z. Stamp is not later than either, and no file references the old 07-00-00Z name.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T06-40-29Z-issue-665-console-latest-guard.md",
+              "lines": {
+                "start": 1,
+                "end": 5
+              },
+              "commit": "5e35fcdf68afc10b37e2d2bdfb929989ba920069"
+            }
+          },
+          "recorded_at": "2026-11-23T06:40:49.659610297Z",
+          "seal": {
+            "by": "server",
+            "mac": "edca07a8e7ed535c85f6bb7fd35d9f21514613b51547e5e3ded09b5f12b1f43a"
+          }
         }
       ],
       "verdicts": [
@@ -51650,13 +51723,26 @@
             "by": "server",
             "mac": "b3898c211f2868b5b3be30fb1a682b2ce41cc41bc8b6e45337dd47e44b264ebf"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Renamed to 06-40-29Z, equal to the HEAD commit time and before the clock; no references to the old name remain.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0842"
+          ],
+          "recorded_at": "2026-11-23T06:41:01.958702142Z",
+          "seal": {
+            "by": "server",
+            "mac": "2351f0f19e69681a7ed1cce10f768e44221866caa9fad67a1b77bf770f4cbfc1"
+          }
         }
       ],
       "created_at": "2026-11-23T06:38:10.351347639Z",
-      "updated_at": "2026-11-23T06:39:05.085273074Z",
+      "updated_at": "2026-11-23T06:41:01.958702142Z",
       "seal": {
         "by": "server",
-        "mac": "94f8e5eb5cb0125b81d66e38db2adea34839f8ec353593d5710b06634c646728"
+        "mac": "f5a7e3d2f662d05b824e55819c9f9057c6da33b6bc2cfedc5d74668f05f13cbc"
       }
     },
     {
@@ -51678,7 +51764,9 @@
         "from-issue:665"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "The original statement named catalogs.js and was refuted; the author corrected the PR text, so the corrected sentence is audited as a new claim. Note EVD-0843 on this claim describes the corrected text.",
+        "retired_at": "2026-11-23T06:41:01.872642374Z"
       },
       "evidence": [
         {
@@ -51702,6 +51790,28 @@
             "by": "server",
             "mac": "88a3a55638f83187c74bd8b3d824656f0543de67f3bdfaf691fbe304ebd9e8d8"
           }
+        },
+        {
+          "id": "EVD-0843",
+          "kind": "inspection",
+          "locator": "pr-665-body.md line 2; src/http/ui/js/pages/teams.js:66; users.js:79",
+          "summary": "The draft PR body now reads \"as users.js and teams.js do\". teams.js:66 and users.js:79 both call latest(main), so the corrected sentence is true. The claim's old wording (catalogs.js) was replaced; the claim statement itself is the superseded text, judged on what the PR now says.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/teams.js",
+              "lines": {
+                "start": 64,
+                "end": 68
+              },
+              "commit": "5e35fcdf68afc10b37e2d2bdfb929989ba920069"
+            }
+          },
+          "recorded_at": "2026-11-23T06:40:49.708878269Z",
+          "seal": {
+            "by": "server",
+            "mac": "baaea50187fa34536820d500d259e02ac02c909d3ff9bd2b63011660f6f93d74"
+          }
         }
       ],
       "verdicts": [
@@ -51720,10 +51830,10 @@
         }
       ],
       "created_at": "2026-11-23T06:38:10.351347639Z",
-      "updated_at": "2026-11-23T06:39:05.121780468Z",
+      "updated_at": "2026-11-23T06:41:01.872642374Z",
       "seal": {
         "by": "server",
-        "mac": "aa719a57ffb0fe39ed26beb5a056dfc12633bd83a9b397bc1d70eb2a7488e935"
+        "mac": "c6a87434c54d159035a5b6fd26dfce0b8a902e5218fabe370e150de26b08e80b"
       }
     },
     {
@@ -51814,7 +51924,9 @@
         "from-issue:665"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "The statement (no held-answer journeys for unlocks/keys/audit) was false and refuted; the changelog clause was removed, so a replacement claim audits the corrected text. Note EVD-0844 on this claim describes the corrected text.",
+        "retired_at": "2026-11-23T06:41:01.914734189Z"
       },
       "evidence": [
         {
@@ -51840,6 +51952,28 @@
             "by": "server",
             "mac": "ddefe5d0b6c2867bfbd784f1eef2035a9038916c535648f209392194499ea473"
           }
+        },
+        {
+          "id": "EVD-0844",
+          "kind": "inspection",
+          "locator": "git show HEAD -- changelog",
+          "summary": "The false clause is gone: now \"not a mechanical swap. Moving them is left to a separate issue.\" No statement about held-answer journeys remains in the entry.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "none has a held-answer",
+              "scope": [
+                "changelog"
+              ],
+              "hits": 0,
+              "commit": "5e35fcdf68afc10b37e2d2bdfb929989ba920069"
+            }
+          },
+          "recorded_at": "2026-11-23T06:40:49.762322667Z",
+          "seal": {
+            "by": "server",
+            "mac": "179bd78686fc2cf603991ca0fcf5fab5ab3ca5d154b75ddcee1c02935b203841"
+          }
         }
       ],
       "verdicts": [
@@ -51858,10 +51992,144 @@
         }
       ],
       "created_at": "2026-11-23T06:38:10.351347639Z",
-      "updated_at": "2026-11-23T06:39:05.206898131Z",
+      "updated_at": "2026-11-23T06:41:01.914734189Z",
       "seal": {
         "by": "server",
-        "mac": "e6f21d990dc4524e15f1b36c4b295d096ec159e6a37d8f71e651de1ce9b89f75"
+        "mac": "bebebb73c109c4ff1183751d42e49c27e572a99945ec051ea5b6d5e64946cf8c"
+      }
+    },
+    {
+      "id": "CLM-0671",
+      "statement": "The PR body says the changed pages use latest(view) \"as users.js and teams.js do\", and users.js and teams.js both call latest(main).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "pr-665-body.md line 2: \"as users.js and teams.js do (#351 follow-up)\"",
+      "derived_from": [
+        "CLM-0658"
+      ],
+      "artifacts": [
+        "src/http/ui/js/pages/users.js",
+        "src/http/ui/js/pages/teams.js"
+      ],
+      "tags": [
+        "from-issue:665"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0846",
+          "kind": "inspection",
+          "locator": "scratchpad/pr-665-body.md:2; src/http/ui/js/pages/teams.js:66; users.js:79",
+          "summary": "PR body line 2 reads \"as users.js and teams.js do (#351 follow-up)\". teams.js:66 and users.js:79 both define a latest(main) counter.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "= latest\\(main\\)",
+              "scope": [
+                "src/http/ui/js/pages/teams.js",
+                "src/http/ui/js/pages/users.js"
+              ],
+              "hits": 2,
+              "commit": "5e35fcdf68afc10b37e2d2bdfb929989ba920069"
+            }
+          },
+          "recorded_at": "2026-11-23T06:41:07.052230407Z",
+          "seal": {
+            "by": "server",
+            "mac": "65e1c77ccac881320db90e8f5134861d0cdd9450145e5e9294cd9c2637c48369"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "PR body corrected; both named pages use latest(main).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0846"
+          ],
+          "recorded_at": "2026-11-23T06:41:14.226455001Z",
+          "seal": {
+            "by": "server",
+            "mac": "ad6c54019f2b55dc74a64ba7f85adaa426045aad40ed001e15cc71ab6ee452f3"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T06:41:02.042171620Z",
+      "updated_at": "2026-11-23T06:41:14.226455001Z",
+      "seal": {
+        "by": "server",
+        "mac": "e29914e81a7472aaabafd8e447b53118be40cc288043ec1779173e28d22b0b60"
+      }
+    },
+    {
+      "id": "CLM-0672",
+      "statement": "The changelog entry's \"Not changed\" section makes no claim about held-answer journeys for unlocks.js, keys.js or audit.js.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "changelog/2026-11-23T06-40-29Z-issue-665-console-latest-guard.md (Not changed)",
+      "derived_from": [
+        "CLM-0658"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T06-40-29Z-issue-665-console-latest-guard.md"
+      ],
+      "tags": [
+        "from-issue:665"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0847",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T06-40-29Z-issue-665-console-latest-guard.md \"Not changed\"",
+          "summary": "The section now ends \"not a mechanical swap. Moving them is left to a separate issue.\"; no journey statement remains (search for \"held-answer journey\" in the entry's Not changed text finds none; the only journey mentions are in Tests).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T06-40-29Z-issue-665-console-latest-guard.md",
+              "lines": {
+                "start": 17,
+                "end": 24
+              },
+              "commit": "5e35fcdf68afc10b37e2d2bdfb929989ba920069"
+            }
+          },
+          "recorded_at": "2026-11-23T06:41:07.097788425Z",
+          "seal": {
+            "by": "server",
+            "mac": "f77ce957a35740268f89c451671d6c38ca5bd38d24d276a931ae5a0a07938a9b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Lines 18-23 contain no journey statement.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0847"
+          ],
+          "recorded_at": "2026-11-23T06:41:14.267867814Z",
+          "seal": {
+            "by": "server",
+            "mac": "b5607b30be18c4d40aaaea483f4b5c591352f6350d89fd32eca21f1558fa58e8"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T06:41:02.042171620Z",
+      "updated_at": "2026-11-23T06:41:14.267867814Z",
+      "seal": {
+        "by": "server",
+        "mac": "8b521a2fbdbd3c7f5dcc1d42542e13b15ce36ea685e67048be36c65fac8ac708"
       }
     }
   ]
