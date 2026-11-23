@@ -20,6 +20,7 @@ use sqlx::PgConnection;
 
 use crate::app::App;
 use crate::error::OkfError;
+use crate::http::REQUEST_TIMEOUT;
 use crate::keys;
 use crate::oauth::error::OAuthError;
 use crate::oauth::state::{code_key, AuthorizationCode};
@@ -344,11 +345,14 @@ async fn issue_token(
 }
 
 /// How long a code stays in the store at least after an exchange marked it
-/// used. Covers the exchange's own transaction, so its replay check after
-/// the commit finds the code even if the code's 60 s lifetime ended in
-/// between; a code gone then would be indistinguishable from a replayed one
-/// and would revoke a legitimate exchange's tokens (issue #590).
-const USED_CODE_FLOOR: Duration = Duration::from_secs(30);
+/// used. The OAuth routes are cut off at [`REQUEST_TIMEOUT`], so an exchange
+/// cannot reach its replay check later than that after the mark; the floor is
+/// that deadline plus a margin, so the check always finds the spent code even
+/// if the code's own 60 s lifetime ended meanwhile. A code gone then would be
+/// indistinguishable from a replayed one and would revoke a legitimate
+/// exchange's tokens (issue #590). Derived from the deadline so the two
+/// cannot drift apart.
+const USED_CODE_FLOOR: Duration = Duration::from_secs(REQUEST_TIMEOUT.as_secs() + 30);
 
 /// `grant_type=authorization_code`.
 #[tracing::instrument(level = "debug", skip_all)]
@@ -1290,6 +1294,11 @@ mod tests {
     }
 
     #[test]
+    fn the_used_code_floor_outlasts_the_request_deadline() {
+        assert!(super::USED_CODE_FLOOR > crate::http::REQUEST_TIMEOUT);
+    }
+
+    #[test]
     fn debug_never_prints_codes_verifiers_or_tokens() {
         let secret = "okfac_do-not-print";
         let request = TokenForm {
@@ -1516,6 +1525,13 @@ mod tests {
             assert!(
                 left > i64::try_from(LEFT.as_millis()).expect("fits"),
                 "the used code outlives its old lifetime: {left} ms left"
+            );
+            // And it outlives the longest an exchange may take (the OAuth
+            // routes are cut off at `REQUEST_TIMEOUT`), so a stall of any
+            // allowed length still finds it; a stall that long is not slept.
+            assert!(
+                left > i64::try_from(crate::http::REQUEST_TIMEOUT.as_millis()).expect("fits"),
+                "the used code outlives the request deadline: {left} ms left"
             );
             // Let what the code had left pass, as it does for an exchange
             // that is slow in its last moments.

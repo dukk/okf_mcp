@@ -10,8 +10,9 @@
   family; the floor lengthens but never shortens or revives an entry.
 
 ## Changed
-- The authorization-code exchange marks the code used with a 30 s floor
-  (`USED_CODE_FLOOR`). Before, a code used in the last milliseconds of its
+- The authorization-code exchange marks the code used with a floor
+  (`USED_CODE_FLOOR`: the 120 s request timeout plus 30 s, so it covers
+  any exchange the server lets run). Before, a code used in the last milliseconds of its
   60 s life could be gone by the post-commit replay check, which treats a
   missing code as a replay: it revoked the legitimate tokens and answered
   "the code was used twice".
