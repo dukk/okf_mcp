@@ -2534,9 +2534,13 @@ mod publish_tests {
         let text = published_text(&test, "log.md").await;
         assert!(text.contains("* **Update:** fine"), "{text}");
         assert!(
-            published.report.warnings.iter().any(|finding| finding.file == "log.md"
-                && finding.rule == "broken-link"
-                && finding.message.contains("a b.md")),
+            published
+                .report
+                .warnings
+                .iter()
+                .any(|finding| finding.file == "log.md"
+                    && finding.rule == "broken-link"
+                    && finding.message.contains("a b.md")),
             "{:?}",
             published.report.warnings
         );
@@ -2556,7 +2560,10 @@ mod publish_tests {
             panic!("not LintFailed: {error:?}")
         };
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert_eq!((errors[0].file.as_str(), errors[0].rule.as_str()), ("log.md", "broken-link"));
+        assert_eq!(
+            (errors[0].file.as_str(), errors[0].rule.as_str()),
+            ("log.md", "broken-link")
+        );
         assert!(warnings.iter().any(|finding| finding.rule == "broken-link"));
         assert_eq!(state_of(&test, &handle).await, ChangesetState::Open);
     }
@@ -2566,7 +2573,13 @@ mod publish_tests {
         let test = pg_with_old_broken_links().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        body(&ctx, &handle, "/old.md", "See [x](<a b.md>).\n\nMore text.\n").await;
+        body(
+            &ctx,
+            &handle,
+            "/old.md",
+            "See [x](<a b.md>).\n\nMore text.\n",
+        )
+        .await;
 
         let published = publish_as(&ctx, &handle, "edit").await.unwrap();
 

@@ -664,7 +664,11 @@ fn demote_preexisting(
     let mut new = Vec::with_capacity(errors.len());
     let mut preexisting = Vec::new();
     for mut finding in errors {
-        let key = (finding.file.clone(), finding.rule.clone(), finding.message.clone());
+        let key = (
+            finding.file.clone(),
+            finding.rule.clone(),
+            finding.message.clone(),
+        );
         match excused.get_mut(&key) {
             Some(left) if *left > 0 => {
                 *left -= 1;
