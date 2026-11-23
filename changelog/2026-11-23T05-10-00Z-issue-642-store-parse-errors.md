@@ -9,7 +9,7 @@
 - One corrupt-row test per reader family: `ceiling` (member access and
   entitlement level, including a rolled-back `change_member_access`),
   `changesets`, `sign_in_events`, `teams`, `unlocks`, `keys`, `oauth::codes`,
-  `oauth::clients`.
+  `oauth::clients`, plus a keys test for `key_catalogs.access` (review of PR #939).
 
 ## Changed
 

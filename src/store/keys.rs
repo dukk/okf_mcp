@@ -4538,4 +4538,44 @@ mod tests {
                 .unwrap();
         }
     }
+    /// Issue #642, review of PR #939: the per-catalog level is its own decode
+    /// path (`key_catalogs.access`, read through the aggregated pairs).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_corrupt_catalog_grant_level_is_a_database_error() {
+        let db = test_db().await;
+        catalogs::create(
+            &db.pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "main",
+                display_name: &crate::labels::DisplayName::default(),
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &crate::store::audit::AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        let names = ["main".to_string()];
+        let created = create_with_id(
+            &db.pool,
+            &new_key("laptop", Grants::Catalogs(&names), None),
+            &crate::store::audit::AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        crate::store::drop_check_constraints(&db.pool, "key_catalogs").await;
+        sqlx::query("UPDATE key_catalogs SET access = 'bogus-level' WHERE key_id = $1")
+            .bind(&created.id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let listed = list(&db.pool).await;
+        let by_id = record_by_id(&db.pool, &created.id).await;
+
+        crate::store::assert_decode_error(listed, "key_catalogs.access", "bogus-level");
+        crate::store::assert_decode_error(by_id, "key_catalogs.access", "bogus-level");
+    }
 }
