@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 703,
+  "next_claim_seq": 704,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "f039cf7399d88463a612cd135941ac2189d5597ef029880e310bc58c152eba96"
+    "mac": "ee91815bd49b8bb9858575bde416cb1537e92ab54eba3a51cc2c9ef114593316"
   },
-  "next_evidence_seq": 907,
+  "next_evidence_seq": 914,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "e43639a686c4f3123c039f5bc632e0d8c941be50e7b584ede798276d685eb80a"
+    "mac": "0dd2e013d6dc53296bc744ab16cd5c8b9b7326326536bc305b1d68c39d605d70"
   },
   "claims": [
     {
@@ -53850,6 +53850,18 @@
             "by": "server",
             "mac": "1a6fd6003529b47130acbc96417165705be948c075c18508080ca5869c56363f"
           }
+        },
+        {
+          "id": "EVD-0911",
+          "kind": "analysis",
+          "locator": "children CLM-0695, CLM-0699, CLM-0703 re-audited at 40988d0",
+          "summary": "The three children changed since the last audit hold at 40988d0 (EVD-0907 to EVD-0910); the other children were not re-audited this round. Gap: the 'stopped them' warning prints even if a member survived KILL.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T09:53:35.828561341Z",
+          "seal": {
+            "by": "server",
+            "mac": "d4b95bea2b53e71ca552536118d581f24df0be99c38e0cc398fb6ef261a075a9"
+          }
         }
       ],
       "verdicts": [
@@ -53878,18 +53890,31 @@
             "by": "server",
             "mac": "f58176bffd8232c5b350255a85ff1b575500bb12523a1d138b330e85c86e31de"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Children 0695, 0699 and 0703 hold at 40988d0; the others were supported at 7e0a933 and not re-audited this round.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0911"
+          ],
+          "recorded_at": "2026-11-23T09:53:38.864632226Z",
+          "seal": {
+            "by": "server",
+            "mac": "009b42dac1526278d6d8675c5046aa02098ced97411cc7f514a7b9ea03ab003f"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T09:35:16.671776146Z",
+      "updated_at": "2026-11-23T09:53:38.864632226Z",
       "seal": {
         "by": "server",
-        "mac": "4ffedc64661eed5b1d7514e464d40ead224ef63e1b68b472872f7a91bdb4e1a7"
+        "mac": "ce11227cf450ea195c6c0dc9bddfb0b346e2f91beb2936f564a52226f4a88cef"
       }
     },
     {
       "id": "CLM-0695",
-      "statement": "Every external command a watchdog.sh pass runs that reads the process table, another process's memory, git or the logs goes through one supervisor, bounded_capture: the three ps -eo scans, both per-process ps -p re-reads, the tr read of an idle tail's /proc/<pid>/cmdline, git worktree list, git reflog, find over target/i*-logs, and the start-up git rev-parse. bounded_capture captures output to a private temp file, polls with a deadline (AGENTIC_CALL_TIMEOUT), escalates TERM then KILL, and abandons a child that survives without waiting for it or for its output to close. watchdog.sh no longer calls agentic_bounded_call, agentic_git or a $(...) around any of these commands.",
+      "statement": "Every external command a watchdog.sh pass runs that reads the process table, another process's memory, git or the logs goes through one supervisor, bounded_capture: the three ps -eo scans, both per-process ps -p re-reads, the tr read of an idle tail's /proc/<pid>/cmdline, git worktree list, git reflog, find over target/i*-logs, and the start-up git rev-parse. bounded_capture captures output to a private temp file, polls the leader with a deadline (AGENTIC_CALL_TIMEOUT), then stops the call's process group, and abandons a leader that survives KILL without waiting for it or for its output to close. watchdog.sh no longer calls agentic_bounded_call, agentic_git or a $(...) around any of these commands.",
       "kind": "functional",
       "level": "component",
       "integrity_level": 3,
@@ -54039,6 +54064,28 @@
             "by": "server",
             "mac": "c93b37ab6925bc63784f6ddd1b1c75a6258165ffc90bf3e1e66c60bfd6eb41b2"
           }
+        },
+        {
+          "id": "EVD-0909",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh:152-210 and grep of bounded_capture (15 hits) at 40988d0",
+          "summary": "The restated sentence (private temp file, poll to AGENTIC_CALL_TIMEOUT, stop the call's process group, abandon a leader that survives KILL without waiting) matches bounded_capture: mktemp file, setsid child, 0.1 s kill -0 polling to agentic_call_budget, agentic_stop_group on the group, disown of a surviving leader, no wait. watchdog.sh has no agentic_bounded_call/agentic_git call. The call-site set is unchanged from the 7e0a933 audit (EVD-0897); I did not re-verify each call site beyond the grep.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 152,
+                "end": 210
+              },
+              "commit": "40988d0fb551b4a79997091d4a5685bcf748c09c"
+            }
+          },
+          "recorded_at": "2026-11-23T09:53:28.524677583Z",
+          "seal": {
+            "by": "server",
+            "mac": "d7156a55266ac8cd63fcd8ba1a86cfb77baeda1c05a63a556468b7f1807cf3fb"
+          }
         }
       ],
       "verdicts": [
@@ -54095,13 +54142,26 @@
             "by": "server",
             "mac": "533530c4b7333bec41da0174924d9361cf1bf5e4594e35fe6256d4304cfd3193"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Restated wording matches bounded_capture at 40988d0; no agentic_bounded_call/agentic_git call remains.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0909"
+          ],
+          "recorded_at": "2026-11-23T09:53:35.743365159Z",
+          "seal": {
+            "by": "server",
+            "mac": "9f40e1ecfe158c4aac14267f470d5b26b38a661f5858f8a61e7db58cc58e9ed5"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T09:35:16.711913611Z",
+      "updated_at": "2026-11-23T09:53:35.743365159Z",
       "seal": {
         "by": "server",
-        "mac": "72aca4cf946bc64c71d6011c730487bcd2928552370b4404894616ab1940f63e"
+        "mac": "4f77443984687ef3fff258a63edfa6e13cf388a93ed85852f29c7db5c1b061c8"
       }
     },
     {
@@ -54515,7 +54575,7 @@
     },
     {
       "id": "CLM-0699",
-      "statement": "tools/agentic/tests/run.sh passes with 89 passed, 0 failed on the head commit, three runs in a row.",
+      "statement": "tools/agentic/tests/run.sh passes with 91 passed, 0 failed on the code commit 6a832e0, three runs in a row.",
       "kind": "functional",
       "level": "artifact",
       "integrity_level": 2,
@@ -54569,6 +54629,30 @@
             "by": "server",
             "mac": "07467dbf6195a1239e0ffab394e1ed18b5304215b34966b687a80d4cf2f941e3"
           }
+        },
+        {
+          "id": "EVD-0910",
+          "kind": "log",
+          "locator": "target/i675-logs/run-d1.log, run-d2.log, run-d3.log (last line of each); worktree HEAD 40988d0",
+          "summary": "Each of the three logs ends with '91 passed, 0 failed' with no FAIL line; both new tests are among the passes. Worktree HEAD is 40988d0. I read the logs and did not run the suite; which commit each ran on rests on the implementer's statement.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T09:53:28.567491840Z",
+          "seal": {
+            "by": "server",
+            "mac": "01adb578876b4a0176b1b25143d5b3f7fe007f0d9683b1e17d41504f9db741ed"
+          }
+        },
+        {
+          "id": "EVD-0913",
+          "kind": "log",
+          "locator": "target/i675-logs/run-e1.log, run-e2.log, run-e3.log (last lines); worktree HEAD 6a832e0",
+          "summary": "Each of the three logs ends with \"91 passed, 0 failed\"; the last lines include test_watchdog_stops_what_a_call_leaves_behind_on_a_normal_exit as ok (about 3.85 s each). Worktree HEAD is 6a832e0. I read the last 6 lines of each log and did not run the suite; that each ran on 6a832e0 rests on the caller's statement.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:00:15.793950804Z",
+          "seal": {
+            "by": "server",
+            "mac": "66671aeb789944eaf8f49799177171cbc143ae30d7cf93e4111a4f40322b78df"
+          }
         }
       ],
       "verdicts": [
@@ -54610,13 +54694,39 @@
             "by": "server",
             "mac": "0e8e261fb4587d0459da15e5c726da5576c876799e664be6f2ddd19368eecf6c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Three logs each end 91 passed, 0 failed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0910"
+          ],
+          "recorded_at": "2026-11-23T09:53:35.786221096Z",
+          "seal": {
+            "by": "server",
+            "mac": "98a176d2b8bd9536ed141b16d3db48587e0b1fe4fd48addf4f7f6bcfd1e6c02c"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Three logs on 6a832e0 each end 91 passed, 0 failed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0913"
+          ],
+          "recorded_at": "2026-11-23T10:00:20.280781308Z",
+          "seal": {
+            "by": "server",
+            "mac": "aec0ad44b32d6d1d027b10271dcef22770664bd615ce2c3edaa218f19b70e978"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T09:35:16.878994212Z",
+      "updated_at": "2026-11-23T10:00:20.280781308Z",
       "seal": {
         "by": "server",
-        "mac": "58dc12a4bd4aa59350f418c185be0584507e65890db0e31a7a348fa42e36b869"
+        "mac": "5854bbdee43469160a4f3d0e7af63826a1b6c34c68ccd12d03bf6e4908db5fd9"
       }
     },
     {
@@ -54928,6 +55038,139 @@
       "seal": {
         "by": "server",
         "mac": "d2ea93b32bd4a5b46ccc34fc97655070f44f983f5c8c41873d686b6e93fe64ec"
+      }
+    },
+    {
+      "id": "CLM-0703",
+      "statement": "On every bounded_capture path that started a process (timed out or exited on its own), the call's whole process group is stopped by agentic_stop_group, which escalates by the group's liveness (kill -0 -- -pgid), not the leader's: TERM, then KILL while any member is left, each wait bounded. The leader is reaped before the group check on a normal exit, there is no unconditional wait, and a leader still alive after KILL is disowned. A leader that exits on TERM while a same-group member ignores TERM, and a member left behind by a leader that exits normally, are both gone when the call returns. Tests test_watchdog_kills_a_group_member_that_ignores_term_after_a_timeout and test_watchdog_stops_what_a_call_leaves_behind_on_a_normal_exit check this and fail against watchdog.sh at 69f280d.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Review of PR #947 round 4 (comment 4664032178): escalation checked only bc_pid; the normal-exit path did not clean up descendants",
+      "source_anchor": {
+        "path": "tools/agentic/watchdog.sh",
+        "lines": {
+          "start": 131,
+          "end": 198
+        },
+        "commit": "40988d0fb551b4a79997091d4a5685bcf748c09c"
+      },
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/watchdog.sh",
+        "tools/agentic/tests/run.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0907",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh:152-210 (bounded_capture) and tools/agentic/lib.sh:14-30 (agentic_stop_group) at 40988d0",
+          "summary": "Traced every path. No budget: nothing started, stop_group not called. mktemp failure: returns before traps/spawn. INT/TERM traps: set before spawn, KILL the group by pgid, rm the file, re-raise, no wait. Normal exit: kill -0 on leader false, then wait (returns at once, leader already gone/reaped), then kill -0 -pgid sets bc_left, then agentic_stop_group. Timeout: same stop_group call; it TERMs the group, polls kill -0 -pgid (group liveness, not leader) for agentic_kill_after s, KILLs, polls up to 5 s more, each loop bounded. Leader survives KILL: kill -0 bc_pid still true so disown, no wait. Leader dies leaving members: group check still true so KILL escalation happens. A zombie leader cannot pin the group: on normal exit it is reaped by wait first; on timeout bash reaps on SIGCHLD during the 0.1 s sleeps. The only wait is after kill -0 failed. lib.sh is unchanged from 69f280d, so stop_group is pre-existing code. The old code at 69f280d escalated by kill -0 bc_pid only and did no cleanup on normal exit. Untested: the disown branch (needs a D-state process).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 152,
+                "end": 210
+              },
+              "commit": "40988d0fb551b4a79997091d4a5685bcf748c09c"
+            }
+          },
+          "recorded_at": "2026-11-23T09:53:28.443036236Z",
+          "seal": {
+            "by": "server",
+            "mac": "d355254b5b5fe266bd89d848b74f247b743041fa73a2ec0a7efd353264f137a8"
+          }
+        },
+        {
+          "id": "EVD-0908",
+          "kind": "test",
+          "locator": "target/i675-logs/mutations-r4.log; tools/agentic/tests/run.sh:733-785; run-d1.log..run-d3.log",
+          "summary": "group_stub starts a TERM-ignoring same-group member holding the output; want_members_gone checks /proc/<pid> absence. Against 69f280d's watchdog.sh both new tests FAIL (mutations-r4.log: 'group member outlived the call' for the timeout test; 'output lacks warning: ps call exited leaving processes behind' for the normal-exit test; 0 passed, 2 failed). On 40988d0 both pass in all three full runs (run-d1, d2, d3: 91 passed, 0 failed). I read the logs; I did not run the suite.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/tests/run.sh",
+              "lines": {
+                "start": 733,
+                "end": 785
+              },
+              "commit": "40988d0fb551b4a79997091d4a5685bcf748c09c"
+            }
+          },
+          "recorded_at": "2026-11-23T09:53:28.484239766Z",
+          "seal": {
+            "by": "server",
+            "mac": "c62303797de5c16fc70479acef45d464fd31aa994e216411e8f479bcdd579a66"
+          }
+        },
+        {
+          "id": "EVD-0912",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh:152-215 (bounded_capture) at 6a832e0; git show 6a832e0",
+          "summary": "6a832e0 changes only the warning after agentic_stop_group: the old unconditional echo \"stopped them\" became an if on bc_left that sets bc_left to \"stopped them\" or, when kill -0 -- -bc_pid is still true, \"some survived KILL and were left behind\", then echoes. Added code is one kill -0 and one echo: no wait, sleep or loop. The reap (wait after leader exit), the group-liveness stop (agentic_stop_group) and the disown branch are unchanged and run before the new check, so cleanup is unaltered. bc_left is reused after its last use as a flag and only affects the message. EVD-0907 traced these paths at 40988d0 and the diff does not touch them.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 152,
+                "end": 215
+              },
+              "commit": "6a832e0734bb136d76c0fd173a2525054e0973f4"
+            }
+          },
+          "recorded_at": "2026-11-23T10:00:15.749768947Z",
+          "seal": {
+            "by": "server",
+            "mac": "70727c6aec3a4abe15b146d88c130a8fb3fbe531370be606c7170080efa6d096"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All paths traced use group liveness, have bounded waits, and the leader is reaped before the group check; both tests fail on 69f280d and pass 3 of 3 on 40988d0. The disown branch is by inspection only.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0907",
+            "EVD-0908"
+          ],
+          "recorded_at": "2026-11-23T09:53:35.700188951Z",
+          "seal": {
+            "by": "server",
+            "mac": "66f3049c3bd8b912567f665aa69004e05276671760cfd699f0d44023cc9288e9"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The 6a832e0 diff only changes the message after cleanup: one extra kill -0 and an echo, no wait, and the stop, reap and disown logic is untouched.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0912"
+          ],
+          "recorded_at": "2026-11-23T10:00:20.237333014Z",
+          "seal": {
+            "by": "server",
+            "mac": "802159927e0fd142567ee669a664f80d5e14604e6f621aceec663ab97520e86c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T09:46:38.002577735Z",
+      "updated_at": "2026-11-23T10:00:20.237333014Z",
+      "seal": {
+        "by": "server",
+        "mac": "f1ff25d84b78d5be9a9e59d70e258212c54edb8096ea484d0df8124bc424550a"
       }
     }
   ]
