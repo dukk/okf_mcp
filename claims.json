@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 924,
+  "next_claim_seq": 944,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "e4ebcacd5ad58878536a15fb655ac9a5b29827ec1d66ce83272f63edcce948fd"
+    "mac": "f302c1c074fcdb8dbb7418e6e0d380111dbb6ce9d6a324e45169e3d6640addcd"
   },
-  "next_evidence_seq": 1300,
+  "next_evidence_seq": 1336,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "6c32a9219f08df9b9be9be76ae761754e072815f722f741d41eff54e7941f8fd"
+    "mac": "5ebc136e19c07f97a4da5c343e804d85b8f92080432206cf35c67ef3fdad7dce"
   },
   "claims": [
     {
@@ -725,6 +725,28 @@
             "by": "server",
             "mac": "7e9392057ec8b1725683c416010c91ee6628b9f01163928cc9ee161e5c6eac1c"
           }
+        },
+        {
+          "id": "EVD-1334",
+          "kind": "inspection",
+          "locator": "docs/operations.md:3828-3850 and 2150-2153 against src/http/api/stores.rs, src/store/stores.rs, src/http/mod.rs:145-152",
+          "summary": "The text this PR added inside the claim's range (Catalog stores API section and the audit table rows) matches the code: routes, 403/404/409/201 statuses (Refused is 409, UnknownName 404), view fields, CLI commands, no removal, audit details without host or reference. Rest of the range not re-read; its earlier verdict stands.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 3828,
+                "end": 3850
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:59:18.751307277Z",
+          "seal": {
+            "by": "server",
+            "mac": "40bd4c3d723591987790abf09666b0f1f256662b8457d333b76485d8c57f0eda"
+          }
         }
       ],
       "verdicts": [
@@ -753,13 +775,26 @@
             "by": "server",
             "mac": "916df291a652d1d861859b069fd62923a6c1c4519a464220c771e9b853e29b57"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Earlier verdict stands for the unchanged text; the section this PR added inside the range was checked against the code and matches (scope: the added text only; the remaining lines were not re-read).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1334"
+          ],
+          "recorded_at": "2026-11-23T18:59:31.152885925Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d5b887ab0e03c07ba65293a3ed612e717ed600c60ac82fc0a07f0a15024c470"
+          }
         }
       ],
       "created_at": "2026-11-21T19:04:12.375208519Z",
-      "updated_at": "2026-11-21T21:35:59.506739427Z",
+      "updated_at": "2026-11-23T18:59:31.152885925Z",
       "seal": {
         "by": "server",
-        "mac": "3b2b8cdd3bfc910ed067918db201579083cbe84b428e2ebc95166d3b940493e7"
+        "mac": "bbb4c6a7b84001bcacf81726ee569f0c9b93c78245b90091a2a3c0283f92f74e"
       }
     },
     {
@@ -13927,6 +13962,28 @@
             "by": "server",
             "mac": "d6dcd4f75a3124b69749b121391115dc09eb351a1acae4f9cf4fdd008c6521b9"
           }
+        },
+        {
+          "id": "EVD-1330",
+          "kind": "inspection",
+          "locator": "src/cli.rs at fe75fec: KeyCreateArgs.provisioner (744), CatalogCommand::SetMaintenance (251), UnlockCommand (615, List 636), AuditCommand (689), user List --email (351-352)",
+          "summary": "At head the PR only inserted StoresCommand (new enum, plus Command::Stores) after SettingsCommand; every subcommand and flag the claim lists is still present and unchanged.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli.rs",
+              "lines": {
+                "start": 612,
+                "end": 700
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:59:18.455823661Z",
+          "seal": {
+            "by": "server",
+            "mac": "74abbd08b82be4d279d5b3988784beee5a663b484a32813e5ecf476f64b97a27"
+          }
         }
       ],
       "verdicts": [
@@ -13955,13 +14012,26 @@
             "by": "server",
             "mac": "a0685d848bd6d925b4a6be8d0d704b9963cf09848f16e169ce1e16c11ba68f5f"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at fe75fec: the PR only inserted a new enum; listed subcommands unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1330"
+          ],
+          "recorded_at": "2026-11-23T18:59:30.893475041Z",
+          "seal": {
+            "by": "server",
+            "mac": "9b343ca8c371df02e02e6da407fd9907b544330715fd8036d233f859c0db16a1"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:06.412184286Z",
-      "updated_at": "2026-11-23T10:48:07.001859715Z",
+      "updated_at": "2026-11-23T18:59:30.893475041Z",
       "seal": {
         "by": "server",
-        "mac": "036fcae281093c54b785c12cb445f6ceab498e285e71972272616bf74938092a"
+        "mac": "3b3e93becb26d8ed5e2bac9da8e798730accee6fa128242e8bf632cc08da4992"
       }
     },
     {
@@ -72680,6 +72750,28 @@
             "by": "server",
             "mac": "be5cb3b9b978a653c4ee7b72ea819199c5ee8aeccc3d7831b8082b246f548f22"
           }
+        },
+        {
+          "id": "EVD-1332",
+          "kind": "test",
+          "locator": "src/stores/registry.rs:316-400 at fe75fec; stores::registry::tests::account_database_store_opens_its_own_pool (narrow run, ok)",
+          "summary": "The PR moved the pool-building part of open into open_row (called by open and by the new check); settings (max_connections, min 0, idle, acquire timeout, after_connect search_path) are unchanged and all registry tests pass.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 314,
+                "end": 400
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:59:18.595565486Z",
+          "seal": {
+            "by": "server",
+            "mac": "71171d298fd683579f85deb7e30e25435960172d40b479d28c4f9e56393bf47d"
+          }
         }
       ],
       "verdicts": [
@@ -72709,13 +72801,26 @@
             "by": "server",
             "mac": "902f484527bdd88c05fa2264b06ee903ba88bcc70d9162f92b7688b79f90ce6b"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at fe75fec: open_row split keeps every pool setting; registry tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1332"
+          ],
+          "recorded_at": "2026-11-23T18:59:31.028053201Z",
+          "seal": {
+            "by": "server",
+            "mac": "e4503b67bba5a6c3ae265011d13c785958c92d67b7e01211167f55681a243fb7"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T18:11:37.867183747Z",
+      "updated_at": "2026-11-23T18:59:31.028053201Z",
       "seal": {
         "by": "server",
-        "mac": "fc98c715b891c898ca7a8e70ea33f3d884012ad9f67d908143e2ac8232c61abc"
+        "mac": "b9448951e778e1e9b11cedcd14e75c5648edf5e18e7755266e8a12b5502f8d9e"
       }
     },
     {
@@ -73219,6 +73324,28 @@
             "by": "server",
             "mac": "ba41f8d0d91ff03b85404529c2b727cf504fdc352fa779d183a7430b4a5fe22e"
           }
+        },
+        {
+          "id": "EVD-1331",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- stores (51 passed) incl. store::stores::tests::main_is_the_account_database_row",
+          "summary": "At head by_name and names are unchanged; this PR appended summaries, add, insert, set_default and lock_store after them. The reading tests still pass.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 160,
+                "end": 207
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:59:18.529360921Z",
+          "seal": {
+            "by": "server",
+            "mac": "2c824e183bb424f6b5c63b3adbe1368211ef72ff72e37fedc2a4c84f19bb459c"
+          }
         }
       ],
       "verdicts": [
@@ -73234,13 +73361,26 @@
             "by": "server",
             "mac": "9a5cb928722f3b27b9a78b217e04f2f175b8701923f11f383edca0f0f9e74188"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at fe75fec: by_name and names unchanged and tested; the PR only added code after them.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1331"
+          ],
+          "recorded_at": "2026-11-23T18:59:30.965183042Z",
+          "seal": {
+            "by": "server",
+            "mac": "9a7d76f01197f9a44d6d3e910188d5c60620dec15124fe9b131526220c8f6d98"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:40:13.383969606Z",
+      "updated_at": "2026-11-23T18:59:30.965183042Z",
       "seal": {
         "by": "server",
-        "mac": "540ee993f6971f7f1fd500e2eef6b505f6940124955d1d8556b678f3e983e900"
+        "mac": "2b2ed19222564d5e1d5d9c08d0ed7b3e336671d1fa1a0935076ba136734355a8"
       }
     },
     {
@@ -74010,7 +74150,9 @@
         "from-issue:966"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Superseded by issue #968 (Task 10): it described Task 8's state, when nothing wrote a stores row. store::stores::insert now does.",
+        "retired_at": "2026-11-23T19:02:54.333538431Z"
       },
       "evidence": [
         {
@@ -74034,6 +74176,28 @@
             "by": "server",
             "mac": "4a7e4221a8c3e89c3d94001d39dc13f5974f66f4f53b11f1ce6ee703a06debbc"
           }
+        },
+        {
+          "id": "EVD-1333",
+          "kind": "analysis",
+          "locator": "src/store/stores.rs:325-393 (insert), called from add at :308",
+          "summary": "At head non-test code does INSERT INTO stores (store::stores::insert, reached from add, the CLI and POST /api/v1/stores). The claim's clause 'no non-test code inserts into stores' was true for the Task 8 commit and is false after this change; the changelog sentence it quotes was about Task 8's state.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 344,
+                "end": 360
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:59:18.679030773Z",
+          "seal": {
+            "by": "server",
+            "mac": "5b3b24583a2af9157eea833ef33ee81ffab2ef198b594c8d67e925c033ebc6df"
+          }
         }
       ],
       "verdicts": [
@@ -74049,13 +74213,26 @@
             "by": "server",
             "mac": "91da0063fd9d88c321e259b148fdab4ffa89adba92c2ecbee9304b880d26f0d6"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "At head, non-test code inserts into stores (store::stores::insert), so the clause 'no non-test code inserts into stores' no longer holds; it described the Task 8 commit and this PR (Task 10) is what made it false. Fix: retire CLM-0921 as superseded by Task 10 (reason: its sentence described Task 8's state) in the ledger, or leave it recorded as refuted by Task 10.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1333"
+          ],
+          "recorded_at": "2026-11-23T18:59:31.092026446Z",
+          "seal": {
+            "by": "server",
+            "mac": "4bf857f8afe8c5059749191dec12a11b356b0c76faa4124bd840ff5355887383"
+          }
         }
       ],
       "created_at": "2026-11-23T17:42:26.282714045Z",
-      "updated_at": "2026-11-23T17:42:44.479829615Z",
+      "updated_at": "2026-11-23T19:02:54.333538431Z",
       "seal": {
         "by": "server",
-        "mac": "78b1ceb1502ab39d320ded5ba2c99ab57fbed588980e5bc784c3f7e0f71b8234"
+        "mac": "0194196b84f71398b136a1b951b2753ecf9ce401979a5090ce40af03c6dd0497"
       }
     },
     {
@@ -74251,6 +74428,1558 @@
       "seal": {
         "by": "server",
         "mac": "ccc0a3561ede3ba79bed61233b32bbe5b22e3205351e03c11fdfd1ef4396620e"
+      }
+    },
+    {
+      "id": "CLM-0924",
+      "statement": "Issue #968 (M21.10) is delivered: placement and the admin surface for catalog stores exist as Task 10 of the catalog stores plan specifies.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/968",
+      "derived_from": [],
+      "artifacts": [
+        "src/stores/placement.rs",
+        "src/store/stores.rs",
+        "src/http/api/stores.rs",
+        "src/cli/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1335",
+          "kind": "analysis",
+          "locator": "children of CLM-0924",
+          "summary": "All behavioural children (placement, add check, audit and invalidation transactions, admin-only routes, no removal, no migration, no transaction across a connect, named tests, CLI, audit actions, docs) are supported. Two children about the PR body's gate results (full test count; fmt, lint, dylint) are not_enough_info because only the producer's logs exist and the gates were not rerun.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T18:59:31.214083366Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d8dd376c8a8bebb869a3a8e164df4909cb565c5b0d9cd7f1493fd222e6e6620"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Every behavioural child is supported; only the two PR-body gate-result children are undecided. Fix: rerun tools/agentic/gate.sh test, fmt, lint and dylint on the final head and record the results on CLM-0942 and CLM-0943, then re-judge this parent.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [],
+          "recorded_at": "2026-11-23T18:59:35.508658714Z",
+          "seal": {
+            "by": "server",
+            "mac": "375ff0f585c68f59f723d97cb192f530254d75ffacbf3040634448a52f17e30c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:59:35.508658714Z",
+      "seal": {
+        "by": "server",
+        "mac": "965cf13a8c75e59199e16a1bfa55676608b03320952891e78e2942b24e653019"
+      }
+    },
+    {
+      "id": "CLM-0925",
+      "statement": "The refusal of host stores until Task 20 is one function, placement::refuse_host_stores_until_task_20, called from exactly one place (store::stores::add), and it returns OkfError::Refused for a Host location and Ok for the account database.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Issue #968 brief (a); plan Task 10 'The check is one function'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/stores/placement.rs",
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1300",
+          "kind": "inspection",
+          "locator": "src/stores/placement.rs:91; src/store/stores.rs:307",
+          "summary": "refuse_host_stores_until_task_20 matches on location: AccountDatabase Ok, Host Err(Refused \"separate stores are not enabled yet\"). Search shows its only non-test call is stores.rs:307 in add.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "refuse_host_stores_until_task_20\\(",
+              "scope": [
+                "src"
+              ],
+              "hits": 4,
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:23.859418275Z",
+          "seal": {
+            "by": "server",
+            "mac": "69f3bc5114259781a90c84f5dc93207c81b5b0f14cf45e039be70c261154a0be"
+          }
+        },
+        {
+          "id": "EVD-1301",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- stores: stores::placement::tests::only_host_stores_are_refused_until_task_20; store::stores::tests::adding_a_host_store_is_refused_until_enabled",
+          "summary": "Both tests pass (51 passed, 0 failed in the narrow run); the first asserts host Err and AccountDatabase Ok, the second that a reachable host store add is Refused with 'not enabled' and no row written.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/placement.rs",
+              "lines": {
+                "start": 91,
+                "end": 98
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:23.925754047Z",
+          "seal": {
+            "by": "server",
+            "mac": "078c5e74f4bc2a7185dd984bf1393bcf3e909653dbab0d13c7977d462f62b4e6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Single definition, single non-test call site, behaviour tested.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1300",
+            "EVD-1301"
+          ],
+          "recorded_at": "2026-11-23T18:58:11.640477220Z",
+          "seal": {
+            "by": "server",
+            "mac": "515dd4801020f258760ae646b3bf8ea0c54deff565ad2f39057ff7ecf26134ab"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:11.640477220Z",
+      "seal": {
+        "by": "server",
+        "mac": "50066c4a107d34213d778993029de467a81d021bbaaa1c134c2f047236854410"
+      }
+    },
+    {
+      "id": "CLM-0926",
+      "statement": "stores::add checks that the new store can connect through the registry's own open path (Stores::check, which runs open_row, the code shared with Stores::get) before it writes anything, and refuses with OkfError::Refused when it cannot.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #968 brief (b); plan Task 10",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/stores.rs",
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1302",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:289-309; src/stores/registry.rs:316-340,416-424",
+          "summary": "add calls stores.check(row) first; check runs open_row, the same function Stores::open (used by get) calls after reading the row; failure (StoreUnavailable) is mapped to OkfError::Refused before insert. Pool closed afterwards, nothing cached.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 289,
+                "end": 309
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:23.993079065Z",
+          "seal": {
+            "by": "server",
+            "mac": "e0c1cc28a4652c2c3dd07ea4649a00b94d1f430aa2c456dd109f3fbf80dab0bf"
+          }
+        },
+        {
+          "id": "EVD-1303",
+          "kind": "test",
+          "locator": "store::stores::tests::adding_an_unreachable_store_is_refused (narrow --lib -- stores)",
+          "summary": "Passes: add on a closed port returns OkfError::Refused, no store row (only main) and no store.added audit entry.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 599,
+                "end": 626
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:24.058678244Z",
+          "seal": {
+            "by": "server",
+            "mac": "e0421cd2e601ebd28583a8d96793828e2810e15f972de0a074d89022d7233817"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "add runs Stores::check (shared open_row) before insert and maps failure to Refused; test confirms no row written.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1302",
+            "EVD-1303"
+          ],
+          "recorded_at": "2026-11-23T18:58:11.776842908Z",
+          "seal": {
+            "by": "server",
+            "mac": "a094f31e15dd321b8ceab843f208b65f27b396052c1a002325dbb96e203d285a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:11.776842908Z",
+      "seal": {
+        "by": "server",
+        "mac": "4baa21624b303c903d45036654e59dc3ac4eda97bdd2f313bedb15c0d208583a"
+      }
+    },
+    {
+      "id": "CLM-0927",
+      "statement": "The refusal reply for an unreachable store contains no host, port or credential reference (the test asserts none of them appears in the error's JSON).",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #968 brief (b); PR body 'names no host, port or credential'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/stores.rs",
+        "src/http/api/stores.rs",
+        "src/cli/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1304",
+          "kind": "test",
+          "locator": "store::stores::tests::adding_an_unreachable_store_is_refused; http::api::stores::tests::adding_an_unreachable_store_through_the_api_leaks_nothing; cli::stores::tests::adding_a_store_that_cannot_be_reached_is_refused_and_names_no_host",
+          "summary": "All three pass. The store-level test asserts the reply JSON lacks 127.0.0.1, the port and STORE_PASSWORD; the refusal text is a fixed generic string (stores.rs:297-305); the API and CLI tests check the same through their surfaces.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 612,
+                "end": 622
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:24.125922561Z",
+          "seal": {
+            "by": "server",
+            "mac": "9934cfc5d7320d6a286ee1818fc905ef7a6afe80882a4270054e96f27c344c5f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Fixed generic reply text; tests at store, API and CLI level assert host, port and credential ref are absent.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1304"
+          ],
+          "recorded_at": "2026-11-23T18:58:11.860759834Z",
+          "seal": {
+            "by": "server",
+            "mac": "721e9cafa4cdd5af6747e7ffa8e791bf4482954b44701ca0a42837bd9175d337"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:11.860759834Z",
+      "seal": {
+        "by": "server",
+        "mac": "db91b772ca8b09fa9b51772fe655cfe2aa61aa1c0af87747a20f1e212c1a6438"
+      }
+    },
+    {
+      "id": "CLM-0928",
+      "statement": "No credential value is logged by the new code or the connection check: the check's failure path logs only the cause on the local side, the HTTP handlers log only the store name, and the only secret the open path reads (the env password) is never put in a log field or error text.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "Issue #968 brief (b)",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs",
+        "src/http/api/stores.rs",
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1305",
+          "kind": "analysis",
+          "locator": "src/stores/registry.rs:316-324,376-395,440-460; src/http/api/stores.rs:232-237,262-267",
+          "summary": "open_row logs only the connect error and store name (local half of split_event!); the env password is read into a local and only passed to .password(); the only credential text in a message is the variable name ('the variable X is not set'), a reference not a secret. HTTP handlers log store name and key id/actor only. No log carries the password.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 376,
+                "end": 395
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:24.195137879Z",
+          "seal": {
+            "by": "server",
+            "mac": "9fd771805a34e9f4728766410d598951331d1ca4a0458030384f207b2150ea56"
+          }
+        },
+        {
+          "id": "EVD-1306",
+          "kind": "analysis",
+          "locator": "src/stores/registry.rs:448-449 (neutral note)",
+          "summary": "Note: a connect failure's sqlx error text is logged on the local half and may contain host/port; that is local-side only by the registry's existing convention and is not a credential. No test asserts log content, so the claim rests on reading.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 440,
+                "end": 452
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:24.260763958Z",
+          "seal": {
+            "by": "server",
+            "mac": "de13e33c79f664ab4f1a11512bf3cc3f795916d74f5778d241c3f92f9cda49b6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Read of every log site on the open and add paths: none carries the password; only the variable name appears in a local-side message. Rests on reading (no log-capturing test); the neutral note records that local-side logs may show host/port, which is not a credential.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1305"
+          ],
+          "recorded_at": "2026-11-23T18:58:11.968234136Z",
+          "seal": {
+            "by": "server",
+            "mac": "8c3f72e14adf45dcdecf5ff098d2795c400d192ad405749a7bc13765695a64a0"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:11.968234136Z",
+      "seal": {
+        "by": "server",
+        "mac": "8df63d30fb08057db7c166de1f22c2341c2c935b258e9d2229d8cb594e70f0c2"
+      }
+    },
+    {
+      "id": "CLM-0929",
+      "statement": "store::stores::insert writes the stores row, the store.added audit entry and the Invalidation::store invalidation in one transaction, and the audit details name neither the host nor the credential reference.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #968 brief (c); issue comment on #968 (Task 8 note)",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1307",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:344-393",
+          "summary": "insert begins one tx (344), inserts the row, audit::record StoreAdded with details {location, credential_kind} only (no host or ref), invalidate(Invalidation::store) at 390, then tx.commit.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 344,
+                "end": 393
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:43.749874070Z",
+          "seal": {
+            "by": "server",
+            "mac": "c0f4b6c60dfddb4e5b253e9b63c0d6a41e1942397fd1b8b3f93bab89ba430cba"
+          }
+        },
+        {
+          "id": "EVD-1308",
+          "kind": "test",
+          "locator": "store::stores::tests::every_store_change_is_audited; store::stores::tests::a_store_change_reaches_every_replica_through_the_change_feed",
+          "summary": "Both pass: one store.added entry with target_kind store, target shared-1, details exactly {location:host, credential_kind:env}; the NOTIFY feed delivers exactly [Invalidation::store(name)] for the insert.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 689,
+                "end": 742
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:43.838790856Z",
+          "seal": {
+            "by": "server",
+            "mac": "63a6949299aa12df448a351035354a790ce68ea772cd049fe23478a31d62677d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Row, audit and invalidation share the transaction opened at stores.rs:344 and tests check the entry and the feed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1307",
+            "EVD-1308"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.072017835Z",
+          "seal": {
+            "by": "server",
+            "mac": "741a4e6f749ee00ef8e52e356aacfa68d2cc2fb45ef114da8a2d17e2d83262d8"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.072017835Z",
+      "seal": {
+        "by": "server",
+        "mac": "55fddfb40231b85de35b75bc604bfc50fbe280c8f1e5cb7f91d5b96ae4d294ed"
+      }
+    },
+    {
+      "id": "CLM-0930",
+      "statement": "stores::set_default changes the default_store setting, writes the setting.default_store_changed audit entry and sends Invalidation::Settings in one transaction, and a change to the value it already has writes, audits and sends nothing.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #968 brief (c); PR body 'An unchanged default or pin records and sends nothing'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1309",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:419-475",
+          "summary": "set_default: one tx; lock_store; invalidate(Settings) in the tx; if the existing value equals the new one it returns early (tx dropped, rolling back the generation bump and NOTIFY); otherwise upserts the setting and records SettingDefaultStoreChanged in the same tx before commit.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 419,
+                "end": 475
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:43.907196069Z",
+          "seal": {
+            "by": "server",
+            "mac": "60864dc58e09e607d793736bea37c662ef5074fd933fca1c73da40ab7525ce4d"
+          }
+        },
+        {
+          "id": "EVD-1310",
+          "kind": "test",
+          "locator": "store::stores::tests::an_unchanged_default_or_pin_records_and_sends_nothing; every_store_change_is_audited; a_store_change_reaches_every_replica_through_the_change_feed",
+          "summary": "All pass: changing default main->shared-1 records one entry with details {from main,to shared-1} and sends exactly [Settings]; set_default to main again sends no invalidation and records no entry.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 779,
+                "end": 806
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:43.971051439Z",
+          "seal": {
+            "by": "server",
+            "mac": "9dadf675e1b0088143b6a3d55979b9cb23f87fb7da954f278cad7aacbbc4e5e4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and tests show the audit, setting write and Settings invalidation in one tx, and the no-change path sends and records nothing.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1309",
+            "EVD-1310"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.217312385Z",
+          "seal": {
+            "by": "server",
+            "mac": "3584e85ddb33721081be3695aecceb9a6e855cc9f7877ab61518fd372d33ccae"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.217312385Z",
+      "seal": {
+        "by": "server",
+        "mac": "1d11984b87065cdb8175a8a9f52f2f1973da925ee656d8b2899f80fc6b8347cb"
+      }
+    },
+    {
+      "id": "CLM-0931",
+      "statement": "teams::set_store pins or unpins a team, writes the team.store_pinned or team.store_unpinned audit entry and sends Invalidation::team in one transaction, and pinning to the store it is on (or unpinning an unpinned team) writes, audits and sends nothing.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #968 brief (c); PR body",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/teams.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1311",
+          "kind": "inspection",
+          "locator": "src/store/teams.rs:763-822",
+          "summary": "set_store: one tx; returns Ok(false) before any write when previous == requested; otherwise updates teams.store, record_team with TeamStorePinned or TeamStoreUnpinned (from/to details), invalidate(Invalidation::team(&team_id)), then commit.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/teams.rs",
+              "lines": {
+                "start": 763,
+                "end": 822
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:44.037486683Z",
+          "seal": {
+            "by": "server",
+            "mac": "b9973a2a05e378f71d2e2a6ffd210b4bdb04de156b07178f48018b24e155eb94"
+          }
+        },
+        {
+          "id": "EVD-1312",
+          "kind": "test",
+          "locator": "store::stores::tests::every_store_change_is_audited; a_store_change_reaches_every_replica_through_the_change_feed; an_unchanged_default_or_pin_records_and_sends_nothing",
+          "summary": "All pass: pin records team.store_pinned {from null,to shared-1}, unpin team.store_unpinned {from shared-1,to null}; a pin sends exactly one Invalidation::Team; unpinning an unpinned team returns false with no entry and no invalidation.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 743,
+                "end": 806
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:44.103320773Z",
+          "seal": {
+            "by": "server",
+            "mac": "d931176ae52fe1b0a1258dc9ce5e81a7cce482d63eb1896eb9b2a44c0d20afe9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "set_store does update, audit and Team invalidation in one tx; unchanged returns early; tests cover pin, unpin and no-op.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1311",
+            "EVD-1312"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.347282129Z",
+          "seal": {
+            "by": "server",
+            "mac": "8675fc4d466ec42b70e4cd1b67541ef8d9059997a239eb1c6b395d0da6776959"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.347282129Z",
+      "seal": {
+        "by": "server",
+        "mac": "99f709da44d77d8ab835e9f38a1822cec7b84e21acd637fbd954126a73228b9f"
+      }
+    },
+    {
+      "id": "CLM-0932",
+      "statement": "GET /api/v1/stores needs an admin key, and the POST /stores, PUT /settings/default_store and PUT/DELETE /teams/{team}/store routes need an admin key reaching every catalog; non-admin keys get 403 and none of these routes is in PROVISIONER_ROUTES (a provisioner key is refused).",
+      "kind": "security",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #968 brief (d); PR body 'Reads need an admin; changes need an admin reaching every catalog; none is a provisioner route'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/http/api/stores.rs",
+        "src/http/api/mod.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1313",
+          "kind": "inspection",
+          "locator": "src/http/api/stores.rs:171-176,196-200,235-241 and handlers; src/http/api/mod.rs:205-234,272-300",
+          "summary": "list_stores calls require_admin; add_store, set_default_store, pin_team and unpin_team call require_every_catalog (admin + Reach::All). The routes are merged at mod.rs:95; none of /stores, /settings/default_store or /teams/{name}/store appears in PROVISIONER_ROUTES.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/stores.rs",
+              "lines": {
+                "start": 168,
+                "end": 200
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:44.169762006Z",
+          "seal": {
+            "by": "server",
+            "mac": "51174495caf7a02f8c266700406ca1b358bb02f633f4dfd562c4090c141d9c93"
+          }
+        },
+        {
+          "id": "EVD-1314",
+          "kind": "test",
+          "locator": "http::api::stores::tests::store_admin_endpoints_refuse_non_admin_credentials; a_provisioner_key_reaches_none_of_the_store_routes",
+          "summary": "Both pass: the matrix test checks every store route per credential tier (admin on one catalog gets 403 for writes, every-catalog admin 200) and the provisioner test checks a provisioner key is refused on all routes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/stores.rs",
+              "lines": {
+                "start": 343,
+                "end": 436
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:56:44.236676822Z",
+          "seal": {
+            "by": "server",
+            "mac": "5f1c87b1d81cb7f3752f5e6b8b3c307494567b5103d837adcae20990e55540be"
+          }
+        },
+        {
+          "id": "EVD-1315",
+          "kind": "analysis",
+          "locator": "git grep PROVISIONER_ROUTES allow-list for store routes",
+          "summary": "Zero lines of src/http/api/mod.rs contain /stores, default_store or '/store\"' in the PROVISIONER_ROUTES list (the allow-list names only users, teams and related routes); so the provisioner gate refuses the new routes.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "\"/api/v1/(stores|settings/default_store|teams/\\{[a-z]+\\}/store)",
+              "scope": [
+                "src/http/api/mod.rs"
+              ],
+              "hits": 0,
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:05.116725824Z",
+          "seal": {
+            "by": "server",
+            "mac": "2068acd328d1c49d59fe28d50656d6b86895f3ef9a2cd9a25e688b18818409d7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Handlers use require_admin or require_every_catalog, the routes are absent from PROVISIONER_ROUTES, and the matrix and provisioner tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1313",
+            "EVD-1314",
+            "EVD-1315"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.424589151Z",
+          "seal": {
+            "by": "server",
+            "mac": "cc961d691d29085869837b27279c4da660b2db03efb24d9c21ab428e9824ddba"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.424589151Z",
+      "seal": {
+        "by": "server",
+        "mac": "0f359e13ef80544e4d6ae3c2733a512f378e7f073db861c3b9fde5b3f920990b"
+      }
+    },
+    {
+      "id": "CLM-0933",
+      "statement": "No removal route or command for a store exists: no DELETE /stores route, and the stores CLI has only list, add, set-default, pin and unpin.",
+      "kind": "constraint",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #968 brief (d); plan Task 10 'no removal endpoint is built'; PR body 'No removal route or command'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/http/api/stores.rs",
+        "src/cli.rs",
+        "src/cli/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1316",
+          "kind": "inspection",
+          "locator": "src/http/api/stores.rs:171-175; src/cli.rs StoresCommand; src/cli/stores.rs:40-80",
+          "summary": "Routes are only GET/POST /stores, PUT /settings/default_store, PUT/DELETE /teams/{team}/store (the DELETE removes a pin, not a store). StoresCommand has List, Add, SetDefault, Pin, Unpin; no store-removal function exists in store/stores.rs.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/stores.rs",
+              "lines": {
+                "start": 171,
+                "end": 175
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:05.203458012Z",
+          "seal": {
+            "by": "server",
+            "mac": "4652dd3c1e055b92ccbb6670a24ae4638866ae9270afe6495edc265d7c2edf90"
+          }
+        },
+        {
+          "id": "EVD-1317",
+          "kind": "analysis",
+          "locator": "git grep removal of a stores row",
+          "summary": "No DELETE FROM stores, delete_store/remove_store or remove/delete store subcommand exists in the stores API, CLI or store module.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "DELETE FROM stores|delete_store|remove_store|StoresCommand::(Remove|Delete)",
+              "case_insensitive": true,
+              "scope": [
+                "src/cli",
+                "src/cli.rs",
+                "src/http/api/stores.rs",
+                "src/store/stores.rs"
+              ],
+              "hits": 0,
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:05.305782642Z",
+          "seal": {
+            "by": "server",
+            "mac": "f0e7d7100ddd59cd4aa0dc2897f8f58e25fd01e8413b3e1fa37d15ef9b59f389"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Routes and CLI list show no store removal; zero-hit search confirms; the only DELETE route removes a team pin.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1316",
+            "EVD-1317"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.509897312Z",
+          "seal": {
+            "by": "server",
+            "mac": "e391b43a8e21d9508dc35db94f4f65ac1624599e50ed36cb797fe9e5ebe8afdb"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.509897312Z",
+      "seal": {
+        "by": "server",
+        "mac": "946aa7f82bbcc1f66a261a3368c9cc9be891d0dbf4079247a321c45c8169f882"
+      }
+    },
+    {
+      "id": "CLM-0934",
+      "statement": "catalogs::create calls placement::choose on its own transaction connection and inserts the result into catalogs.store (with provisioned_at set), and placement::choose returns the owner team's pin if set, else the default_store setting.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #968 brief (e); plan Task 10",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/catalogs.rs",
+        "src/stores/placement.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1318",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:150-176; src/stores/placement.rs:34-47",
+          "summary": "create calls placement::choose(&mut tx, owner_team) on its own transaction and binds the store as $7 into INSERT INTO catalogs (..., store, provisioned_at) with provisioned_at = $3 (creation time). choose reads teams.store for the owner and falls back to default_store.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 150,
+                "end": 176
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:05.384145896Z",
+          "seal": {
+            "by": "server",
+            "mac": "6354dc67e6d666a16cd984a7e95fbc21052defe84380b7f2bda592bb11e302d1"
+          }
+        },
+        {
+          "id": "EVD-1319",
+          "kind": "test",
+          "locator": "stores::placement::tests::a_new_catalog_lands_on_the_default_store; a_team_pin_wins_over_the_default; a_missing_default_setting_falls_back_to_main",
+          "summary": "All pass; they create catalogs through catalogs::create and read catalogs.store back (default store, then pinned team's store winning over a different default).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/placement.rs",
+              "lines": {
+                "start": 147,
+                "end": 190
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:05.466704087Z",
+          "seal": {
+            "by": "server",
+            "mac": "36d6a883fdc4afb165ffc487f48bc2d4cf2746279b9d13d4285cf9e07a276a33"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "create calls choose on its tx and writes store and provisioned_at; tests read catalogs.store for default and pin cases.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1318",
+            "EVD-1319"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.583438870Z",
+          "seal": {
+            "by": "server",
+            "mac": "0bfb6d1b2d1d613f606b8aca967a9b2b36a99f036f30f62a89c99f03eadcb433"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.583438870Z",
+      "seal": {
+        "by": "server",
+        "mac": "5d39013950e2f06bebdc55fbc0edee0afd8482daaa3d1c94f4a8a084dad01ce6"
+      }
+    },
+    {
+      "id": "CLM-0935",
+      "statement": "Existing catalogs never move: no code updates catalogs.store after creation, and a test shows changing the default store leaves existing catalogs where they were and affects only new ones.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #968 brief (e); named test changing_the_default_moves_new_catalogs_only",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/stores/placement.rs",
+        "src/store/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1320",
+          "kind": "test",
+          "locator": "stores::placement::tests::changing_the_default_moves_new_catalogs_only",
+          "summary": "Passes: after set_default to a new store, the earlier catalog still records its old store and the next new catalog records the new one.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/placement.rs",
+              "lines": {
+                "start": 191,
+                "end": 230
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:05.538941757Z",
+          "seal": {
+            "by": "server",
+            "mac": "fb6d1bc73c5d949e8e1af0b82903e975a5e255d7cf2dc0464ad6704c4a0c4ee9"
+          }
+        },
+        {
+          "id": "EVD-1321",
+          "kind": "analysis",
+          "locator": "git grep UPDATE catalogs SET store in src",
+          "summary": "No statement updates catalogs.store anywhere in src (only INSERT in catalogs::create); the two 'SET store' hits are on teams.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "UPDATE catalogs SET[^;\"]*store",
+              "case_insensitive": true,
+              "scope": [
+                "src"
+              ],
+              "hits": 0,
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:05.642809983Z",
+          "seal": {
+            "by": "server",
+            "mac": "e33cbce6dfa9e2522cc6b73c2634864a6a4ea1560e2fd9c1e1c44b455af38bbc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test shows old catalogs stay; zero-hit search shows nothing updates catalogs.store.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1320",
+            "EVD-1321"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.656682868Z",
+          "seal": {
+            "by": "server",
+            "mac": "d44c4515907aeb8b0b69a8fd178cc915786b562555f9307196f2012d026c423a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.656682868Z",
+      "seal": {
+        "by": "server",
+        "mac": "d2b5f3e30c3e8c637ba68480e9f16c7204d76bbb2196ffc02e338964cc1bc8b0"
+      }
+    },
+    {
+      "id": "CLM-0936",
+      "statement": "The change adds no migration: no file under migrations/ is added or changed in the commit range.",
+      "kind": "constraint",
+      "level": "software",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #968 brief (f); PR body 'No migration'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "migrations"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1322",
+          "kind": "log",
+          "locator": "git diff --name-status origin/milestone/958-catalog-stores..HEAD | grep -i migr",
+          "summary": "No output: of the 15 files in the range none is under migrations/; the latest migration at head is 0040_catalogs_unprovisioned_index.sql, from before this range.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T18:57:22.196407740Z",
+          "seal": {
+            "by": "server",
+            "mac": "8b540c963a3ff89d6c62e7253b6e3e9e4e4266d792c0ce7788531830f98f9721"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The diff name list over the range contains no migrations path.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1322"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.723948253Z",
+          "seal": {
+            "by": "server",
+            "mac": "39263f5fc826c5567f1c717cd45f3002bb84f3fdcd20280d8f1cfaf217f53e9d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.723948253Z",
+      "seal": {
+        "by": "server",
+        "mac": "9c9a10c611f2eb9c9dd598e594f0f3bd2e7a1b7c6da691c907002fb7ba19972c"
+      }
+    },
+    {
+      "id": "CLM-0937",
+      "statement": "No account-database transaction is held while a store pool connects: stores::add runs Stores::check before any begin on the account pool, and the CLI and HTTP handlers call add without opening a transaction.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #968 brief (g); PR body 'holding no transaction'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/stores.rs",
+        "src/http/api/stores.rs",
+        "src/cli/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1323",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:289-309; src/cli/stores.rs:64; src/http/api/stores.rs:221-228",
+          "summary": "add awaits stores.check(...) (the only code that connects a store pool) as its first statement, with no begin in scope; pool.begin occurs only in insert (line 344), after the check returns. The CLI and HTTP handlers pass the pool and registry to add and open no transaction themselves. check also holds no account connection (open_row reads none).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 289,
+                "end": 309
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:22.896605108Z",
+          "seal": {
+            "by": "server",
+            "mac": "0f92dc4459b1e6d8cb7e1a4ff9b84d446ebeba713d4cba2bc4b51bb0b774f0c0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Connect check precedes the only begin; callers open no transaction.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1323"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.796621958Z",
+          "seal": {
+            "by": "server",
+            "mac": "a084f93bcd278ae19e54e7097d742674d7186e00ee471ea1957f405c90c0aa52"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.796621958Z",
+      "seal": {
+        "by": "server",
+        "mac": "76df95e602c3520deb19142c95b843f99e406fe0b1dfaed40554948a77be3b45"
+      }
+    },
+    {
+      "id": "CLM-0938",
+      "statement": "The seven tests the issue names (a_new_catalog_lands_on_the_default_store, a_team_pin_wins_over_the_default, changing_the_default_moves_new_catalogs_only, adding_an_unreachable_store_is_refused, adding_a_host_store_is_refused_until_enabled, store_admin_endpoints_refuse_non_admin_credentials, every_store_change_is_audited) exist and pass at head.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/968 (Validation)",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/stores/placement.rs",
+        "src/store/stores.rs",
+        "src/http/api/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1324",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- stores",
+          "summary": "Run on head: 'test result: ok. 51 passed; 0 failed; 0 ignored'. Output lists each of the seven named tests as ok (placement: a_new_catalog_lands_on_the_default_store, a_team_pin_wins_over_the_default, changing_the_default_moves_new_catalogs_only; store::stores: adding_an_unreachable_store_is_refused, adding_a_host_store_is_refused_until_enabled, every_store_change_is_audited; http::api::stores: store_admin_endpoints_refuse_non_admin_credentials).",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "async fn (a_new_catalog_lands_on_the_default_store|a_team_pin_wins_over_the_default|changing_the_default_moves_new_catalogs_only|adding_an_unreachable_store_is_refused|adding_a_host_store_is_refused_until_enabled|store_admin_endpoints_refuse_non_admin_credentials|every_store_change_is_audited)",
+              "scope": [
+                "src"
+              ],
+              "hits": 7,
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:24.458034815Z",
+          "seal": {
+            "by": "server",
+            "mac": "5bb4f3ff0d6f770927fad2eb4be4a4b4effb2c9424faeba8ade92454a5bbfc02"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All seven named tests exist (search anchor: 7 definitions) and passed in my narrow run on head.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1324"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.866230472Z",
+          "seal": {
+            "by": "server",
+            "mac": "8928779627165b1ed3e4a172df37d72a0f034c0080eeb4f1ea4fff298447c1f6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.866230472Z",
+      "seal": {
+        "by": "server",
+        "mac": "86a59f82637e235747643e47eab1cc5e31c8f716b16d1128965e11c7c17b7bc1"
+      }
+    },
+    {
+      "id": "CLM-0939",
+      "statement": "The okf-mcp CLI has `stores list|add|set-default|pin|unpin` commands that call the same store functions as the API.",
+      "kind": "interface",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Issue #968 / plan Task 10 'The CLI has the same commands under okf-mcp stores'; PR body",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/cli.rs",
+        "src/cli/stores.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1325",
+          "kind": "test",
+          "locator": "cli::stores::tests::the_commands_list_set_default_pin_and_unpin; adding_a_store_that_cannot_be_reached_is_refused_and_names_no_host",
+          "summary": "Both pass (narrow run). src/cli/stores.rs:31-80 dispatches List to stores::summaries, Add to stores::add, SetDefault to stores::set_default, Pin/Unpin to teams::set_store: the same functions the HTTP handlers call; src/cli.rs wires Command::Stores.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli/stores.rs",
+              "lines": {
+                "start": 31,
+                "end": 80
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:26.883569460Z",
+          "seal": {
+            "by": "server",
+            "mac": "07c35881d4f103560d6f1ed9f33432e330618e5f0edd00af923969b866f573bf"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "CLI dispatches to the same store functions and its tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1325"
+          ],
+          "recorded_at": "2026-11-23T18:58:12.930844368Z",
+          "seal": {
+            "by": "server",
+            "mac": "37b44f8663aa0b75507dfeb021e2e556dbbd7ed1a9e0e09a202b586581521442"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:12.930844368Z",
+      "seal": {
+        "by": "server",
+        "mac": "89c816cdb787dc094d756741c448bf05e6e3e6f40b28cccb82c07a5084bff1ba"
+      }
+    },
+    {
+      "id": "CLM-0940",
+      "statement": "The new audit actions store.added, setting.default_store_changed, team.store_pinned and team.store_unpinned exist, and Target::Store records target kind store with the store name as target_name.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #968 / plan Task 10 audit actions",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "src/store/audit.rs"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1326",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:312-315,337-338,383",
+          "summary": "Four Action variants with the exact strings, Target::Store(&str) mapped to plain('store', name). Test every_store_change_is_audited passes and reads target_kind 'store' and target 'shared-1' for store.added from the database (the 0038 CHECK admits it).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 309,
+                "end": 316
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:28.514740494Z",
+          "seal": {
+            "by": "server",
+            "mac": "b817442f38c5a84b188d7239d6ad8d7a37d2b8e25d8f09f792260fdc331d7969"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Actions and target exist; the audited test reads them back from the database.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1326"
+          ],
+          "recorded_at": "2026-11-23T18:58:13.064145384Z",
+          "seal": {
+            "by": "server",
+            "mac": "ec7eae1b76fb57ebfa7731ebbfa84aa4cbe424021c45fac8ab515e11b9b87d02"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:13.064145384Z",
+      "seal": {
+        "by": "server",
+        "mac": "bdec8f99938e2dc084ef080e30651b7c835483ebfbf4db430ed048497f760a84"
+      }
+    },
+    {
+      "id": "CLM-0941",
+      "statement": "The PR adds a changelog entry, docs/operations.md 'Catalog stores API' section, a dated Corrected note on plan Task 10, a changed Task 20 step naming the one function, and comments on #969 and #979.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body 'Plan: dated correction note on Task 10, changed Task 20 step, comments on #969 and #979. Docs in docs/operations.md; changelog entry.'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "changelog"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1327",
+          "kind": "inspection",
+          "locator": "git diff range; gh issue view 969 / 979 --comments",
+          "summary": "Range adds changelog/2026-11-23T18-31-46Z-m21-task-10-placement-and-admin-surface.md, docs/operations.md 'Catalog stores API' (line 3828), the plan's '> Corrected (issue #968, 2026-11-23)' note on Task 10, and rewrites the Task 20 step to name placement::refuse_host_stores_until_task_20. Issues #969 and #979 each carry a 'From #968 (Task 10)' comment (the #969 one on placement::choose's signature, the #979 one on the P8 function).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 3828,
+                "end": 3850
+              },
+              "commit": "fe75feca16ea4962f0004354aa7c9a138db1d500"
+            }
+          },
+          "recorded_at": "2026-11-23T18:57:29.721901079Z",
+          "seal": {
+            "by": "server",
+            "mac": "b12ddd9a207f38b4e8cfdbae4ad0a63b937911609a57f8a6a595194eb9e0eb1c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Each listed item is present in the diff or on the named issues.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1327"
+          ],
+          "recorded_at": "2026-11-23T18:58:13.157748756Z",
+          "seal": {
+            "by": "server",
+            "mac": "162f5c406211a1ef9e5a6c121546fda70c8e187c18e91b356040f93c35514e02"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:13.157748756Z",
+      "seal": {
+        "by": "server",
+        "mac": "60b9bc8380c2ea1cd2bb9aa3cd4fe6c8776adedacde4958f445cbbc6ee375ce1"
+      }
+    },
+    {
+      "id": "CLM-0942",
+      "statement": "tools/agentic/gate.sh test passes with 3444 passed, 0 failed, 21 ignored across all test binaries at head.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'tools/agentic/gate.sh test: pass (3444 passed, 0 failed, 21 ignored across all test binaries)'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [
+        "target/i968-logs/test.log"
+      ],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1328",
+          "kind": "log",
+          "locator": "target/i968-logs/test.log",
+          "summary": "The author's log (written 13:44, after the last edit to a changed file at 13:38 and before the 13:53 commit) sums its 'test result' lines to 3444 passed, 0 failed, 21 ignored. I did not rerun the full gate (forbidden here), so the count is the producer's log, not my own run; the stores-filtered subset I ran passes (51).",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T18:57:37.320731757Z",
+          "seal": {
+            "by": "server",
+            "mac": "463b2449b6d57ad73ba03d67c447c76834624d256224de5a7f973f5bbf64f784"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Only the author's log backs the 3444/0/21 count; the full gate was not rerun in this audit. Fix: have the author or CI rerun `tools/agentic/gate.sh test` on the final head and quote its printed totals.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1328"
+          ],
+          "recorded_at": "2026-11-23T18:58:13.243648229Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa1f6254a3c347fad154cc66b491c0625d3a29e7c4ce3d5dacb396c6543aac82"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:13.243648229Z",
+      "seal": {
+        "by": "server",
+        "mac": "ea9706a8c236e4a5e9d6e0b9540af187fa128382133a74be9a25039ee5c647d2"
+      }
+    },
+    {
+      "id": "CLM-0943",
+      "statement": "tools/agentic/gate.sh fmt, lint and dylint pass at head.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'tools/agentic/gate.sh fmt, lint, dylint: pass'",
+      "derived_from": [
+        "CLM-0924"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:968"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1329",
+          "kind": "log",
+          "locator": "target/i968-logs/{fmt,lint,lint2,dylint,status}.log",
+          "summary": "Producer logs only: status.log shows lint=101 (first run failed in cargo doc), lint2=0, dylint=0, test=0; fmt.log (13:36) predates the last edit to src/store/stores.rs (13:38:42) and records no exit status. I did not rerun these gates.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T18:57:37.806562944Z",
+          "seal": {
+            "by": "server",
+            "mac": "3a14c360ade4f339e1dc635b69a04e63b735fd1858698e9dfd57d610158cad61"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Only producer logs exist (lint failed once then passed; fmt log predates the last source edit and has no exit status); gates not rerun here. Fix: rerun `tools/agentic/gate.sh fmt`, `lint` and `dylint` on the final head and record their exit codes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1329"
+          ],
+          "recorded_at": "2026-11-23T18:58:13.327083014Z",
+          "seal": {
+            "by": "server",
+            "mac": "6540c23c184fd14b33ead5db5c9877b419c8e0c6fd31e44f5ddc4396f82bcad0"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:55:41.188670885Z",
+      "updated_at": "2026-11-23T18:58:13.327083014Z",
+      "seal": {
+        "by": "server",
+        "mac": "749d390227e3be5169086b3ae66cc7636fcbc356b58e14f8d90f65413a13c653"
       }
     }
   ]
