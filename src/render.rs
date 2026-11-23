@@ -816,6 +816,26 @@ mod tests {
     }
 
     #[test]
+    fn angle_bracket_destinations_resolve_like_the_catalog_reads_them() {
+        let files = MemWorkspace::from_files([
+            ("systems/alpha.md", "# Alpha\n"),
+            ("systems/a b.md", "# A b\n"),
+        ]);
+        let html = to_html(
+            "[Spaced](<a b.md>) [Titled](<a b.md> \"t\") [Gone](<gone x.md>)\n",
+            &Page::new("main", "systems/alpha.md", &files),
+        );
+
+        assert_eq!(
+            html.matches("href=\"#/browse/main/systems/a%20b.md\"")
+                .count(),
+            2,
+            "{html}"
+        );
+        assert_eq!(html.matches(BROKEN_LINK_TITLE).count(), 1, "{html}");
+    }
+
+    #[test]
     fn routes_percent_encode_each_segment() {
         assert_eq!(
             browse_route("main", "a b/c#d.md", Some("x y")),

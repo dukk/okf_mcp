@@ -541,7 +541,9 @@ percent-encoding, such as `* [A](a b.md) - x` or
 `* [My docs](my docs/) - x`, whose link never resolves: its destination is
 encoded in place (`* [A](a%20b.md) - x`, label and summary kept), or the
 bullet is removed when a working listing sits beside it, and `notes` quotes
-each one. A bullet whose link resolves to an existing document, or whose
+each one. A listing written with an angle-bracket destination, `* [A](<a b.md>) - x`, already
+resolves and is left alone (the link parser reads `[x](<a b.md>)` and
+`[x](<a b.md> "title")` like any other link, and rewrites keep the brackets). A bullet whose link resolves to an existing document, or whose
 name holds a `%XX` escape, is never touched. A
 path no markdown link can reach (a label that cannot be written, such as a folder named `a]`) is not listed;
 `notes` names it instead. A

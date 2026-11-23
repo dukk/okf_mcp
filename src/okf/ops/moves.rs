@@ -144,8 +144,8 @@ pub fn move_concept(
 /// The old listing with its link into `old` pointing at `name` instead, the
 /// fragment kept: `cmd_mv`'s `LINK_RE.sub` over the carried bullet.
 ///
-/// As in `okf.py`, the first `(<target>` in the link's text is replaced, so
-/// a link whose text itself holds `(<target>` changes there.
+/// Only the destination (inside the `<` `>` of an angle-bracket link, whose
+/// brackets are kept) is replaced, wherever the link's text repeats it.
 #[tracing::instrument(level = "trace", skip_all)]
 fn relinked_bullet(
     workspace: &dyn Workspace,
@@ -166,15 +166,10 @@ fn relinked_bullet(
             .target
             .split_once('#')
             .map_or(String::new(), |(_, fragment)| format!("#{fragment}"));
-        // `clone`: a `Range` is not `Copy`, and slicing would move it.
-        let whole = &bullet[link.range.clone()];
-        out.push_str(&bullet[copied..link.range.start]);
-        out.push_str(&whole.replacen(
-            &format!("({}", link.target),
-            &format!("({}{fragment}", encode_link_path(name)),
-            1,
-        ));
-        copied = link.range.end;
+        out.push_str(&bullet[copied..link.target_range.start]);
+        out.push_str(&encode_link_path(name));
+        out.push_str(&fragment);
+        copied = link.target_range.end;
     }
     out.push_str(&bullet[copied..]);
     out
@@ -296,6 +291,65 @@ mod tests {
             "---\ntype: System\ntitle: NTP\ndescription: How   hosts sync.\n---\n\
              Uses [time](/infra/wall%20clock.md#ports).\n"
         );
+    }
+
+    #[test]
+    fn a_move_rewrites_angle_bracket_links_and_keeps_their_brackets() {
+        let mut files: BTreeMap<&str, &str> = FILES.iter().copied().collect();
+        files.insert("infra/ntp.md", "---\ntype: System\ntitle: NTP\n---\nSee [t](</infra/time.md#ports>) and [u](<time.md> \"title\").\n");
+        files.insert(
+            "infra/index.md",
+            "# Infra\n\n# Concepts\n\n* [Time](<time.md>) - the clock\n",
+        );
+        let workspace = MemWorkspace::from_files(files);
+
+        move_concept(&workspace, "infra/time.md", "infra/wall clock.md", None).unwrap();
+
+        assert_eq!(
+            text(&workspace, "infra/ntp.md"),
+            "---\ntype: System\ntitle: NTP\n---\nSee [t](</infra/wall%20clock.md#ports>) and [u](<wall%20clock.md> \"title\").\n"
+        );
+        assert_eq!(
+            text(&workspace, "infra/index.md"),
+            "# Infra\n\n# Concepts\n\n* [Time](<wall%20clock.md>) - the clock\n"
+        );
+    }
+
+    #[test]
+    fn a_cross_folder_move_carries_an_angle_bracket_listing_with_its_brackets() {
+        // `old_dir != new_dir`, so the listing goes through `relinked_bullet`.
+        // The second case repeats `(time.md)` in the label, which must stay.
+        for (listing, carried) in [
+            (
+                "* [Time](<time.md>) - the clock",
+                "* [Time](<wall%20clock.md>) - the clock",
+            ),
+            (
+                "* [Time (time.md)](<time.md#ports> \"t\") - the clock",
+                "* [Time (time.md)](<wall%20clock.md#ports> \"t\") - the clock",
+            ),
+        ] {
+            let mut files: BTreeMap<&str, String> =
+                FILES.iter().map(|(p, t)| (*p, (*t).to_string())).collect();
+            files.insert(
+                "infra/index.md",
+                format!("# Infra\n\n# Concepts\n\n{listing}\n"),
+            );
+            files.insert("other/index.md", "# Other\n\n# Concepts\n".to_string());
+            let workspace =
+                MemWorkspace::from_files(files.iter().map(|(path, text)| (*path, text.as_str())));
+
+            move_concept(&workspace, "infra/time.md", "other/wall clock.md", None).unwrap();
+
+            assert_eq!(
+                text(&workspace, "infra/index.md"),
+                "# Infra\n\n# Concepts\n\n"
+            );
+            assert_eq!(
+                text(&workspace, "other/index.md"),
+                format!("# Other\n\n# Concepts\n\n{carried}\n")
+            );
+        }
     }
 
     #[test]

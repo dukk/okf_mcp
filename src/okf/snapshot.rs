@@ -1046,6 +1046,24 @@ mod tests {
     }
 
     #[test]
+    fn an_angle_bracket_link_is_a_backlink() {
+        let workspace = MemWorkspace::from_files([
+            ("index.md", "# Sections\n\n* [Infra](infra/)\n"),
+            ("infra/index.md", "# Concepts\n\n* [A B](<a b.md>)\n"),
+            ("infra/a b.md", "---\ntype: Host\n---\n# A\n"),
+        ]);
+        let snapshot = Snapshot::build(&workspace).unwrap();
+
+        let sources: Vec<&str> = snapshot
+            .backlinks("infra/a b.md")
+            .iter()
+            .map(|b| b.source.as_str())
+            .collect();
+
+        assert_eq!(sources, ["infra/index.md"]);
+    }
+
+    #[test]
     fn backlinks_list_every_document_linking_in() {
         let snapshot = Snapshot::build(&catalog()).unwrap();
         let sources: Vec<&str> = snapshot

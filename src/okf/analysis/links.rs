@@ -699,6 +699,21 @@ mod tests {
     }
 
     #[test]
+    fn an_angle_bracket_link_is_checked_like_any_other() {
+        let report = report(&[
+            ("index.md", "# Sections\n\n* [Infra](infra/)\n"),
+            (
+                "infra/index.md",
+                "# Concepts\n\n* [A B](<a b.md>)\n* [Gone](<gone x.md> \"t\")\n",
+            ),
+            ("infra/a b.md", "---\ntype: Host\n---\n# A\n"),
+        ]);
+
+        // Only the link to the missing file is broken.
+        assert_eq!(report.summary.broken, 1, "{report:?}");
+    }
+
+    #[test]
     fn mentions_can_be_turned_off() {
         let workspace = MemWorkspace::from_files(CATALOG);
         let report = links_report(&Snapshot::build(&workspace).expect("snapshot"), false);
