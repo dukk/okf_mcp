@@ -527,6 +527,54 @@ async fn a_subscriber_whose_connection_is_killed_still_learns_of_a_revoke() {
     );
 }
 
+/// Restarts Redis and checks a handle built from the old URL reaches it
+/// again, and (in a cluster) that the node announces the same port again.
+async fn a_handle_survives_a_restart(redis: &TestRedis) {
+    let handle = support::server::redis_connect(redis).await;
+    let url_before = redis.url.clone();
+    if redis.stop().await.is_none() {
+        // A shared server: it cannot be stopped for one test.
+        return;
+    }
+    redis.start_again().await.expect("a container to start");
+
+    assert_eq!(redis.url, url_before, "the URL is the one the handle uses");
+    let mut connection = handle.connection();
+    eventually!("the old handle reaches the restarted server", {
+        redis::cmd("PING")
+            .query_async::<String>(&mut connection)
+            .await
+            .is_ok()
+    });
+    if redis.cluster {
+        let port = redis
+            .url
+            .rsplit(':')
+            .next()
+            .expect("a port")
+            .trim_end_matches("/0");
+        let announced: Vec<String> = redis::cmd("CONFIG")
+            .arg("GET")
+            .arg("cluster-announce-port")
+            .query_async(&mut connection)
+            .await
+            .expect("config get");
+        assert_eq!(announced.get(1).map(String::as_str), Some(port));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_handle_built_before_a_restart_reaches_redis_afterwards() {
+    let redis = TestRedis::start().await;
+    a_handle_survives_a_restart(&redis).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_handle_built_before_a_restart_reaches_the_cluster_afterwards() {
+    let redis = TestRedis::start_cluster().await;
+    a_handle_survives_a_restart(&redis).await;
+}
+
 /// `CLIENT KILL TYPE pubsub`: ends every subscriber connection.
 async fn kill_pubsub_connections(redis: &TestRedis) {
     let handle = support::server::redis_connect(redis).await;

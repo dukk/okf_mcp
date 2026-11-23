@@ -769,6 +769,8 @@ impl TestRedis {
 - Outage tests skip themselves (return early with an `eprintln!` note) when `stop()` gives `None`.
 - If testcontainers maps a new host port on `start()`, start that test's container with `.with_mapped_port(free_port, REDIS_PORT.tcp())` instead, and add a `TestRedis::start_fixed_port()`. Then fix this plan.
 
+> **Corrected (issue #593).** Testcontainers does map a new host port on a restart, so every `TestRedis` container now starts with a free host port chosen up front (`with_mapped_port`, retried on a new port if the start fails), and `start_again` keeps it and re-applies the cluster announce settings. There is no `start_fixed_port()`; see `tests/support/redis.rs`. Restart-based tests are possible again.
+
 The crate-side helpers are written once per build:
 - **Lib.** `src/shared/mod.rs` gets a `#[cfg(test)] pub(crate) mod testing` with:
   - `config(&TestRedis) -> RedisConfig { url_env: URL_VAR.into(), key_prefix: server.prefix.clone() }`;
