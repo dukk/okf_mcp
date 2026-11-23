@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 977,
+  "next_claim_seq": 985,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "9b50295c595beb4a782f4fbf679aac283fb20b8a9b006bc508daa90bd430a0b4"
+    "mac": "cd33e0f0254427836c0da54d8b15d8ccf29e3e337792aeda725d1dd62687a6a3"
   },
-  "next_evidence_seq": 1387,
+  "next_evidence_seq": 1395,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "49af4de4bbc14384afb1d0440c7bd548397202c1681fa829405fb1673591183c"
+    "mac": "80a325ba4f2ba1179d3dfc9cf8fc0e475c3598b1272c34923affb6c37b94d11c"
   },
   "claims": [
     {
@@ -78710,6 +78710,541 @@
       "seal": {
         "by": "server",
         "mac": "d8db80c1810a0fd168720d6c7c7c72c246021df4cb51c1a5904947333708af3f"
+      }
+    },
+    {
+      "id": "CLM-0977",
+      "statement": "Every account-side reader and by-name writer of the catalogs table that can be reached by a catalog name hides rows whose provisioned_at IS NULL, so a release-2 replica cannot see or act on a half-made catalog (decision P11, issue #969 part 1).",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/969 and plan docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md P11",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/catalogs.rs",
+        "src/store/ceiling.rs",
+        "src/store/teams.rs",
+        "src/store/keys.rs",
+        "src/store/repair.rs"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1394",
+          "kind": "analysis",
+          "locator": "children of CLM-0977",
+          "summary": "The children cover the filtered sites in catalogs.rs, ceiling.rs, teams.rs, keys.rs, repair.rs, show the remaining readers cannot reach an unprovisioned row, and show no writer of NULL is added.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T20:37:55.880116524Z",
+          "seal": {
+            "by": "server",
+            "mac": "eefd181fb30417aa0400249589c940c4b2f17085d53a0b8ca1b5409ee897b67a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All children supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1394"
+          ],
+          "recorded_at": "2026-11-23T20:37:59.324180603Z",
+          "seal": {
+            "by": "server",
+            "mac": "cdb54d0fe7050c4059843c711765c71ca59327324bea1a5ec9f9bc3e36fd0891"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:59.324180603Z",
+      "seal": {
+        "by": "server",
+        "mac": "4d24d7297e2c66ac144cacf9b33f3f088f31fe2dcd8a46deca5d29b203d6c796"
+      }
+    },
+    {
+      "id": "CLM-0978",
+      "statement": "catalogs::find, catalogs::list and the by-name subqueries of set_owner, update_details and set_maintenance add provisioned_at IS NOT NULL, and a test shows each refuses or omits a row seeded with provisioned_at NULL.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"provisioned_at IS NOT NULL is added to catalogs::find and list, and to the by-name subqueries of set_owner, update_details and set_maintenance.\"",
+      "derived_from": [
+        "CLM-0977"
+      ],
+      "artifacts": [
+        "src/store/catalogs.rs",
+        "src/store/catalogs_unprovisioned_tests.rs"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1387",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib unprovisioned_tests (3 passed); src/store/catalogs.rs:320-325,477-482,778-783,839-880",
+          "summary": "Filters present in find, list and the three UPDATE subqueries; a_half_created_catalog_is_not_visible asserts find/delete/set_owner/lock_by_name give CatalogNotSelected and list is empty; update_details and set_maintenance asserted in the ceiling test. 3 passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 839,
+                "end": 880
+              },
+              "commit": "e545f62f18a04881c29028e5d1d977a7af58ba8b"
+            }
+          },
+          "recorded_at": "2026-11-23T20:37:40.362606287Z",
+          "seal": {
+            "by": "server",
+            "mac": "66dcd0b7a094faa33b121c6556ae6a8b896e3a806dc0deedc4016d4d8bd4bcc6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Filters read in the diff; test passes and asserts refusal/omission.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1387"
+          ],
+          "recorded_at": "2026-11-23T20:37:55.340114323Z",
+          "seal": {
+            "by": "server",
+            "mac": "4f119fa067e3bcabbabdfac9bfb77208b0747cc7255821a613c2947ec90b3102"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:55.340114323Z",
+      "seal": {
+        "by": "server",
+        "mac": "b7f01941d24919cea3752f9830bd0df18e495ebc99a0a1cdbc2cc819076bfb88"
+      }
+    },
+    {
+      "id": "CLM-0979",
+      "statement": "Every read and by-name write in ceiling.rs (highest, page, ceiling_in, entitlements_in, member_access, team_access via read_catalog_locked, entitle via begin_entitlement including the team-owner branch, set_member_access and the owner variants) adds provisioned_at IS NOT NULL, and tests exercise them against an unprovisioned row.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"It is added to every ceiling.rs read and by-name write ... and the locks beneath them.\"",
+      "derived_from": [
+        "CLM-0977"
+      ],
+      "artifacts": [
+        "src/store/ceiling.rs",
+        "src/store/catalogs_unprovisioned_tests.rs"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1388",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib unprovisioned_tests (3 passed); gate.sh narrow --lib an_owner_cannot_act_on_a_catalog_that_is_not (1 passed); src/store/ceiling.rs:142-150,264-273,319-327,367-385,669-675,727-733,831-836,1299-1306,1377-1383",
+          "summary": "Every ceiling.rs query naming catalogs carries the filter (CEILING_ROWS is cfg(test) only). Tests cover ceiling_in, entitlements_in, highest, page, set_member_access, member_access, team_access, entitle and the owner entitle/set paths; entitle and team_access assertions are only is_err(). lock_shared_team_owner in catalogs.rs is unfiltered, but each caller is followed by a filtered statement.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/ceiling.rs",
+              "lines": {
+                "start": 319,
+                "end": 327
+              },
+              "commit": "e545f62f18a04881c29028e5d1d977a7af58ba8b"
+            }
+          },
+          "recorded_at": "2026-11-23T20:37:40.435483441Z",
+          "seal": {
+            "by": "server",
+            "mac": "57f7d81dfe47d82441e63d6b1719f46a01eb34b0501f29d95fdbe81efb7788c8"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All ceiling.rs catalogs queries filtered; four tests pass. entitle/team_access asserts are weak (is_err only) but the owner test covers the entitle path with Forbidden and a positive control.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1388"
+          ],
+          "recorded_at": "2026-11-23T20:37:55.420255360Z",
+          "seal": {
+            "by": "server",
+            "mac": "fe2581070d9d6cb1601504d751de14c3837f0c293aa7bd5eef354f88b400da24"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:55.420255360Z",
+      "seal": {
+        "by": "server",
+        "mac": "6c33d01d61b44016170c1682e83fa547dd570b831f0898c0a9cc56f20ae3c991"
+      }
+    },
+    {
+      "id": "CLM-0980",
+      "statement": "The team catalog list (teams.rs select_teams), keys::catalog_ids and repair::missing_root_index add provisioned_at IS NOT NULL, and a test shows each omits an unprovisioned row.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"It is added to the team catalog list (teams.rs), keys::catalog_ids and repair::missing_root_index.\"",
+      "derived_from": [
+        "CLM-0977"
+      ],
+      "artifacts": [
+        "src/store/teams.rs",
+        "src/store/keys.rs",
+        "src/store/repair.rs",
+        "src/store/catalogs_unprovisioned_tests.rs"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1389",
+          "kind": "test",
+          "locator": "a_half_created_catalog_is_not_listed_granted_or_repaired (passed); src/store/teams.rs:190-192, keys.rs:847, repair.rs:290-294",
+          "summary": "Test asserts team.catalogs empty, catalog_ids returns CatalogNotSelected, missing_root_index empty for the seeded row, and team.catalogs shows it after provisioning.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/keys.rs",
+              "lines": {
+                "start": 844,
+                "end": 850
+              },
+              "commit": "e545f62f18a04881c29028e5d1d977a7af58ba8b"
+            }
+          },
+          "recorded_at": "2026-11-23T20:37:40.519374454Z",
+          "seal": {
+            "by": "server",
+            "mac": "4cca72ceed5a0d2de6db6f9edd9098afa39dd8f1c8e8d1cebd7d665008029391"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Filters present; the test passes with absent-then-present assertions.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1389"
+          ],
+          "recorded_at": "2026-11-23T20:37:55.494249069Z",
+          "seal": {
+            "by": "server",
+            "mac": "427e2a318fa404c7371c651d636a8cf9c0fe70cb66280e03dc5132e5d935556b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:55.494249069Z",
+      "seal": {
+        "by": "server",
+        "mac": "1d585878383776755527c5c0cc3d24a93661a618775ff661f69123ac3e42b186"
+      }
+    },
+    {
+      "id": "CLM-0981",
+      "statement": "The remaining readers of catalogs (unlocks, sign-in codes, key list and changeset joins, audit rendering, labels, changeset name filter, unassigned list, export, team and user deletion counts, lock_owner and lock_shared_team_owner) cannot expose or act on an unprovisioned row: they take an id that only filtered paths hand out, or are followed in the same transaction by a filtered statement, or err on the safe side.",
+      "kind": "security",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"Readers left as they are\"",
+      "derived_from": [
+        "CLM-0977"
+      ],
+      "artifacts": [
+        "src/store/unlocks.rs",
+        "src/store/oauth/codes.rs",
+        "src/store/keys.rs",
+        "src/store/changesets.rs",
+        "src/cache/labels.rs",
+        "src/store/unassigned.rs",
+        "src/store/users.rs",
+        "src/store/teams.rs"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1390",
+          "kind": "analysis",
+          "locator": "src/store/unlocks.rs:483 (create resolves by catalogs::find), :358,583,645,822 (id joins); src/store/oauth/codes.rs:228-231; src/store/keys.rs:940-944; changesets.rs:675,728; cache/labels.rs:286; unassigned.rs:66; teams.rs:862,1193; users.rs:1319,1529,1592; catalogs.rs:575,611,1280",
+          "summary": "Each remaining site either joins/looks up by an id minted only via filtered paths (grants via catalog_ids, unlocks via find, changesets after publish), is a display-name or count read, or is a by-name lock (lock_owner, lock_shared_team_owner) whose five callers (catalogs.rs:466,771; ceiling.rs:664,829,1287) are followed in the same tx by a filtered statement that refuses. changesets.rs:675 and labels.rs:286 filter by name without the check but expose only ids/names of rows that cannot have changesets or grants yet. Unassigned list requires owner_team_id NULL, which create never writes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/unlocks.rs",
+              "lines": {
+                "start": 483,
+                "end": 483
+              },
+              "commit": "e545f62f18a04881c29028e5d1d977a7af58ba8b"
+            }
+          },
+          "recorded_at": "2026-11-23T20:37:40.608966772Z",
+          "seal": {
+            "by": "server",
+            "mac": "881dbe722a44520c698edfec5b1c251ab36c0392ccd51b288a2db615da3d355f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every remaining site traced; none lets a caller see or act on an unprovisioned row by name. Reasoned, not tested (no mixed-version harness).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1390"
+          ],
+          "recorded_at": "2026-11-23T20:37:55.578017671Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa3f6f298ffb3405a21146f2d78c84a8d940e6b6f39a7fed925006ba0649fee6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:55.578017671Z",
+      "seal": {
+        "by": "server",
+        "mac": "a48de6966bc7a25ac5b93766280e55e3392ff15b4c2bda0a1af0bd2c577e207a"
+      }
+    },
+    {
+      "id": "CLM-0982",
+      "statement": "This PR adds no non-test writer of a NULL provisioned_at, no ProvisionCatalogs task, and no migration.",
+      "kind": "constraint",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"nothing here writes a NULL provisioned_at, and there is no ProvisionCatalogs task ... No migration.\"",
+      "derived_from": [
+        "CLM-0977"
+      ],
+      "artifacts": [
+        "src",
+        "migrations"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1391",
+          "kind": "analysis",
+          "locator": "git diff --name-only origin/milestone/958-catalog-stores..HEAD; git grep ProvisionCatalogs -- src",
+          "summary": "Diff touches 8 files, none under migrations/ or *.sql; the only added statements setting provisioned_at NULL are in test code (ceiling.rs test, catalogs_unprovisioned_tests.rs seed); catalogs::create still inserts provisioned_at = $3. ProvisionCatalogs appears nowhere in src.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "ProvisionCatalogs",
+              "scope": [
+                "src"
+              ],
+              "hits": 0,
+              "commit": "e545f62f18a04881c29028e5d1d977a7af58ba8b"
+            }
+          },
+          "recorded_at": "2026-11-23T20:37:40.692392463Z",
+          "seal": {
+            "by": "server",
+            "mac": "1127bf01089430a9a48cd62e44d2b496fe4eb9ba891401cb45be4bc073f91a2d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "No migration in diff, zero ProvisionCatalogs hits, only test code sets NULL.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1391"
+          ],
+          "recorded_at": "2026-11-23T20:37:55.659945995Z",
+          "seal": {
+            "by": "server",
+            "mac": "385da46a0771eafeca25935d23ca04649ae64751ffaaacc5ea1e6d1fd49438b6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:55.659945995Z",
+      "seal": {
+        "by": "server",
+        "mac": "b61786ff170ddce28827bc914d3472dfd7fb57cfa2dc178331746cf56827c7a6"
+      }
+    },
+    {
+      "id": "CLM-0983",
+      "statement": "A changelog entry for the change exists and the plan carries a dated 'Corrected (issue #969, 2026-11-23)' note, with P11, the release graph, the Task 8 line and the Task 10b line consistent with each other.",
+      "kind": "documentation",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"Plan: a dated Corrected note ... Changelog entry added.\"",
+      "derived_from": [
+        "CLM-0977"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T20-20-27Z-m21-task-10b-part-1-hide-unprovisioned-readers.md",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1392",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:95,206-217,324,369; changelog/2026-11-23T20-20-27Z-m21-task-10b-part-1-hide-unprovisioned-readers.md",
+          "summary": "Changelog present. P11 line, release graph (Release 2 ends with 10b part 1, 2b is part 2), Task 8 and Task 10b lines and the Corrected note agree. Minor: the Release 3 line still reads '10b -> 11' without saying part 2.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 206,
+                "end": 217
+              },
+              "commit": "e545f62f18a04881c29028e5d1d977a7af58ba8b"
+            }
+          },
+          "recorded_at": "2026-11-23T20:37:40.768133340Z",
+          "seal": {
+            "by": "server",
+            "mac": "59ba3c021494b1a2370304c15f71f60c8d17362b2e50a51d49f2da8aaaff75fb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Plan edits and changelog read and consistent.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1392"
+          ],
+          "recorded_at": "2026-11-23T20:37:55.734143435Z",
+          "seal": {
+            "by": "server",
+            "mac": "e26e7242a10738c5825d299bf533beb6e2dc5d22db22094d33543b31579104c2"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:55.734143435Z",
+      "seal": {
+        "by": "server",
+        "mac": "0f9031f9736b9e87d79efe291fc1506c012b7490da028be473dd68748960cae0"
+      }
+    },
+    {
+      "id": "CLM-0984",
+      "statement": "The new tests would fail if their filters were removed: each asserts absence or refusal for a row seeded with provisioned_at NULL, and one asserts the row shows once provisioned.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body Tests section",
+      "derived_from": [
+        "CLM-0977"
+      ],
+      "artifacts": [
+        "src/store/catalogs_unprovisioned_tests.rs",
+        "src/store/ceiling.rs"
+      ],
+      "tags": [
+        "from-issue:969-part1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1393",
+          "kind": "analysis",
+          "locator": "src/store/catalogs_unprovisioned_tests.rs:44-203; src/store/ceiling.rs an_owner_cannot_act_on_a_catalog_that_is_not_provisioned_yet",
+          "summary": "Reasoned per filter: list/find/delete/set_owner/lock_by_name, ceiling_in, entitlements_in, page, highest (seeded team write plus entitlement write; the assertion Read fails if either branch is unfiltered), set_member_access, member_access, update_details, set_maintenance, catalog_ids, team list and missing_root_index all have a positive absence/refusal assertion that a missing filter would break, and the owner test asserts Forbidden plus zero written rows and a post-provision success. Weak spots: entitle and team_access are asserted with is_err() only, no post-provision control; set_owner is possibly refused earlier by find-like paths so its subquery filter is covered only if lock reaches it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs_unprovisioned_tests.rs",
+              "lines": {
+                "start": 62,
+                "end": 160
+              },
+              "commit": "e545f62f18a04881c29028e5d1d977a7af58ba8b"
+            }
+          },
+          "recorded_at": "2026-11-23T20:37:40.844618890Z",
+          "seal": {
+            "by": "server",
+            "mac": "688a651f7f3a4c53bb73a43d7a8414846c63477faa6d1d6ce55dc447bb277320"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reasoning per filter shows a failing assertion without it; two weak spots (entitle/team_access is_err only) are noted but each still fails if the filter is removed, since the unfiltered baseline would succeed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1393"
+          ],
+          "recorded_at": "2026-11-23T20:37:55.800472920Z",
+          "seal": {
+            "by": "server",
+            "mac": "9b9521dda0053cc2b250005149aff5bfee048db00c8d899a31a95afb1cd107f4"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:37:18.408169187Z",
+      "updated_at": "2026-11-23T20:37:55.800472920Z",
+      "seal": {
+        "by": "server",
+        "mac": "31d7e495470d4b64c9d6bff2659f7716e50a9fdbedf43a335c47adc12b931067"
       }
     }
   ]
