@@ -571,12 +571,13 @@ async fn racing_announcements_and_refreshes_rebuild_once_and_never_go_back() {
     let change = stored_generation(&a.app, "pg").await;
 
     let raced = tokio::time::timeout(WAIT, async {
+        let db = b.main_db().await;
         tokio::join!(
             b.apply_catalog_announcement(change),
             b.apply_catalog_announcement(change),
             b.apply_catalog_announcement(change),
-            state.refresh(b.main_store(), b.rebuild_locks()),
-            state.refresh(b.main_store(), b.rebuild_locks()),
+            state.refresh(&db, b.rebuild_locks()),
+            state.refresh(&db, b.rebuild_locks()),
         )
     })
     .await

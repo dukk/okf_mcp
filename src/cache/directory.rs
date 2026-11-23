@@ -515,7 +515,9 @@ impl CatalogDirectory {
                     })
                     .await;
             }
-            Invalidation::Credential { .. } | Invalidation::Settings => {}
+            Invalidation::Credential { .. }
+            | Invalidation::Settings
+            | Invalidation::Store { .. } => {}
         }
     }
 
@@ -576,6 +578,7 @@ mod tests {
 
     fn row(id: i64, generation: i64) -> Option<Arc<CatalogRow>> {
         Some(Arc::new(CatalogRow {
+            store: crate::stores::StoreName::main(),
             id,
             name: "pg".to_owned(),
             display_name: String::new(),

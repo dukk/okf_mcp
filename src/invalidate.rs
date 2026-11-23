@@ -112,6 +112,14 @@ pub enum Invalidation {
     },
     /// A server setting changed.
     Settings,
+    /// A `stores` row changed (its location or credential reference): each
+    /// replica drops that store's pool and opens a new one with the new row
+    /// on next use ([`crate::stores::Stores::forget`]). A store's name is
+    /// operator detail, not content: it may appear in a payload.
+    Store {
+        /// `stores.name`.
+        name: crate::stores::StoreName,
+    },
 }
 
 /// One received message: what changed, and when it was sent.
@@ -208,6 +216,24 @@ impl Invalidation {
         Self::Team { id: id.to_owned() }
     }
 
+    /// The invalidation of one store's row.
+    ///
+    /// # Arguments
+    /// * `name` - its `stores.name`.
+    ///
+    /// # Returns
+    /// [`Invalidation::Store`] for it.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn store(name: &crate::stores::StoreName) -> Self {
+        Self::Store { name: name.clone() }
+    }
+
     /// The serde tag (`"catalog"`, ...), for metric labels and span fields.
     ///
     /// # Returns
@@ -227,6 +253,7 @@ impl Invalidation {
             Self::User { .. } => "user",
             Self::Team { .. } => "team",
             Self::Settings => "settings",
+            Self::Store { .. } => "store",
         }
     }
 }
@@ -658,6 +685,7 @@ mod tests {
                 id: "t_1".to_owned(),
             },
             Invalidation::Settings,
+            Invalidation::store(&crate::stores::StoreName::parse("shared-1").unwrap()),
         ];
         for invalidation in all {
             let payload = invalidation.to_payload(1_700_000_000_000);
@@ -674,6 +702,13 @@ mod tests {
         );
         assert!(Message::parse(r#"{"v":1,"at":1,"kind":"nope"}"#).is_none());
         assert!(Message::parse("42").is_none());
+    }
+
+    #[test]
+    fn a_store_payload_with_an_invalid_name_does_not_parse() {
+        let good = Invalidation::store(&crate::stores::StoreName::main()).to_payload(1);
+        assert_eq!(good, r#"{"v":1,"at":1,"kind":"store","name":"main"}"#);
+        assert!(Message::parse(r#"{"v":1,"at":1,"kind":"store","name":"Main/x"}"#).is_none());
     }
 
     #[test]
@@ -905,6 +940,68 @@ mod tests {
         .await
         .expect("the notification removed the revoked key within the wait");
         running.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn changing_a_store_row_reopens_its_pool_on_every_replica() {
+        use crate::clock::SystemClock;
+        use crate::config::Config;
+        use crate::stores::StoreName;
+
+        let db = crate::db::test_db().await;
+        let main = StoreName::main();
+        // Two replicas of one database, each with its own listener.
+        let mut replicas = Vec::new();
+        for _ in 0..2 {
+            let app = App::load(db.pool.clone(), Config::default(), Arc::new(SystemClock))
+                .await
+                .unwrap();
+            let caught_up = Arc::new(tokio::sync::Notify::new());
+            let shutdown = CancellationToken::new();
+            let task = tokio::spawn(listen_signalling(
+                Arc::clone(&app),
+                shutdown.clone(),
+                Some(Arc::clone(&caught_up)),
+            ));
+            timeout(WAIT, caught_up.notified())
+                .await
+                .expect("the listener subscribed within the wait");
+            app.stores().get(&main).await.unwrap();
+            assert_eq!(app.stores().pools_opened(), 1);
+            replicas.push((app, shutdown, task));
+        }
+
+        // One writer changes the row and says so, in one commit. Neither
+        // replica wrote it: only the change feed can reach them.
+        let mut tx = db.pool.begin().await.unwrap();
+        sqlx::query("UPDATE stores SET created_at = now() WHERE name = 'main'")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        invalidate(&mut tx, &[Invalidation::store(&main)])
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        for (app, _, _) in &replicas {
+            // A pool that is not dropped yet is a hit; the first `get` after
+            // the message opens the second.
+            timeout(WAIT, async {
+                while app.stores().pools_opened() < 2 {
+                    app.stores().get(&main).await.unwrap();
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await
+            .expect("the replica reopened the store's pool within the wait");
+            // And it keeps the new pool: nothing else asked for another.
+            app.stores().get(&main).await.unwrap();
+            assert_eq!(app.stores().pools_opened(), 2);
+        }
+        for (_, shutdown, task) in replicas {
+            shutdown.cancel();
+            timeout(WAIT, task).await.unwrap().unwrap();
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -1216,6 +1216,7 @@ mod tests {
     /// `family` (`t-family`), active, with maintenance on.
     fn row(name: &str, id: i64) -> CatalogRow {
         CatalogRow {
+            store: crate::stores::StoreName::main(),
             id,
             name: name.to_string(),
             display_name: String::new(),

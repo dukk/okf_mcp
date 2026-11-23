@@ -196,8 +196,10 @@ async fn publish_locked(
         actor,
         message,
     } = *input;
+    // The catalog's store: every read and write of the publish goes to it.
+    let db = app.store_db(state.store()).await?;
     // Step 1, before any lock: an empty changeset never waits for one.
-    if changesets::entries(app.main_store().executor(), changeset.id)
+    if changesets::entries(db.executor(), changeset.id)
         .await?
         .is_empty()
     {
@@ -210,7 +212,7 @@ async fn publish_locked(
     let lock_started = std::time::Instant::now();
     let locks = async {
         let publishing = app.publish_lock(state.id()).await;
-        let mut tx = app.main_store().begin().await?;
+        let mut tx = db.begin().await?;
         // The users the entry resolves (the actor, its key's owner and the
         // person of a personal owner team), before the changeset: the
         // order `users::delete` takes them in (issue #418). After the
@@ -270,7 +272,7 @@ async fn publish_locked(
             // sees only what is committed, and report the revision there now.
             Err(OkfError::Conflict { files }) => {
                 tx.rollback().await?;
-                let files = with_current_revisions(app.main_store(), state.id(), files).await?;
+                let files = with_current_revisions(&db, state.id(), files).await?;
                 return Err(OkfError::Conflict { files });
             }
             Err(error) => return Err(error),
@@ -334,7 +336,7 @@ async fn publish_locked(
     // the next use retries it (it checks the snapshot against the catalog's
     // row), and the next publish refreshes first. `publish` then has the
     // catalog cache weigh the new snapshot.
-    if let Err(error) = state.refresh(app.main_store(), app.rebuild_locks()).await {
+    if let Err(error) = state.refresh(&db, app.rebuild_locks()).await {
         split_event!(
             error,
             { catalog = %state.name(), kind = error.kind(), },
@@ -994,7 +996,7 @@ mod tests {
         let first = test.app.catalog("pg").await.unwrap().expect("pg is loaded");
         let second = Arc::new(
             CatalogState::load(
-                test.app.main_store(),
+                &test.app.main_db().await,
                 &test.app.catalog_row("pg").await.unwrap().expect("pg"),
             )
             .await

@@ -12,6 +12,10 @@
 use sqlx::postgres::PgPool;
 use sqlx::{Postgres, Transaction};
 
+mod registry;
+
+pub use registry::{PoolSettings, Stores, STORE_SEARCH_PATH};
+
 use crate::error::OkfError;
 
 /// The name of the store every existing catalog is on after migration 0036.
@@ -313,10 +317,10 @@ mod tests {
             .await
             .unwrap();
         let from_store: String = sqlx::query_scalar("SELECT current_database()")
-            .fetch_one(app.main_store().executor())
+            .fetch_one(app.main_db().await.executor())
             .await
             .unwrap();
         assert_eq!(from_accounts, from_store);
-        assert_eq!(app.main_store().store(), &StoreName::main());
+        assert_eq!(app.main_db().await.store(), &StoreName::main());
     }
 }

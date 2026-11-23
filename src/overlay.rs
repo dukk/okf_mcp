@@ -947,7 +947,7 @@ mod tests {
                 tokio::spawn(async move {
                     let state = app.catalog("pg").await.unwrap().unwrap();
                     app.overlays()
-                        .get(app.main_store(), app.rebuild_locks(), &state, &row)
+                        .get(&app.main_db().await, app.rebuild_locks(), &state, &row)
                         .await
                         .unwrap()
                 })
@@ -992,7 +992,9 @@ mod tests {
         let row = Arc::new(pending_entry(&test, &handle, &edit).await);
         // Loaded before the pool is full: a catalog loads on demand.
         let state = test.app.catalog("pg").await.unwrap().unwrap();
-        let pool = test.app.accounts().executor();
+        // The build reads through the store's own pool, so that is the one filled.
+        let db = test.app.main_db().await;
+        let pool = db.executor();
         let mut tx = pool.begin().await.unwrap();
         let size = pool.options().get_max_connections();
         let mut held = Vec::with_capacity(size as usize);
@@ -1000,10 +1002,15 @@ mod tests {
             held.push(pool.acquire().await.unwrap());
         }
         let read = {
-            let (app, row, state) = (Arc::clone(&test.app), Arc::clone(&row), Arc::clone(&state));
+            let (app, row, state, db) = (
+                Arc::clone(&test.app),
+                Arc::clone(&row),
+                Arc::clone(&state),
+                db.clone(),
+            );
             tokio::spawn(async move {
                 app.overlays()
-                    .get(app.main_store(), app.rebuild_locks(), &state, &row)
+                    .get(&db, app.rebuild_locks(), &state, &row)
                     .await
             })
         };
@@ -1051,17 +1058,24 @@ mod tests {
         };
         let row = Arc::new(pending_entry(&test, &handle, &edit).await);
         let state = test.app.catalog("pg").await.unwrap().unwrap();
-        let pool = test.app.accounts().executor();
+        // The build reads through the store's own pool, so that is the one filled.
+        let db = test.app.main_db().await;
+        let pool = db.executor();
         let size = pool.options().get_max_connections();
         let mut held = Vec::with_capacity(size as usize);
         for _ in 0..size {
             held.push(pool.acquire().await.unwrap());
         }
         let read = {
-            let (app, row, state) = (Arc::clone(&test.app), Arc::clone(&row), Arc::clone(&state));
+            let (app, row, state, db) = (
+                Arc::clone(&test.app),
+                Arc::clone(&row),
+                Arc::clone(&state),
+                db.clone(),
+            );
             tokio::spawn(async move {
                 app.overlays()
-                    .get(app.main_store(), app.rebuild_locks(), &state, &row)
+                    .get(&db, app.rebuild_locks(), &state, &row)
                     .await
             })
         };

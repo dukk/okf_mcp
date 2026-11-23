@@ -16,6 +16,7 @@ use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
 use crate::store::ceiling::MemberAccess;
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::store::teams;
+use crate::stores::StoreName;
 
 /// The `revisions.message` of a new catalog's [`starter_files`].
 pub const STARTER_MESSAGE: &str = "create catalog";
@@ -62,7 +63,7 @@ pub struct Catalog {
 // each query's tail at compile time; see `select_users!` in users.rs).
 macro_rules! select_catalogs {
     () => {
-        "SELECT c.id, c.name, c.display_name, c.description, c.generation, c.created_at, \
+        "SELECT c.store, c.id, c.name, c.display_name, c.description, c.generation, c.created_at, \
                 (SELECT t.name FROM teams t WHERE t.id = c.owner_team_id) AS owner_team \
          FROM catalogs c"
     };
@@ -900,11 +901,15 @@ pub struct CatalogRow {
     /// and console sessions: one half of every user's ceiling on this
     /// catalog ([`crate::store::ceiling::level_on`], issue #728).
     pub member_access: MemberAccess,
+    /// The store holding its documents, history and changesets
+    /// (`catalogs.store`).
+    pub store: StoreName,
 }
 
 /// [`CatalogRow`] as the query returns it: the suspension as two columns.
 #[derive(sqlx::FromRow)]
 struct CatalogRowColumns {
+    store: String,
     id: i64,
     name: String,
     display_name: String,
@@ -923,7 +928,9 @@ struct CatalogRowColumns {
     member_access: String,
 }
 
-impl From<CatalogRowColumns> for CatalogRow {
+impl TryFrom<CatalogRowColumns> for CatalogRow {
+    type Error = OkfError;
+
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -931,7 +938,7 @@ impl From<CatalogRowColumns> for CatalogRow {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    fn from(columns: CatalogRowColumns) -> Self {
+    fn try_from(columns: CatalogRowColumns) -> Result<Self, Self::Error> {
         // A catalog is suspended when its owner team is.
         let suspended = columns
             .suspended
@@ -956,7 +963,12 @@ impl From<CatalogRowColumns> for CatalogRow {
                     notice: columns.suspension_notice,
                 }
             });
-        Self {
+        // The foreign key and the stores' CHECK keep the name valid; a
+        // hand-edited row is an error, not a guess.
+        let store =
+            crate::store::decode_column(StoreName::parse(&columns.store).ok(), "catalogs.store")?;
+        Ok(Self {
+            store,
             id: columns.id,
             name: columns.name,
             display_name: columns.display_name,
@@ -971,7 +983,7 @@ impl From<CatalogRowColumns> for CatalogRow {
             // else would reach nothing through the team, never more.
             member_access: MemberAccess::parse(&columns.member_access)
                 .unwrap_or(MemberAccess::None),
-        }
+        })
     }
 }
 
@@ -980,7 +992,7 @@ impl From<CatalogRowColumns> for CatalogRow {
 // check reads about the catalog it acts on (M18 spec Decision 9).
 macro_rules! select_catalog_rows {
     () => {
-        "SELECT c.id, c.name, c.display_name, c.description, c.generation, \
+        "SELECT c.store, c.id, c.name, c.display_name, c.description, c.generation, \
                 t.name AS owner_team, c.owner_team_id, \
                 (t.suspended_at IS NOT NULL) AS suspended, t.suspension_notice, \
                 t.display_name AS team_display_name, \
@@ -1018,12 +1030,12 @@ pub async fn row_by_name<'e>(
     }
     let row = sqlx::query_as::<_, CatalogRowColumns>(concat!(
         select_catalog_rows!(),
-        " WHERE c.name = $1"
+        " WHERE c.provisioned_at IS NOT NULL AND c.name = $1"
     ))
     .bind(name)
     .fetch_optional(executor)
     .await?;
-    Ok(row.map(CatalogRow::from))
+    row.map(CatalogRow::try_from).transpose()
 }
 
 /// The row of the catalog with this `catalogs.id`, with its access facts:
@@ -1044,12 +1056,14 @@ pub async fn row_by_id<'e>(
     executor: impl PgExecutor<'e>,
     id: i64,
 ) -> Result<Option<CatalogRow>, OkfError> {
-    let row =
-        sqlx::query_as::<_, CatalogRowColumns>(concat!(select_catalog_rows!(), " WHERE c.id = $1"))
-            .bind(id)
-            .fetch_optional(executor)
-            .await?;
-    Ok(row.map(CatalogRow::from))
+    let row = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE c.provisioned_at IS NOT NULL AND c.id = $1"
+    ))
+    .bind(id)
+    .fetch_optional(executor)
+    .await?;
+    row.map(CatalogRow::try_from).transpose()
 }
 
 /// The rows of the catalogs called `names`, in one query.
@@ -1080,12 +1094,12 @@ pub async fn rows_by_names<'e>(
     }
     let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
         select_catalog_rows!(),
-        " WHERE c.name = ANY($1) ORDER BY c.name"
+        " WHERE c.provisioned_at IS NOT NULL AND c.name = ANY($1) ORDER BY c.name"
     ))
     .bind(valid)
     .fetch_all(executor)
     .await?;
-    Ok(rows.into_iter().map(CatalogRow::from).collect())
+    rows.into_iter().map(CatalogRow::try_from).collect()
 }
 
 /// One page of catalog rows, ordered by name.
@@ -1114,13 +1128,14 @@ pub async fn page<'e>(
     }
     let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
         select_catalog_rows!(),
-        " WHERE ($1::text IS NULL OR c.name > $1) ORDER BY c.name LIMIT $2"
+        " WHERE c.provisioned_at IS NOT NULL AND ($1::text IS NULL OR c.name > $1) \
+         ORDER BY c.name LIMIT $2"
     ))
     .bind(after)
     .bind(limit)
     .fetch_all(executor)
     .await?;
-    Ok(rows.into_iter().map(CatalogRow::from).collect())
+    rows.into_iter().map(CatalogRow::try_from).collect()
 }
 
 /// One page of the catalogs a user's ceiling reaches, ordered by name
@@ -1159,16 +1174,18 @@ pub async fn ceiling_page<'e>(
     // `unnest`), each an index range scan stopping after `limit` rows.
     let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
         select_catalog_rows!(),
-        " WHERE c.id IN ( \
+        " WHERE c.provisioned_at IS NOT NULL AND c.id IN ( \
               SELECT owned.id FROM unnest($1::text[]) AS team (id) \
               CROSS JOIN LATERAL ( \
                   SELECT i.id FROM catalogs i \
                   WHERE i.owner_team_id = team.id AND i.member_access <> 'none' \
+                    AND i.provisioned_at IS NOT NULL \
                     AND ($3::text IS NULL OR i.name > $3) \
                   ORDER BY i.name LIMIT $4) owned \
               UNION \
               (SELECT i.id FROM catalogs i \
-               WHERE i.id = ANY($2) AND ($3::text IS NULL OR i.name > $3) \
+               WHERE i.id = ANY($2) AND i.provisioned_at IS NOT NULL \
+                 AND ($3::text IS NULL OR i.name > $3) \
                ORDER BY i.name LIMIT $4)) \
           ORDER BY c.name LIMIT $4"
     ))
@@ -1178,7 +1195,7 @@ pub async fn ceiling_page<'e>(
     .bind(limit)
     .fetch_all(executor)
     .await?;
-    Ok(rows.into_iter().map(CatalogRow::from).collect())
+    rows.into_iter().map(CatalogRow::try_from).collect()
 }
 
 // Its own file: the directory's queries are tested away from `tests` below.

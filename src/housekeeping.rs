@@ -57,6 +57,7 @@ use crate::store::oauth::{
     clients as oauth_clients, codes as sign_in_codes, tokens as oauth_tokens,
 };
 use crate::store::{audit, changesets, email_tokens, keys, sign_in_events, user_sessions};
+use crate::stores::StoreName;
 use crate::telemetry::metrics::{MailStatus, Outcome};
 use crate::telemetry::subscriber::{split_event, LOCAL_ONLY};
 
@@ -475,9 +476,11 @@ async fn prune_changesets(app: &App) -> Result<(), OkfError> {
     let now = app.clock().now();
     let older_than = now - TimeDelta::hours(EMPTY_CHANGESET_HOURS);
     let mut steps = Steps::default();
+    // `main` only until Task 16 runs this once per store.
+    let main = app.store_db(&StoreName::main()).await?;
     steps.note(
         "empty changesets a day old",
-        changesets::prune_empty(app.main_store().executor(), older_than, now).await,
+        changesets::prune_empty(main.executor(), older_than, now).await,
     );
     steps.finish()
 }
@@ -654,7 +657,9 @@ async fn prune_jobs(pool: &PgPool, now: DateTime<Utc>) -> Result<u64, OkfError> 
 async fn cluster_stats(app: &App) -> Result<(), OkfError> {
     let pool = app.accounts().executor();
     // Changesets are catalog data: counted on the store, not the account database.
-    let open_changesets = changesets::open_total(app.main_store().executor()).await?;
+    // `main` only until Task 16 sums every store.
+    let main = app.store_db(&StoreName::main()).await?;
+    let open_changesets = changesets::open_total(main.executor()).await?;
     let depth = mail_queue::depth(pool).await?;
     // `{"pending": 2, ...}`: one key per status, zero included.
     let mail_queue: serde_json::Map<String, serde_json::Value> = MailStatus::ALL

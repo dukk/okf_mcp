@@ -21,6 +21,7 @@ use crate::store::audit::{AccessKind, AccessRecord, AuditActor, Source};
 use crate::store::catalogs::{self, CatalogRow};
 use crate::store::changesets::{self, ChangesetRow, ChangesetState};
 use crate::store::keys::Access;
+use crate::stores::StoreName;
 
 /// Is this [`ToolContext::view`] error a changeset's overlay failing to
 /// apply, rather than the database failing?
@@ -873,7 +874,7 @@ impl ToolContext {
                     .app
                     .overlays()
                     .get(
-                        self.app.main_store(),
+                        &self.app.store_db(state.store()).await?,
                         self.app.rebuild_locks(),
                         state,
                         &pinned.row,
@@ -975,7 +976,11 @@ impl ToolContext {
         let unknown = || OkfError::UnknownChangeset {
             changeset: handle.to_string(),
         };
-        let row = changesets::by_handle(self.app.main_store().executor(), handle)
+        // A handle does not name its store, and none but `main` can hold
+        // catalogs until Task 20 lifts P8. Task 18 must find the store of a
+        // handle (every store from `Stores::all`, `main` first) before then.
+        let main = self.app.store_db(&StoreName::main()).await?;
+        let row = changesets::by_handle(main.executor(), handle)
             .await?
             .ok_or_else(unknown)?;
         // By the changeset's `catalogs.id`: that incarnation, never one

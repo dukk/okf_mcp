@@ -35,6 +35,7 @@ use crate::store::keys::Access;
 // `as publishing`: the module's `publish` would clash with this file's
 // `publish` function.
 use crate::store::publish as publishing;
+use crate::stores::StoreName;
 use crate::write::{apply_audited, OpAudit, WriteReport};
 
 /// `list_changesets`' arguments.
@@ -131,14 +132,14 @@ pub(crate) async fn list_changesets(
     // keys' changesets and paths never leave it.
     let key_filter = (!admin).then_some(principal.key_id.as_str());
     let accounts = ctx.app().accounts();
-    let store = ctx.app().main_store();
     let rows = match params.catalog.as_deref() {
         // `one` refuses a catalog the key does not reach; it checks the name
         // and the incarnation whose changesets are listed, and admits
         // nothing: a list of changesets reads no catalog's contents.
         Some(name) => {
-            let id = ctx.one(Some(name)).await?.id();
-            changesets::list_open(accounts, store, &[id], key_filter).await?
+            let state = ctx.one(Some(name)).await?;
+            let store = ctx.app().store_db(state.store()).await?;
+            changesets::list_open(accounts, &store, &[state.id()], key_filter).await?
         }
         None => {
             // A list naming a bad catalog fails here as it does elsewhere.
@@ -154,8 +155,14 @@ pub(crate) async fn list_changesets(
                 // rows, and each is checked against its row below.
                 (_, Reach::All | Reach::Ceiling) => None,
             };
-            let rows = changesets::open_for_catalogs(accounts, store, names.as_deref(), key_filter)
-                .await?;
+            // Across catalogs: read from `main`, the only store that can hold
+            // catalogs until Task 20 lifts P8. Task 18 makes this a fan-out
+            // over every store, with `unavailable` for those it could not
+            // reach.
+            let store = ctx.app().store_db(&StoreName::main()).await?;
+            let rows =
+                changesets::open_for_catalogs(accounts, &store, names.as_deref(), key_filter)
+                    .await?;
             // A closed catalog shows no changesets: its handles and paths are
             // part of what suspension (M13) and a lock (M14) withhold.
             // `offers` (reach) is checked first; the lock is checked against
@@ -315,7 +322,7 @@ pub(crate) async fn open_changeset(
     ctx.require_contents(Access::Write, &state).await?;
     // The lock order of every changeset write: the catalog row first, so a
     // concurrent `catalog delete` either waits for this or is seen here.
-    let mut tx = ctx.app().main_store().begin().await?;
+    let mut tx = ctx.app().store_db(state.store()).await?.begin().await?;
     changesets::lock_catalog(&mut tx, state.id()).await?;
     let opened = changesets::open(
         &mut tx,
@@ -643,7 +650,7 @@ pub(crate) async fn discard(
     let recorded =
         paths.is_none() && changeset.key_id.as_deref() != Some(principal.key_id.as_str());
     // Dropping `tx` without `commit()` (any `?`) rolls back.
-    let mut tx = app.main_store().begin().await?;
+    let mut tx = app.store_db(state.store()).await?.begin().await?;
     if recorded {
         // The entry's users before the changeset, as publish (issue #418).
         crate::store::publish::lock_people(&mut tx, &ctx.audit_actor(), state.name()).await?;
@@ -729,11 +736,16 @@ pub(crate) async fn revert(
     // The history is the changeset's catalog's; `apply` resolves the handle
     // again under its locks.
     let state = ctx.changeset(&changeset, Access::Write).await?.state;
-    let stored = history::content_at(ctx.app().main_store(), state.id(), &path, revision)
-        .await?
-        .ok_or_else(|| OkfError::NotFound {
-            path: format!("/{path} (revision {revision})"),
-        })?;
+    let stored = history::content_at(
+        &ctx.app().store_db(state.store()).await?,
+        state.id(),
+        &path,
+        revision,
+    )
+    .await?
+    .ok_or_else(|| OkfError::NotFound {
+        path: format!("/{path} (revision {revision})"),
+    })?;
     // `transpose` again: `Option<Result<String, _>>` to `Result<Option<..>>`.
     let content = stored
         .content
@@ -807,7 +819,7 @@ pub(crate) async fn pending_changes(
     use crate::store::changesets;
 
     let Pinned { state, row } = ctx.changeset(&params.changeset, Access::Read).await?;
-    let store = ctx.app().main_store();
+    let store = ctx.app().store_db(state.store()).await?;
     let entries = changesets::entries(store.executor(), row.id).await?;
     // An entry made on another replica (or before this one's snapshot moved)
     // can have a base newer than the snapshot here: refresh before diffing,
@@ -819,7 +831,7 @@ pub(crate) async fn pending_changes(
     // diff is against what the entries were made on.
     let before = state.current().generation();
     let loaded = state
-        .current_covering(store, ctx.app().rebuild_locks(), bases)
+        .current_covering(&store, ctx.app().rebuild_locks(), bases)
         .await?;
     ctx.app()
         .catalog_cache()
@@ -1763,7 +1775,7 @@ mod publish_tests {
         assert!(published_text(&test, "a.md")
             .await
             .ends_with("# A\n\nNew.\n"));
-        let rows = history::revisions(test.app.main_store(), state.id(), "a.md", 5)
+        let rows = history::revisions(&test.app.main_db().await, state.id(), "a.md", 5)
             .await
             .unwrap();
         assert_eq!(
@@ -1861,7 +1873,7 @@ mod publish_tests {
             "the publish rolled back"
         );
         let state = test.app.catalog("pg").await.unwrap().unwrap();
-        let rows = history::revisions(test.app.main_store(), state.id(), "a.md", 5)
+        let rows = history::revisions(&test.app.main_db().await, state.id(), "a.md", 5)
             .await
             .unwrap();
         assert_eq!(rows.len(), 1, "no revision was written");
@@ -1885,7 +1897,7 @@ mod publish_tests {
         assert!(published.report.published);
         assert_eq!(state_of(&test, &handle).await, ChangesetState::Published);
         let state = test.app.catalog("pg").await.unwrap().unwrap();
-        let rows = history::revisions(test.app.main_store(), state.id(), "a.md", 5)
+        let rows = history::revisions(&test.app.main_db().await, state.id(), "a.md", 5)
             .await
             .unwrap();
         // The publishing key's actor, not the opener's.
@@ -1978,7 +1990,7 @@ mod publish_tests {
             ("log.md", "# Log\n"),
             ("z.md", "# Z\n"),
         ]);
-        import(test.app.main_store(), "pg", republished, &options)
+        import(&test.app.main_db().await, "pg", republished, &options)
             .await
             .unwrap();
         let state = test.app.catalog("pg").await.unwrap().unwrap();
@@ -2420,7 +2432,7 @@ mod publish_tests {
             ("infra/y.md", Y),
             ("log.md", "# Log\n"),
         ]);
-        import(test.app.main_store(), "pg", incoming, &options)
+        import(&test.app.main_db().await, "pg", incoming, &options)
             .await
             .unwrap();
         // The import wrote revision 3; this server's snapshot still has 2
@@ -2667,7 +2679,7 @@ mod publish_tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
         };
-        import(test.app.main_store(), "pg", files(&incoming), &options)
+        import(&test.app.main_db().await, "pg", files(&incoming), &options)
             .await
             .unwrap();
         let state = test.app.catalog("pg").await.unwrap().unwrap();
@@ -2947,7 +2959,7 @@ mod changes_tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
         };
-        import(test.app.main_store(), "pg", files(entries), &options)
+        import(&test.app.main_db().await, "pg", files(entries), &options)
             .await
             .unwrap();
         test.app
@@ -2955,7 +2967,7 @@ mod changes_tests {
             .await
             .unwrap()
             .unwrap()
-            .refresh(test.app.main_store(), test.app.rebuild_locks())
+            .refresh(&test.app.main_db().await, test.app.rebuild_locks())
             .await
             .unwrap();
     }
@@ -3757,10 +3769,10 @@ mod restructure_publish_tests {
             ]
         );
         assert!(published.report.replayed.is_empty());
-        let old = history::revisions(test.app.main_store(), state.id(), "infra/x.md", 5)
+        let old = history::revisions(&test.app.main_db().await, state.id(), "infra/x.md", 5)
             .await
             .unwrap();
-        let new = history::revisions(test.app.main_store(), state.id(), "infra/z.md", 5)
+        let new = history::revisions(&test.app.main_db().await, state.id(), "infra/z.md", 5)
             .await
             .unwrap();
         // Each path keeps its own history (plan Decision 16).
