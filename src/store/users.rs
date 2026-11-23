@@ -2,6 +2,8 @@
 //! user also creates its personal team, so every user can own catalogs.
 //! Users are addressed by name; ids stay inside SQL.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde_json::json;
 use sqlx::{PgConnection, PgPool};
@@ -1270,15 +1272,7 @@ async fn delete_checked(
             .await?;
     // The catalogs of its keys' open changesets, read without a lock: the
     // discard entries resolve their personal owner teams' people.
-    let open_catalogs: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT cat.name FROM changesets c JOIN api_keys k ON k.id = c.key_id \
-                                   JOIN users u ON u.id = k.user_id \
-                                   JOIN catalogs cat ON cat.id = c.catalog_id \
-         WHERE u.name = $1 AND c.state = 'open' ORDER BY cat.name",
-    )
-    .bind(name)
-    .fetch_all(&mut *tx)
-    .await?;
+    let open_catalogs = open_changeset_catalogs(&mut tx, name).await?;
     let open_catalogs: Vec<&str> = open_catalogs.iter().map(String::as_str).collect();
     // Then the user `FOR UPDATE`, so a credential or membership created
     // concurrently (its foreign-key check takes `FOR KEY SHARE`) waits, with
@@ -1384,7 +1378,7 @@ async fn delete_checked(
         .bind(&user_id)
         .fetch_one(&mut *tx)
         .await?;
-    let discarded = discard_open_changesets(&mut tx, &user_id, actor, now).await?;
+    let discarded = discard_open_changesets(&mut tx, &user_id, &keys, actor, now).await?;
     let deleted = DeletedUser {
         keys: count_of(keys.len()),
         codes,
@@ -1486,17 +1480,79 @@ fn count_of(rows: usize) -> i64 {
     i64::try_from(rows).unwrap_or(i64::MAX)
 }
 
-/// Discards the open changesets of `user_id`'s keys and grants (else their
-/// `key_id` would become NULL and leave them open with no owner), with one
-/// `catalog.changeset_discarded` entry each. Like `changesets::prune_empty`
-/// it runs without the catalog lock, so it cannot deadlock with
-/// `catalogs::delete` (catalog, then changesets); the changeset row lock is
-/// what a publish or discard of the same changeset waits on. A cached
-/// overlay of a discarded changeset ages out of the cache on its own.
+/// The names of the catalogs where the user's keys have open changesets,
+/// sorted: the catalogs whose owner teams' people the discard entries
+/// resolve, which `audit::lock_people` locks first.
+///
+/// Three statements, each on one side, joined here by id (plan decision P1,
+/// issue #963): the account side gives the user's key ids (`users`,
+/// `api_keys`), the store side the catalogs those keys have open changesets
+/// in (`changesets`), and the account side those catalogs' names, in name
+/// order (`catalogs`).
 ///
 /// # Arguments
-/// * `conn` - the deletion's transaction, holding the user's keys.
+/// * `conn` - the deletion's transaction. In release 1 the store is the
+///   account database, so one connection reaches both sides; Task 13 makes
+///   the store half a fan-out over every store.
+/// * `name` - the user's name, already checked.
+///
+/// # Returns
+/// The names, sorted; empty for a user with no key or no open changeset.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.open_changeset_catalogs"))]
+async fn open_changeset_catalogs(
+    conn: &mut PgConnection,
+    name: &str,
+) -> Result<Vec<String>, OkfError> {
+    let key_ids: Vec<String> = sqlx::query_scalar(
+        "SELECT k.id FROM api_keys k JOIN users u ON u.id = k.user_id WHERE u.name = $1",
+    )
+    .bind(name)
+    .fetch_all(&mut *conn)
+    .await?;
+    if key_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let catalog_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT catalog_id FROM changesets \
+         WHERE key_id = ANY($1) AND state = 'open'",
+    )
+    .bind(&key_ids)
+    .fetch_all(&mut *conn)
+    .await?;
+    if catalog_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(
+        sqlx::query_scalar("SELECT name FROM catalogs WHERE id = ANY($1) ORDER BY name")
+            .bind(&catalog_ids)
+            .fetch_all(&mut *conn)
+            .await?,
+    )
+}
+
+/// Discards the open changesets of `key_ids` (the user's keys and grants;
+/// else their `key_id` would become NULL and leave them open with no owner),
+/// with one `catalog.changeset_discarded` entry each. Like
+/// `changesets::prune_empty` it runs without the catalog lock, so it cannot
+/// deadlock with `catalogs::delete` (catalog, then changesets); the
+/// changeset row lock is what a publish or discard of the same changeset
+/// waits on. A cached overlay of a discarded changeset ages out of the cache
+/// on its own.
+///
+/// The changesets (store) and the catalogs' names (account) are two
+/// statements joined here by catalog id (plan decision P1, issue #963). The
+/// changesets are locked `FOR UPDATE` as before; the names are read after
+/// that lock.
+///
+/// # Arguments
+/// * `conn` - the deletion's transaction, holding the user's keys. In
+///   release 1 the store is the account database, so one connection reaches
+///   both sides; Task 13 makes the store half a fan-out over every store.
 /// * `user_id` - the user being deleted.
+/// * `key_ids` - its keys and grants, locked by the caller.
 /// * `actor` - who, for the entries.
 /// * `now` - the server clock.
 ///
@@ -1509,21 +1565,44 @@ fn count_of(rows: usize) -> i64 {
 async fn discard_open_changesets(
     conn: &mut PgConnection,
     user_id: &str,
+    key_ids: &[String],
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<i64, OkfError> {
-    // Each row: id, handle, catalog id, catalog name, entry count.
-    let open: Vec<(i64, String, i64, String, i64)> = sqlx::query_as(
-        "SELECT c.id, c.handle, c.catalog_id, cat.name, \
+    // Each row: id, handle, catalog id, entry count.
+    let open: Vec<(i64, String, i64, i64)> = sqlx::query_as(
+        "SELECT c.id, c.handle, c.catalog_id, \
                 (SELECT count(*) FROM changeset_entries e WHERE e.changeset_id = c.id) \
-         FROM changesets c JOIN api_keys k ON k.id = c.key_id \
-                           JOIN catalogs cat ON cat.id = c.catalog_id \
-         WHERE k.user_id = $1 AND c.state = 'open' ORDER BY c.id FOR UPDATE OF c",
+         FROM changesets c \
+         WHERE c.key_id = ANY($1) AND c.state = 'open' ORDER BY c.id FOR UPDATE",
     )
-    .bind(user_id)
+    .bind(key_ids)
     .fetch_all(&mut *conn)
     .await?;
-    for (id, handle, catalog_id, catalog, files) in &open {
+    if open.is_empty() {
+        return Ok(0);
+    }
+    let mut catalog_ids: Vec<i64> = open
+        .iter()
+        .map(|(_, _, catalog_id, _)| *catalog_id)
+        .collect();
+    catalog_ids.sort_unstable();
+    catalog_ids.dedup();
+    let names: HashMap<i64, String> =
+        sqlx::query_as("SELECT id, name FROM catalogs WHERE id = ANY($1)")
+            .bind(&catalog_ids)
+            .fetch_all(&mut *conn)
+            .await?
+            .into_iter()
+            .collect();
+    let mut discarded = 0;
+    for (id, handle, catalog_id, files) in &open {
+        // A catalog row cannot be gone while its changeset exists (the
+        // foreign key), and the inner join this replaces would have skipped
+        // it too.
+        let Some(catalog) = names.get(catalog_id) else {
+            continue;
+        };
         changesets::set_state(conn, *id, ChangesetState::Discarded, now).await?;
         let teams = audit::catalog_teams(conn, *catalog_id).await?;
         audit::record(
@@ -1543,8 +1622,9 @@ async fn discard_open_changesets(
             now,
         )
         .await?;
+        discarded += 1;
     }
-    Ok(count_of(open.len()))
+    Ok(discarded)
 }
 
 #[cfg(test)]
@@ -2889,6 +2969,168 @@ pub(crate) mod tests {
         assert_eq!(details["changeset"], changeset.handle);
         assert_eq!(details["files"], 0);
         assert_eq!(details["reason"], "user_deleted");
+    }
+
+    /// The fixture for the two issue #963 tests: catalogs `shared` and
+    /// `other` (created in that order, so id order is not name order), users
+    /// `alice` (two keys, and a third deleted) and `bob` (one key), and open
+    /// changesets: alice's first key in `shared` (two entries) and `other`
+    /// (none), bob's key in `shared`, and one whose key row was deleted.
+    ///
+    /// # Returns
+    /// The changesets' ids: alice in `shared`, alice in `other`, bob in
+    /// `shared`, and the one with no key.
+    async fn split_fixture(pool: &PgPool) -> [i64; 4] {
+        seed_user(pool, "alice", None).await;
+        seed_user(pool, "bob", None).await;
+        seed_catalog_owned_by(pool, crate::db::TEST_TEAM).await;
+        catalogs::create(
+            pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "other",
+                display_name: &DisplayName::default(),
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        let shared: i64 = sqlx::query_scalar("SELECT id FROM catalogs WHERE name = 'shared'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let other: i64 = sqlx::query_scalar("SELECT id FROM catalogs WHERE name = 'other'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let alice_one = key_for(pool, "alice", "alice-one", false).await;
+        let alice_two = key_for(pool, "alice", "alice-two", false).await;
+        let alice_gone = key_for(pool, "alice", "alice-gone", false).await;
+        let bob_key = key_for(pool, "bob", "bob-one", false).await;
+        let mut tx = pool.begin().await.unwrap();
+        let first = changesets::open(&mut tx, shared, &alice_one, "alice-one", now())
+            .await
+            .unwrap();
+        for path in ["a.md", "b.md"] {
+            let entry = changesets::EntryRow {
+                path: path.to_string(),
+                base_revision: None,
+                content: Some(b"x\n".to_vec()),
+                executable: false,
+                replay: None,
+            };
+            changesets::upsert_entry(&mut tx, first.id, &entry, now())
+                .await
+                .unwrap();
+        }
+        let second = changesets::open(&mut tx, other, &alice_two, "alice-two", now())
+            .await
+            .unwrap();
+        let bobs = changesets::open(&mut tx, shared, &bob_key, "bob-one", now())
+            .await
+            .unwrap();
+        let orphan = changesets::open(&mut tx, other, &alice_gone, "alice-gone", now())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        // The key row goes; its changeset stays open with a NULL key.
+        sqlx::query("DELETE FROM api_keys WHERE id = $1")
+            .bind(&alice_gone)
+            .execute(pool)
+            .await
+            .unwrap();
+        [first.id, second.id, bobs.id, orphan.id]
+    }
+
+    /// Issue #963 (M21 Task 5): the catalogs behind a user's open changesets
+    /// come from three one-sided reads. Each user gets exactly its keys'
+    /// catalogs, by name (not id) order; a changeset whose key was deleted
+    /// belongs to no one; a closed changeset does not count.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn user_catalogs_with_open_changesets_after_the_split() {
+        let db = test_db().await;
+        let [first, ..] = split_fixture(&db.pool).await;
+        seed_user(&db.pool, "carol", None).await;
+        let mut conn = db.pool.acquire().await.unwrap();
+
+        let alice = open_changeset_catalogs(&mut conn, "alice").await.unwrap();
+        let bob = open_changeset_catalogs(&mut conn, "bob").await.unwrap();
+        let carol = open_changeset_catalogs(&mut conn, "carol").await.unwrap();
+        let nobody = open_changeset_catalogs(&mut conn, "nobody").await.unwrap();
+        sqlx::query("UPDATE changesets SET state = 'discarded' WHERE id = $1")
+            .bind(first)
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        let alice_after = open_changeset_catalogs(&mut conn, "alice").await.unwrap();
+
+        assert_eq!(alice, ["other", "shared"]);
+        assert_eq!(bob, ["shared"]);
+        assert!(carol.is_empty());
+        assert!(nobody.is_empty());
+        assert_eq!(alice_after, ["other"]);
+    }
+
+    /// Issue #963 (M21 Task 5): deleting alice discards exactly her keys'
+    /// open changesets, each with its entry's catalog, handle and file
+    /// count, in changeset id order, and leaves bob's and the keyless one
+    /// open.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deleting_a_user_discards_their_changesets_after_the_split() {
+        let db = test_db().await;
+        let [first, second, bobs, orphan] = split_fixture(&db.pool).await;
+
+        let deleted = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(deleted.discarded, 2);
+        let states: Vec<(i64, String)> =
+            sqlx::query_as("SELECT id, state FROM changesets ORDER BY id")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            states,
+            [
+                (first, "discarded".to_string()),
+                (second, "discarded".to_string()),
+                (bobs, "open".to_string()),
+                (orphan, "open".to_string()),
+            ]
+        );
+        let entries: Vec<(Option<String>, serde_json::Value)> = sqlx::query_as(
+            "SELECT target_name, details FROM audit_entries \
+             WHERE action = 'catalog.changeset_discarded' ORDER BY id",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        let shape: Vec<(Option<&str>, i64, &str)> = entries
+            .iter()
+            .map(|(target, details)| {
+                (
+                    target.as_deref(),
+                    details["files"].as_i64().unwrap(),
+                    details["reason"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (Some("shared"), 2, "user_deleted"),
+                (Some("other"), 0, "user_deleted")
+            ]
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

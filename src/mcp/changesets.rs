@@ -130,14 +130,15 @@ pub(crate) async fn list_changesets(
     // The database narrows by key (unless admin) and catalog, so other
     // keys' changesets and paths never leave it.
     let key_filter = (!admin).then_some(principal.key_id.as_str());
-    let pool = ctx.app().pool();
+    let accounts = ctx.app().accounts();
+    let store = ctx.app().main_store();
     let rows = match params.catalog.as_deref() {
         // `one` refuses a catalog the key does not reach; it checks the name
         // and the incarnation whose changesets are listed, and admits
         // nothing: a list of changesets reads no catalog's contents.
         Some(name) => {
             let id = ctx.one(Some(name)).await?.id();
-            changesets::list_open(pool, &[id], key_filter).await?
+            changesets::list_open(accounts, store, &[id], key_filter).await?
         }
         None => {
             // A list naming a bad catalog fails here as it does elsewhere.
@@ -153,7 +154,8 @@ pub(crate) async fn list_changesets(
                 // rows, and each is checked against its row below.
                 (_, Reach::All | Reach::Ceiling) => None,
             };
-            let rows = changesets::open_for_catalogs(pool, names.as_deref(), key_filter).await?;
+            let rows = changesets::open_for_catalogs(accounts, store, names.as_deref(), key_filter)
+                .await?;
             // A closed catalog shows no changesets: its handles and paths are
             // part of what suspension (M13) and a lock (M14) withhold.
             // `offers` (reach) is checked first; the lock is checked against

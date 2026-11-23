@@ -270,6 +270,14 @@ Each release ends deployable: after Task 6 (types only, rolling), after Task 10 
   - `repair.rs:281`: read the catalog ids from the account database, then the documents.
 - [ ] Tests: one test per split statement, asserting the same rows as before on a fixture with two catalogs, two keys and a deleted key: `changeset_listing_names_catalogs_and_keys_after_the_split`, `user_catalogs_with_open_changesets_after_the_split`, `deleting_a_user_discards_their_changesets_after_the_split`, `maintenance_run_records_a_missing_key_as_null`, `repair_lists_the_same_catalogs_after_the_split`.
 
+> **Corrected (issue #963, 2026-11-23).** Shipped, with these differences from the text above:
+> - `changesets::list_open` and `open_for_catalogs` take `(&AccountDb, &CatalogDb, ..)`. When the list is narrowed by catalog name, the account database first resolves the names to ids; the store then reads the changesets and paths; the account database then returns the catalogs' names (ordered by name, so the result order is the old statement's, whatever the database collation) and the key labels, one `= ANY($1)` query each.
+> - `users.rs`: `delete_checked` reads the catalogs through the new private `open_changeset_catalogs`, and `discard_open_changesets` takes the user's key ids (`keys`, already read and locked by `delete_checked`) instead of joining `api_keys`. Both run on the deletion's transaction, **not on `main_store()`**: that transaction already holds the keys' locks and takes `FOR UPDATE` on the changesets, and in release 1 it reaches both sides. Each statement names one side's tables. Task 13 splits the transaction along with the store fan-out.
+> - `runs::claim` takes `accounts: &AccountDb` as a new first argument and checks the key row itself, just before its insert, rather than leaving it to the caller (one place, and the shortest window). In release 1 a key deleted in that window fails the claim with a foreign-key error (a retry succeeds); Task 11 drops the foreign key.
+> - `repair::missing_root_index` takes `(&AccountDb, &CatalogDb)`; so does the CLI's private `repair_targets`.
+> - `AccountDb::of(&pool)` is the test-only account-side twin of `CatalogDb::main_of`.
+> - Line numbers in the bullets above are those at `22c07f7`.
+
 ### Task 6: every remaining caller picks a side; `App::pool()` goes
 
 **Files:** every remaining production user of `App::pool()` (HTTP API, sign-in, OAuth, OIDC, passkeys, mail, feedback, housekeeping, CLI, telemetry, invalidate).

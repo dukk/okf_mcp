@@ -9,7 +9,7 @@ use super::{reports, runs};
 use crate::db::test_db;
 use crate::error::OkfError;
 use crate::maintenance::types::*;
-use crate::stores::CatalogDb;
+use crate::stores::{AccountDb, CatalogDb};
 
 const NUL: &str = "a\0b";
 
@@ -17,6 +17,7 @@ const NUL: &str = "a\0b";
 async fn leased(pool: &sqlx::PgPool) -> (i64, String, Lease) {
     let catalog = setup(pool, &["a.md"]).await;
     let batch = runs::claim(
+        &AccountDb::of(pool),
         &CatalogDb::main_of(pool),
         catalog,
         &actor("one"),
