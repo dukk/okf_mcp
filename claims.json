@@ -5,10 +5,10 @@
     "by": "server",
     "mac": "e58df8864c0dcbedd91b51fc4da46fa9a71737dfbdc336807d453bb04c995009"
   },
-  "next_evidence_seq": 864,
+  "next_evidence_seq": 865,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "d4a81d7bdb0e2e3b6a00651f00fdc4417e851d6456f4593f717cfcb16c0dc181"
+    "mac": "8b5d05df744f473f169ee88bd88e2b33f861f0308faac80f09448844a2ddc9a6"
   },
   "claims": [
     {
@@ -52274,6 +52274,28 @@
             "by": "server",
             "mac": "607584472a985119df8480d1ed33aa766c826857262c10e67219fb789bb93d4b"
           }
+        },
+        {
+          "id": "EVD-0864",
+          "kind": "analysis",
+          "locator": "git grep -nE '\\.refresh\\(|current_covering\\(|\\.catch_up\\(|refresh_to\\(' -- src (non-test hits); src/catalog.rs:272-276,318",
+          "summary": "Corrected caller list; this supersedes the caller list in EVD-0849, which named a poll and refresh_at that no longer exist (no poll_pass anywhere in src). Production callers of CatalogState::refresh (the path to refresh_to, the only taker of the rebuild lock), re-derived by grep: (1) CatalogCache::get, cache/catalogs.rs:262, under the cache's catching_up keyed lock; (2) CatalogCache::catch_up, cache/catalogs.rs:311, called by App::refresh_announced (app.rs:1249) and by http/archives.rs:585 after an import; (3) current_covering, catalog.rs:318, called from overlay.rs:400 (Overlays::get, pool only) and mcp/changesets.rs:819 (pending_changes, pool only, no tx opened); (4) the post-commit refresh at store/publish.rs:335. Connection check: catalog_state/get take only a pool and hold no connection (the catching_up lock is a mutex, not a connection); handlers that open a transaction (mcp/changesets.rs:316 and :643, write.rs:199 via Overlays::get_in, which cannot refresh) resolve their CatalogState before begin() and never call refresh inside it; publish.rs:335 runs after tx.commit() (publish.rs:317) has released the connection; refresh itself reads the generation through the pool (connection released) before refresh_to takes the lock. refresh_locked, the only code holding a connection near this state, takes no lock. So none of the callers holds a pooled connection while calling refresh.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/catalogs.rs",
+              "lines": {
+                "start": 254,
+                "end": 262
+              },
+              "commit": "fb3fa483db182a83bf7026971199f1f71d4269c5"
+            }
+          },
+          "recorded_at": "2026-11-23T07:43:36.171996024Z",
+          "seal": {
+            "by": "server",
+            "mac": "102a40a51f6383d0a1ec01a1f00c3167a5dc8adbf8e3a46a70447285ad16c4f4"
+          }
         }
       ],
       "verdicts": [
@@ -52303,13 +52325,27 @@
             "by": "server",
             "mac": "097739bbeab669e8607ae0c8d2921de09a3681a5a4b35ed2529d4c433018d1f1"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged on the corrected caller list (EVD-0864): the four production caller groups of refresh hold no pooled connection when they call it, and refresh_locked takes no lock. EVD-0849's poll and refresh_at wording is superseded.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0862",
+            "EVD-0864"
+          ],
+          "recorded_at": "2026-11-23T07:43:40.124640802Z",
+          "seal": {
+            "by": "server",
+            "mac": "699f78b31b32c0fcd91f884421884722fb08c78bbe161113803501b2d1dc58c2"
+          }
         }
       ],
       "created_at": "2026-11-23T07:17:33.220112894Z",
-      "updated_at": "2026-11-23T07:36:12.061017591Z",
+      "updated_at": "2026-11-23T07:43:40.124640802Z",
       "seal": {
         "by": "server",
-        "mac": "402716dd46cfff2d7c2bd02d841110fac76b9ce9cfe0b9d27bccf90ab8bd5625"
+        "mac": "e7f0c984acce962e6c9fd9843a0876dde9fba7038d1f9c726cee437d23b7011a"
       }
     },
     {

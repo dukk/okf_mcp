@@ -575,7 +575,7 @@ mod tests {
 
     /// A refresh and a publish's refresh (`refresh_locked`) racing on a full
     /// pool must both finish at once (issue #671). The publish holds one
-    /// connection, the test holds the other, and the refresh (the poll's or
+    /// connection, the test holds the other, and the refresh (a request's or
     /// an announcement's) holds the rebuild lock and is queued for a
     /// connection. The publish's refresh used to wait for that lock, whose
     /// holder waited for the publish's connection, until the acquire timeout.

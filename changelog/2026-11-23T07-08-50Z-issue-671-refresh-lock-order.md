@@ -6,14 +6,17 @@
 for a pooled connection to build the new generation. A publish's
 `refresh_locked` already holds a connection (its transaction's) and then
 waited for the same lock. On an exhausted pool each held what the other
-needed, until the pool's acquire timeout fired. The change-feed poll, and
-since #669 the Redis announcement listener, refresh through the same path.
+needed, until the pool's acquire timeout fired. Every other refresh goes
+through the same path: a request behind the database's generation
+(`CatalogCache::get`), the change feed's announcement handler and the
+catch-up after a reconnect (`App::refresh_announced`, via
+`CatalogCache::catch_up`, which an import also calls), `current_covering`,
+and the refresh after a publish commits. There is no polling loop.
 
 ## Changed
 
 - One rule everywhere: nothing that holds a pooled connection waits for the
-  rebuild lock. Refreshers (`refresh`, from the poll, an announcement, a
-  request) still take the lock and then a connection, so a holder of the
+  rebuild lock. Refreshers (`refresh`, from any of those callers) still take the lock and then a connection, so a holder of the
   lock may wait for the pool. `refresh_locked`, the publish's refresh on its
   own connection, no longer takes the lock (and no longer takes `rebuilds`).
 - `refresh_locked` builds the generation it read, under the catalog's
