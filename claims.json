@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 923,
+  "next_claim_seq": 924,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "5b29a0f75af97718ed46baf36e7d7714aca577f00bfc412f0bf5963b03a28ada"
+    "mac": "e4ebcacd5ad58878536a15fb655ac9a5b29827ec1d66ce83272f63edcce948fd"
   },
-  "next_evidence_seq": 1293,
+  "next_evidence_seq": 1300,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "8401269261198b76a564e6848503bb56ee50c7a6b1ce034d457b8421d8669efd"
+    "mac": "6c32a9219f08df9b9be9be76ae761754e072815f722f741d41eff54e7941f8fd"
   },
   "claims": [
     {
@@ -72532,6 +72532,18 @@
             "by": "server",
             "mac": "f0782995969f529d43a7a5436b996a444d1ace900c465f0429307aab63fe763d"
           }
+        },
+        {
+          "id": "EVD-1299",
+          "kind": "analysis",
+          "locator": "children of CLM-0905",
+          "summary": "At 98ed266 all active children are supported, now including CLM-0923 (an overtaken open is served but not kept); CLM-0906, 0907, 0909 and 0920 were re-recorded.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T18:11:38.122091152Z",
+          "seal": {
+            "by": "server",
+            "mac": "3da9bc56dfc69e2731792dc8878c239bb0c20e4e8b4e2e121a4232ef15b90c0f"
+          }
         }
       ],
       "verdicts": [
@@ -72560,13 +72572,26 @@
             "by": "server",
             "mac": "0b362fa26cf7b8091bbe23de384d2efeec9cd863df8c2c1589c9d3d5ca818d93"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Every active child is supported at 98ed266, including the new CLM-0923.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1299"
+          ],
+          "recorded_at": "2026-11-23T18:11:40.917086751Z",
+          "seal": {
+            "by": "server",
+            "mac": "829a24b67a677e707a29f9f869ac5f265f960fce60b1cd56182ac6296b5ffdc2"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:53:44.583911707Z",
+      "updated_at": "2026-11-23T18:11:40.917086751Z",
       "seal": {
         "by": "server",
-        "mac": "7aa9edab3ccf37666ba75a421d0b76d357d0b2c8b5b50fadb62adda9c4fdbe6a"
+        "mac": "c197ffb91504985d94174089398d5d02b7511edefe40a70cacfb214ab3c19b9a"
       }
     },
     {
@@ -72633,6 +72658,28 @@
             "by": "server",
             "mac": "9c18bc4caa6478159d347c29e1f3dfe4c09d78e8b564c4ac9d8385b66ed2f11c"
           }
+        },
+        {
+          "id": "EVD-1295",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:213-360 at 98ed266",
+          "summary": "The anchor changed only by the review commit: a cfg(test) gate field, OpenGate and pause_if_gated call (compiled out of production) were added; get, all, forget, forget_all, and the PgPoolOptions settings (max_connections, min_connections 0, idle_timeout, acquire_timeout, after_connect search_path) are unchanged apart from the earlier forgets counter. account_database_store_opens_its_own_pool still passes in r2-test2.log.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 213,
+                "end": 360
+              },
+              "commit": "98ed266ed83a5d3740dfaee27456cce632846200"
+            }
+          },
+          "recorded_at": "2026-11-23T18:11:28.053025768Z",
+          "seal": {
+            "by": "server",
+            "mac": "be5cb3b9b978a653c4ee7b72ea819199c5ee8aeccc3d7831b8082b246f548f22"
+          }
         }
       ],
       "verdicts": [
@@ -72649,13 +72696,26 @@
             "by": "server",
             "mac": "716a663d4697cd7589d8d0a762780ceebd03d3a1e8ac868bab724559a6fc6968"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Anchor changed only by a test-only hook; pool settings and API unchanged and still tested.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1295"
+          ],
+          "recorded_at": "2026-11-23T18:11:37.867183747Z",
+          "seal": {
+            "by": "server",
+            "mac": "902f484527bdd88c05fa2264b06ee903ba88bcc70d9162f92b7688b79f90ce6b"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:40:12.922138166Z",
+      "updated_at": "2026-11-23T18:11:37.867183747Z",
       "seal": {
         "by": "server",
-        "mac": "512f0d7e3e1a0b2be2195f2d3d15b58a55e556b850a2c086f27fd8c8a1bde2af"
+        "mac": "fc98c715b891c898ca7a8e70ea33f3d884012ad9f67d908143e2ac8232c61abc"
       }
     },
     {
@@ -72700,6 +72760,28 @@
             "by": "server",
             "mac": "50f579f7d59a54e7ca936668f8ca151bcd2596308e21851022ccb3f88396ef4e"
           }
+        },
+        {
+          "id": "EVD-1296",
+          "kind": "test",
+          "locator": "stores::registry::tests::concurrent_first_use_opens_one_pool (passed in r2-test2.log)",
+          "summary": "Recheck: anchor moved, unchanged (now registry.rs:536-554). get still uses try_get_with; the new overtaken-open check only fires when a forget happened, which this test does not do. Test passes in the 2918-test run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 536,
+                "end": 554
+              },
+              "commit": "98ed266ed83a5d3740dfaee27456cce632846200"
+            }
+          },
+          "recorded_at": "2026-11-23T18:11:28.119283869Z",
+          "seal": {
+            "by": "server",
+            "mac": "0219f7c3eafd1e1c457dcb1264793a909a34dca8d9d7c457428dbe245201656b"
+          }
         }
       ],
       "verdicts": [
@@ -72715,13 +72797,26 @@
             "by": "server",
             "mac": "b41c2770046f46ab850feb24871cc7ff928e2d9a726c7c524cee7b4f1991c4db"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Anchor moved only; single flight unchanged; test passes at the new head.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1296"
+          ],
+          "recorded_at": "2026-11-23T18:11:37.934354572Z",
+          "seal": {
+            "by": "server",
+            "mac": "9abb18b2b44756b37c527fa8152456b79c4ec4e0284ff29c38d37a1b2ea53517"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:40:12.990591461Z",
+      "updated_at": "2026-11-23T18:11:37.934354572Z",
       "seal": {
         "by": "server",
-        "mac": "ee44a3056c5fbcd190793209b1a8565058c3e69a76d965a1bcd898aed4d4e416"
+        "mac": "a74ffea011d7e2222dfd96fd43056e516efe2df8a35c4c10e0f67f318d1d5162"
       }
     },
     {
@@ -72832,6 +72927,28 @@
             "by": "server",
             "mac": "0ec3435cd17ddd97190822b94c1d9742796c5eaa374690da8b96e187824a1fae"
           }
+        },
+        {
+          "id": "EVD-1297",
+          "kind": "test",
+          "locator": "stores::registry::tests::forgetting_a_store_lets_a_user_of_the_old_pool_finish (passed in r2-test2.log)",
+          "summary": "Recheck: anchor moved, unchanged (now registry.rs:705-732). Test passes in the full run; the forgets counter and epoch invalidate do not disturb it (pools_opened 2 then 3 as before).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 705,
+                "end": 732
+              },
+              "commit": "98ed266ed83a5d3740dfaee27456cce632846200"
+            }
+          },
+          "recorded_at": "2026-11-23T18:11:28.185173167Z",
+          "seal": {
+            "by": "server",
+            "mac": "3e9a9d645f7ab311bf9deb926542b8c7b29c5bf264e1412dd6d13bd34b75ee6c"
+          }
         }
       ],
       "verdicts": [
@@ -72847,13 +72964,26 @@
             "by": "server",
             "mac": "c36a1893727b42afd7c9494a7ee6b52753ac5cea88482ce292c988995d5a4011"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Anchor moved only; test passes at the new head.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1297"
+          ],
+          "recorded_at": "2026-11-23T18:11:37.997534108Z",
+          "seal": {
+            "by": "server",
+            "mac": "5e38b3a921852148a90756343858e7336bafb09a3dbf999be80c099edf6e2deb"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:40:13.101874458Z",
+      "updated_at": "2026-11-23T18:11:37.997534108Z",
       "seal": {
         "by": "server",
-        "mac": "53289ccaefec20641a182c47aa3459e5c90257c03f31dc1912e7f731e774f4ed"
+        "mac": "9e5c69d562dcffc023c8d3d8645bd6f3eba226c4931b70d59981fdfcce159c19"
       }
     },
     {
@@ -73787,6 +73917,18 @@
             "by": "server",
             "mac": "51644646c1da1f32f30bd6e1c8fe60076e0f623ce831bab3be19bad135e0a328"
           }
+        },
+        {
+          "id": "EVD-1298",
+          "kind": "log",
+          "locator": "target/i966-logs/r2-test2.log, r2-lint.log, r2-dylint.log, r2-fmt.log, r2-ui-rerun.log; my cargo fmt --all --check on 98ed266",
+          "summary": "Round-2 gates: r2-test2.log lib \"2918 passed; 0 failed; 2 ignored\", other binaries ok, zero FAILED or panicked lines; r2-lint.log and r2-dylint.log end Finished, no warning or error lines; r2-fmt.log clean, my own cargo fmt --all --check exits 0. An earlier run (r2-test.log) had a Chromium port-in-use flake in ui_e2e, which passed on rerun (r2-ui-rerun.log); not related to this change. Caveat: lint and dylint ran at 13:01, before the 13:10:40 commit; the only change after 0ccd9ee is in registry.rs, and my narrow run on the head passes.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T18:11:28.245590621Z",
+          "seal": {
+            "by": "server",
+            "mac": "0632b2669c29038eda4fa82f9569be9cedddfd8ab357daef00daa0967a349a52"
+          }
         }
       ],
       "verdicts": [
@@ -73828,13 +73970,26 @@
             "by": "server",
             "mac": "def398fb8738d359c6f090c0faaaf6cedf733e8509c0e1bded6a3b9301b8b5dc"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Round-2 full test (2918 lib, exit 0), lint, dylint and fmt are clean; the one flake passed on rerun and is unrelated.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1298"
+          ],
+          "recorded_at": "2026-11-23T18:11:38.060328873Z",
+          "seal": {
+            "by": "server",
+            "mac": "0dc0beef51ffe73554e06d67d76b7cf1304dd6d281144580b5947dfa080cd861"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:53:38.732982064Z",
+      "updated_at": "2026-11-23T18:11:38.060328873Z",
       "seal": {
         "by": "server",
-        "mac": "ba68d0d4183b447ea791d4b0159ffbd9ccc264132b08c5fe34cf8e09529dfd1f"
+        "mac": "48d342e9efb86fdea1ebcabf82f6dc1b03f6552dc12cec7d911df7672cf571bf"
       }
     },
     {
@@ -73999,6 +74154,103 @@
       "seal": {
         "by": "server",
         "mac": "4c40df8d0da4d581831dafa9ac02e88818b3f13bf3829687f0d599c37bef6425"
+      }
+    },
+    {
+      "id": "CLM-0923",
+      "statement": "An open that a Stores::forget or forget_all overtakes serves its caller (a working pool) but is not cached, so the next get reopens from the new row and that one is kept.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/966",
+      "source_anchor": {
+        "path": "src/stores/registry.rs",
+        "lines": {
+          "start": 213,
+          "end": 250
+        },
+        "commit": "98ed266ed83a5d3740dfaee27456cce632846200"
+      },
+      "derived_from": [
+        "CLM-0905"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:966"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1293",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:218-240, 268-282",
+          "summary": "forget and forget_all each bump the forgets counter before invalidating. get records the counter before try_get_with, and if its own initialiser ran (ran flag) and the counter moved, it invalidates the store's entry after returning the result, so the caller is served and the next get misses. A get that did not run the open (a hit) never invalidates, so a plain hit is not dropped.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 218,
+                "end": 240
+              },
+              "commit": "98ed266ed83a5d3740dfaee27456cce632846200"
+            }
+          },
+          "recorded_at": "2026-11-23T18:11:27.902950974Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa3b36cb5161da914271e7e3ccf8782f01c868fc80138b3a295d233ec56aabc2"
+          }
+        },
+        {
+          "id": "EVD-1294",
+          "kind": "test",
+          "locator": "stores::registry::tests::an_open_overtaken_by_a_forget_is_served_but_not_kept; ::an_open_overtaken_by_a_forget_all_is_served_but_not_kept",
+          "summary": "Ran both via gate.sh narrow (target/i966-logs/audit-r2-narrow.log): 2 passed. Each gates an open after it read the row, changes the row, calls forget (or forget_all), releases the open; the overlapping caller gets a pool that runs SELECT 1; pools_opened is 1, the next get opens a second pool (2), and a further get is a hit (still 2). Full run r2-test2.log: 2918 lib passed, 0 failed, exit 0. I did not re-run the author's mutation (removing the epoch invalidate); the assertions of 2 pools after a forget would fail without it by construction.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 625,
+                "end": 682
+              },
+              "commit": "98ed266ed83a5d3740dfaee27456cce632846200"
+            }
+          },
+          "recorded_at": "2026-11-23T18:11:27.988666976Z",
+          "seal": {
+            "by": "server",
+            "mac": "31eb6862424fa12bba4908df8e733940e205fb421f5ae2af95c9ad44e714e4da"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The ran-flag and forgets-counter check in get drops an overtaken open's entry after serving it; both new tests pass in my narrow run and the full run.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1293",
+            "EVD-1294"
+          ],
+          "recorded_at": "2026-11-23T18:11:37.788971070Z",
+          "seal": {
+            "by": "server",
+            "mac": "80452f0bb115b35741abc1cd6d584db7d4856827830cb02cc0c68230725a81f2"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T18:11:04.061450566Z",
+      "updated_at": "2026-11-23T18:11:37.788971070Z",
+      "seal": {
+        "by": "server",
+        "mac": "ccc0a3561ede3ba79bed61233b32bbe5b22e3205351e03c11fdfd1ef4396620e"
       }
     }
   ]
