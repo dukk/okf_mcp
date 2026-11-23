@@ -592,6 +592,16 @@ back to memory, because that would split the state between replicas.
   a subscription that stays disconnected for 10 seconds is replaced by a new
   one, retried with a wait that grows from 1 to 30 seconds. Key revocation
   between milestone 18 replicas does not depend on Redis at all.
+- **Subscriber log lines.** Each subscriber (`subscriber="bridge"` for the
+  `admin_generation` channel, `subscriber="catalog"` for catalog
+  announcements) logs at `info` every time it is subscribed (`resubscribe`
+  is `true` after the first; `disconnected_ms` says how long a connection
+  loss lasted), and at `warn` when the connection is lost, when a lost
+  connection outlasts the 10-second grace and the subscription is replaced,
+  when the subscription ends and when a subscribe fails. A replica with
+  `warn` lines and no later `info` line is not hearing announcements. No
+  line carries the Redis URL, a channel payload or a key. There is no
+  gauge: `okf_redis_errors_total{operation="subscribe"}` counts the losses.
 - **Catalog announcements** fail the same way: a failed publish is counted and
   logged. When a replica's catalog subscriber (re)subscribes, with the same
   reconnect and backoff, it marks every cached catalog row stale, so each

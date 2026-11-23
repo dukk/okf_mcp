@@ -275,6 +275,10 @@ pub async fn listen_catalogs(app: Arc<App>, shutdown: CancellationToken) {
 /// What a subscriber does with its channel's events.
 #[async_trait::async_trait]
 trait Handler: Send + Sync {
+    /// Names this subscriber in its log lines (`catalog` or `bridge`): a
+    /// closed set, never a channel payload, key or URL.
+    const NAME: &'static str;
+
     /// After every (re)subscribe: catch up on whatever was missed.
     async fn subscribed(&self);
 
@@ -295,6 +299,8 @@ struct AdminChanges<'a>(&'a App);
 
 #[async_trait::async_trait]
 impl Handler for AdminChanges<'_> {
+    const NAME: &'static str = "bridge";
+
     #[tracing::instrument(level = "debug", skip_all)]
     async fn subscribed(&self) {
         self.0.apply_m16_announcement().await;
@@ -313,6 +319,8 @@ struct Snapshots<'a>(&'a App);
 
 #[async_trait::async_trait]
 impl Handler for Snapshots<'_> {
+    const NAME: &'static str = "catalog";
+
     #[tracing::instrument(level = "debug", skip_all)]
     async fn subscribed(&self) {
         self.0.catch_up_catalogs().await;
@@ -387,6 +395,24 @@ impl Source for RedisSource {
     }
 }
 
+/// A duration in whole milliseconds, saturating, for a log field.
+///
+/// # Arguments
+/// * `duration` - the span to report.
+///
+/// # Returns
+/// Its milliseconds.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "one-line accessor or key formatter: a span would record nothing"
+    )
+)]
+fn duration_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
 /// The subscriber's loop, with its handler, subscription source and grace
 /// period injected: subscribes, calls the handler on `Subscribed` and on
 /// every message, replaces a subscription that stays `Disconnected` for
@@ -420,6 +446,8 @@ async fn run<H: Handler, S: Source>(
                 // When the library reported the connection lost, until it
                 // reports the subscription again.
                 let mut disconnected_at: Option<tokio::time::Instant> = None;
+                // Whether this loop has reported the subscription before.
+                let mut subscribed_before = false;
                 loop {
                     // Never ready while connected; `pending` waits forever.
                     let replace_at = async {
@@ -432,7 +460,15 @@ async fn run<H: Handler, S: Source>(
                         () = shutdown.cancelled() => return,
                         // Drop the subscription; the code below backs off and
                         // subscribes again.
-                        () = replace_at => None,
+                        () = replace_at => {
+                            tracing::warn!(
+                                subscriber = H::NAME,
+                                grace_ms = duration_ms(grace),
+                                "pub/sub subscription stayed disconnected past the grace; \
+                                 replacing it"
+                            );
+                            None
+                        }
                         event = subscription.next() => event,
                     };
                     match event {
@@ -440,6 +476,14 @@ async fn run<H: Handler, S: Source>(
                         // messages sent before it may have been lost, so catch up.
                         Some(SubscriptionEvent::Subscribed) => {
                             backoff.reset();
+                            tracing::info!(
+                                subscriber = H::NAME,
+                                resubscribe = subscribed_before,
+                                disconnected_ms =
+                                    disconnected_at.map(|since| duration_ms(since.elapsed())),
+                                "pub/sub subscribed; catching up on missed announcements"
+                            );
+                            subscribed_before = true;
                             disconnected_at = None;
                             handler.subscribed().await;
                         }
@@ -450,10 +494,22 @@ async fn run<H: Handler, S: Source>(
                         // follows, or the grace above replaces the subscription.
                         Some(SubscriptionEvent::Disconnected) => {
                             redis.count(RedisOp::Subscribe);
-                            disconnected_at.get_or_insert_with(tokio::time::Instant::now);
+                            if disconnected_at.is_none() {
+                                tracing::warn!(
+                                    subscriber = H::NAME,
+                                    grace_ms = duration_ms(grace),
+                                    "pub/sub connection lost; waiting for the library to \
+                                     resubscribe"
+                                );
+                                disconnected_at = Some(tokio::time::Instant::now());
+                            }
                         }
                         None => {
                             redis.count(RedisOp::Subscribe);
+                            tracing::warn!(
+                                subscriber = H::NAME,
+                                "pub/sub subscription ended; subscribing again after a backoff"
+                            );
                             break;
                         }
                     }
@@ -461,6 +517,10 @@ async fn run<H: Handler, S: Source>(
             }
             Err(error) => {
                 let _ = redis.failed(RedisOp::Subscribe, &error);
+                tracing::warn!(
+                    subscriber = H::NAME,
+                    "pub/sub subscribe failed; retrying after a backoff"
+                );
             }
         }
         tokio::select! {
@@ -805,5 +865,158 @@ mod catch_up_tests {
             b.find_key(&key).await.unwrap().is_some(),
             "the cached key was not reread"
         );
+    }
+}
+
+/// What `run` logs about the subscription's life (issue #592).
+#[cfg(test)]
+mod log_tests {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use tokio_util::sync::CancellationToken;
+
+    use super::{run, Events, Handler, Source};
+    use crate::db::redis_support::TestRedis;
+    use crate::shared::SubscriptionEvent;
+    use crate::telemetry::subscriber::capture::Capture;
+
+    /// A handler that does nothing, named like the catalog subscriber.
+    struct Quiet;
+
+    #[async_trait::async_trait]
+    impl Handler for Quiet {
+        const NAME: &'static str = "catalog";
+
+        #[cfg_attr(
+            dylint_lib = "hyp_tracing",
+            allow(uninstrumented_fn, reason = "test double")
+        )]
+        async fn subscribed(&self) {}
+
+        #[cfg_attr(
+            dylint_lib = "hyp_tracing",
+            allow(uninstrumented_fn, reason = "test double")
+        )]
+        async fn message(&self, _payload: &[u8]) {}
+    }
+
+    /// Yields its events, then ends the stream or waits forever.
+    struct Script(VecDeque<SubscriptionEvent>, bool);
+
+    #[async_trait::async_trait]
+    impl Events for Script {
+        #[cfg_attr(
+            dylint_lib = "hyp_tracing",
+            allow(uninstrumented_fn, reason = "test double")
+        )]
+        async fn next(&mut self) -> Option<SubscriptionEvent> {
+            match self.0.pop_front() {
+                Some(event) => Some(event),
+                None if self.1 => None,
+                None => std::future::pending().await,
+            }
+        }
+    }
+
+    /// Attempt 1: `Subscribed`, `Disconnected`, `Subscribed`, then the stream
+    /// ends. Attempt 2: `Disconnected` and silence (replaced after the grace).
+    /// Attempt 3: fails. Attempt 4: the stream ends. Attempt 5 stops the loop.
+    struct Lifetimes {
+        attempts: Mutex<usize>,
+        shutdown: CancellationToken,
+    }
+
+    #[async_trait::async_trait]
+    impl Source for Lifetimes {
+        type Stream = Script;
+
+        #[cfg_attr(
+            dylint_lib = "hyp_tracing",
+            allow(uninstrumented_fn, reason = "test double")
+        )]
+        async fn subscribe(&self) -> redis::RedisResult<Script> {
+            let attempt = {
+                let mut attempts = self.attempts.lock().expect("attempts lock");
+                *attempts += 1;
+                *attempts
+            };
+            use SubscriptionEvent::{Disconnected, Subscribed};
+            match attempt {
+                1 => Ok(Script(
+                    [Subscribed, Disconnected, Subscribed].into_iter().collect(),
+                    true,
+                )),
+                2 => Ok(Script([Disconnected].into_iter().collect(), false)),
+                3 => Err(redis::RedisError::from((redis::ErrorKind::Io, "refused"))),
+                4 => Ok(Script(VecDeque::new(), true)),
+                _ => {
+                    self.shutdown.cancel();
+                    Ok(Script(VecDeque::new(), false))
+                }
+            }
+        }
+    }
+
+    /// Runs the loop through the four scripted lives and returns its log.
+    async fn logged_lives() -> String {
+        let server = TestRedis::start().await;
+        let redis = crate::shared::testing::connect(&server).await;
+        let capture = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_ansi(false)
+            .finish();
+        let _guard = crate::test_tracing::set_default(subscriber);
+        // The backoffs and the grace run on the paused clock.
+        tokio::time::pause();
+        let shutdown = CancellationToken::new();
+        let source = Lifetimes {
+            attempts: Mutex::new(0),
+            shutdown: shutdown.clone(),
+        };
+        tokio::time::timeout(
+            Duration::from_secs(60),
+            run(
+                &Quiet,
+                &redis,
+                &source,
+                Duration::from_millis(50),
+                &shutdown,
+            ),
+        )
+        .await
+        .expect("the loop stops within 60 s");
+        capture.text()
+    }
+
+    /// Every (re)subscribe is at info, every loss at warn, each naming the
+    /// subscriber and nothing a payload or URL could carry.
+    /// ("ended" counts the stream that ended, and the one the grace dropped.)
+    #[tokio::test]
+    async fn subscribe_disconnect_grace_failure_and_end_are_logged() {
+        let logged = logged_lives().await;
+        let lines: Vec<&str> = logged.lines().collect();
+        let count = |level: &str, text: &str| {
+            lines
+                .iter()
+                .filter(|line| line.contains(level) && line.contains(text))
+                .count()
+        };
+        assert_eq!(count("INFO", "pub/sub subscribed"), 2, "{logged}");
+        assert_eq!(count("INFO", "resubscribe=true"), 1, "{logged}");
+        assert_eq!(count("WARN", "connection lost"), 2, "{logged}");
+        assert_eq!(count("WARN", "past the grace"), 1, "{logged}");
+        assert_eq!(count("WARN", "subscribe failed"), 1, "{logged}");
+        assert_eq!(count("WARN", "subscription ended"), 3, "{logged}");
+        assert!(
+            lines
+                .iter()
+                .filter(|line| line.contains("pub/sub"))
+                .all(|line| line.contains("subscriber=\"catalog\"")),
+            "{logged}"
+        );
+        assert!(!logged.contains("redis://"), "{logged}");
     }
 }
