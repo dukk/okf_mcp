@@ -56,7 +56,9 @@ use crate::mail::queue::{
 use crate::store::oauth::{
     clients as oauth_clients, codes as sign_in_codes, tokens as oauth_tokens,
 };
-use crate::store::{audit, changesets, email_tokens, keys, sign_in_events, user_sessions};
+use crate::store::{
+    audit, catalogs, changesets, email_tokens, keys, sign_in_events, user_sessions,
+};
 use crate::stores::StoreName;
 use crate::telemetry::metrics::{MailStatus, Outcome};
 use crate::telemetry::subscriber::{split_event, LOCAL_ONLY};
@@ -90,6 +92,11 @@ const UNIQUE_VIOLATION: &str = "23505";
 /// How long an empty open changeset may go unchanged before it is
 /// discarded (design "Session lifecycle").
 const EMPTY_CHANGESET_HOURS: i64 = 24;
+
+/// How old a half-created catalog must be before the `provision_catalogs`
+/// task looks at it: an efficiency filter that keeps it off creates still
+/// running. Safety does not depend on it (decision P9).
+const UNPROVISIONED_GRACE_SECONDS: i64 = 60;
 
 /// How long expired tokens and unredeemed codes are kept (for diagnosis).
 const OAUTH_RETENTION_DAYS: i64 = 7;
@@ -130,16 +137,20 @@ pub enum Task {
     /// Counts the open changesets and the mail queue into `cluster_stats`;
     /// every minute.
     ClusterStats,
+    /// Finishes or removes catalogs whose create stopped half-way (plan
+    /// Task 10b, decision P9); every minute.
+    ProvisionCatalogs,
 }
 
 impl Task {
     /// Every task, in the order the ticker schedules them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::PruneChangesets,
         Self::PruneOauth,
         Self::PruneAudit,
         Self::PruneWorkers,
         Self::ClusterStats,
+        Self::ProvisionCatalogs,
     ];
 
     /// The task's name: its idempotency-key prefix, its metric label and
@@ -154,19 +165,20 @@ impl Task {
             Self::PruneAudit => "prune_audit",
             Self::PruneWorkers => "prune_workers",
             Self::ClusterStats => "cluster_stats",
+            Self::ProvisionCatalogs => "provision_catalogs",
         }
     }
 
     /// How often the task runs in the cluster.
     ///
     /// # Returns
-    /// 5 minutes, an hour, a day, an hour or a minute.
+    /// 5 minutes, an hour, a day, an hour, or a minute.
     pub const fn cadence(self) -> Duration {
         match self {
             Self::PruneChangesets => Duration::from_secs(5 * 60),
             Self::PruneOauth | Self::PruneWorkers => Duration::from_secs(60 * 60),
             Self::PruneAudit => Duration::from_secs(24 * 60 * 60),
-            Self::ClusterStats => Duration::from_secs(60),
+            Self::ClusterStats | Self::ProvisionCatalogs => Duration::from_secs(60),
         }
     }
 
@@ -415,6 +427,7 @@ pub async fn run(task: Task, app: &App) -> Result<(), OkfError> {
             steps.finish()
         }
         Task::ClusterStats => cluster_stats(app).await,
+        Task::ProvisionCatalogs => provision_catalogs(app).await,
     }
 }
 
@@ -482,6 +495,57 @@ async fn prune_changesets(app: &App) -> Result<(), OkfError> {
         "empty changesets a day old",
         changesets::prune_empty(main.executor(), older_than, now).await,
     );
+    steps.finish()
+}
+
+/// Finishes or removes the catalogs whose create stopped half-way
+/// ([`catalogs::recover`], decision P9). It looks at rows older than
+/// [`UNPROVISIONED_GRACE_SECONDS`]; that age only keeps it off creates still
+/// running, since the catalog's lock decides the outcome. A failure on one
+/// catalog (its store unreachable, say) is logged and does not stop the
+/// others; the first is the task's result, so the job is retried.
+///
+/// # Errors
+/// The first failure; every catalog is tried regardless.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn provision_catalogs(app: &App) -> Result<(), OkfError> {
+    let now = app.clock().now();
+    let older_than = now - TimeDelta::seconds(UNPROVISIONED_GRACE_SECONDS);
+    let half_made = catalogs::pending(app.accounts().executor(), older_than).await?;
+    let mut steps = Steps::default();
+    let mut finished = 0_u64;
+    for catalog in &half_made {
+        // The store is read from the row, so a catalog is recovered where
+        // it was placed.
+        let outcome = async {
+            let store = StoreName::parse(&catalog.store)?;
+            let db = app.store_db(&store).await?;
+            catalogs::recover(&db, catalog, now).await
+        }
+        .await;
+        match outcome {
+            Ok(catalogs::Recovery::Finished) => finished += 1,
+            Ok(catalogs::Recovery::Removed) => {
+                tracing::warn!(
+                    catalog_id = catalog.id,
+                    "removed a catalog whose create failed"
+                );
+            }
+            Ok(catalogs::Recovery::Settled) => {}
+            Err(error) => {
+                split_event!(
+                    error,
+                    { kind = error.kind(), catalog_id = catalog.id, },
+                    { %error, },
+                    "recovering a half-created catalog failed"
+                );
+                steps.keep(error);
+            }
+        }
+    }
+    if finished > 0 {
+        tracing::info!(finished, "finished half-created catalogs");
+    }
     steps.finish()
 }
 
@@ -1020,6 +1084,7 @@ mod tests {
         assert_eq!(Task::PruneChangesets.slot_at(now), at(19, 50));
         assert_eq!(Task::PruneAudit.slot_at(now), at(0, 0));
         assert_eq!(Task::ClusterStats.slot_at(now), at(19, 52));
+        assert_eq!(Task::ProvisionCatalogs.slot_at(now), at(19, 52));
         // A window's start is its own slot, and the next second too.
         let start = Utc.timestamp_opt(at(19, 50), 0).unwrap();
         assert_eq!(Task::PruneChangesets.slot_at(start), at(19, 50));
@@ -1039,7 +1104,8 @@ mod tests {
                 "prune_oauth",
                 "prune_audit",
                 "prune_workers",
-                "cluster_stats"
+                "cluster_stats",
+                "provision_catalogs"
             ]
         );
         for task in Task::ALL {
@@ -1345,6 +1411,72 @@ mod tests {
         assert_eq!(state(empty_old).await, ChangesetState::Discarded);
         assert_eq!(state(empty_new).await, ChangesetState::Open);
         assert_eq!(state(full_old).await, ChangesetState::Open);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn provision_catalogs_finishes_or_removes_old_half_made_catalogs_and_spares_young_ones() {
+        let test = app_with(&[("whole", &[])], Config::default()).await;
+        let pool = test.app.accounts().executor().clone();
+        let now = test.app.clock().now();
+        let owner = crate::db::TEST_TEAM;
+        // `finish` has its store side but no `provisioned_at`; `lost` has
+        // neither; `young` has neither and is too new to look at.
+        for name in ["finish", "lost", "young"] {
+            let name_text = name.to_string();
+            let display = crate::labels::DisplayName::default();
+            catalogs::create(
+                &pool,
+                &catalogs::NewCatalog {
+                    name: &name_text,
+                    display_name: &display,
+                    description: "",
+                    owner_team: owner,
+                },
+                &AuditActor::cli(),
+                now,
+            )
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "UPDATE catalogs SET provisioned_at = NULL, created_at = $1 \
+             WHERE name IN ('finish', 'lost')",
+        )
+        .bind(now - TimeDelta::minutes(5))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE catalogs SET provisioned_at = NULL WHERE name = 'young'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "DELETE FROM documents WHERE catalog_id IN \
+             (SELECT id FROM catalogs WHERE name IN ('lost', 'young'))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        run(Task::ProvisionCatalogs, &test.app).await.unwrap();
+
+        let rows: Vec<(String, bool)> =
+            sqlx::query_as("SELECT name, provisioned_at IS NOT NULL FROM catalogs ORDER BY name")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            rows,
+            [
+                ("finish".to_string(), true),
+                ("whole".to_string(), true),
+                ("young".to_string(), false),
+            ]
+        );
+        let removed = crate::store::audit::testing::entries(&pool, "catalog.deleted").await;
+        assert_eq!(removed.len(), 1, "{removed:?}");
+        assert_eq!(removed[0].target.as_deref(), Some("lost"));
+        assert_eq!(removed[0].details["failed_create"], true);
     }
 
     #[tokio::test(flavor = "multi_thread")]
