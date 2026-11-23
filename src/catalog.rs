@@ -256,7 +256,7 @@ impl CatalogState {
     /// catalog run one at a time under its key in `rebuilds`, which every
     /// state of the catalog shares. The lock is taken before the build's
     /// pooled connection, so a caller already holding a connection (a
-    /// publish) must not wait for it: see [`CatalogState::refresh_locked`].
+    /// publish) must not wait for it: see `refresh_locked`.
     ///
     /// # Arguments
     /// * `pool` - the database.
