@@ -194,13 +194,19 @@ the release notes.
 today, which for a `Reach::All` key would be every catalog in the system.
 It now searches at most `search_fanout_max` catalogs (default 25). A
 request that would exceed it is refused with a 400 asking the caller to
-name the catalogs. The cap applies to every key. MCP `search` is already
-bounded by catalog selection and does not change.
+name the catalogs. The cap applies to every key.
 
 > **Corrected (issue #745, 2026-11-19).** The cap applies only when the
 > request names no catalogs (issue #725). An explicit list is not capped:
 > the console names every reachable catalog, so capping a list would have
 > broken it. The cap still applies to every key.
+
+> **Corrected (issue #725, 2026-11-23).** An explicit list is capped too: a
+> request may name at most `search_fanout_max` distinct catalogs (a repeated
+> name counts once), in `GET /api/v1/search` and in MCP `search`, with the
+> same 400. The console no longer names every catalog: a key that reaches no
+> more than the cap names none, and one that reaches more is shown a chooser
+> limited to the cap, which it learns from `GET /whoami`'s `search_fanout_max`.
 
 ### 9. The key cache is split by what each change touches
 

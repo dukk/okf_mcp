@@ -560,7 +560,7 @@ Search concepts across this connection's catalogs (or `catalogs`). Every term of
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `query` | string | yes | Free text. Every whitespace-separated term must occur (case-insensitive substring) in a concept's title or aliases, tags, description or body; free text matches tags by substring. Empty matches every concept that passes the filters. |
-| `catalogs` | array of string | no | The catalog ids to search (the `name`s from `list_catalogs`; default: this connection's selection, which may be the only catalog the key reaches; when `list_catalogs` shows an empty selection, pass `catalogs`). |
+| `catalogs` | array of string | no | The catalog ids to search (the `name`s from `list_catalogs`; default: this connection's selection, which may be the only catalog the key reaches; when `list_catalogs` shows an empty selection, pass `catalogs`). At most the server's `search_fanout_max` (default 25) distinct catalogs may be named; more is refused. |
 | `type` | string | no | Only concepts of this `type` (case-insensitive). |
 | `tags` | array of string | no | Only concepts carrying every one of these tags. These match whole tags only (case-insensitive): `infra` does not match `infrastructure`, while the same text in `query` would, by substring. |
 | `status` | string | no | Only concepts with this `status` (case-insensitive; a missing status counts as `stable`). |

@@ -49,6 +49,9 @@ pub(crate) struct WhoAmI {
     /// differs per catalog (issue #736: the console reads levels here, a
     /// page at a time, instead of a whole ceiling from `GET /session`).
     pub levels: BTreeMap<String, &'static str>,
+    /// The most catalogs one search may name (`search_fanout_max`), so the
+    /// console can offer a chooser instead of naming every catalog.
+    pub search_fanout_max: u32,
     /// The `after` of the next page of `catalogs`; absent on the last page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
@@ -227,6 +230,7 @@ async fn whoami(
         all_catalogs: matches!(principal.reach, Reach::All),
         catalogs,
         levels,
+        search_fanout_max: app.config().search_fanout_max,
         next: page.next,
         default_catalog: principal.default_catalog.clone(),
         kind,
@@ -325,6 +329,7 @@ mod tests {
         assert_eq!(body["all_catalogs"], false);
         assert_eq!(body["catalogs"], serde_json::json!(["main"]));
         assert_eq!(body["default_catalog"], "main");
+        assert_eq!(body["search_fanout_max"], 25);
         assert_eq!(body["kind"], "key");
         assert_eq!(body["client_name"], serde_json::Value::Null);
         assert!(body.get("sha256").is_none(), "never a hash or secret");
