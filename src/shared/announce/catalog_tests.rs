@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use super::listen_catalogs;
+use super::{listen_catalogs, run, Events, Snapshots, Source};
 use crate::app::App;
 use crate::config::Config;
 use crate::db::redis_support::TestRedis;
@@ -21,6 +21,7 @@ use crate::mcp::context::ToolContext;
 use crate::mcp::documents::{read_document, ReadDocumentParams};
 use crate::mcp::testing::{app_with, open, principal_as, replica_pair, writer, TestApp};
 use crate::mcp::writes::{edit_document, EditDocumentParams};
+use crate::shared::SubscriptionEvent;
 use crate::store::audit::AuditActor;
 use crate::store::catalogs::{self, CatalogGeneration};
 use crate::store::keys::Access;
@@ -224,6 +225,120 @@ async fn a_subscriber_catches_up_on_a_missed_publish_when_it_subscribes() {
     listener.stop().await;
 
     assert!(caught_up, "B caught up on subscribing");
+}
+
+/// A subscription that yields its one event, then waits forever.
+struct OneEvent(Option<SubscriptionEvent>);
+
+#[async_trait::async_trait]
+impl Events for OneEvent {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "test double")
+    )]
+    async fn next(&mut self) -> Option<SubscriptionEvent> {
+        match self.0.take() {
+            Some(event) => Some(event),
+            None => std::future::pending().await,
+        }
+    }
+}
+
+/// Redis restart (issue #591): the first subscription is `Disconnected` and
+/// never recovers; the second subscribe succeeds only after the test has
+/// released it, which it does after the publish, so the announcement falls in
+/// the window in which no subscription is live.
+struct RestartWindow {
+    attempts: std::sync::atomic::AtomicUsize,
+    back: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl Source for RestartWindow {
+    type Stream = OneEvent;
+
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "test double")
+    )]
+    async fn subscribe(&self) -> redis::RedisResult<OneEvent> {
+        let attempt = self
+            .attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if attempt == 0 {
+            return Ok(OneEvent(Some(SubscriptionEvent::Disconnected)));
+        }
+        self.back.notified().await;
+        Ok(OneEvent(Some(SubscriptionEvent::Subscribed)))
+    }
+}
+
+/// A publish announced while the subscriber is down, and a subscriber that
+/// returns through its own fresh subscribe (the library never recovered, the
+/// grace replaced the subscription) rather than the library's resubscribe,
+/// is caught up by that subscribe's `Subscribed`: B reads the publish with
+/// no further announcement and no wait for a cache TTL. This refutes the
+/// issue's hypothesis for the current code: both the library's and the
+/// code's own subscribe end in the same catch-up.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_publish_during_a_resubscribe_window_is_seen_once_the_subscriber_returns() {
+    let files: &[(&str, &str)] = &[
+        ("index.md", INDEX),
+        ("infra/index.md", INFRA),
+        ("infra/x.md", X),
+    ];
+    // An hour: B's cached row must not expire during the test, or the TTL
+    // backstop would show the publish and hide a missing catch-up.
+    let config = Config {
+        catalog_ttl: Duration::from_secs(3600),
+        ..Config::default()
+    };
+    let (a, b, _redis) = tokio::time::timeout(
+        Duration::from_secs(120),
+        replica_pair(&[("pg", files)], config),
+    )
+    .await
+    .expect("starting two replicas within 120 s");
+    let on_a = writer(&a, "alice", "pg").await;
+    let on_b = alice_on(&b);
+    read(&on_b, "/index.md", None).await;
+
+    let source = RestartWindow {
+        attempts: std::sync::atomic::AtomicUsize::new(0),
+        back: tokio::sync::Notify::new(),
+    };
+    let shutdown = CancellationToken::new();
+    let redis = b.redis().expect("B's redis").clone();
+    let handler = Snapshots(&b);
+    let looped = run(
+        &handler,
+        &redis,
+        &source,
+        Duration::from_millis(100),
+        &shutdown,
+    );
+    let driver = async {
+        // Wait until the grace replaced the subscription: the second
+        // subscribe is then parked on `back`.
+        while source.attempts.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        published_edit(&on_a, "/index.md", "- systems", "- the systems").await;
+        assert!(
+            !read(&on_b, "/index.md", None).await.contains("the systems"),
+            "B was not told while it had no subscription"
+        );
+        source.back.notify_one();
+        let caught_up = until_read(&on_b, "/index.md", "the systems").await;
+        shutdown.cancel();
+        caught_up
+    };
+    let (caught_up, ()) = tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::join!(driver, looped)
+    })
+    .await
+    .expect("the window test finishes within 30 s");
+    assert!(caught_up, "B caught up when its subscriber returned");
 }
 
 /// The issue's four steps: a publish of `/index.md` (B not told), B still
