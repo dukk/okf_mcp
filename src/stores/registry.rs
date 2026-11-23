@@ -113,6 +113,17 @@ struct Inner {
     // How many pools were opened, for tests.
     #[cfg(test)]
     opened: AtomicU64,
+    // Tests: makes the next open stop once it has read the row.
+    #[cfg(test)]
+    gate: std::sync::Mutex<Option<OpenGate>>,
+}
+
+/// A test's hold on an open: the open says when it has read the row, then
+/// waits to be let go.
+#[cfg(test)]
+struct OpenGate {
+    reached: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
 }
 
 impl std::fmt::Debug for Stores {
@@ -180,6 +191,8 @@ impl Stores {
                 forgets: AtomicU64::new(0),
                 #[cfg(test)]
                 opened: AtomicU64::new(0),
+                #[cfg(test)]
+                gate: std::sync::Mutex::new(None),
             }),
         }
     }
@@ -276,6 +289,23 @@ impl Stores {
         self.inner.opened.load(Ordering::SeqCst)
     }
 
+    /// Tests: if a gate is set, takes it, says the row has been read, and
+    /// waits to be released. The next open is not held.
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "a test hook")
+    )]
+    async fn pause_if_gated(&self) {
+        let gate = self.inner.gate.lock().expect("the gate lock").take();
+        if let Some(gate) = gate {
+            // `notify_one` keeps a permit, so it does not matter whether the
+            // test is already waiting.
+            gate.reached.notify_one();
+            gate.release.notified().await;
+        }
+    }
+
     /// Reads the store's row and opens its pool.
     ///
     /// # Errors
@@ -296,6 +326,8 @@ impl Stores {
                 return Err(OpenFailure::Registry);
             }
         };
+        #[cfg(test)]
+        self.pause_if_gated().await;
         let options = self.connect_options(&row).map_err(|reason| {
             split_event!(
                 warn,
@@ -588,6 +620,64 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(one, 1);
+    }
+
+    /// Starts a `get` that stops after reading its row, runs a change to the
+    /// row and a forget (or a forget of everything), lets the open finish, and checks
+    /// that the pool it built served its caller but was not kept.
+    async fn an_open_overtaken_by(forget_everything: bool) {
+        let db = crate::db::test_db().await;
+        let stores = Stores::new(db.pool.clone(), settings());
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        *stores.inner.gate.lock().unwrap() = Some(OpenGate {
+            reached: Arc::clone(&reached),
+            release: Arc::clone(&release),
+        });
+        let overlapping = {
+            let stores = stores.clone();
+            tokio::spawn(async move { stores.get(&StoreName::main()).await })
+        };
+        reached.notified().await;
+
+        // The row changes and replicas are told, while the open holds the
+        // old row.
+        sqlx::query("UPDATE stores SET created_at = now() WHERE name = 'main'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        if forget_everything {
+            stores.forget_all().await;
+        } else {
+            stores.forget(&StoreName::main()).await;
+        }
+        release.notify_one();
+
+        // The overlapping caller still gets its pool, and it works.
+        let served = overlapping.await.unwrap().unwrap();
+        let one: i32 = sqlx::query_scalar("SELECT 1")
+            .fetch_one(served.executor())
+            .await
+            .unwrap();
+        assert_eq!(one, 1);
+        assert_eq!(stores.pools_opened(), 1);
+        // The next call reads the new row and opens afresh instead of
+        // keeping the pool built from the old one.
+        stores.get(&StoreName::main()).await.unwrap();
+        assert_eq!(stores.pools_opened(), 2);
+        // That one is kept.
+        stores.get(&StoreName::main()).await.unwrap();
+        assert_eq!(stores.pools_opened(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_open_overtaken_by_a_forget_is_served_but_not_kept() {
+        an_open_overtaken_by(false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_open_overtaken_by_a_forget_all_is_served_but_not_kept() {
+        an_open_overtaken_by(true).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
