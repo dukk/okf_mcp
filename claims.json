@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 854,
+  "next_claim_seq": 855,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "dd10e8cd4e368b58af8c5d1500ae089d35d3e7333008a03cf295c110a427eb9a"
+    "mac": "ac8fefe7253bcd337209e792cb2279c628d42a2240c44294fbdfb74fe8707b94"
   },
-  "next_evidence_seq": 1147,
+  "next_evidence_seq": 1150,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "ee24440eadb4104b8c40af4088762e2fe50c842ff1654f45fa90c83820fb7b88"
+    "mac": "974e0e54e2687498aa605e573097b9b1493832d0894fc9aaa4ebbb7602b662b5"
   },
   "claims": [
     {
@@ -66021,6 +66021,18 @@
             "by": "server",
             "mac": "b54e5e95cef3f2564ed9f2fd9ef17b7f52e8a95ff9c6ea265c6ed509397d9886"
           }
+        },
+        {
+          "id": "EVD-1149",
+          "kind": "analysis",
+          "locator": "children of CLM-0838; git grep '\\.pool()' src tests",
+          "summary": "CLM-0852 is retired (superseded) and replaced by CLM-0854, which is supported by fresh grep evidence (two WorkerPool::pool() hits only). Remaining active children (CLM-0839..0851, 0853) were supported at last audit and are untouched; no active child is refuted.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T15:49:52.848575484Z",
+          "seal": {
+            "by": "server",
+            "mac": "f537541a273f11bb71dcd1a667c0410371539e1fdc232241018fe58137be9bcb"
+          }
         }
       ],
       "verdicts": [
@@ -66049,13 +66061,26 @@
             "by": "server",
             "mac": "dddb2c24453c7b4896a18a8ea68032b8d18891789d8696289b65398c496aedd8"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All active children are supported, including the replacement CLM-0854; the superseded CLM-0852 is retired.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1149"
+          ],
+          "recorded_at": "2026-11-23T15:49:57.002471771Z",
+          "seal": {
+            "by": "server",
+            "mac": "f79c1d2efab2a37fde2dac98d600bf5364146a9439252e986f058e31addce6a4"
+          }
         }
       ],
       "created_at": "2026-11-23T15:45:08.911321586Z",
-      "updated_at": "2026-11-23T15:47:27.724548948Z",
+      "updated_at": "2026-11-23T15:49:57.002471771Z",
       "seal": {
         "by": "server",
-        "mac": "ef773ca2841c5aa6d959d4ce8fc7c47a96c9cdff843fb7109a65998ccc14e448"
+        "mac": "1e505d347760c4eebf0990b9e918dca2e464d4e90bdfe1afcf9f62ab927de0a9"
       }
     },
     {
@@ -66940,7 +66965,9 @@
         "from-issue:964"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Superseded: statement about test-only Test*::pool() accessors is stale; the plan note now says the only remaining .pool() hits are WorkerPool::pool(). Replaced by a new claim derived from CLM-0838.",
+        "retired_at": "2026-11-23T15:49:46.275629347Z"
       },
       "evidence": [
         {
@@ -67018,10 +67045,10 @@
         }
       ],
       "created_at": "2026-11-23T15:45:08.911321586Z",
-      "updated_at": "2026-11-23T15:47:23.529754875Z",
+      "updated_at": "2026-11-23T15:49:46.275629347Z",
       "seal": {
         "by": "server",
-        "mac": "d388b36774db78bb83ee685874d9349a4374ff12cf281488706e84dce31b31b7"
+        "mac": "f1c629064d6d50ee2b7c3f9d4d11e8bda6b9b0049d1d61ca072d5abacb533f51"
       }
     },
     {
@@ -67088,6 +67115,104 @@
       "seal": {
         "by": "server",
         "mac": "75a4664a8e5628a45e18d454c5e6cfcb8914131355bf62ecd2b06c49204111c7"
+      }
+    },
+    {
+      "id": "CLM-0854",
+      "statement": "The plan's Task 6 correction note is accurate: the only remaining `.pool()` hits in src and tests are `WorkerPool::pool()` (two calls in src/housekeeping.rs; the method is in src/mail/queue.rs).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:288 (Task 6 'Corrected (issue #964)' note)",
+      "source_anchor": {
+        "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "lines": {
+          "start": 288,
+          "end": 288
+        },
+        "commit": "65e9981dd3f2bd50e4db83c883ccc3fd93b78248"
+      },
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1147",
+          "kind": "inspection",
+          "locator": "git grep -n '\\.pool()' -- src tests",
+          "summary": "git grep finds exactly two hits: src/housekeeping.rs:772 and :973, both pool.pool().clone() on WorkerPool; none in tests. WorkerPool::pool is defined at src/mail/queue.rs:136.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "\\.pool\\(\\)",
+              "scope": [
+                "src",
+                "tests"
+              ],
+              "hits": 2,
+              "commit": "65e9981dd3f2bd50e4db83c883ccc3fd93b78248"
+            }
+          },
+          "recorded_at": "2026-11-23T15:49:52.755201170Z",
+          "seal": {
+            "by": "server",
+            "mac": "d0d70b2ae370970b12f7aa3e06a00af7194be55c6b417b651666f294d7225403"
+          }
+        },
+        {
+          "id": "EVD-1148",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:288",
+          "summary": "The Task 6 'Corrected (issue #964)' note says grep '\\.pool()' src now finds only WorkerPool::pool() (mail queue's own pool, src/mail/queue.rs), matching the grep result.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 288,
+                "end": 288
+              },
+              "commit": "65e9981dd3f2bd50e4db83c883ccc3fd93b78248"
+            }
+          },
+          "recorded_at": "2026-11-23T15:49:52.804206665Z",
+          "seal": {
+            "by": "server",
+            "mac": "2e1017f0325e3e7199067fd07ec9c39f30ee03393fd639185372dbd11a102508"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Own git grep finds exactly the two WorkerPool::pool() calls in src/housekeeping.rs and none in tests; the plan note at line 288 states the same.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1147",
+            "EVD-1148"
+          ],
+          "recorded_at": "2026-11-23T15:49:56.958989965Z",
+          "seal": {
+            "by": "server",
+            "mac": "b3a5fd0ef3f0f6b14c6944bdeffe01fe497e2afc3c3f5ae06e22ac693ad15ceb"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:49:46.325426424Z",
+      "updated_at": "2026-11-23T15:49:56.958989965Z",
+      "seal": {
+        "by": "server",
+        "mac": "a09c6b4e46b5786a7a3f6839309fcd2b1a060c5bf107ebbcfdfb8ebdae10dfc6"
       }
     }
   ]
