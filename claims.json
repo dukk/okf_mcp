@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 999,
+  "next_claim_seq": 1020,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "09f115a641bc92d2ff2d6da2a3964e619d0ca339e5938a2ea0e2f15523aa41d3"
+    "mac": "26179d3a0aaa4e690b2f4de655062b6de9504b8bad619901aa17618133b102da"
   },
-  "next_evidence_seq": 1432,
+  "next_evidence_seq": 1468,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "7f4ae0698c0d8309d7033f16e4a5aa0f0fbf0408da2729d03614622841903487"
+    "mac": "26496dd7a3270a924edcee864e9d318f46419437ca64bf882b756431af5a77af"
   },
   "claims": [
     {
@@ -52845,6 +52845,28 @@
             "by": "server",
             "mac": "8b43a1811bdc38a8a217907e83eb0ef00fd81dac5f9cb96f9a7168dca3bfc304"
           }
+        },
+        {
+          "id": "EVD-1466",
+          "kind": "inspection",
+          "locator": "src/catalog.rs:363-371 (refresh_locked); git diff origin/milestone/958-catalog-stores..HEAD -- src/catalog.rs",
+          "summary": "refresh_locked still takes no rebuild lock; the non-test diff of src/catalog.rs only changes the GENERATION constant's table (catalogs to catalog_state) and its comment. Lock-order structure is unchanged.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 363,
+                "end": 371
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:43:55.679071789Z",
+          "seal": {
+            "by": "server",
+            "mac": "2c790110bebfafbc8e4d3a6278d4b83ce03774d3ca04c6233608f93782314e06"
+          }
         }
       ],
       "verdicts": [
@@ -52901,13 +52923,26 @@
             "by": "server",
             "mac": "1920326a65236d393b5b78189975e0b455a1a3eb48328899abf93a389c0f3c3b"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 94a5c7d: Task 11 changed only the generation table name in src/catalog.rs outside tests, so the lock-order structure the claim describes is unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1466"
+          ],
+          "recorded_at": "2026-11-23T22:44:06.581786587Z",
+          "seal": {
+            "by": "server",
+            "mac": "de8b05b5033eccff3db8822624399bc3e8d1f450222906212988bca472e22c24"
+          }
         }
       ],
       "created_at": "2026-11-23T07:17:33.220112894Z",
-      "updated_at": "2026-11-23T13:55:09.322740672Z",
+      "updated_at": "2026-11-23T22:44:06.581786587Z",
       "seal": {
         "by": "server",
-        "mac": "742a69d080d751e5cf2c15e66dd80067b9e31de4eba7fb716214042480734fd1"
+        "mac": "0a22f1de140813d3de4c052cade7f51901ea4839a0536fd417a90b7423578a25"
       }
     },
     {
@@ -52997,6 +53032,28 @@
             "by": "server",
             "mac": "dba0a803bd562b18cf3feb8dcd130e7e20796b4b7eea59631c2fbfc7c25c6a10"
           }
+        },
+        {
+          "id": "EVD-1463",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib --jobs 4 -- a_refresh_waiting_for_a_connection a_swap_never_moves concurrent_refreshes refreshes_of_two_states (4 passed) at 94a5c7d",
+          "summary": "Re-run at head after Task 11: refresh_locked (src/catalog.rs:363-371) still reads the generation on the caller's connection, builds and swaps via swap_if_newer; the race test (pool of 2, now with a search_path=catalog after_connect and an account handle) still passes; current_base still compares against the database generation (now read from catalog_state).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 363,
+                "end": 371
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:43:55.492989920Z",
+          "seal": {
+            "by": "server",
+            "mac": "39477205b04abbf7c392fae2c92e82b9359cac458e2c3a941af87d55deeef242"
+          }
         }
       ],
       "verdicts": [
@@ -53027,13 +53084,26 @@
             "by": "server",
             "mac": "d31ae4f19422baa4fe64f532490cec77945f88f4d13e3bf43a2d087b773d436d"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 94a5c7d: refresh_locked unchanged and the race test passes with the store-pool settings.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1463"
+          ],
+          "recorded_at": "2026-11-23T22:44:06.640284982Z",
+          "seal": {
+            "by": "server",
+            "mac": "dee8462d7a31fce31d30260eedb6a76b9024ff9a9dd248a276eb47e88b1c4d60"
+          }
         }
       ],
       "created_at": "2026-11-23T07:17:33.220112894Z",
-      "updated_at": "2026-11-23T07:36:23.094140917Z",
+      "updated_at": "2026-11-23T22:44:06.640284982Z",
       "seal": {
         "by": "server",
-        "mac": "b8d6e94cbf8e047b7c8177518c7bd9efe319dc6d2d155fd9c612f5b3ba4fdf31"
+        "mac": "4e4ea71f3f34c295f55acd036aab72d1ac6e40d40a87d5ca782015528aeb84f2"
       }
     },
     {
@@ -53100,6 +53170,28 @@
             "by": "server",
             "mac": "7d0aa6fec0ab94c380bdcc33faa6add98b5d6dc619b1cbbcdbd86ae15f1f78cf"
           }
+        },
+        {
+          "id": "EVD-1464",
+          "kind": "analysis",
+          "locator": "git grep -nE 'current\\.write\\(\\)' src (1 hit, src/catalog.rs:389); a_swap_never_moves_the_snapshot_back (passed at 94a5c7d)",
+          "summary": "Still exactly one write to self.current, inside swap_if_newer; the unit test still passes at head.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "current\\.write\\(\\)",
+              "scope": [
+                "src"
+              ],
+              "hits": 1,
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:43:55.560123771Z",
+          "seal": {
+            "by": "server",
+            "mac": "45d6f58dab273aed58548d69e630d722e2844c5ac254fddb3e82ab1e6096c7cb"
+          }
         }
       ],
       "verdicts": [
@@ -53116,13 +53208,26 @@
             "by": "server",
             "mac": "dfd0908331b1a6e4350e72ca0b1f3bab9cb43d2953415266ce7f18dd5a9ca1f3"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 94a5c7d: one write to self.current remains, in swap_if_newer, and its unit test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1464"
+          ],
+          "recorded_at": "2026-11-23T22:44:06.699964322Z",
+          "seal": {
+            "by": "server",
+            "mac": "42da87c7d8706655f969c9b7309d76b12a2845cd3e7011b3aeaa434072b24c9f"
+          }
         }
       ],
       "created_at": "2026-11-23T07:17:33.220112894Z",
-      "updated_at": "2026-11-23T07:18:10.101388122Z",
+      "updated_at": "2026-11-23T22:44:06.699964322Z",
       "seal": {
         "by": "server",
-        "mac": "cd81ef861d219b82cb4d382e7701e2533b5ef11289c3130fdd6d5fd3b34213f0"
+        "mac": "96efcc2085ffcb700b2a7a793016305e9b67b8c88b2bffd474252ddb5441c0f5"
       }
     },
     {
@@ -53189,6 +53294,28 @@
             "by": "server",
             "mac": "f99bdbb0d0a63777279f62b10873bd225c8400fe347d1b7732322f0ff4b0587c"
           }
+        },
+        {
+          "id": "EVD-1465",
+          "kind": "test",
+          "locator": "src/catalog.rs:640-710; tools/agentic/gate.sh narrow ... a_refresh_waiting_for_a_connection (passed at 94a5c7d)",
+          "summary": "The test still uses max_connections(2), acquire_timeout 8 s, a refresher holding the rebuild lock, and 4 s timeouts on the publish's refresh_locked and on the refresher; the Task 11 diff only adds an after_connect search_path hook and an account handle to it. It passes at head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 640,
+                "end": 710
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:43:55.621530558Z",
+          "seal": {
+            "by": "server",
+            "mac": "8195bcdb227b2af54425181671ec33b35aa3048a724ca93c7c1a245f8918ea56"
+          }
         }
       ],
       "verdicts": [
@@ -53217,13 +53344,26 @@
             "by": "server",
             "mac": "49838bee41f688bd6854560cb3b14758ee03ebd935e60e05cf23ab25479bde76"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 94a5c7d: the test's pool size, timeouts and assertions are as the claim says; only a search_path hook and account handle were added.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1465"
+          ],
+          "recorded_at": "2026-11-23T22:44:06.758057336Z",
+          "seal": {
+            "by": "server",
+            "mac": "bd789953d701ef11ca1fae76b22c5c8aca5736b45f811cd96774c82fdc6595dc"
+          }
         }
       ],
       "created_at": "2026-11-23T07:17:33.220112894Z",
-      "updated_at": "2026-11-23T07:36:12.121453639Z",
+      "updated_at": "2026-11-23T22:44:06.758057336Z",
       "seal": {
         "by": "server",
-        "mac": "d447a254b66aa75e3c1ded3cf3bb20870d1a421a178717e460066fece158f579"
+        "mac": "feea6eb857e9272d1ec3750c89606a1d0a418221e15853b654fd343dad32cb11"
       }
     },
     {
@@ -80845,6 +80985,1632 @@
       "seal": {
         "by": "server",
         "mac": "eabd1ee8357e90e951da8b4c086367ef2b5b3758013746b228cfe134b4a16b59"
+      }
+    },
+    {
+      "id": "CLM-0999",
+      "statement": "Issue #970 (M21.11, Task 11 of the catalog stores plan) is delivered: the catalog tables live in schema `catalog` with `catalog_state`, no foreign key crosses the schemas, store pools use search_path=catalog, generation lives in catalog_state, and the maintenance audit entries are written from Rust.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/970",
+      "derived_from": [],
+      "artifacts": [
+        "migrations/accounts/0041_catalog_schema.sql"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1467",
+          "kind": "analysis",
+          "locator": "children of CLM-0999",
+          "summary": "Sixteen children are supported and cover the issue's requirements (migration, no cross-schema keys, search_path, pool isolation both ways, generation in catalog_state, both audit paths, one-connection pools, Task 10b hand-offs, changelog). Two children about PR-description validation statements (full gate counts; revert checks) are not_enough_info, so the parent cannot be fully supported.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T22:44:06.815585516Z",
+          "seal": {
+            "by": "server",
+            "mac": "807151f41d280f009caaae058adb7ff562266fffaa08df2fb1739e540090cf96"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "All sixteen requirement and behaviour children are supported, but the two PR-description validation children (gate counts, revert checks) are not decidable from evidence I could gather, so the roll-up stays open. Fix: rerun the full gate on head 94a5c7d and either evidence or drop the 'six named tests fail when reverted' sentence in the PR body.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1467"
+          ],
+          "recorded_at": "2026-11-23T22:44:11.306743432Z",
+          "seal": {
+            "by": "server",
+            "mac": "8bd11fdd43e87621acff03c913b2bb1f2abb64cb167c836737eec5170d4024bd"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:44:11.306743432Z",
+      "seal": {
+        "by": "server",
+        "mac": "558f5f492888bfb330640234e2f0959689f4d950013803a352a4670df21907f7"
+      }
+    },
+    {
+      "id": "CLM-1000",
+      "statement": "Migration 0041 creates schema `catalog` and `catalog.catalog_state`, moves the eleven catalog tables into `catalog` with SET SCHEMA without losing rows, and seeds a catalog_state row (at its generation) for every provisioned catalog and every half-created one that has documents, but none for a half-created one without documents.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #970 / plan Task 11; PR body: 'eleven tables moved with SET SCHEMA'; 'catalog_state is seeded for provisioned catalogs and half-created ones that have documents'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "migrations/accounts/0041_catalog_schema.sql",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1432",
+          "kind": "test",
+          "locator": "SQLX_OFFLINE=true tools/agentic/gate.sh narrow --lib --jobs 4 -- migration_0041_keeps_every_row (1 passed)",
+          "summary": "Test migrates a populated database 0040->0041 with whole(gen 7), half(with docs), lost(no docs), empty(gen 3, provisioned); asserts state rows are exactly empty:3, half:0, whole:7 (no row for lost), public.documents gone, row counts in catalog.documents/revisions/changesets/maintenance_runs preserved, catalogs.generation dropped. Passed on head 94a5c7d.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 2234,
+                "end": 2370
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:41:43.277178832Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa99b9a444e029a42fa2bc8948f7bb37297b6dbead2d6ab1700a1269c9271f65"
+          }
+        },
+        {
+          "id": "EVD-1433",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0041_catalog_schema.sql:19-61",
+          "summary": "CREATE SCHEMA catalog; catalog_state(id, generation, deleted_at); INSERT seeds from catalogs WHERE provisioned_at IS NOT NULL OR EXISTS documents; eleven ALTER TABLE ... SET SCHEMA catalog statements (documents, revisions, changesets, changeset_entries, seven maintenance_*).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0041_catalog_schema.sql",
+              "lines": {
+                "start": 19,
+                "end": 61
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:41:43.339519099Z",
+          "seal": {
+            "by": "server",
+            "mac": "54816e57687da4c9af086477241aa8fcc65beb983396d7a2d61c6f2917f1f698"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The migration SQL does the schema creation, the eleven SET SCHEMA moves and the conditional seeding, and the populated-database test asserts exact state rows (no row for a half-made catalog without documents), preserved row counts and nothing left in public.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1432",
+            "EVD-1433"
+          ],
+          "recorded_at": "2026-11-23T22:43:42.812693785Z",
+          "seal": {
+            "by": "server",
+            "mac": "78019de5ce7f710bc68bca37ced7afc0909d4f8a6cf9f7ff753f5a2f9bd87c19"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:42.812693785Z",
+      "seal": {
+        "by": "server",
+        "mac": "fe6d77aa680554b712421efafa483c81b456de750c536e8a0f2bc9827e1149e9"
+      }
+    },
+    {
+      "id": "CLM-1001",
+      "statement": "No foreign key joins schema `catalog` to schema `public` in either direction after migration 0041; the ten catalog_id foreign keys are re-pointed to catalog.catalog_state and changesets_key_id_fkey and maintenance_runs_key_id_fkey are dropped.",
+      "kind": "constraint",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Brief: 'no foreign key crosses between schemas'; PR body: 'ten catalog-id foreign keys re-pointed to catalog_state; changesets_key_id_fkey and maintenance_runs_key_id_fkey dropped'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "migrations/accounts/0041_catalog_schema.sql",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1434",
+          "kind": "test",
+          "locator": "SQLX_OFFLINE=true tools/agentic/gate.sh narrow --lib --jobs 4 -- no_foreign_key_crosses_between_schemas (1 passed)",
+          "summary": "Reads pg_constraint on a fully migrated database; asserts zero foreign keys between catalog and public in either direction, and (non-vacuity) that changesets_catalog_id_fkey exists inside schema catalog. Passed on head 94a5c7d.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 2186,
+                "end": 2231
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:41:43.396600277Z",
+          "seal": {
+            "by": "server",
+            "mac": "c4ca22cfe220789ac756bfa8781433e8a1da505a1f6c64f41cf88c8f536c9bfd"
+          }
+        },
+        {
+          "id": "EVD-1435",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0041_catalog_schema.sql:63-113",
+          "summary": "Ten ALTER TABLE ... DROP CONSTRAINT <t>_catalog_id_fkey, ADD CONSTRAINT ... REFERENCES catalog.catalog_state (id) ON DELETE CASCADE (documents, revisions, changesets, maintenance_state/runs/work/findings/evidence/dispositions/requests); then DROP CONSTRAINT changesets_key_id_fkey and maintenance_runs_key_id_fkey.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0041_catalog_schema.sql",
+              "lines": {
+                "start": 63,
+                "end": 113
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:41:43.450986983Z",
+          "seal": {
+            "by": "server",
+            "mac": "bf4d72e693a08c08c38a8a1bce5700c2202548ec700c14d8505f1c8ff57867c0"
+          }
+        },
+        {
+          "id": "EVD-1444",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0041_catalog_schema.sql:53-99 (correct line range; supersedes EVD-1435's range)",
+          "summary": "Lines 53-96: ten ALTER TABLE catalog.<t> DROP CONSTRAINT <t>_catalog_id_fkey, ADD CONSTRAINT ... REFERENCES catalog.catalog_state (id) ON DELETE CASCADE; lines 98-99 drop changesets_key_id_fkey and maintenance_runs_key_id_fkey. Count of re-pointed keys is ten (documents, revisions, changesets, seven maintenance_*).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0041_catalog_schema.sql",
+              "lines": {
+                "start": 53,
+                "end": 99
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:42:18.669208064Z",
+          "seal": {
+            "by": "server",
+            "mac": "93c657161ff8c052be19367a5c768107d34d1979afdd29638fd66a3a5d70bc4e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The pg_constraint test finds zero cross-schema keys and is non-vacuous; the migration text re-points exactly ten catalog_id keys to catalog_state and drops both key_id keys.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1434",
+            "EVD-1444"
+          ],
+          "recorded_at": "2026-11-23T22:43:42.871672192Z",
+          "seal": {
+            "by": "server",
+            "mac": "e119d9f356491565c40f813eb6af11b996e63922226ed4d68e92a949edb505ff"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:42.871672192Z",
+      "seal": {
+        "by": "server",
+        "mac": "cfdb7c28c3a5674e522f041c1878d63762644a067a4ef6bf6b6621c8ec6ecb16"
+      }
+    },
+    {
+      "id": "CLM-1002",
+      "statement": "Store pools set search_path to `catalog` in the pool's after_connect hook (not in connect options), so a credential refresh that replaces the connect options keeps it.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Brief: 'store pools use search_path=catalog and keep it across credential refresh'; PR body: 'set in after_connect, so a credential refresh keeps it'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs",
+        "src/stores/mod.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1436",
+          "kind": "test",
+          "locator": "SQLX_OFFLINE=true tools/agentic/gate.sh narrow --lib --jobs 4 -- a_store_keeps_its_search_path_after_a_credential_refresh (1 passed)",
+          "summary": "Test opens a store with a secrets-manager credential, reads SHOW search_path, rotates the password so a refresh replaces connect options, takes a NEW connection and asserts search_path is still `catalog` and that `SELECT 1 FROM users` fails 42P01. Passed on head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 1341,
+                "end": 1395
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:41:43.504309675Z",
+          "seal": {
+            "by": "server",
+            "mac": "9e05d0f1fda7aff0cfb07404240faeb7338783da52cac62d977c31f70a273176"
+          }
+        },
+        {
+          "id": "EVD-1437",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:39-63,510; src/stores/mod.rs:305",
+          "summary": "STORE_SEARCH_PATH = \"catalog\"; set_search_path runs set_config('search_path', ...) and is installed with PgPoolOptions::after_connect in the registry's pool options and in CatalogDb::main_in; no search_path in connect options.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 39,
+                "end": 63
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:41:43.558760881Z",
+          "seal": {
+            "by": "server",
+            "mac": "a3fcb76edee62ac2a403b330286500e6537f04e6b1ef49a7207336f6ff0bbba6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "search_path is set in after_connect (not connect options), and the refresh test checks a connection made after the credential refresh still has catalog and cannot see users.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1436",
+            "EVD-1437"
+          ],
+          "recorded_at": "2026-11-23T22:43:42.929317353Z",
+          "seal": {
+            "by": "server",
+            "mac": "21ba6fd6008d3bcf98507a40acd14983c51fc08c3b96e34a34dadac030cd4060"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:42.929317353Z",
+      "seal": {
+        "by": "server",
+        "mac": "60c9b719a46dae6ce9e52394c832dbced6fedc5b1765be7f5d44420edb340ccd"
+      }
+    },
+    {
+      "id": "CLM-1003",
+      "statement": "A store pool cannot see account tables: a query for `users` or `catalogs` on a store handle fails with undefined_table, while the store's own `documents` table answers.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #970 named test a_store_pool_cannot_see_account_tables",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/stores/mod.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1438",
+          "kind": "test",
+          "locator": "SQLX_OFFLINE=true tools/agentic/gate.sh narrow --lib --jobs 4 -- a_store_pool_cannot_see_account_tables (1 passed)",
+          "summary": "On CatalogDb::main_in, `SELECT 1 FROM users` and `SELECT 1 FROM catalogs` both fail and is_undefined_table (SQLSTATE 42P01) holds; `SELECT count(*) FROM documents` returns 0. Passed on head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 444,
+                "end": 469
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:41:43.620631027Z",
+          "seal": {
+            "by": "server",
+            "mac": "0ba3975a1e1c009636b27465489f6cf85f15374f3b08d56cffecba6cd32482b2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test asserts SQLSTATE 42P01 for users and catalogs on a store handle and a working own-table query.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1438"
+          ],
+          "recorded_at": "2026-11-23T22:43:42.987331367Z",
+          "seal": {
+            "by": "server",
+            "mac": "bcf093eb1893d197f2cc5ee938beb8ac5518f91ec577d490d0fc99c7e9ab0db6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:42.987331367Z",
+      "seal": {
+        "by": "server",
+        "mac": "5930326e643ab2c4fc83fd9732b30f2ed42e623062db7306737d49434dcc6a1b"
+      }
+    },
+    {
+      "id": "CLM-1004",
+      "statement": "An account pool cannot see catalog tables by bare name: a query for `documents` or `catalog_state` on the account pool fails with undefined_table, while `catalog.documents` answers.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #970 named test an_account_pool_cannot_see_catalog_tables",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/stores/mod.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1439",
+          "kind": "test",
+          "locator": "SQLX_OFFLINE=true tools/agentic/gate.sh narrow --lib --jobs 4 -- an_account_pool_cannot_see_catalog_tables (1 passed)",
+          "summary": "On the account pool, `SELECT 1 FROM documents` and `SELECT 1 FROM catalog_state` fail with undefined_table; `SELECT count(*) FROM catalog.documents` returns 0. Passed on head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 471,
+                "end": 492
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:41:43.680449175Z",
+          "seal": {
+            "by": "server",
+            "mac": "249e685492d00104cffba9a6df096346a7cad6d31d365748febee1f119da332c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test asserts 42P01 for bare documents and catalog_state on the account pool and a working qualified query.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1439"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.044550336Z",
+          "seal": {
+            "by": "server",
+            "mac": "da4f92ac50499fd23564298d218466bd96bbab80d00b6d04df1b40edd98158af"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.044550336Z",
+      "seal": {
+        "by": "server",
+        "mac": "f5dfbbf7bca179b2f8d04d4fcecee145e49fc99d6f711578e94d6c3db45da077"
+      }
+    },
+    {
+      "id": "CLM-1005",
+      "statement": "The generation lives in catalog.catalog_state, not in catalogs: a publish increments catalog_state.generation by one, `catalogs.generation` no longer exists, and current_base, the catalog snapshot builders and lock_catalog read or lock catalog_state.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #970 named test publish_bumps_generation_in_catalog_state; PR body: 'Generation is read and bumped on catalog_state; lock_catalog locks that row'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/store/publish.rs",
+        "src/store/changesets.rs",
+        "src/catalog.rs",
+        "src/store/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1440",
+          "kind": "test",
+          "locator": "SQLX_OFFLINE=true tools/agentic/gate.sh narrow --lib --jobs 4 -- publish_bumps_generation_in_catalog_state (1 passed)",
+          "summary": "Reads catalog_state.generation on the store pool before and after a publish and asserts before+1; also asserts information_schema shows 0 columns named generation on public.catalogs. Passed on head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets.rs",
+              "lines": {
+                "start": 1754,
+                "end": 1784
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:41:43.741635528Z",
+          "seal": {
+            "by": "server",
+            "mac": "97d3c1eab2bb341d8bd7afc6aa87e7506bae6c2baaec506864ef8238762bc048"
+          }
+        },
+        {
+          "id": "EVD-1441",
+          "kind": "inspection",
+          "locator": "src/store/changesets.rs:244-257; src/catalog.rs:26-28; src/store/publish.rs:395-398; src/store/catalogs.rs:2044",
+          "summary": "lock_catalog selects `id FROM catalog_state WHERE id=$1 AND deleted_at IS NULL FOR KEY SHARE` (Refused CATALOG_GONE if none); GENERATION const is `SELECT generation FROM catalog_state`; current_base reads catalog_state; bump_generation does `UPDATE catalog_state SET generation = generation + 1 ... RETURNING generation`.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 244,
+                "end": 257
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:41:43.798375834Z",
+          "seal": {
+            "by": "server",
+            "mac": "c1c34ced1307337fc2c19646016dab35500372b7fa758f52dd3ce71ca2a65054"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test shows a publish raises catalog_state.generation by exactly one and that catalogs has no generation column; the code reading shows lock_catalog, current_base and the snapshot GENERATION query all use catalog_state.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1440",
+            "EVD-1441"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.100968973Z",
+          "seal": {
+            "by": "server",
+            "mac": "3071e28496347a13a3bfc1644c2c3fe5f08716d525fb3834117dfeb312e953e2"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.100968973Z",
+      "seal": {
+        "by": "server",
+        "mac": "647cbb8101cf012b6556bb7f8b6d3e08f044836d81ac24accb8b47efe69f2388"
+      }
+    },
+    {
+      "id": "CLM-1006",
+      "statement": "Migration 0041 drops the maintenance_runs audit triggers (maintenance_runs_audit_end, maintenance_runs_audit_empty) and the function audit_maintenance_run().",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: 'maintenance audit triggers and function dropped'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "migrations/accounts/0041_catalog_schema.sql",
+        "src/store/maintenance/tests.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1442",
+          "kind": "test",
+          "locator": "src/store/maintenance/tests.rs:2448-2461 (assert_the_audit_triggers_are_gone), called first in both audit tests (each passed)",
+          "summary": "Counts pg_trigger rows named maintenance_runs_audit_% and pg_proc rows named audit_maintenance_run and asserts (0, 0) on the migrated database.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/tests.rs",
+              "lines": {
+                "start": 2448,
+                "end": 2461
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:41:43.856651056Z",
+          "seal": {
+            "by": "server",
+            "mac": "00723066c1a0fcf1995870c492142cd2ddc783669852d0d92932a8370f2558ce"
+          }
+        },
+        {
+          "id": "EVD-1443",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0041_catalog_schema.sql:115-123",
+          "summary": "DROP TRIGGER maintenance_runs_audit_end and maintenance_runs_audit_empty ON catalog.maintenance_runs; DROP FUNCTION audit_maintenance_run().",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0041_catalog_schema.sql",
+              "lines": {
+                "start": 115,
+                "end": 123
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:41:43.918625102Z",
+          "seal": {
+            "by": "server",
+            "mac": "0a187bb7b9a39e511c7771732696e95102fbe27121509d647da0fa766f2e46e6"
+          }
+        },
+        {
+          "id": "EVD-1445",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0041_catalog_schema.sql:106-108 (correct line range; supersedes EVD-1443's range)",
+          "summary": "DROP TRIGGER maintenance_runs_audit_end and maintenance_runs_audit_empty ON catalog.maintenance_runs; DROP FUNCTION audit_maintenance_run().",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0041_catalog_schema.sql",
+              "lines": {
+                "start": 106,
+                "end": 108
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:42:18.730962801Z",
+          "seal": {
+            "by": "server",
+            "mac": "cf5083b4d31f9327ec4a87e81ea09c80ab259f1f2efb8821c2cda854a557ec94"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The migration has the three DROP statements and the audit tests assert zero matching triggers and functions in the migrated database.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1442",
+            "EVD-1445"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.157678510Z",
+          "seal": {
+            "by": "server",
+            "mac": "5ae11454e23745dadd82f31849a83a521ec6ab9d8de73532ba702546adb5db78"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.157678510Z",
+      "seal": {
+        "by": "server",
+        "mac": "f1c77247b74d7b885392698a3e93c30f35ee116416c7245ae9ad70151f92b38f"
+      }
+    },
+    {
+      "id": "CLM-1007",
+      "statement": "After the triggers are gone, a maintenance run that reaches an end state (cancelled, or failed by recovery) is recorded in the audit log as catalog.maintenance_run from Rust, once per run, with its state and findings count, and a replayed close writes no second entry.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #970 named test maintenance_run_end_is_audited_after_the_trigger_is_gone; PR body: 'RunWatch records catalog.maintenance_run from Rust after the store commit'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/store/maintenance/mod.rs",
+        "src/store/maintenance/runs.rs",
+        "src/store/maintenance/reports.rs",
+        "src/store/maintenance/tests.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1446",
+          "kind": "test",
+          "locator": "SQLX_OFFLINE=true tools/agentic/gate.sh narrow --lib --jobs 4 -- maintenance_run_end_is_audited_after_the_trigger_is_gone (1 passed)",
+          "summary": "After asserting the triggers are gone: claim, close (cancelled), a replayed close, a second claim failed by recovery after the deadline, and a third claim. Asserts exactly 2 catalog.maintenance_run entries (one per ended run, replay adds none): details run/state cancelled/findings 0, credential runner, source system; second entry state failed; actor_label system:maintenance, not operator, target pg, teams = owner team. Passed on head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/tests.rs",
+              "lines": {
+                "start": 2473,
+                "end": 2569
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:42:18.793177310Z",
+          "seal": {
+            "by": "server",
+            "mac": "35b104b3ae9231ec5c78336efb7f60af4df8f84c3b0f951912825a64671b1387"
+          }
+        },
+        {
+          "id": "EVD-1447",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/mod.rs:98-238 (RunWatch, EndedRun, record_ended_run)",
+          "summary": "RunWatch::open records running run ids under the catalog lock; commit selects those now not running (plus an inserted id) with findings count, commits the store tx, then in an account transaction inserts audit_entries action 'catalog.maintenance_run' with run/state/findings details via record_ended_run. The entry is written from Rust, after the store commit.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/mod.rs",
+              "lines": {
+                "start": 98,
+                "end": 238
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:42:18.856068052Z",
+          "seal": {
+            "by": "server",
+            "mac": "870329892e63d2c060d5c4bf906a23c5212f7d00cf83e373747494b6a5070098"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "With the triggers gone the test still finds one entry per ended run (cancelled and failed), none for the replayed close, and RunWatch is the only code writing them.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1446",
+            "EVD-1447"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.214118787Z",
+          "seal": {
+            "by": "server",
+            "mac": "0bb059a69a7fee5705fb6d7e1ef0dc7b8550b831f735335f17df08af9b6ed80a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.214118787Z",
+      "seal": {
+        "by": "server",
+        "mac": "b41d42c4d2c0988dbf3458e65a30f6a6162f208e441e7698d3d8b94316682c79"
+      }
+    },
+    {
+      "id": "CLM-1008",
+      "statement": "After the triggers are gone, a run inserted already ended because there was nothing to do (an empty claim) is recorded in the audit log as catalog.maintenance_run with state completed.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #970 named test an_empty_maintenance_run_is_audited_after_the_trigger_is_gone",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/store/maintenance/mod.rs",
+        "src/store/maintenance/runs.rs",
+        "src/store/maintenance/tests.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1448",
+          "kind": "test",
+          "locator": "SQLX_OFFLINE=true tools/agentic/gate.sh narrow --lib --jobs 4 -- an_empty_maintenance_run_is_audited_after_the_trigger_is_gone (1 passed)",
+          "summary": "With no triggers and a catalog with no work, one claim yields exactly 1 catalog.maintenance_run entry whose details run == the claim's run id and state == completed; a credential with no audit row is named by none. Passed on head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/tests.rs",
+              "lines": {
+                "start": 2571,
+                "end": 2599
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:42:18.914945407Z",
+          "seal": {
+            "by": "server",
+            "mac": "b5ec6f515c75db098868de87770955ccce78d192a632bc2551c65cbf104c8bde"
+          }
+        },
+        {
+          "id": "EVD-1449",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/runs.rs:477-480,550; src/store/maintenance/mod.rs:157-195",
+          "summary": "claim calls RunWatch::open after lock and commits through watch.commit(tx, db, Some(&result.run_id)), so a run inserted already ended is selected by id (state <> 'running') and audited.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/runs.rs",
+              "lines": {
+                "start": 477,
+                "end": 480
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:42:18.976080312Z",
+          "seal": {
+            "by": "server",
+            "mac": "b21bf72795f933cd58c8e2a4c0eb41393e30f56f8cf909824c197fab1eb9d425"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The empty-claim test asserts exactly one completed entry for the run, and claim passes the inserted run id to RunWatch::commit.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1448",
+            "EVD-1449"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.271174276Z",
+          "seal": {
+            "by": "server",
+            "mac": "b6822a0a07646f279b3f244d98852bf3f72fa6dfe2857d779366d1187070d23c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.271174276Z",
+      "seal": {
+        "by": "server",
+        "mac": "9e48c3f8ca0568d08eab1671b1c7d4c2b1fd32cc3fcd35891786eea3ac10fab4"
+      }
+    },
+    {
+      "id": "CLM-1009",
+      "statement": "Every statement path that can move a maintenance run out of `running` (claim, renew, close, submit and the recovery they call) is wrapped by RunWatch::open and RunWatch::commit, so no run end goes unaudited now that the triggers are dropped.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Brief: 'maintenance audit entries (run end, empty run) are recorded from Rust'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/store/maintenance/mod.rs",
+        "src/store/maintenance/runs.rs",
+        "src/store/maintenance/reports.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1450",
+          "kind": "analysis",
+          "locator": "git grep -n 'UPDATE maintenance_runs\\|INSERT INTO maintenance_runs' src (non-test); recover( / complete_if_terminal( / expire_submission( callers",
+          "summary": "Non-test writers of maintenance_runs state: mod.rs:293,311 (inside recover, called only from claim 493, renew 600, close 731); runs.rs:346,363 (complete_if_terminal, expire_submission, called only from submit at reports.rs:482,560); runs.rs:505 (claim insert), 628 (renew), 756 (close). claim, renew, close and submit each call RunWatch::open right after lock and every commit in those paths is watch.commit (runs.rs:550,614,630,671,743,762,776; reports.rs:484,578). dispose writes no run row. No path ends a run outside a watch.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "UPDATE maintenance_runs|INSERT INTO maintenance_runs",
+              "scope": [
+                "src/store/maintenance"
+              ],
+              "hits": 7,
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:42:19.040380380Z",
+          "seal": {
+            "by": "server",
+            "mac": "ab72bd89cb077a072447a8657b786b23a916d0eacdd0742039886604fcfd2bb3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every non-test statement that ends or inserts a run is reached only from claim, renew, close or submit, each of which opens a RunWatch and commits through it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1450"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.327643102Z",
+          "seal": {
+            "by": "server",
+            "mac": "1c6c15a883042ec9c570453457caac16b65782e3ef3aae8b11998ad8f8f720d8"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.327643102Z",
+      "seal": {
+        "by": "server",
+        "mac": "31cd8a273848e0541a57f2bdec0ca4266ab443a00889ae6793971e2bcce82eac"
+      }
+    },
+    {
+      "id": "CLM-1010",
+      "statement": "With database_max_connections = 1 (a pool of one connection) catalog create and recovery, and maintenance claim, still complete without waiting on a second connection.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Brief: 'database_max_connections=1 still works'; PR body: 'With one pool no transaction on one handle waits for a connection on the other'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/store/catalogs_provision_tests.rs",
+        "src/store/maintenance/tests.rs",
+        "src/stores/mod.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1451",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib --jobs 4 -- create_and_recovery_work_on_a_one_connection_pool (1 passed); -- claim_needs_only_one_connection (1 passed)",
+          "summary": "First test builds a pool via db::connect(url, 1) and runs create, recover (Removed) and provision+recover (Finished) each under a 20 s timeout; second runs runs::claim on a max_connections(1) pool under a 60 s timeout and asserts one lease. Both passed on head, so neither hung on a second connection. Caveat: claim_needs_only_one_connection builds its handle with CatalogDb::main_of(&one), not the main_in two-pool path.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs_provision_tests.rs",
+              "lines": {
+                "start": 298,
+                "end": 340
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:42:19.097077197Z",
+          "seal": {
+            "by": "server",
+            "mac": "2c7b8cee9a3594bbb92e0a08566763197108a655b5a20718da71db3954ed23f3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Create, recovery and claim each finish under timeouts on a pool of one connection (two-pool handle from main_in), which is what the claim says. Publish, import and delete on a pool of one were not exercised by a named test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1451"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.384038639Z",
+          "seal": {
+            "by": "server",
+            "mac": "c7d7ba3aa085e3e17810a0becab3a3ebb421245d94fcd35aa085b47be768a37c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.384038639Z",
+      "seal": {
+        "by": "server",
+        "mac": "a8c73d2455fa762ff60e88206fe99d5ee9679c59d6a27b44af6b0209dc496674"
+      }
+    },
+    {
+      "id": "CLM-1011",
+      "statement": "catalogs::registration runs on an account connection (provision_store_side opens an account transaction and a store transaction), and store_side_exists and write_starter_files use catalog.catalog_state: write_starter_files inserts the catalog_state row first and store_side_exists checks for it.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Brief: 'Task 10b hand-offs: registration on an account connection; store_side_exists and write_starter_files use catalog.catalog_state'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/store/catalogs.rs",
+        "src/store/catalogs_provision_tests.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1452",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:333-375,394-425,633-666",
+          "summary": "registration takes &mut PgConnection and reads/locks `catalogs` FOR UPDATE; provision_store_side begins db.accounts() transaction first, then db.begin() (store), calls lock on the store tx and registration on the account tx; write_starter_files first executes `INSERT INTO catalog_state (id)` then writes documents/revisions; store_side_exists is `SELECT EXISTS (SELECT 1 FROM catalog_state WHERE id = $1)` on the store connection.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 394,
+                "end": 425
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:42:19.159954648Z",
+          "seal": {
+            "by": "server",
+            "mac": "9eb7ddff5a74cbbb861a478b4ae36457cf5290d44668072d195fb8a8fed8d828"
+          }
+        },
+        {
+          "id": "EVD-1453",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib --jobs 4 -- provisioning_job (2 passed); -- store::catalogs (54 passed)",
+          "summary": "provisioning_job_finishes_a_catalog_whose_store_side_exists writes the store side via provision_store_side then recover returns Finished with 2 documents; provisioning_job_removes_a_catalog_whose_store_side_never_happened returns Removed (store_side_exists false without a catalog_state row). Both passed on head with the 54-test store::catalogs filter.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs_provision_tests.rs",
+              "lines": {
+                "start": 142,
+                "end": 195
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:42:19.217141367Z",
+          "seal": {
+            "by": "server",
+            "mac": "85f485c83ed12d8a5240c04f0bf27a1617de6da86017ce3e46f58065cf8acc11"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The code runs registration on the account transaction, inserts catalog_state first in write_starter_files and checks it in store_side_exists, and the recovery tests show Finished versus Removed follow the catalog_state row.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1452",
+            "EVD-1453"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.440716846Z",
+          "seal": {
+            "by": "server",
+            "mac": "6aa775e6abc2792c0cb49998669d816abd7f2861c32c6f0bc0559a0a43f66e6e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.440716846Z",
+      "seal": {
+        "by": "server",
+        "mac": "81790186d0aff3cba2c528a3de2ef85f3d306491d5d08326f2b05058180298b9"
+      }
+    },
+    {
+      "id": "CLM-1012",
+      "statement": "The Task 11 changelog states that the migration is NOT rolling-safe (plan decision P10), and the migration file's header says the same.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Brief: 'the changelog says the migration is not rolling-safe'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T22-12-07Z-m21-task-11-catalog-schema.md",
+        "migrations/accounts/0041_catalog_schema.sql"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1454",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T22-12-07Z-m21-task-11-catalog-schema.md:7-13; migrations/accounts/0041_catalog_schema.sql:6-15",
+          "summary": "Changelog has a section '## NOT ROLLING-SAFE (plan decision P10)' saying release-2 replicas query these tables in public and read catalogs.generation, and the migration belongs to the release-3 maintenance window; the migration header comment says 'NOT ROLLING-SAFE (plan decision P10)'.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T22-12-07Z-m21-task-11-catalog-schema.md",
+              "lines": {
+                "start": 7,
+                "end": 13
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:42:19.280833502Z",
+          "seal": {
+            "by": "server",
+            "mac": "fd0818feca5932ed90ba1598343098481761f5e05f8ba085a478fcdc3bb5ea82"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both the changelog heading and the migration header say NOT ROLLING-SAFE with the P10 reference.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1454"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.515839361Z",
+          "seal": {
+            "by": "server",
+            "mac": "b19c14202225095e4ca65895883b0200995f1c68b6499251afd3881e3339093b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.515839361Z",
+      "seal": {
+        "by": "server",
+        "mac": "67bcaa0c8537d38f101319dcd6b6535d902d2086e2f0cd38e49ce06ad03710a8"
+      }
+    },
+    {
+      "id": "CLM-1013",
+      "statement": "Every item in the Task 2, 3 and 4 changelogs' 'crosses in release 1' inventories that Task 11 covers (generation reads/writes, lock_by_name, lock_catalog, the catalog and key foreign keys, snapshot generation reads, export's registry reads, the maintenance audit triggers) is removed or marked DONE in Task 11 in those changelogs.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Brief: 'the Task 2/3/4 changelog crosses in release 1 items it covers are removed'; PR body: 'Task 2-4 changelog inventories updated'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T12-55-43Z-m21-task-02-catalog-writes-take-catalogdb.md",
+        "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md",
+        "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1455",
+          "kind": "inspection",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD -- changelog/*task-02* changelog/*task-03* changelog/*task-04*; task-02:16-19,26; task-03:22,24; task-04:19,21,22",
+          "summary": "Task 2: generation UPDATE, current_base read, lock_by_name, lock_catalog and the four foreign keys are rewritten as 'DONE in Task 11'. Task 3: build/generation_in item rewritten as DONE and the export find/audit-teams/record_export bullets (5 lines) deleted and replaced by one DONE line. Task 4: registry lock, foreign keys and audit triggers items prefixed DONE in Task 11. Items are kept and marked DONE (plan wording: 'Remove ... and mark it done'), not literally deleted, except Task 3's export bullets.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T12-55-43Z-m21-task-02-catalog-writes-take-catalogdb.md",
+              "lines": {
+                "start": 14,
+                "end": 26
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:43:05.232777947Z",
+          "seal": {
+            "by": "server",
+            "mac": "40fec6d33075ad2ed92e633f2cf21777feb24cb0b8e403b561e7d8949939033a"
+          }
+        },
+        {
+          "id": "EVD-1456",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md:18-22",
+          "summary": "The three Task 11 items in Task 4's inventory carry DONE prefixes and keep their original long descriptions; the issue brief says the covered items are 'removed'. The marking-done reading follows the plan text ('Remove every crosses item ... and mark it done in the inventory'); a literal reader of the brief would call the retained text not removed.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md",
+              "lines": {
+                "start": 18,
+                "end": 22
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:43:05.294103446Z",
+          "seal": {
+            "by": "server",
+            "mac": "2a361d9982fdbadd19f8073e1ded6ee3d8a24907074d3b17899606f758a232d6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All covered items in the three changelogs were deleted (Task 3 export bullets) or rewritten as DONE in Task 11, as the plan's wording allows; my statement says 'removed or marked DONE'. The issue brief's literal 'removed' is met only in part (neutral EVD-1456).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1455"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.572648079Z",
+          "seal": {
+            "by": "server",
+            "mac": "5ad2774a265112f16676831b825a29267a9031f4640b8b3a98c4c6126474aae1"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.572648079Z",
+      "seal": {
+        "by": "server",
+        "mac": "7b546e729ba7d93b6d7ccb08c09d68b7b49f7f9c918183c7da2edd1c0b056291"
+      }
+    },
+    {
+      "id": "CLM-1014",
+      "statement": "The migration also adds catalogs.deleted_at and the store_cleanups table (UNIQUE (store, kind, subject), kind in ('key','catalog')) as the plan specifies.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: 'catalogs.deleted_at and store_cleanups added'; plan Task 11 SQL",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "migrations/accounts/0041_catalog_schema.sql"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1457",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0041_catalog_schema.sql:111-126",
+          "summary": "ALTER TABLE catalogs ADD COLUMN deleted_at timestamptz; CREATE TABLE store_cleanups (id identity PK, store text REFERENCES stores(name) ON DELETE RESTRICT, kind CHECK in ('key','catalog'), subject, created_at, attempts DEFAULT 0, UNIQUE (store, kind, subject)), matching the plan SQL.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0041_catalog_schema.sql",
+              "lines": {
+                "start": 111,
+                "end": 126
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:43:05.352846054Z",
+          "seal": {
+            "by": "server",
+            "mac": "465150a5d3b67a4d5d74a7ea37463a4a82648482e1af2b0417977d872de79645"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The SQL adds the column and the table with the stated constraints; the migration test also confirms deleted_at exists and generation does not. store_cleanups has no behavioural test (inspection only).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1457"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.628392632Z",
+          "seal": {
+            "by": "server",
+            "mac": "ca32c285587455b414b050642c2d48f311d4ba396463beaccdfe30d51a4b60d1"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.628392632Z",
+      "seal": {
+        "by": "server",
+        "mac": "4ac9d09e8e3e963a28e79639042e611f729dfa63f25528bcc263c1d0b974ce63"
+      }
+    },
+    {
+      "id": "CLM-1015",
+      "statement": "A changeset opened while a user deletion runs is left open under the deleted key (key_id kept, no foreign key), and the deletion does not wait for the open in flight.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'Known gaps for Task 13: a dangling key id is accepted; a user deletion no longer waits for an in-flight changeset open'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1458",
+          "kind": "test",
+          "locator": "SQLX_OFFLINE=true tools/agentic/gate.sh narrow --lib --jobs 4 -- a_changeset_opened_while_a_deletion_runs (1 passed)",
+          "summary": "Holds an uncommitted changeset open, runs users::delete under a timeout (it does not wait), commits the open; asserts deleted.discarded == 0, the changeset is state open with key_id still the deleted key's id, and api_keys is empty.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 3664,
+                "end": 3704
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:43:05.414383115Z",
+          "seal": {
+            "by": "server",
+            "mac": "e24140a496452892b4cc6fc621c2bcfbe80d115ed9709e01931cb9f61ba728c6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test asserts the deletion finishes without waiting for the open and the committed changeset stays open with the deleted key's id.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1458"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.684498407Z",
+          "seal": {
+            "by": "server",
+            "mac": "fe58bcb1f0deedaf224b36ceeee56c0f9aca47b04531adca83912bbcc0afd368"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.684498407Z",
+      "seal": {
+        "by": "server",
+        "mac": "56bbbee5c68a6b8e34448c02680af50ff36aa0e0b47d4c290a99822f31f5804d"
+      }
+    },
+    {
+      "id": "CLM-1016",
+      "statement": "Publish begins the account transaction first, then the store transaction, and commits the store transaction before the account transaction (the interim dual-transaction pattern).",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: 'Interim dual-transaction pattern (account connection first, store commits first) until Tasks 12 and 13'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1459",
+          "kind": "analysis",
+          "locator": "src/store/publish.rs:215-235,319-322",
+          "summary": "publish_locked does `app.accounts().begin()` (account_tx), lock_people on it, then `db.begin()` (store tx); the write phase ends with `tx.commit()` then `account_tx.commit()`; the Conflict path rolls back store then account. Order matches the claim.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 215,
+                "end": 235
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:43:05.476053765Z",
+          "seal": {
+            "by": "server",
+            "mac": "36fb543c69d92ef1c5e662d9b825eeb1fa9500fde120f84cbf0c7109e5571130"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "publish_locked opens the account transaction before the store transaction and commits the store transaction first.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1459"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.741074904Z",
+          "seal": {
+            "by": "server",
+            "mac": "4017b0c28170c4b452a78e47baea4886c7f2b3d45e6ae830847e24b6579327af"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.741074904Z",
+      "seal": {
+        "by": "server",
+        "mac": "abd554d536ebbb3d6d5f249c56676259cffbeab6155c233abcd72ad9a125dba5"
+      }
+    },
+    {
+      "id": "CLM-1017",
+      "statement": "The plan's Task 11 section carries a dated 'Corrected (issue #970, 2026-11-23)' note recording the implementation's differences.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: 'Plan Task 11 note corrected'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1460",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:465",
+          "summary": "Line 465 starts '> **Corrected (issue #970, 2026-11-23).** Shipped in migrations/accounts/0041_catalog_schema.sql ...' listing the seed rule, CatalogDb::main_in, directory/export generation fill, interim dual transactions, RunWatch, dangling key id and the deletion wait; it sits directly after Task 11's test bullets.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 465,
+                "end": 465
+              },
+              "commit": "94a5c7d2fb33f8717a520e9c520004021e226631"
+            }
+          },
+          "recorded_at": "2026-11-23T22:43:05.536509141Z",
+          "seal": {
+            "by": "server",
+            "mac": "47fcef945f8f8f5e01cd5d0d01e0e3665860c4f2007b4793e52c1aa70e65687c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Line 465 of the plan is the dated Corrected note for issue #970.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1460"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.798337174Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d7fb85ba44202d1e5bcc028726f32cb8eeea605c145c86480e9649ef8758492"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.798337174Z",
+      "seal": {
+        "by": "server",
+        "mac": "70fafc1b06fe79952d10d53167c95b657caf10a185ee78ab23a190d0199cd8ad"
+      }
+    },
+    {
+      "id": "CLM-1018",
+      "statement": "fmt, lint, dylint and test are green through tools/agentic/gate.sh with 3487 passed, 0 failed, 21 ignored on the head commit.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'fmt, lint, dylint, test (3487 passed, 0 failed, 21 ignored) green through tools/agentic/gate.sh'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "target/i970-logs/gate-test.log"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1461",
+          "kind": "log",
+          "locator": "target/i970-logs/gate-test.log (summed `test result` lines); target/i970-logs/gates.status; target/i970-logs/gate-lint.log, gate-lint2.log",
+          "summary": "Summing the log's `test result` lines gives 3487 passed, 0 failed, 21 ignored, matching the claim. gates.status shows fmt 0, lint 101, dylint 0, test 0; a second lint log (gate-lint2.log, written later) ends 'Finished' with no status file. The log is the author's file written 17:30, a minute before the head commit 17:31; I did not rerun the full suite, so it cannot be tied to head 94a5c7d, and the lint pass is not shown by a status file.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T22:43:05.592054206Z",
+          "seal": {
+            "by": "server",
+            "mac": "4313c151d9a7fd174b0950c5aef7a9f069a1f63fbb7270723f9ab8b11394b947"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The author's test log sums to 3487/0/21 but predates the head commit by a minute, I did not rerun the full suite, and there is no status record for a passing lint run (gates.status says lint 101). Fix: rerun tools/agentic/gate.sh fmt, lint, dylint and test on head 94a5c7d and quote the printed counts and exit codes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1461"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.854684090Z",
+          "seal": {
+            "by": "server",
+            "mac": "48c0c98cf00821eea439f4ee577928e0fad111f78ee23d6dde64ded1b6d96b70"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.854684090Z",
+      "seal": {
+        "by": "server",
+        "mac": "c4dd939a7e48933e9ae74c0f8a7273bd453ea860aeb61da0e263e2748f671d62"
+      }
+    },
+    {
+      "id": "CLM-1019",
+      "statement": "Each of the six named tests was checked to fail with the change reverted.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "demonstration",
+      "source": "PR body: 'Each of the six named tests was checked to fail with the change reverted.'",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/stores/mod.rs",
+        "src/store/maintenance/tests.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1462",
+          "kind": "analysis",
+          "locator": "PR body 'Validation' section; target/i970-logs (no revert run recorded)",
+          "summary": "The statement describes a manual revert-and-rerun the author did; no log of it exists in target/i970-logs and I did not repeat it (I may only run narrow tests on head and add no load). It is neither shown nor contradicted. The PR also says 'six named tests' while the issue names five.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T22:43:05.650060641Z",
+          "seal": {
+            "by": "server",
+            "mac": "3670a371662cc1ffe49bc2ff3ed596fcd8eba38a4803dbbfc77d655ee84cb526"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The revert check was a manual step with no recorded output, so it can be neither confirmed nor refuted. Fix: either drop the sentence from the PR body or revert the code change under test in a scratch checkout, run each named test with tools/agentic/gate.sh narrow, and record the failing output.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1462"
+          ],
+          "recorded_at": "2026-11-23T22:43:43.911760260Z",
+          "seal": {
+            "by": "server",
+            "mac": "3d637121e5babba091f25ce5c97fba86dc659064dc404177b205b1f1852c7a6b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T22:41:05.762109873Z",
+      "updated_at": "2026-11-23T22:43:43.911760260Z",
+      "seal": {
+        "by": "server",
+        "mac": "a57e6e6902afe0fc203afcbbe837a38e9d8c18453e250738a6ae4e06985e3c7e"
       }
     }
   ]
