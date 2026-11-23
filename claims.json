@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 838,
+  "next_claim_seq": 854,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "8471f499d4f78596e7661e11bed43b78b824fddfbcf39cd0642743281d6a99d7"
+    "mac": "dd10e8cd4e368b58af8c5d1500ae089d35d3e7333008a03cf295c110a427eb9a"
   },
-  "next_evidence_seq": 1121,
+  "next_evidence_seq": 1147,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "7599a857ee31dc1c1ceed81c8b5ace58c3236fa7bd715f85953df86fbb3a50c3"
+    "mac": "ee24440eadb4104b8c40af4088762e2fe50c842ff1654f45fa90c83820fb7b88"
   },
   "claims": [
     {
@@ -59018,7 +59018,9 @@
         "from-issue:959"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by #964",
+        "retired_at": "2026-11-23T15:47:15.897367057Z"
       },
       "evidence": [
         {
@@ -59031,6 +59033,18 @@
           "seal": {
             "by": "server",
             "mac": "576875abfa62e2ff71af84ff65d8670f2288e0c4d69814530ef028ecd177f668"
+          }
+        },
+        {
+          "id": "EVD-1143",
+          "kind": "analysis",
+          "locator": "children of CLM-0743",
+          "summary": "Children CLM-0748 (pool() deprecated plus allow(deprecated)) and CLM-0753 (no call-site migration) are refuted at head because #964 removed the method and migrated all callers. The parent's wording 'deprecated App::pool()' and 'no call-site migration' no longer holds.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-23T15:46:32.799056949Z",
+          "seal": {
+            "by": "server",
+            "mac": "3cf1e375b5d77ff504616942094ca99750787088ff639a08b7a85f1fdaf77b17"
           }
         }
       ],
@@ -59047,13 +59061,26 @@
             "by": "server",
             "mac": "dccd7efbed357327d559f581ef1917d08d82d2e79cf432af157cd448048969d4"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "Two children (deprecated pool() with allow, and no call-site migration) are false at head after #964; the #959 delivery claim is superseded. Fix: retire CLM-0743 and its refuted children CLM-0748 and CLM-0753 with reason 'superseded by #964' (retire_claim), keeping the other #959 children.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1143"
+          ],
+          "recorded_at": "2026-11-23T15:46:43.731490371Z",
+          "seal": {
+            "by": "server",
+            "mac": "457f708aef4cb5a0a0cf50116d30f5382a8b2091f52a9e65a3e9b614f6e5c9a0"
+          }
         }
       ],
       "created_at": "2026-11-23T12:26:36.728383559Z",
-      "updated_at": "2026-11-23T12:27:50.735922157Z",
+      "updated_at": "2026-11-23T15:47:15.897367057Z",
       "seal": {
         "by": "server",
-        "mac": "c0548f8a78206d953723437cac0cbf346b08bfcc2d6f0dbc0a28e8639083d020"
+        "mac": "d400886ef3946090b545a8b4caaa97e29510d686bf3b9b8d2899ed234ca8d6b0"
       }
     },
     {
@@ -59332,6 +59359,28 @@
             "by": "server",
             "mac": "9a7663c76e433c39e59afbddc7a803ff65d95f37aee2d6d12c8e2aaceef72563"
           }
+        },
+        {
+          "id": "EVD-1144",
+          "kind": "test",
+          "locator": "src/app.rs:536-553; src/stores/mod.rs:301 main_store_and_accounts_reach_the_same_database_in_release_one; tools/agentic/gate.sh test on e224cb2",
+          "summary": "accounts() returns &AccountDb and main_store() returns &CatalogDb at head, and the named test is in the passing suite (3391 passed, 0 failed).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/app.rs",
+              "lines": {
+                "start": 536,
+                "end": 553
+              },
+              "commit": "e224cb213de03cb90be1a22300bc211b5fae3bbf"
+            }
+          },
+          "recorded_at": "2026-11-23T15:46:32.854070096Z",
+          "seal": {
+            "by": "server",
+            "mac": "94136c6ec083e7750162a5e12e1f5380163935d85c29125e12e7d19f92023308"
+          }
         }
       ],
       "verdicts": [
@@ -59347,13 +59396,26 @@
             "by": "server",
             "mac": "1bdba6996dec983556d52a9ec0eaace8423094af98d3e4ba9fa3b507d04fc921"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head after src/app.rs changed: accessors exist and the same-pool test is in the passing suite.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1144"
+          ],
+          "recorded_at": "2026-11-23T15:46:43.780195412Z",
+          "seal": {
+            "by": "server",
+            "mac": "9a35e6a4cb8f7fcf00d4cae837ff8c3f7bf93f7e81456acff6aea6dc9bbef1b7"
+          }
         }
       ],
       "created_at": "2026-11-23T12:26:36.728383559Z",
-      "updated_at": "2026-11-23T12:27:28.557365962Z",
+      "updated_at": "2026-11-23T15:46:43.780195412Z",
       "seal": {
         "by": "server",
-        "mac": "5e7245e8860800540dfcb7315679c96e02e1b0f43d3aa30de5a54c870de2afb9"
+        "mac": "ebc2d072231dbe1eb8a25b3aaba0ec527d890ecc9b0899811984af0aa58d91c6"
       }
     },
     {
@@ -59375,7 +59437,9 @@
         "from-issue:959"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by #964",
+        "retired_at": "2026-11-23T15:47:15.797345387Z"
       },
       "evidence": [
         {
@@ -59399,6 +59463,29 @@
             "by": "server",
             "mac": "3624ef4ae512a7d760abb698de3011e41ba10b02a398c138b71a4cc4fb6638f2"
           }
+        },
+        {
+          "id": "EVD-1141",
+          "kind": "inspection",
+          "locator": "src/app.rs:528-553; src/lib.rs:18-24 at e224cb2",
+          "summary": "At head App::pool() no longer exists and lib.rs has no allow(deprecated): the #959 state this claim describes was removed on purpose by #964 (zero hits for allow(deprecated) or #[deprecated] in src and tests).",
+          "stance": "refutes",
+          "anchor": {
+            "search": {
+              "pattern": "allow\\(deprecated\\)|#\\[deprecated|#!\\[deprecated",
+              "scope": [
+                "src",
+                "tests"
+              ],
+              "hits": 0,
+              "commit": "e224cb213de03cb90be1a22300bc211b5fae3bbf"
+            }
+          },
+          "recorded_at": "2026-11-23T15:46:32.687711059Z",
+          "seal": {
+            "by": "server",
+            "mac": "ab2c6061ecaf669ebe426435128b1f3b861013cbb0bd0c31ac74257a54dd28e7"
+          }
         }
       ],
       "verdicts": [
@@ -59414,13 +59501,26 @@
             "by": "server",
             "mac": "e0e1f12f53d4a5d9c06702693cd7b48c0d20ef4a6e05ca03d9607d37b99b9b8f"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "At head the method and the allow are gone; the claim described the #959 state that #964 removes by design. Fix: retire CLM-0748 with reason 'superseded by #964: App::pool() and allow(deprecated) removed' (retire_claim), since the issue-required end state contradicts it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1141"
+          ],
+          "recorded_at": "2026-11-23T15:46:43.628733717Z",
+          "seal": {
+            "by": "server",
+            "mac": "25b76e64956df80baf7ddcef500ef6d6067b5b7276329ec55e44a261a6a0c887"
+          }
         }
       ],
       "created_at": "2026-11-23T12:26:36.728383559Z",
-      "updated_at": "2026-11-23T12:27:28.610672567Z",
+      "updated_at": "2026-11-23T15:47:15.797345387Z",
       "seal": {
         "by": "server",
-        "mac": "9d914ae38bf78ddbf5fa3ce3f31fe7888eaea52316019ec505fe36849dea3539"
+        "mac": "e37508e7da19ddf6403d47a3b1502a0ad9f69c785cee5ea23a724bdfd3cad023"
       }
     },
     {
@@ -59707,7 +59807,9 @@
         "from-issue:959"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by #964",
+        "retired_at": "2026-11-23T15:47:15.846501287Z"
       },
       "evidence": [
         {
@@ -59731,6 +59833,18 @@
             "by": "server",
             "mac": "a08ebbbb366cc06bd905567384faef6c60cb70fd85d43cb7bb3d350882a20256"
           }
+        },
+        {
+          "id": "EVD-1142",
+          "kind": "inspection",
+          "locator": "git diff --stat origin/milestone/958-catalog-stores..HEAD (64 files, about 712 App::pool() call sites replaced)",
+          "summary": "This change migrates every call site of App::pool() (712 removed lines in 62 src/tests files), so the statement that no call sites are migrated is false at head; it described #959 only.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-23T15:46:32.748427350Z",
+          "seal": {
+            "by": "server",
+            "mac": "3f20c9060e4306fb2fe3b46e5bebec271a615db8dd44a9edfc09b505607b1a61"
+          }
         }
       ],
       "verdicts": [
@@ -59746,13 +59860,26 @@
             "by": "server",
             "mac": "28c3d273243d0a84245096e14da15c747eb54d8c20b114cb2ad52ddef1d9a547"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "#964 migrates all ~712 call sites, so 'migrates no call sites' is false at head; it described #959 only. Fix: retire CLM-0753 with reason 'superseded by #964: all App::pool() callers migrated' (retire_claim).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1142"
+          ],
+          "recorded_at": "2026-11-23T15:46:43.678054090Z",
+          "seal": {
+            "by": "server",
+            "mac": "eec1f98b5d5741276e64df72ec7826b921119fc88ecfcf19c24f7a6a955956d9"
+          }
         }
       ],
       "created_at": "2026-11-23T12:26:36.728383559Z",
-      "updated_at": "2026-11-23T12:27:28.968676771Z",
+      "updated_at": "2026-11-23T15:47:15.846501287Z",
       "seal": {
         "by": "server",
-        "mac": "c0f4399058d5ff979eac036ffb7f21623b0dd195202ae73ecaa1b56b88018cd1"
+        "mac": "2b8c27046ec4e513d326c659cd06cfe7a9d377fd2502dedbbf3ea93c504f4239"
       }
     },
     {
@@ -65848,6 +65975,1119 @@
       "seal": {
         "by": "server",
         "mac": "61a8feb475b9903efea36c25f3d17aa86f4dd0f2926e000e20a70b7eb777c13d"
+      }
+    },
+    {
+      "id": "CLM-0838",
+      "statement": "Issue #964 (M21.06) is delivered: App::pool() and the crate-wide allow(deprecated) are removed, every remaining caller uses app.accounts() or app.main_store(), tests moved too, with no schema or behaviour change.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/964 (Scope: Every remaining caller uses app.accounts(); remove App::pool(). Release 1 is deployable after this (no schema or behaviour change).)",
+      "derived_from": [],
+      "artifacts": [
+        "src/app.rs",
+        "src/lib.rs",
+        "src/housekeeping.rs"
+      ],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1140",
+          "kind": "analysis",
+          "locator": "children of CLM-0838",
+          "summary": "All behavioural children are supported (pool removed, allow removed, callers split, same-pool no behaviour/schema change, tests, gates). One documentation child, CLM-0852 (the plan's correction note about Test*::pool() accessors), is refuted; it is a one-sentence doc error, not a code gap.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-23T15:46:32.572236142Z",
+          "seal": {
+            "by": "server",
+            "mac": "76e32a52d8a45e569ba64f659e2e68ccb1cf7f11b49f301ae5f4fc48e081cc17"
+          }
+        },
+        {
+          "id": "EVD-1146",
+          "kind": "analysis",
+          "locator": "children of CLM-0838",
+          "summary": "All active children CLM-0839 to CLM-0853 are supported after the plan note was corrected (CLM-0852 re-audited with EVD-1145).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T15:47:23.583227571Z",
+          "seal": {
+            "by": "server",
+            "mac": "b54e5e95cef3f2564ed9f2fd9ef17b7f52e8a95ff9c6ea265c6ed509397d9886"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Every behavioural requirement holds, but the child CLM-0852 (plan correction note) is refuted, which rolls the parent up as refuted. Fix: correct the plan's Task 6 correction note (docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md line 288) so it no longer claims Test*::pool() accessors exist, commit, and re-audit CLM-0852 and this parent.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1140"
+          ],
+          "recorded_at": "2026-11-23T15:46:43.578340079Z",
+          "seal": {
+            "by": "server",
+            "mac": "28ce808cc42976093856144eec38aba71d22416fc9ed5a9fbdd95fd13231e697"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All active children are supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1146"
+          ],
+          "recorded_at": "2026-11-23T15:47:27.724548948Z",
+          "seal": {
+            "by": "server",
+            "mac": "dddb2c24453c7b4896a18a8ea68032b8d18891789d8696289b65398c496aedd8"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:47:27.724548948Z",
+      "seal": {
+        "by": "server",
+        "mac": "ef773ca2841c5aa6d959d4ce8fc7c47a96c9cdff843fb7109a65998ccc14e448"
+      }
+    },
+    {
+      "id": "CLM-0839",
+      "statement": "App::pool() no longer exists: src/app.rs defines no pool method, and no .pool() call on an App remains anywhere in src or tests.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #964 title and Scope: \"remove App::pool()\"; PR body: \"App::pool() and #![allow(deprecated)] in src/lib.rs are removed.\"",
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [
+        "src/app.rs"
+      ],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1121",
+          "kind": "analysis",
+          "locator": "git grep -nE '(app|test\\.app|ctx\\.app\\(\\)|state\\.app)\\.pool\\(\\)|App::pool' -- src tests",
+          "summary": "Zero hits at head e224cb2 for a .pool() call on an App or App::pool in src and tests. The only remaining .pool() calls are WorkerPool::pool (src/housekeeping.rs:772,973 via src/mail/queue.rs:136), a different type.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "(app|test\\.app|ctx\\.app\\(\\)|state\\.app)\\.pool\\(\\)|App::pool",
+              "scope": [
+                "src",
+                "tests"
+              ],
+              "hits": 0,
+              "commit": "e224cb213de03cb90be1a22300bc211b5fae3bbf"
+            }
+          },
+          "recorded_at": "2026-11-23T15:45:26.308655644Z",
+          "seal": {
+            "by": "server",
+            "mac": "7a2e14fe5c9df1483bf28315f2ff9ffddb77ddc6471960ceeccf8525fddeffe1"
+          }
+        },
+        {
+          "id": "EVD-1122",
+          "kind": "inspection",
+          "locator": "src/app.rs:520-555",
+          "summary": "The accessor block now goes from metrics() to accounts() and main_store(); the deprecated pool() method (diff -531..-545) is gone. The code compiles (lint and test gates pass), so no caller of it is left.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/app.rs",
+              "lines": {
+                "start": 528,
+                "end": 553
+              },
+              "commit": "e224cb213de03cb90be1a22300bc211b5fae3bbf"
+            }
+          },
+          "recorded_at": "2026-11-23T15:45:26.363021559Z",
+          "seal": {
+            "by": "server",
+            "mac": "7466a51f8fc24314709d1bc92fe96477e63df3115efec1d7e1e186d569677e83"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Zero-hit search plus the deleted method in app.rs, and the build passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1121",
+            "EVD-1122"
+          ],
+          "recorded_at": "2026-11-23T15:46:19.441199246Z",
+          "seal": {
+            "by": "server",
+            "mac": "b117f4e1115f9db27b42add7f6e3ab18ebcc94339c52f32ab7c40f691ff4f573"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:46:19.441199246Z",
+      "seal": {
+        "by": "server",
+        "mac": "49b48ed84b78dfc686251fa16e0fffee70a57520a1c36e2f6fa73ad2c0599715"
+      }
+    },
+    {
+      "id": "CLM-0840",
+      "statement": "The crate-wide #![allow(deprecated)] is removed from src/lib.rs, and no #[deprecated] or allow(deprecated) attribute remains in src or tests.",
+      "kind": "constraint",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #964: \"the crate-wide allow(deprecated) removed\"; PR body: \"App::pool() and #![allow(deprecated)] in src/lib.rs are removed.\"",
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [
+        "src/lib.rs"
+      ],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1123",
+          "kind": "analysis",
+          "locator": "git grep -nE 'allow\\(deprecated\\)|#\\[deprecated|#!\\[deprecated' -- src tests",
+          "summary": "Zero hits at head in src and tests.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "allow\\(deprecated\\)|#\\[deprecated|#!\\[deprecated",
+              "scope": [
+                "src",
+                "tests"
+              ],
+              "hits": 0,
+              "commit": "e224cb213de03cb90be1a22300bc211b5fae3bbf"
+            }
+          },
+          "recorded_at": "2026-11-23T15:45:26.423301879Z",
+          "seal": {
+            "by": "server",
+            "mac": "b2786521f10247219f61ec4805ab7cb3c2dd999b96f23908329169b46ae7e901"
+          }
+        },
+        {
+          "id": "EVD-1124",
+          "kind": "inspection",
+          "locator": "src/lib.rs:18-24",
+          "summary": "After the recursion_limit attribute the file goes straight to pub mod app; the 4-line allow(deprecated) comment and attribute are deleted (diff -23..-26).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/lib.rs",
+              "lines": {
+                "start": 18,
+                "end": 24
+              },
+              "commit": "e224cb213de03cb90be1a22300bc211b5fae3bbf"
+            }
+          },
+          "recorded_at": "2026-11-23T15:45:26.475891588Z",
+          "seal": {
+            "by": "server",
+            "mac": "474805ffbef56b60b52501d9933511b92931045fb0551cf0bf2aab609fbbdfd6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "lib.rs no longer has the allow and no deprecation attribute exists in src or tests.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1123",
+            "EVD-1124"
+          ],
+          "recorded_at": "2026-11-23T15:46:19.490573810Z",
+          "seal": {
+            "by": "server",
+            "mac": "4ab62ead47903f50f2c6be477c4489cd862d777338b5dd23fb4e88bfa7d7bba4"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:46:19.490573810Z",
+      "seal": {
+        "by": "server",
+        "mac": "8dd5b83c45a57d41c2b55b627c860c54975a18cba44cf2056185e051d9616544"
+      }
+    },
+    {
+      "id": "CLM-0841",
+      "statement": "Account-side production callers that used App::pool() now pass app.accounts().executor(), and the only app.main_store() callers added are housekeeping's changesets::prune_empty and the changesets::open_total count in cluster_stats.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"Account-side callers use app.accounts().executor() ... Housekeeping's changesets::prune_empty and the changesets::open_total count in cluster_stats use app.main_store().executor()\"",
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs"
+      ],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1125",
+          "kind": "inspection",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD | grep -E '^\\+.*main_store'",
+          "summary": "The only added executable main_store() uses are src/housekeeping.rs prune_changesets (changesets::prune_empty(app.main_store().executor(), ..)) and cluster_stats (changesets::open_total(app.main_store().executor())); all other added lines are comments, plan or changelog. Every other changed call site uses accounts().executor() (e.g. tick, refresh_gauges, prune_oauth, prune_audit).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 476,
+                "end": 481
+              },
+              "commit": "e224cb213de03cb90be1a22300bc211b5fae3bbf"
+            }
+          },
+          "recorded_at": "2026-11-23T15:45:26.529040939Z",
+          "seal": {
+            "by": "server",
+            "mac": "12e4f9ba87f637a5a828460c818b19264f39feee65eb2fbc9293db7fd88e82bd"
+          }
+        },
+        {
+          "id": "EVD-1126",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs:652-660",
+          "summary": "cluster_stats counts open changesets on app.main_store().executor() and the mail-queue depth and the cluster_stats insert on app.accounts().executor().",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 652,
+                "end": 660
+              },
+              "commit": "e224cb213de03cb90be1a22300bc211b5fae3bbf"
+            }
+          },
+          "recorded_at": "2026-11-23T15:45:26.576725768Z",
+          "seal": {
+            "by": "server",
+            "mac": "09b8807fc0c40e2da00b4635005d55a037f3575ed9410b30a91ee4c53768869c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The diff's only executable main_store additions are the two housekeeping sites; the rest of the compiler-forced call sites use accounts().",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1125",
+            "EVD-1126"
+          ],
+          "recorded_at": "2026-11-23T15:46:19.539041060Z",
+          "seal": {
+            "by": "server",
+            "mac": "76553b7ca9b3a643bb0ab148edc08320844f2c5d6af0297e384652c0815f9c3f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:46:19.539041060Z",
+      "seal": {
+        "by": "server",
+        "mac": "51589f5369ac102f32d765639667a5d451a4d5934ad7e71dbdb7f276cbf32abe"
+      }
+    },
+    {
+      "id": "CLM-0842",
+      "statement": "changesets::prune_empty and changesets::open_total read and write only the changesets and changeset_entries tables (no account table).",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"they read only changesets and changeset_entries, so no new crossing\"",
+      "derived_from": [
+        "CLM-0841"
+      ],
+      "artifacts": [
+        "src/store/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1127",
+          "kind": "inspection",
+          "locator": "src/store/changesets.rs:797-834",
+          "summary": "prune_empty is UPDATE changesets with a subquery on changesets c and NOT EXISTS over changeset_entries; OPEN_TOTAL_SQL is SELECT count(*) FROM changesets WHERE state = 'open'. No account table is named.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 797,
+                "end": 834
+              },
+              "commit": "e224cb213de03cb90be1a22300bc211b5fae3bbf"
+            }
+          },
+          "recorded_at": "2026-11-23T15:45:26.630069900Z",
+          "seal": {
+            "by": "server",
+            "mac": "66be1c7fc7141d83eb8851c5cf806a36d7b5eed36ea8591e61be093fc85b06bd"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both SQL statements name only changesets and changeset_entries.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1127"
+          ],
+          "recorded_at": "2026-11-23T15:46:19.587223738Z",
+          "seal": {
+            "by": "server",
+            "mac": "4ad95dea2834df54b59e1c8d6cb692321070c6095e0951da84dc7b20bc6c37f6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:46:19.587223738Z",
+      "seal": {
+        "by": "server",
+        "mac": "55aa9e4fef11b6de0277e9b1e90ca2fef123fe8777ef5c18bc0217e101ada852"
+      }
+    },
+    {
+      "id": "CLM-0843",
+      "statement": "The tests moved too: no test code in src or tests still calls the removed method, and the whole test target compiles and passes under the new handles.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #964 Validation: \"the existing suite passes (handle types aside)\"; PR body: \"and the tests\" now pick a side.",
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [
+        "src",
+        "tests"
+      ],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1128",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh test (just test), run by the auditor on e224cb2",
+          "summary": "Whole workspace test target compiled with no App::pool() and every test binary reported ok: 3391 passed, 0 failed, 21 ignored summed over the 28 'test result' lines. The test files changed (e.g. src/housekeeping.rs mod tests, src/http/api/*_tests.rs) use accounts().executor().",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T15:45:52.811089169Z",
+          "seal": {
+            "by": "server",
+            "mac": "b0d98425067040be7305e8bfe18d0afce1df84e2b2fbb6ffdf642c0dd6198ef0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Full test gate re-run: compiles and 3391 pass, 0 fail.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1128"
+          ],
+          "recorded_at": "2026-11-23T15:46:19.635292267Z",
+          "seal": {
+            "by": "server",
+            "mac": "63384726234d33d57b861999e61c66e0940de6d949b0f5e5db1348c674790bea"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:46:19.635292267Z",
+      "seal": {
+        "by": "server",
+        "mac": "c34369a7d7577325890b5590b6a012088df6eb92ae5b5d94a5c8cbcf0c5055b9"
+      }
+    },
+    {
+      "id": "CLM-0844",
+      "statement": "No schema change: the change touches no migration file and no committed sqlx query data.",
+      "kind": "constraint",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #964: \"no schema or behaviour change\"; PR body: \"No schema or behaviour change\"",
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [
+        "migrations"
+      ],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1129",
+          "kind": "analysis",
+          "locator": "git diff --name-only origin/milestone/958-catalog-stores..HEAD -- migrations .sqlx ':(glob)**/*.sql'",
+          "summary": "Empty output: no migration or sqlx query-data file is in the 64-file diff (src, changelog and the plan only).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T15:45:52.926014636Z",
+          "seal": {
+            "by": "server",
+            "mac": "bb70875643e5231a15ab3e839418ed0ce3bc92d81f0836792376d88163354f3b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "No migration or .sqlx file in the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1129"
+          ],
+          "recorded_at": "2026-11-23T15:46:19.683660296Z",
+          "seal": {
+            "by": "server",
+            "mac": "7c07e3ab9a08be89a15fef98db6bc82f59689c9a84d5db9b8300a64ff6bd4f4e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:46:19.683660296Z",
+      "seal": {
+        "by": "server",
+        "mac": "f86d32312c02c1221a3614bff9c60097f9417fb1945f3baec8eb60b19a4d290e"
+      }
+    },
+    {
+      "id": "CLM-0845",
+      "statement": "No behaviour change: apart from deleting App::pool() and the allow, every non-test hunk only replaces app.pool() with app.accounts().executor() or app.main_store().executor() (plus reflow and one comment); no SQL, ordering, transaction or error path differs.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #964: \"no schema or behaviour change\"; PR body: \"No schema or behaviour change; release 1 is deployable at this commit.\"",
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [
+        "src"
+      ],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1130",
+          "kind": "analysis",
+          "locator": "per-file token diff of base vs head with .accounts().executor(), .main_store().executor(), .accounts(), .main_store() all rewritten to .pool() and whitespace, trailing commas and token boundaries normalized (perl+diff over all 62 src/tests files)",
+          "summary": "After normalization 49 files are identical. The rest differ only by: src/app.rs (pool() method deleted), src/lib.rs (allow deleted), src/housekeeping.rs (one added comment and the main_store swap), and files where rustfmt turned a one-line call into a method chain or block ({, }, '. executor ( )' tokens). I read the raw hunks of identity.rs, http/mod.rs and mcp/changesets.rs: reflow only. Beyond the two main_store swaps no SQL string, ordering, transaction or error path changed.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T15:45:53.001981037Z",
+          "seal": {
+            "by": "server",
+            "mac": "4c04653ff93622c89fa1877ed2ed6062a1dfa4c131bfbe2b079b12c42034bcd3"
+          }
+        },
+        {
+          "id": "EVD-1131",
+          "kind": "inspection",
+          "locator": "src/app.rs:72 and src/housekeeping.rs:477-481, 652-660",
+          "summary": "Both handles wrap one PgPool in release 1 (app.rs comment: pool() and main_store() hand out the same one; App::load builds both from pool.clone()), so the two main_store swaps address the same pool as before.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 652,
+                "end": 660
+              },
+              "commit": "e224cb213de03cb90be1a22300bc211b5fae3bbf"
+            }
+          },
+          "recorded_at": "2026-11-23T15:45:53.076910295Z",
+          "seal": {
+            "by": "server",
+            "mac": "e45296466c1301d049abcd52d9047f425cb73ae4ebcbc055b8c79e88f0e5a97a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The normalized diff leaves only formatting, the deleted method and allow, one comment and the two main_store swaps, which address the same pool in release 1.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1130",
+            "EVD-1131"
+          ],
+          "recorded_at": "2026-11-23T15:46:19.758384725Z",
+          "seal": {
+            "by": "server",
+            "mac": "74d8ceb6a3f8788e93f099e8a78642e638caaa9b68e9a6aa626271bb19fdb35a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:46:19.758384725Z",
+      "seal": {
+        "by": "server",
+        "mac": "0bdb3f71fb91703b03c10881f3d861652dda497a415be9e392065eeee6096490"
+      }
+    },
+    {
+      "id": "CLM-0846",
+      "statement": "just fmt (cargo fmt --all --check) passes on the head commit.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "source": "PR body: \"fmt, lint, test (3391 passed, 0 failed, 21 ignored), dylint, test-ui (277 passed, 1 ignored) all green via tools/agentic/gate.sh.\"",
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1132",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh fmt",
+          "summary": "Ran `cargo fmt --all --check` on e224cb2: exit 0, no diff.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T15:45:53.141682382Z",
+          "seal": {
+            "by": "server",
+            "mac": "9a1c2239467b6b96f7f5d61a818cbf7864c4a146f7c8e4526de10f5be08f0f88"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Re-ran; exit 0.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1132"
+          ],
+          "recorded_at": "2026-11-23T15:46:19.816834726Z",
+          "seal": {
+            "by": "server",
+            "mac": "218c0a6efecac8bb956d681064bb3055e99578f27562aca3cae995867d478560"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:46:19.816834726Z",
+      "seal": {
+        "by": "server",
+        "mac": "7653690c5507997d42ea6b9791ec9c9da51677d74085932eb3ea4c05806b1dcc"
+      }
+    },
+    {
+      "id": "CLM-0847",
+      "statement": "just lint (clippy and cargo doc with -D warnings) passes on the head commit.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"fmt, lint, test ..., dylint, test-ui ... all green via tools/agentic/gate.sh.\"",
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1133",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh lint",
+          "summary": "Ran on e224cb2: exit 0; ends with cargo doc under RUSTDOCFLAGS=-D warnings 'Generated ... index.html'.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T15:45:53.202271852Z",
+          "seal": {
+            "by": "server",
+            "mac": "b2b4c051c624b76fa06c1039b05b8d799245d425019ff3e07fab40eb218ad5cf"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Re-ran; exit 0.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1133"
+          ],
+          "recorded_at": "2026-11-23T15:46:19.877773398Z",
+          "seal": {
+            "by": "server",
+            "mac": "3be2e3f7e66c14c56c42eb59e146560eac2360014268887f36c809b7d4a840c4"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:46:19.877773398Z",
+      "seal": {
+        "by": "server",
+        "mac": "a4942ebf97aeec4c5af7e598fb93d875f06a15a831a30a3951804ada8a6ea373"
+      }
+    },
+    {
+      "id": "CLM-0848",
+      "statement": "The test gate on the head commit reports 3391 passed, 0 failed, 21 ignored.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"test (3391 passed, 0 failed, 21 ignored)\"",
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1134",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh test",
+          "summary": "Re-ran on e224cb2: exit 0; summing the 28 'test result: ok' lines gives 3391 passed, 0 failed, 21 ignored (lib 2889 passed, 2 ignored). The author's log target/i964-logs/test.txt sums to the same.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T15:45:53.266833548Z",
+          "seal": {
+            "by": "server",
+            "mac": "aa53b2f5ddcb7ad8cbb1796460c0325dacca783e7a3edd9b44aab6a5bd5e51a9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Re-ran; counts match exactly.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1134"
+          ],
+          "recorded_at": "2026-11-23T15:46:19.928027895Z",
+          "seal": {
+            "by": "server",
+            "mac": "9dae5dfa8f02423874eece09e3bf4834162a46bac92706ba953a1b537fd96142"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:46:19.928027895Z",
+      "seal": {
+        "by": "server",
+        "mac": "1f7ed316aec97143f4e702f19b83c4d0b85aa9a07023eff69a196849c22093ef"
+      }
+    },
+    {
+      "id": "CLM-0849",
+      "statement": "The ui_e2e suite on the head commit reports 277 passed, 0 failed, 1 ignored.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"test-ui (277 passed, 1 ignored)\"",
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1135",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh test (ui_e2e binary: 'test result: ok. 277 passed; 0 failed; 1 ignored'); justfile:45-46 test-ui = cargo test --test ui_e2e",
+          "summary": "The ui_e2e binary run inside my test gate reported 277 passed, 0 failed, 1 ignored. I did not run the separate test-ui gate (same cargo test --test ui_e2e, with --test-threads=2); the author's log target/i964-logs/ui.txt shows the same counts.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T15:45:53.409282204Z",
+          "seal": {
+            "by": "server",
+            "mac": "0cb53e0dc1885e3382b0b138a2bbde3780835201ba0f41399f3bb700fe0c1919"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The ui_e2e binary reports 277 passed, 1 ignored when run in my test gate; same test target as test-ui.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1135"
+          ],
+          "recorded_at": "2026-11-23T15:46:19.976065953Z",
+          "seal": {
+            "by": "server",
+            "mac": "bfcf625f17597994fee3e6a30b64d0241281053c2f312ed8be99eddcfbeb5de7"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:46:19.976065953Z",
+      "seal": {
+        "by": "server",
+        "mac": "07cd49e0944eafecbda496b52e1fda6eacbc2638df582f338704f9d4d3f4fba0"
+      }
+    },
+    {
+      "id": "CLM-0850",
+      "statement": "just dylint passes on the head commit.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"dylint ... all green via tools/agentic/gate.sh\"",
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1136",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh dylint",
+          "summary": "Ran on e224cb2: exit 0, 'Checking with toolchain nightly-2026-07-09 ... Finished'.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T15:45:53.496237519Z",
+          "seal": {
+            "by": "server",
+            "mac": "6de090c06a90216b7c33e55f77d38f1daf086c46524c62aa814796706b3cc333"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Re-ran; exit 0.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1136"
+          ],
+          "recorded_at": "2026-11-23T15:46:20.023436629Z",
+          "seal": {
+            "by": "server",
+            "mac": "6b6030bbc25b18f3b4483598ea2ed2821977fe7b1373950df0686f5dae7d49a2"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:46:20.023436629Z",
+      "seal": {
+        "by": "server",
+        "mac": "af963703c93cfff930725e79cbcca09d702ed1af341dac7d01aaef1b41c4ad18"
+      }
+    },
+    {
+      "id": "CLM-0851",
+      "statement": "The changelog file changelog/2026-11-23T15-13-31Z-m21-task-06-remove-app-pool.md exists and the plan's Task 6 carries a dated correction note.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"Plan Task 6 gets a dated correction note; changelog changelog/2026-11-23T15-13-31Z-m21-task-06-remove-app-pool.md.\"",
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T15-13-31Z-m21-task-06-remove-app-pool.md",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1137",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T15-13-31Z-m21-task-06-remove-app-pool.md; docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:288",
+          "summary": "The changelog file exists (30 lines, titled with 2026-11-23T15:13:31Z). Plan line 288 is a blockquote 'Corrected (issue #964, 2026-11-23)' under Task 6.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 288,
+                "end": 288
+              },
+              "commit": "e224cb213de03cb90be1a22300bc211b5fae3bbf"
+            }
+          },
+          "recorded_at": "2026-11-23T15:45:53.587315451Z",
+          "seal": {
+            "by": "server",
+            "mac": "81a9e8c625062f8dac5fdb753bae87f54c64cb42e1feec0ecee20267c5d2cc6f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both files exist at the stated locations with the dated note.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1137"
+          ],
+          "recorded_at": "2026-11-23T15:46:20.070772964Z",
+          "seal": {
+            "by": "server",
+            "mac": "37f2f853a0337e78019a11c39d75bc1d3aa3dd267721fb566b465bbb45a38663"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:46:20.070772964Z",
+      "seal": {
+        "by": "server",
+        "mac": "d628bc2ece023ae6aad24a5175daaf26025976b34a4356b0bb25463fdc2493c9"
+      }
+    },
+    {
+      "id": "CLM-0852",
+      "statement": "The plan's Task 6 correction note is accurate: grep -rn '\\.pool()' src finds test-only Test*::pool() accessors besides the account/catalog callers.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:288: \"so `grep -rn '\\.pool()' src` also finds the test-only `Test*::pool()` accessors\"",
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1138",
+          "kind": "analysis",
+          "locator": "git grep -nE 'fn pool\\b|\\.pool\\(\\)' -- src",
+          "summary": "At head the only fn pool in src is mail/queue.rs:136 (WorkerPool::pool, production, pub(crate)) plus a rayon helper in src/okf/caller.rs:122 (test); the only .pool() calls are WorkerPool's at housekeeping.rs:772,973. No Test*::pool() accessor exists, so the note's sentence is wrong.",
+          "stance": "refutes",
+          "anchor": {
+            "search": {
+              "pattern": "Test[A-Za-z]*::pool|struct Test[A-Za-z]*.*pool|fn pool\\(&self\\)",
+              "scope": [
+                "src"
+              ],
+              "hits": 1,
+              "commit": "e224cb213de03cb90be1a22300bc211b5fae3bbf"
+            }
+          },
+          "recorded_at": "2026-11-23T15:45:53.688601913Z",
+          "seal": {
+            "by": "server",
+            "mac": "bb690404c3374e275deb90b81dfe9712d1fdffdbd72eabeaba33a34453fc003b"
+          }
+        },
+        {
+          "id": "EVD-1145",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md Task 6 correction note; git grep '\\.pool()' src tests",
+          "summary": "Note now says the only remaining .pool() hits are WorkerPool::pool() (two calls in src/housekeeping.rs); git grep finds exactly those two.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "\\.pool\\(\\)",
+              "scope": [
+                "src",
+                "tests"
+              ],
+              "hits": 2,
+              "commit": "6e8215eb04a82c78c3157d75dd87375a1eee3144"
+            }
+          },
+          "recorded_at": "2026-11-23T15:47:15.967283509Z",
+          "seal": {
+            "by": "server",
+            "mac": "3a98e0b0d4f21abe4fabedabdc587a813b8c69d240692abc5d29a595c25abac9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Plan line 288 says grep '\\.pool()' src also finds test-only Test*::pool() accessors, but at head there is no such accessor; the only hits are WorkerPool::pool calls in src/housekeeping.rs. Fix: in docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md line 288 replace the sentence about Test*::pool() accessors with 'so grep -rn \"\\.pool()\" src still finds the two WorkerPool::pool() calls in src/housekeeping.rs', and correct the same wording in the changelog if present.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1138"
+          ],
+          "recorded_at": "2026-11-23T15:46:20.118197340Z",
+          "seal": {
+            "by": "server",
+            "mac": "28b4a955531c05bbfc63b73ea00921a2f1ab0f23cc257354f7180c8bc1ffe649"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Plan note corrected; the search anchor shows exactly the two WorkerPool::pool() hits it names.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1145"
+          ],
+          "recorded_at": "2026-11-23T15:47:23.529754875Z",
+          "seal": {
+            "by": "server",
+            "mac": "6c187f69c744dbb628d51b8898969ecc6177748a04ec5e9984ffe376d8d038a2"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:47:23.529754875Z",
+      "seal": {
+        "by": "server",
+        "mac": "d388b36774db78bb83ee685874d9349a4374ff12cf281488706e84dce31b31b7"
+      }
+    },
+    {
+      "id": "CLM-0853",
+      "statement": "The changelog's statement that no caller holds a transaction on one handle while taking a connection on the other holds: cluster_stats awaits the main_store count to completion before using the account executor, with no transaction open, and prune_changesets uses only main_store.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Changelog: \"No caller holds a transaction on one handle while taking a connection on the other\"",
+      "derived_from": [
+        "CLM-0838"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs"
+      ],
+      "tags": [
+        "from-issue:964"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1139",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs:477-481, 652-686",
+          "summary": "cluster_stats awaits open_total on main_store to completion with `?`, then mail_queue::depth and the INSERT run on accounts executor with single auto-commit statements; no begin()/transaction. prune_changesets uses only main_store().executor().",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 652,
+                "end": 686
+              },
+              "commit": "e224cb213de03cb90be1a22300bc211b5fae3bbf"
+            }
+          },
+          "recorded_at": "2026-11-23T15:45:53.771661923Z",
+          "seal": {
+            "by": "server",
+            "mac": "ee0a9a872308fb1b6a1884bc657fe9423940dee9acb7c97e04a97b8de28adef5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "No transaction is opened in either function; the main_store count completes before the account statements run.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1139"
+          ],
+          "recorded_at": "2026-11-23T15:46:20.165418705Z",
+          "seal": {
+            "by": "server",
+            "mac": "0be78065d26f9d8038e10b0758368aadaa16f33fd8cc3c788e6b2fcd3292ba85"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:45:08.911321586Z",
+      "updated_at": "2026-11-23T15:46:20.165418705Z",
+      "seal": {
+        "by": "server",
+        "mac": "75a4664a8e5628a45e18d454c5e6cfcb8914131355bf62ecd2b06c49204111c7"
       }
     }
   ]
