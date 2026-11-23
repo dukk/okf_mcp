@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 811,
+  "next_claim_seq": 828,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "686b34efce18803e299d638a26ded685e669bd226a0d6d3ed6e7255ec8401d34"
+    "mac": "6a04d505a851507e3d075164d4b597a4f38d4556a81c4dacaa42a16eabff0bc9"
   },
-  "next_evidence_seq": 1084,
+  "next_evidence_seq": 1109,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "41976790dae7badad658d7afb6940f4414409d930cef9763ecb386a254cb3cb0"
+    "mac": "e1659a4924e7ef0e2de06192ef11dac8e15c58f4c7c7ddc032c0edcf115ad017"
   },
   "claims": [
     {
@@ -63840,6 +63840,1291 @@
       "seal": {
         "by": "server",
         "mac": "6fb92cba03d1748051057c53052e68d00d238c7451d747f85a26f88c0342195c"
+      }
+    },
+    {
+      "id": "CLM-0811",
+      "statement": "Issue #963 is resolved: the five statements joining catalog and account tables are each split into one statement per side, joined in Rust, with the same results, ordering and paging.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/963 (M21.05: the five joined statements are split)",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/changesets.rs",
+        "src/store/repair.rs",
+        "src/store/users.rs",
+        "src/store/maintenance/runs.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1105",
+          "kind": "analysis",
+          "locator": "children of CLM-0811",
+          "summary": "The five statements are each split (listing, user catalogs, discard, claim, repair), the five named tests pass, the plan note exists. One documentation child (changelog line-number provenance) is refuted, so the parent is not fully supported.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-23T14:51:55.976838401Z",
+          "seal": {
+            "by": "server",
+            "mac": "afe31f337d5d327b74aee4251ced33276b447ba929ced1d8c7d3d28adf9c408e"
+          }
+        },
+        {
+          "id": "EVD-1108",
+          "kind": "analysis",
+          "locator": "children of CLM-0811",
+          "summary": "All active children are now supported except CLM-0825, which is not_enough_info (an unrepeated revert experiment, not a defect). The five statements are each split, the five named tests pass, the plan note and changelog (corrected at c981494) are accurate.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T14:53:38.895458216Z",
+          "seal": {
+            "by": "server",
+            "mac": "811f245d0a137cfbb984a370503a0a6a1cdf5e283cc1d1851e50b82d51587235"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "All code children are supported; refuted only by the roll-up rule because one documentation child (CLM-0821, changelog provenance of two line numbers) is refuted. Not a code defect. Fix: correct the changelog's users.rs bullet to attribute the line numbers to the plan inventory, then re-audit that claim and this one.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1105"
+          ],
+          "recorded_at": "2026-11-23T14:52:24.481052663Z",
+          "seal": {
+            "by": "server",
+            "mac": "a7ef572cc7ceda043abc7c29bec9d2e8171ce8810af8ce323526b8da3e7c12f7"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Code children supported by reading and by the five passing tests; the changelog provenance defect is fixed. CLM-0825 stays not_enough_info and does not bear on the parent's statement.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1108"
+          ],
+          "recorded_at": "2026-11-23T14:53:42.690784789Z",
+          "seal": {
+            "by": "server",
+            "mac": "a94f3cdfe2d83f99c0b57e2c6a45d40315915a8fd53e686fcdf0ac08f81fd770"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:53:42.690784789Z",
+      "seal": {
+        "by": "server",
+        "mac": "17b3103dd0aa4e123e0b76bbcce7a434a43047ec26d4e8b11f4b95ae23113a13"
+      }
+    },
+    {
+      "id": "CLM-0812",
+      "statement": "changesets::list_open and open_for_catalogs take (&AccountDb, &CatalogDb, ..) and no single statement in them names tables from both sides: catalogs and api_keys are read on the account side by id (= ANY), changesets and changeset_entries on the store side.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"`changesets::list_open` and `open_for_catalogs` take `(&AccountDb, &CatalogDb, ..)`. Names are resolved to ids on the account side when a name filter applies; ... the account side returns catalog names (ordered by name) and key labels in one `= ANY($1)` query each.\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "src/store/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1084",
+          "kind": "inspection",
+          "locator": "src/store/changesets.rs:594-760 (list_open, open_for_catalogs, listed)",
+          "summary": "Both entry points take (&AccountDb, &CatalogDb, ..). listed runs: account SELECT id FROM catalogs (name filter), store SELECT FROM changesets LEFT JOIN changeset_entries, account SELECT id,name FROM catalogs WHERE id=ANY ORDER BY name, account SELECT id,name FROM api_keys WHERE id=ANY. No statement names tables of both sides. Only caller mcp::changesets passes accounts() and main_store().",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 663,
+                "end": 760
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:21.917975648Z",
+          "seal": {
+            "by": "server",
+            "mac": "2a75c62d3adb5a441f7aa7d16a89372229faf0e568d0023b5e43038d27eac632"
+          }
+        },
+        {
+          "id": "EVD-1104",
+          "kind": "test",
+          "locator": "gate.sh narrow ... changeset_listing_names_catalogs_and_keys_after_the_split",
+          "summary": "Listing test passed in the 5-test narrow run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 1207,
+                "end": 1215
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:55.889979179Z",
+          "seal": {
+            "by": "server",
+            "mac": "01fcca39cb648976d2a833b8c9cdd815c7e0465e5c21f0e5867e62a54c083110"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code read plus passing test show the split.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1084",
+            "EVD-1104"
+          ],
+          "recorded_at": "2026-11-23T14:52:23.790652056Z",
+          "seal": {
+            "by": "server",
+            "mac": "1fb0fe710b6f48bf3cd26e2ba6f78fa81873da66b7d33df07ee973a861fb1182"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:52:23.790652056Z",
+      "seal": {
+        "by": "server",
+        "mac": "7b226102b1c4052c681097fbaf46926c375c07524909e66ecf295154905172d4"
+      }
+    },
+    {
+      "id": "CLM-0813",
+      "statement": "The split listing keeps the old order (catalog name, updated_at, id), drops a changeset whose catalog row is gone, and gives a changeset whose key row is gone a None key name.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"The result keeps the old `ORDER BY catalog name, updated_at, id`; a changeset whose key row is gone has a null key name.\" Changelog Changed: \"A changeset whose catalog row is gone is left out ...; one whose key row is gone gets `key_name: None`\"",
+      "derived_from": [
+        "CLM-0812"
+      ],
+      "artifacts": [
+        "src/store/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1085",
+          "kind": "inspection",
+          "locator": "src/store/changesets.rs:737-765 vs origin/milestone/958-catalog-stores:src/store/changesets.rs:659-668",
+          "summary": "Old statement ordered by k.name, c.updated_at, c.id with inner join on catalogs and left join on api_keys. New code ranks catalogs by position in the ORDER BY name answer, skips changesets whose catalog is missing (continue), maps key_id through a HashMap giving None if absent, and sorts by (rank, updated_at, id). Same semantics; no paging existed before or after.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 737,
+                "end": 765
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:21.985938588Z",
+          "seal": {
+            "by": "server",
+            "mac": "81cb19ea4eb8db809dcf868c5a00722d93ae4f8a14ca58a40cd3afa80d0878e0"
+          }
+        },
+        {
+          "id": "EVD-1086",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib --jobs 4 -- changeset_listing user_catalogs_with deleting_a_user_discards maintenance_run_records repair_lists",
+          "summary": "changeset_listing_names_catalogs_and_keys_after_the_split passed (5 passed, 0 failed in the narrow run); its fixture has a catalog created later that sorts first by name and a deleted key.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 1207,
+                "end": 1215
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:22.036057808Z",
+          "seal": {
+            "by": "server",
+            "mac": "11e1aaa33221e6912a9f594122375a31ffe603477edcb5b1ff08434ff083527c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Old and new ordering/join semantics compared line by line; test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1085",
+            "EVD-1086"
+          ],
+          "recorded_at": "2026-11-23T14:52:23.837778466Z",
+          "seal": {
+            "by": "server",
+            "mac": "bfd07f1fa30a01d119ff387b8c490b522137d5f742e34756315ed805631783c1"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:52:23.837778466Z",
+      "seal": {
+        "by": "server",
+        "mac": "893f15c024f39adee6f78c8a1d091a7c276691a77e5ac676646e68f1350b2841"
+      }
+    },
+    {
+      "id": "CLM-0814",
+      "statement": "users::open_changeset_catalogs reads the user's key ids (users, api_keys), then DISTINCT catalog_id of the user's open changesets (changesets), then the catalogs' names ordered by name (catalogs), returning early on an empty step, and delete_checked uses it in place of the joined statement.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Changelog Changed: \"the user's key ids (`users`, `api_keys`), then `SELECT DISTINCT catalog_id FROM changesets WHERE key_id = ANY($1) AND state = 'open'`, then the catalogs' names ordered by name. It returns early on an empty step.\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1087",
+          "kind": "inspection",
+          "locator": "src/store/users.rs:1253-1275, 1505-1545",
+          "summary": "delete_checked calls open_changeset_catalogs(&mut tx, name). It does SELECT k.id FROM api_keys k JOIN users u (account tables only), returns empty early; SELECT DISTINCT catalog_id FROM changesets WHERE key_id=ANY AND state='open' (store only), early return; SELECT name FROM catalogs WHERE id=ANY ORDER BY name. Old statement: DISTINCT cat.name ... ORDER BY cat.name.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 1505,
+                "end": 1545
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:22.084485712Z",
+          "seal": {
+            "by": "server",
+            "mac": "5b256dc29619f12ee724e5d5f00beee5b9270055275c342090f49545f8b55080"
+          }
+        },
+        {
+          "id": "EVD-1100",
+          "kind": "test",
+          "locator": "gate.sh narrow ... user_catalogs_with_open_changesets_after_the_split",
+          "summary": "user_catalogs_with_open_changesets_after_the_split passed in the 5-test narrow run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 3052,
+                "end": 3080
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:55.678558568Z",
+          "seal": {
+            "by": "server",
+            "mac": "13e3f5b4d159037dfcc0b7363599069758d3cbdde209ebab1adffaf2570ade25"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Three single-side statements in the stated order; test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1087",
+            "EVD-1100"
+          ],
+          "recorded_at": "2026-11-23T14:52:23.884662886Z",
+          "seal": {
+            "by": "server",
+            "mac": "087b1afa40147f79b40498cfac4986272e91e429e36707f398146ab32c0b16c0"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:52:23.884662886Z",
+      "seal": {
+        "by": "server",
+        "mac": "4e57b63506890e32b1014525c283cf252dd353fa5fca6d5d791ea7196755acc0"
+      }
+    },
+    {
+      "id": "CLM-0815",
+      "statement": "users::discard_open_changesets takes the key ids delete_checked already read and locked, reads the user's open changesets with entry counts in id order FOR UPDATE in one statement, reads the catalogs' names in another, and returns how many it discarded.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Changelog Changed: \"it takes the key ids `delete_checked` already read and locked ... One statement reads the user's open changesets with their entry counts, in id order, `FOR UPDATE`; one reads the catalogs' names. It returns how many it discarded.\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1088",
+          "kind": "inspection",
+          "locator": "src/store/users.rs:1565-1630; delete_checked key read ~1380",
+          "summary": "discard_open_changesets(conn,user_id,key_ids,..) selects id,handle,catalog_id,entry count FROM changesets WHERE key_id=ANY($1) AND state='open' ORDER BY c.id FOR UPDATE; then SELECT id,name FROM catalogs WHERE id=ANY; loops, skipping missing names, counting discarded. delete_checked passes the keys it read with SELECT id FROM api_keys WHERE user_id=$1 ORDER BY id FOR UPDATE. Old statement joined api_keys and catalogs and returned open.len().",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 1565,
+                "end": 1630
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:22.132553673Z",
+          "seal": {
+            "by": "server",
+            "mac": "d8c1ceda67ac4e5322edb8619d243ede77d89a2f9e0b4911647183a54c69cde1"
+          }
+        },
+        {
+          "id": "EVD-1101",
+          "kind": "test",
+          "locator": "gate.sh narrow ... deleting_a_user_discards_their_changesets_after_the_split",
+          "summary": "deleting_a_user_discards_their_changesets_after_the_split passed in the 5-test narrow run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 3081,
+                "end": 3120
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:55.726993761Z",
+          "seal": {
+            "by": "server",
+            "mac": "14d02ed735d46f8183a002cb02f5d8ef5e35dbf7de9b9f0df09cb170454ecbb5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code matches the description; test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1088",
+            "EVD-1101"
+          ],
+          "recorded_at": "2026-11-23T14:52:23.930103899Z",
+          "seal": {
+            "by": "server",
+            "mac": "6bc783ae410413dda1c3f945daabc508284d2210f3b235463de330d092397861"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:52:23.930103899Z",
+      "seal": {
+        "by": "server",
+        "mac": "fcde9bc57b5b14ce6e28f5bb6cea115cd14dc444de0cd0f21dde0daebb8c6006"
+      }
+    },
+    {
+      "id": "CLM-0816",
+      "statement": "The two users.rs statements run on the deletion's own transaction connection, not on main_store().",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"They run on the deletion's own transaction (it holds the key and changeset locks), not on `main_store()`\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1089",
+          "kind": "inspection",
+          "locator": "src/store/users.rs:1505-1630 (both take conn: &mut PgConnection); delete_checked passes &mut tx",
+          "summary": "open_changeset_catalogs and discard_open_changesets take the deletion transaction's PgConnection and run every statement on it; neither references main_store()/CatalogDb. Each statement names one side's tables.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 1565,
+                "end": 1600
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:22.188480209Z",
+          "seal": {
+            "by": "server",
+            "mac": "12ed0c7bb8547371443f287d4b1952618014f2ca5cf27c652a80a3423b6bd178"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both functions take the transaction's PgConnection only.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1089"
+          ],
+          "recorded_at": "2026-11-23T14:52:23.975866964Z",
+          "seal": {
+            "by": "server",
+            "mac": "046e8b44e0008655cd1d3c70da4172811385bcd5e83fa45b9d75f448361e88bd"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:52:23.975866964Z",
+      "seal": {
+        "by": "server",
+        "mac": "3078524b99770f6aa5f766549636fff9f89613d89e5df8b235a13a1e0b72be26"
+      }
+    },
+    {
+      "id": "CLM-0817",
+      "statement": "runs::claim takes &AccountDb as its first argument, reads the key row on the account database just before its INSERT INTO maintenance_runs, and binds the plain value (NULL when the key is gone) in place of the api_keys subselect.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"`runs::claim` takes `&AccountDb`, reads the key row on the account side just before its insert, and binds the plain value (NULL when the key is gone).\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "src/store/maintenance/runs.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1090",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/runs.rs:447-500; git diff for runs.rs",
+          "summary": "claim(accounts:&AccountDb, db, ..) reads SELECT id FROM api_keys WHERE id=$1 via accounts.executor() fetch_optional just before the INSERT, which now binds $3 as recorded_key (Option<String>, NULL when absent) and $4 as credential_id; subselect removed. Callers in mcp/maintenance/work.rs and http/api/maintenance.rs pass accounts().",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/runs.rs",
+              "lines": {
+                "start": 446,
+                "end": 500
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:22.246917377Z",
+          "seal": {
+            "by": "server",
+            "mac": "4f6d3093bdc7ea8dafe5cadac12e2df1d50fe655c16bc40b2b40c807eb36cd8e"
+          }
+        },
+        {
+          "id": "EVD-1102",
+          "kind": "test",
+          "locator": "gate.sh narrow ... maintenance_run_records_a_missing_key_as_null",
+          "summary": "maintenance_run_records_a_missing_key_as_null passed; it asserts a live key records its id and a deleted and a never-existing key record NULL key_id with credential_id kept.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/tests.rs",
+              "lines": {
+                "start": 2694,
+                "end": 2745
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:55.772372591Z",
+          "seal": {
+            "by": "server",
+            "mac": "b9820e70e55136dbf3e0b600b464ad37c561874897f2b2882ad90294725d2877"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and test agree.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1090",
+            "EVD-1102"
+          ],
+          "recorded_at": "2026-11-23T14:52:24.021312757Z",
+          "seal": {
+            "by": "server",
+            "mac": "bbac351a52acf415fd01102adcfbbb34a4b347b633cf9a1c2d6fe082a94db9a6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:52:24.021312757Z",
+      "seal": {
+        "by": "server",
+        "mac": "076bf561567377c2d283ed94595284600a0f22132f87785c5bd6be824720891f"
+      }
+    },
+    {
+      "id": "CLM-0818",
+      "statement": "repair::missing_root_index takes (&AccountDb, &CatalogDb), lists catalogs in name order from the account side and the catalog ids with a live (deleted_at IS NULL) root index.md from the store, and returns the difference computed in Rust; the CLI's repair_targets takes the same two handles.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"`repair::missing_root_index` takes `(&AccountDb, &CatalogDb)`: catalogs in name order from the account side, catalog ids with a live root `index.md` from the store.\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "src/store/repair.rs",
+        "src/cli.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1091",
+          "kind": "inspection",
+          "locator": "src/store/repair.rs:267-315; src/cli.rs repair_targets",
+          "summary": "missing_root_index(accounts, db): SELECT id,name FROM catalogs ORDER BY name (account); SELECT DISTINCT catalog_id FROM documents WHERE catalog_id=ANY AND path='index.md' AND deleted_at IS NULL (store); filter in Rust preserving name order. CLI repair_targets takes (&AccountDb,&CatalogDb,..) and run_catalog builds the store handle before it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/repair.rs",
+              "lines": {
+                "start": 267,
+                "end": 315
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:22.298181552Z",
+          "seal": {
+            "by": "server",
+            "mac": "b2c775f4706e87794ef6bcc51d2b0c3702e4e9ff37ec79263396d6fc6ba9edae"
+          }
+        },
+        {
+          "id": "EVD-1103",
+          "kind": "test",
+          "locator": "gate.sh narrow ... repair_lists_the_same_catalogs_after_the_split",
+          "summary": "repair_lists_the_same_catalogs_after_the_split passed; asserts name order and that a soft-deleted root index counts as missing.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/repair.rs",
+              "lines": {
+                "start": 604,
+                "end": 642
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:55.822761863Z",
+          "seal": {
+            "by": "server",
+            "mac": "515330388e52006fb455beb3756218b9507a82622eb5ddec0acd126f59f9eb3b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and test agree.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1091",
+            "EVD-1103"
+          ],
+          "recorded_at": "2026-11-23T14:52:24.067464473Z",
+          "seal": {
+            "by": "server",
+            "mac": "0080d412ecf99ac06639bab82e7c8c47c70cf1d34d7d9da5f8bd672557d661c2"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:52:24.067464473Z",
+      "seal": {
+        "by": "server",
+        "mac": "f7d4b9795099001e96190ef94af910d5da17cf9d7396b2423e19324eb640d82b"
+      }
+    },
+    {
+      "id": "CLM-0819",
+      "statement": "The five named tests exist and pass: changeset_listing_names_catalogs_and_keys_after_the_split, user_catalogs_with_open_changesets_after_the_split, deleting_a_user_discards_their_changesets_after_the_split, maintenance_run_records_a_missing_key_as_null, repair_lists_the_same_catalogs_after_the_split.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #963 named tests; PR body Manual Test Plan: \"-> 5 passed\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "src/store/changesets.rs",
+        "src/store/users.rs",
+        "src/store/repair.rs",
+        "src/store/maintenance/tests.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1092",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib --jobs 4 -- changeset_listing user_catalogs_with deleting_a_user_discards maintenance_run_records repair_lists",
+          "summary": "Ran on head 9f47082: all five named tests listed as ok; \"5 passed; 0 failed; 0 ignored; 2885 filtered out\". Test bodies read: claim test asserts live/gone/ghost keys record Some/None/None key_id with credential_id kept; repair test asserts before [alpha,nested], after [alpha,mid,nested].",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/tests.rs",
+              "lines": {
+                "start": 2694,
+                "end": 2745
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:22.351622998Z",
+          "seal": {
+            "by": "server",
+            "mac": "aed37207dc7f6547c166804cb32ab7c574e4a7a9d14ddca111ab5d376c3090ab"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Ran the narrow gate on head: 5 passed, 0 failed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1092"
+          ],
+          "recorded_at": "2026-11-23T14:52:24.114124522Z",
+          "seal": {
+            "by": "server",
+            "mac": "e21e24ece3f7064492a43dc5a77d4a354f5c9596f2b2a2e2e6381891e9250e97"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:52:24.114124522Z",
+      "seal": {
+        "by": "server",
+        "mac": "df297f09e4f6a235915b31791f4afe719e3730446bf8475e7d4acd244df1bc82"
+      }
+    },
+    {
+      "id": "CLM-0820",
+      "statement": "The changelog marks the five crossings removed and cites earlier-changelog lines: Task 2 (changesets.rs:654, repair.rs:281), Task 3 (the table reads Task 5 splits) and Task 4 (the api_keys subselect, runs.rs:482), and each cited line exists in those changelogs.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Changelog Notes \"Crossings removed\"; issue #963 changelog requirement",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-33-15Z-m21-task-05-split-joined-statements.md"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1093",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T12-55-43Z-...task-02...md:27; ...13-36-45Z-...task-03...md:35; ...14-04-24Z-...task-04...md:20",
+          "summary": "Task 2 line 27 names changesets.rs:654 and repair.rs:281; Task 3 line 35 (under \"Still on App::pool()\", line 34) has the quoted \"table reads ... that Task 5 splits\"; Task 4 line 20 has \"The api_keys subselect ... (runs.rs:482 ...). Task 5 splits it.\" The new changelog file exists with the required name pattern and lists the five as Removed. The users.rs line numbers are not in those lines (see separate claim).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md",
+              "lines": {
+                "start": 20,
+                "end": 20
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:43.116316043Z",
+          "seal": {
+            "by": "server",
+            "mac": "321692fd86bb7daf601665d2a4a7051ba5cb8c5454c243a5360c15098efecc6a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The cited Task 2, 3, 4 lines exist and say what is quoted.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1093"
+          ],
+          "recorded_at": "2026-11-23T14:52:24.160166998Z",
+          "seal": {
+            "by": "server",
+            "mac": "fab1f3a80fa839b2e965894a56770720eedaa5ae76bf36761b11c042cdb98fda"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:52:24.160166998Z",
+      "seal": {
+        "by": "server",
+        "mac": "843379bd8286c05bd893f2ca52b4e952332effe2df90d9e8abdea6d6fd28aceb"
+      }
+    },
+    {
+      "id": "CLM-0821",
+      "statement": "The changelog's \"Inventory lines in the earlier changelogs\" gives src/store/users.rs:1268 and :1494 as lines from an earlier changelog's inventory.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Changelog Notes: \"Inventory lines in the earlier changelogs, by the statements this task replaced: ... `src/store/users.rs:1268` and `:1494` ... the Task 3 line ...\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-33-15Z-m21-task-05-split-joined-statements.md"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "The wording it judged was replaced by commit c981494; CLM-0827 judges the corrected text. Its refuted verdict stays in history.",
+        "retired_at": "2026-11-23T14:53:35.249005982Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1094",
+          "kind": "inspection",
+          "locator": "git grep -n \"1268\\|1494\" docs changelog; plan lines 50-51",
+          "summary": "users.rs:1268 and :1494 appear only in the plan inventory (docs/superpowers/plans/...catalog-stores.md lines 50-51, 268), not in the Task 2, 3 or 4 changelogs. The Task 3 line the new changelog quotes (line 35) carries no line numbers. So the \"Inventory lines in the earlier changelogs\" label is wrong for these two.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 50,
+                "end": 51
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:43.167685610Z",
+          "seal": {
+            "by": "server",
+            "mac": "2a6ce2831fdbfa3795b7d4fd9498c85daf9fdf9ea6a632690da49508ea6c6421"
+          }
+        },
+        {
+          "id": "EVD-1107",
+          "kind": "inspection",
+          "locator": "git diff 9f47082..c981494 (changelog line 28)",
+          "summary": "Commit c981494 rewrote the bullet so it no longer calls these lines changelog inventory lines; the original wording this claim judged is gone. Replaced by CLM-0827 (supported).",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T14:53:29.359608074Z",
+          "seal": {
+            "by": "server",
+            "mac": "560c160901d0d20931904e3744b2fedd1c3b5fd2b53f052fbf472a97562b0382"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The users.rs line numbers 1268/1494 come from the plan's inventory (lines 50-51), not from any earlier changelog; the Task 3 line quoted has none. Ours (changelog wording, no code impact). Fix: in changelog/2026-11-23T14-33-15Z-m21-task-05-split-joined-statements.md reword the users.rs bullet to say the line numbers are from the plan's inventory (docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md lines 50-51) and the Task 3 changelog line is the cross-reference.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1094"
+          ],
+          "recorded_at": "2026-11-23T14:52:24.205323440Z",
+          "seal": {
+            "by": "server",
+            "mac": "e2340d73915825dc778cf433e10f7280bc2badc7997be496fbbc0af7a5b98543"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:53:35.249005982Z",
+      "seal": {
+        "by": "server",
+        "mac": "f6735a8fb0c666975acc5f0427a23727965e66d5669170afeea3e2c34197cf96"
+      }
+    },
+    {
+      "id": "CLM-0822",
+      "statement": "The changelog's \"Not removed here\" list (lock_catalog, catalogs::lock_by_name, catalogs.generation reads/writes, audit::lock_people, audit::record, the maintenance_runs audit trigger, the foreign keys) names things that exist in the code and that this change did not touch.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Changelog Notes: \"Not removed here (still in the inventories ...)\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-33-15Z-m21-task-05-split-joined-statements.md"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1095",
+          "kind": "inspection",
+          "locator": "src/store/changesets.rs:242 (lock_catalog); src/store/catalogs.rs:1408 (lock_by_name); src/store/audit.rs:413,601 (record, lock_people); migrations/0017_maintenance_audit.sql:58-61; migrations/0006_maintenance.sql:17",
+          "summary": "Each named item exists: lock_catalog, lock_by_name, audit::record, audit::lock_people, the maintenance_runs_audit_* triggers, maintenance_runs.key_id REFERENCES api_keys. git diff --stat for src/store/audit.rs, src/store/catalogs.rs and migrations against the base is empty, so this change did not touch them. The claim of not re-scanning src is the changelog's own disclosure.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 242,
+                "end": 250
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:43.216279433Z",
+          "seal": {
+            "by": "server",
+            "mac": "a64c596ea0d8c66b4edbb29499856107d840cec4bf1fea447412227f6930b6d6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every item exists and the files holding them are unchanged by the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1095"
+          ],
+          "recorded_at": "2026-11-23T14:52:24.250215851Z",
+          "seal": {
+            "by": "server",
+            "mac": "e42f0c25a6a7f28d94cf5280dd1a1358f471b21122638013921c953a118ca811"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:52:24.250215851Z",
+      "seal": {
+        "by": "server",
+        "mac": "fc607bb4d170a0535f189d8779201522671d4c68dc6b54a763a2d7ab789c8f3a"
+      }
+    },
+    {
+      "id": "CLM-0823",
+      "statement": "The plan has a dated \"> **Corrected (issue #963, 2026-11-23).**\" note after Task 5 describing where the shipped code differs, and no later task in the plan mentions the changed symbols.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #963 plan-correction requirement; PR body: \"No later task mentions the changed symbols.\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1096",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:273-279; grep of the five symbols",
+          "summary": "The \"> **Corrected (issue #963, 2026-11-23).**\" note sits at lines 273-279 right after Task 5's checklist and before \"### Task 6\", listing the differences (signatures, tx not main_store, claim's account read, repair, AccountDb::of). The symbols list_open, open_for_catalogs, missing_root_index, discard_open_changesets, runs::claim, repair_targets appear in the plan only at lines 51, 250 (Task 3 note, earlier) and 268-277 (Task 5); none after line 279.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 273,
+                "end": 279
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:43.266994636Z",
+          "seal": {
+            "by": "server",
+            "mac": "54d5b8c982b8e0443790740d050e73ba3237d485d4a9625ba7b3542be0769325"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Note present and dated; no later mention of the symbols.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1096"
+          ],
+          "recorded_at": "2026-11-23T14:52:24.295748685Z",
+          "seal": {
+            "by": "server",
+            "mac": "2613d1d1c4778bf969b8d4332e054163c00fde1a096e723e8eeb5c03105ef4fe"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:52:24.295748685Z",
+      "seal": {
+        "by": "server",
+        "mac": "3ccdaf3b7667997bf135bb87c04f4b503794b0664d77d7d4ff25eff33774bac3"
+      }
+    },
+    {
+      "id": "CLM-0824",
+      "statement": "AccountDb::of(&pool) is a test-only (#[cfg(test)]) constructor.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"Test-only `AccountDb::of(&pool)`.\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "src/stores/mod.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1097",
+          "kind": "inspection",
+          "locator": "src/stores/mod.rs:160-170",
+          "summary": "AccountDb::of is marked #[cfg(test)] pub(crate), body Self::new(pool.clone()).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 159,
+                "end": 170
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:43.318125682Z",
+          "seal": {
+            "by": "server",
+            "mac": "98b07256f955a3361652a52d736a8345f6c0e8a9201b48fa08d0cb2d668ee1a0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "cfg(test) attribute present.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1097"
+          ],
+          "recorded_at": "2026-11-23T14:52:24.340799476Z",
+          "seal": {
+            "by": "server",
+            "mac": "ac7fd3e6e01f3decdc4b194d37ef0728f8db3bca5a00c26adfd9d2d5b2725a43"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:52:24.340799476Z",
+      "seal": {
+        "by": "server",
+        "mac": "13c5f8727f3a8ead6769dd1f1238960ad37b9966c491dbd09470a9f68a5f6e5e"
+      }
+    },
+    {
+      "id": "CLM-0825",
+      "statement": "Reverting each of the five fixes (listing name-order sort, deleted_at IS NULL in the repair scan, user filter on the discard, name order of a user's catalogs, key check in claim) makes its named test fail.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body Validation: \"Reverting each fix made its named test fail\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "src/store/changesets.rs",
+        "src/store/users.rs",
+        "src/store/repair.rs",
+        "src/store/maintenance/runs.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1098",
+          "kind": "analysis",
+          "locator": "tests at src/store/changesets.rs:1207, users.rs:3052/3081, repair.rs, maintenance/tests.rs:2694",
+          "summary": "I was told not to edit source, so I could not revert any fix and rerun. Reading the test fixtures, each plausibly covers its fix (later-created catalog sorting first, tombstoned root index, other user's keyed changeset, key gone/ghost), but that is not a repeated revert experiment.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T14:51:43.366047933Z",
+          "seal": {
+            "by": "server",
+            "mac": "78fc98669951263925b6cac74637c580927662ba2c38506d2562b541f385682d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The audit may not edit source, so no revert experiment was repeated; fixtures look adequate but that is not proof. Does not block. Fix: for each of the five fixes, revert it locally, run its named test with gate.sh narrow, and record the failure output in the PR.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [],
+          "recorded_at": "2026-11-23T14:52:24.387295124Z",
+          "seal": {
+            "by": "server",
+            "mac": "5676ea119ccb79727cf3ad0b0bdfe21afe39f46653d09e195823e4413f415e96"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:52:24.387295124Z",
+      "seal": {
+        "by": "server",
+        "mac": "d9b3c6c0e2941dc07ce5a372491370278ae98ced102b47687929a5cee04c38d7"
+      }
+    },
+    {
+      "id": "CLM-0826",
+      "statement": "In release 1 a key deleted between claim's account read and its insert makes the insert fail on the maintenance_runs.key_id foreign key, and the claim's transaction (which also holds the idempotency receipt) rolls back, so a retry resolves it.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Changelog Notes: \"A race in `claim` that did not exist before ...\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "src/store/maintenance/runs.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1099",
+          "kind": "analysis",
+          "locator": "src/store/maintenance/runs.rs:462-500; migrations/0006_maintenance.sql:17",
+          "summary": "maintenance_runs.key_id REFERENCES api_keys(id) ON DELETE SET NULL, so inserting an id that no longer exists fails the FK. The read is on a separate connection after tx = db.begin(); lock; replay; the insert and the receipt() (idempotency record) are on tx, so an insert error drops tx and rolls back both. A retry therefore replays nothing and reads the now-absent key as NULL. Not exercised by a test (the new test only covers keys already gone).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/runs.rs",
+              "lines": {
+                "start": 462,
+                "end": 500
+              },
+              "commit": "9f47082dd7cb25bec52639ec3af26dd8bcd88ed6"
+            }
+          },
+          "recorded_at": "2026-11-23T14:51:43.417519279Z",
+          "seal": {
+            "by": "server",
+            "mac": "d8aba25aac4ec059a7c1a072bd5b7cc7343cd86c893aa724af5dbe3e18c8e5a4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "FK exists with ON DELETE SET NULL (insert of a vanished id fails); insert and receipt share the rolled-back tx. Reasoned, not tested.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1099"
+          ],
+          "recorded_at": "2026-11-23T14:52:24.435185468Z",
+          "seal": {
+            "by": "server",
+            "mac": "032b0b4318310932cb83f994e8c902404f4791e662bd776b1c82f43c5a8bd52c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:50:53.138363942Z",
+      "updated_at": "2026-11-23T14:52:24.435185468Z",
+      "seal": {
+        "by": "server",
+        "mac": "eed6441b2b5b9d6bddfedc453b97e98170ed57c3f7da480cc5fafce0d3c71316"
+      }
+    },
+    {
+      "id": "CLM-0827",
+      "statement": "The changelog attributes users.rs:1268 and :1494 to the plan's \"Verified facts\" inventory and cites Task 3's changelog line (without numbers) as the earlier cross-reference.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Changelog Notes, users.rs bullet at c981494: \"these line numbers come from the plan's inventory (\\\"Verified facts\\\"); the earlier changelog line that cross-references them, without numbers, is Task 3's ...\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-33-15Z-m21-task-05-split-joined-statements.md"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1106",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T14-33-15Z-m21-task-05-split-joined-statements.md:28; plan lines 43,50-51; Task 3 changelog line 35",
+          "summary": "Changelog line 28 now says the numbers come from the plan's \"Verified facts\" inventory. The plan's \"## Verified facts\" heading is at line 43 and the users.rs:1268/:1494 entries are at lines 50-51. The quoted Task 3 line (changelog line 35) has no numbers, as stated.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T14-33-15Z-m21-task-05-split-joined-statements.md",
+              "lines": {
+                "start": 28,
+                "end": 28
+              },
+              "commit": "c9814947c3cc380715972f1f3f733b7fe67afe72"
+            }
+          },
+          "recorded_at": "2026-11-23T14:53:29.293512334Z",
+          "seal": {
+            "by": "server",
+            "mac": "a920606833469a14a3fbc4fd2227395e256f237e6020e9a42a22d7d34ee80a2f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Corrected wording matches the plan and the Task 3 changelog.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1106"
+          ],
+          "recorded_at": "2026-11-23T14:53:35.194874630Z",
+          "seal": {
+            "by": "server",
+            "mac": "6257488b7cf5eb725a57b16c61879139b0dcd8541093053c5f186de7bef6d30a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:53:23.995452195Z",
+      "updated_at": "2026-11-23T14:53:35.194874630Z",
+      "seal": {
+        "by": "server",
+        "mac": "24f282645b069a6ffa6fbfbda11d9978533980190cc470df7830f1974a697ff2"
       }
     }
   ]
