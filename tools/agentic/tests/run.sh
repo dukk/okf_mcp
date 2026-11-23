@@ -549,7 +549,7 @@ watch_until_warnings() {
     wd_pid=$!
     trap 'kill "$wd_pid" 2>/dev/null' EXIT
     for ((tick = 0; tick < 300; tick++)); do
-        [ "$(grep -c "ps scan failed or timed out" "$fx/watchdog.out")" -ge "$count" ] && break
+        [ "$(grep -c "warning: ps scan " "$fx/watchdog.out")" -ge "$count" ] && break
         kill -0 "$wd_pid" 2>/dev/null || break
         sleep 0.1
     done
@@ -567,7 +567,7 @@ test_watchdog_skips_a_pass_when_the_ps_scan_hangs() {
     hanging_ps
     watch_until_warnings 2 PATH="$fx/bin:$PATH" AGENTIC_CALL_TIMEOUT=1 AGENTIC_WATCHDOG_INTERVAL=0
     [ "$still_running" = 1 ] || die "the watchdog exited by itself"
-    [ "$(grep -c "ps scan failed or timed out" <<<"$out")" -ge 2 ] \
+    [ "$(grep -c "warning: ps scan " <<<"$out")" -ge 2 ] \
         || die "the watchdog did not run a second pass"
     want_no_out WATCHDOG
 }
@@ -577,7 +577,44 @@ test_watchdog_once_exits_0_when_the_ps_scan_hangs() {
     out=$(cd "$work/wt" && PATH="$fx/bin:$PATH" AGENTIC_CALL_TIMEOUT=1 \
         timeout 10 "$tools/watchdog.sh" --once 2>&1)
     rc=$?
-    want_rc 0; want_out "ps scan failed or timed out"; want_no_out WATCHDOG
+    want_rc 0; want_out "warning: ps scan "; want_no_out WATCHDOG
+}
+
+test_watchdog_abandons_a_ps_scan_it_cannot_stop() {
+    # #675, Brooke's second review: a ps that ignores TERM (killed only by KILL)
+    # and whose detached grandchild keeps the output open must neither stall the
+    # watchdog nor leave the scan's temp file behind. Waiting for the child or
+    # for the output to close would hang forever on a ps stuck in an
+    # uninterruptible /proc read; the old pipe capture hangs here the same way
+    # (the grandchild holds the pipe).
+    new_fixtures
+    mkdir -p "$fx/bin" "$fx/tmp"
+    cat >"$fx/bin/ps" <<STUB
+#!/usr/bin/env bash
+trap '' TERM
+setsid sleep 30 </dev/null >&1 2>/dev/null &
+echo \$! >>"$fx/grandchildren"
+while :; do sleep 1; done
+STUB
+    chmod +x "$fx/bin/ps"
+    watch_until_warnings 2 PATH="$fx/bin:$PATH" TMPDIR="$fx/tmp" AGENTIC_CALL_TIMEOUT=1 \
+        agentic_kill_after=1 AGENTIC_WATCHDOG_INTERVAL=0
+    local gc gone=1 tick
+    # Stop every grandchild this test started, then confirm by pid.
+    if [ -s "$fx/grandchildren" ]; then
+        while read -r gc; do kill -KILL "$gc" 2>/dev/null; done <"$fx/grandchildren"
+        for ((tick = 0; tick < 30; tick++)); do
+            gone=1
+            while read -r gc; do [ -e "/proc/$gc" ] && gone=0; done <"$fx/grandchildren"
+            [ "$gone" = 1 ] && break
+            sleep 0.1
+        done
+    fi
+    [ "$still_running" = 1 ] || die "the watchdog exited by itself"
+    [ "$(grep -c "warning: ps scan " <<<"$out")" -ge 2 ] || die "no second pass after the abandoned scan"
+    want_no_out WATCHDOG
+    [ -z "$(ls -A "$fx/tmp")" ] || die "a scan temp file was left behind"
+    [ "$gone" = 1 ] || die "a stub grandchild is still running"
 }
 
 # third_scan_fails_ps <worktree name>: a stub `ps` that lists one test process in the checkout
@@ -612,7 +649,7 @@ test_watchdog_skips_the_pass_when_only_the_third_scan_fails() {
     out=$(cd "$work/wt" && PATH="$fx/bin:$PATH" AGENTIC_UPTIME_FILE="$fx/uptime" \
         AGENTIC_CALL_TIMEOUT=1 timeout 15 "$tools/watchdog.sh" --once 2>&1)
     rc=$?
-    want_rc 0; want_out "ps scan failed or timed out"; want_no_out WATCHDOG
+    want_rc 0; want_out "warning: ps scan "; want_no_out WATCHDOG
 }
 
 test_watchdog_loop_skips_the_pass_when_only_the_third_scan_fails() {

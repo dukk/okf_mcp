@@ -98,18 +98,63 @@ newest_log_time() {
     return 0
 }
 
-# scan_ps <variable> <ps args...>: runs `ps` bounded (lib.sh: agentic_bounded_call)
-# and stores its output in <variable>. A `ps` that hangs or fails (for example on
-# a /proc entry stuck in an uninterruptible read) is a skipped scan, not an
-# alarm: it warns, without any output of the scan, and returns 1.
+# scan_ps <variable> <ps args...>: runs `ps` and stores its output in <variable>.
+# Unlike agentic_bounded_call this supervisor can ABANDON a child: `ps` writes to
+# a private temp file (not a pipe), runs in its own session, and is polled for
+# up to agentic_call_budget seconds. On timeout it gets TERM, then KILL after
+# $agentic_kill_after seconds, then at most 2 s more; a child that is still
+# there (a ps stuck in an uninterruptible /proc read ignores KILL) is left
+# behind, never waited for, and its temp file is deleted. So neither the child
+# nor a grandchild holding its output open can stall the watchdog (#675). A
+# `ps` that times out or fails is a skipped scan, not an alarm: it warns,
+# without any output of the scan, and returns 1.
 scan_ps() {
-    local out status=0
-    out=$(agentic_bounded_call ps "${@:2}") || status=$?
+    local file pid tick budget status=0 reason=""
+    budget=$(agentic_call_budget)
+    file=$(mktemp "${TMPDIR:-/tmp}/watchdog-scan.XXXXXX") || return 1
+    if [ "$budget" -le 0 ]; then
+        reason="no time left"; status=124
+    else
+        setsid ps "${@:2}" >"$file" 2>/dev/null </dev/null &
+        pid=$!
+        trap 'kill -KILL -- "-$pid" 2>/dev/null; rm -f "$file"; trap - INT; kill -INT "$BASHPID"' INT
+        trap 'kill -KILL -- "-$pid" 2>/dev/null; rm -f "$file"; trap - TERM; kill -TERM "$BASHPID"' TERM
+        for ((tick = 0; tick < budget * 10; tick++)); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.1
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            status=124; reason="timed out"
+            kill -TERM -- "-$pid" 2>/dev/null
+            for ((tick = 0; tick < agentic_kill_after * 10; tick++)); do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 0.1
+            done
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -KILL -- "-$pid" 2>/dev/null
+                for ((tick = 0; tick < 20; tick++)); do
+                    kill -0 "$pid" 2>/dev/null || break
+                    sleep 0.1
+                done
+            fi
+            if kill -0 "$pid" 2>/dev/null; then
+                # Unreapable: stop tracking it (bash still reaps it whenever it dies).
+                disown "$pid" 2>/dev/null
+                reason="timed out, child left behind"
+            fi
+        else
+            wait "$pid" || status=$?
+            [ "$status" -eq 0 ] || reason="failed"
+        fi
+        trap - INT TERM
+    fi
     if [ "$status" -ne 0 ]; then
-        echo "watchdog: warning: ps scan failed or timed out (status $status); skipping it" >&2
+        rm -f "$file"
+        echo "watchdog: warning: ps scan $reason (status $status); skipping it" >&2
         return 1
     fi
-    printf -v "$1" '%s' "$out"
+    printf -v "$1" '%s' "$(<"$file")"
+    rm -f "$file"
 }
 
 # Checks every pending expectation (expect.sh), appends alerts to $found.
