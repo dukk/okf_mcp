@@ -882,6 +882,85 @@ mod tests {
         ));
     }
 
+    /// Property: for any concept file name the server's own path check
+    /// accepts, the destination `encode_link_path` writes parses as exactly
+    /// one link, in both the plain and the angle-bracket form, and
+    /// `resolve_link` reads it back to the same file.
+    #[hegel::test(test_cases = 200, derandomize = true)]
+    fn an_encoded_concept_name_round_trips_through_find_links_and_resolve_link(
+        tc: hegel::TestCase,
+    ) {
+        use hegel::generators;
+        // Pieces that broke (or could break) a destination: Unicode
+        // whitespace, controls, reserved punctuation, `%` (also as a fake
+        // escape), and a URI-scheme lookalike.
+        let specials = vec![
+            " ",
+            "\t",
+            "\u{a0}",
+            "\u{2003}",
+            "\u{3000}",
+            "\u{85}",
+            "\u{2028}",
+            "\n",
+            "\r",
+            "\u{1c}",
+            "\u{1f}",
+            "\u{7f}",
+            "\0",
+            "%",
+            "%20",
+            "%2",
+            "%zz",
+            ":",
+            "http:",
+            "<",
+            ">",
+            "(",
+            ")",
+            "[",
+            "]",
+            "\\",
+            "\"",
+            "'",
+            "#",
+            "?",
+            "&",
+            "+",
+            "..",
+            ".",
+            "\u{e9}",
+            "\u{1f600}",
+            "\u{202e}",
+        ];
+        let count = tc.draw(generators::integers::<usize>().max_value(8));
+        let mut name = String::new();
+        for _ in 0..count {
+            if tc.draw(generators::booleans()) {
+                name.push_str(tc.draw(generators::sampled_from(&specials)));
+            } else {
+                name.push_str(&tc.draw(generators::text().max_size(4)));
+            }
+        }
+        name.push_str(".md");
+        // A file name is one path segment, and the name must be one the
+        // write tools accept (`rules::check_path`) in a plain folder.
+        tc.assume(!name.contains('/'));
+        let path = format!("d/{name}");
+        tc.assume(crate::okf::rules::check_path(&path).is_ok_and(|checked| checked == path));
+
+        let ws = MemWorkspace::from_files([(path.as_str(), "")]);
+        let encoded = encode_link_path(&name);
+        for destination in [encoded.to_string(), format!("<{encoded}>")] {
+            let text = format!("[x]({destination})");
+            let found = find_links(&text);
+            assert_eq!(found.len(), 1, "{text:?}");
+            assert_eq!(found[0].target, encoded.as_ref(), "{text:?}");
+            let back = resolve_link(&ws, &found[0].target, "d/index.md").map(|r| r.path);
+            assert_eq!(back, Some(path.clone()), "{text:?}");
+        }
+    }
+
     #[test]
     fn slugify_follows_python_word_characters() {
         // `²` is a Python word char (category No); a combining mark is not.
