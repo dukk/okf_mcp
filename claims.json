@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 646,
+  "next_claim_seq": 658,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "127f8eee47309777a063c3ab1d552425d004cf6209f600dbeddcfdee7309a8ee"
+    "mac": "c0f2ed7677670f69940729929e48d7a9b7516c388be1403d081e3acac83fdc87"
   },
-  "next_evidence_seq": 813,
+  "next_evidence_seq": 828,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "b233bb6b163c473262ad249cd208941d688e13cb778f600f3388f40aaaca2e2f"
+    "mac": "99dc230a9fb1640f95fd67707ae5d719ecdd18d83bc24021e86818f159b1503f"
   },
   "claims": [
     {
@@ -50210,6 +50210,788 @@
       "seal": {
         "by": "server",
         "mac": "de47f220d1111cfa7578851cf4c6f97c33f79c3a3ac4014b7cf580660cb7dbc1"
+      }
+    },
+    {
+      "id": "CLM-0646",
+      "statement": "Issue #652 is delivered: tests cover a code exchange waiting on a held revocation, and a refresh and user deletion interleaved in both orders, as a test-only change",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/652",
+      "derived_from": [],
+      "artifacts": [
+        "src/oauth/token.rs",
+        "src/store/keys/idle_tests.rs"
+      ],
+      "tags": [
+        "from-issue:652"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [],
+      "verdicts": [],
+      "created_at": "2026-11-23T06:19:19.184673783Z",
+      "updated_at": "2026-11-23T06:19:19.184673783Z",
+      "seal": {
+        "by": "server",
+        "mac": "ff3a1d5af8b1066e7611047369a8636bcd8870e07e7f09b488cebf3af32bec74"
+      }
+    },
+    {
+      "id": "CLM-0647",
+      "statement": "A deterministic test makes a code exchange wait on a held grant revocation and asserts the exchange answers invalid_grant and mints no oauth_tokens row",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #652 requirement (1)",
+      "derived_from": [
+        "CLM-0646"
+      ],
+      "artifacts": [
+        "src/oauth/token.rs"
+      ],
+      "tags": [
+        "from-issue:652"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0813",
+          "kind": "inspection",
+          "locator": "src/oauth/token.rs:863-918",
+          "summary": "Test holds grant FOR UPDATE and sets revoked_at uncommitted, runs the exchange beside a driver that commits only after expect_row_lock_waiter; asserts 400 invalid_grant 'the grant was revoked' and count(*) oauth_tokens for grant == 0. Production path: src/oauth/token.rs:447 lock_grant returns false for revoked.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/token.rs",
+              "lines": {
+                "start": 863,
+                "end": 918
+              },
+              "commit": "aec88412758f862aed0fa65cebd4dabd0775e833"
+            }
+          },
+          "recorded_at": "2026-11-23T06:19:50.561177439Z",
+          "seal": {
+            "by": "server",
+            "mac": "5f839ae7704c5928c917aaffd1dd220629e9c85fc1f067448e644fad15272a7a"
+          }
+        },
+        {
+          "id": "EVD-0814",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_user_deletion_queues a_refresh_queues a_code_exchange_waiting",
+          "summary": "oauth::token::tests::a_code_exchange_waiting_on_a_revocation_is_refused_and_mints_nothing ... ok (3 passed, 0 failed, 2862 filtered out, 2.11s) on head aec8841",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T06:19:50.594775447Z",
+          "seal": {
+            "by": "server",
+            "mac": "5715f3ec1d7c8b4377df6f36bb5858f019800ed4069e2fc4ba220a9f05b72534"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test forces the wait deterministically and asserts invalid_grant and zero minted rows; it passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0813",
+            "EVD-0814"
+          ],
+          "recorded_at": "2026-11-23T06:20:08.665614021Z",
+          "seal": {
+            "by": "server",
+            "mac": "0106d09f13a3048ee2dcf5ab4be2d4444e801f92ac532f44eaf198f02e8a5ef8"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T06:19:19.184673783Z",
+      "updated_at": "2026-11-23T06:20:08.665614021Z",
+      "seal": {
+        "by": "server",
+        "mac": "cdfb821e7f1c1627e144d8f31cfc7496624bd2d6f57409053eec572db1f02bac"
+      }
+    },
+    {
+      "id": "CLM-0648",
+      "statement": "Deterministic tests interleave a refresh and a user deletion in both orders, each wrapped in tokio::time::timeout and asserting neither deadlocks, with the refresh refused or the deletion cascading after it",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #652 requirement (2)",
+      "derived_from": [
+        "CLM-0646"
+      ],
+      "artifacts": [
+        "src/store/keys/idle_tests.rs"
+      ],
+      "tags": [
+        "from-issue:652"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0815",
+          "kind": "inspection",
+          "locator": "src/store/keys/idle_tests.rs:636-768",
+          "summary": "Two tests: refresh admitted first then deletion queued (cascade removes successors, 679-700 timeouts via RACE_LIMIT 30s) and deletion first then refresh queued, refresh gets RefreshUse::Unknown (743-755). Every join on commit/deletion/refresh is inside tokio::time::timeout and expects no 40P01. Note the in-test 'commit' of the rotation at 679 and spawned refresh are timeout-wrapped; the refresh-task's own begin is not but is joined with timeout.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/keys/idle_tests.rs",
+              "lines": {
+                "start": 636,
+                "end": 768
+              },
+              "commit": "aec88412758f862aed0fa65cebd4dabd0775e833"
+            }
+          },
+          "recorded_at": "2026-11-23T06:19:50.636987639Z",
+          "seal": {
+            "by": "server",
+            "mac": "cb68f885fd565ebfdb3cb67ef84345ff077e1fd45490bd709838cf73609d8de4"
+          }
+        },
+        {
+          "id": "EVD-0816",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_user_deletion_queues a_refresh_queues a_code_exchange_waiting",
+          "summary": "store::keys::idle_tests::a_refresh_queues_behind_a_user_deletion_and_is_refused ... ok and ...a_user_deletion_queues_behind_an_admitted_refresh_and_removes_what_it_minted ... ok (3 passed, 0 failed)",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T06:19:50.670964648Z",
+          "seal": {
+            "by": "server",
+            "mac": "fbeeb7e8dfd3eaef7deef870834e78bbedd5f755027113766d9199fb9978ac04"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both orders are tested, waiters are confirmed before release, joins are timeout-wrapped, outcomes asserted (cascade or Unknown); tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0815",
+            "EVD-0816"
+          ],
+          "recorded_at": "2026-11-23T06:20:08.704421709Z",
+          "seal": {
+            "by": "server",
+            "mac": "63e1f52e68bdecc73fe3991c128da7c4ef2c3f9372e7e23387bb638c057b38ea"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T06:19:19.184673783Z",
+      "updated_at": "2026-11-23T06:20:08.704421709Z",
+      "seal": {
+        "by": "server",
+        "mac": "72b86e5e6a9f55a7db699966f641a05a15ff674206ed4ced92e60b4d95b7d1d5"
+      }
+    },
+    {
+      "id": "CLM-0649",
+      "statement": "The new tests confirm each waiter through the shared helper test_locks::expect_row_lock_waiter and none of them queries pg_stat_activity query text",
+      "kind": "constraint",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #652 requirement (3)",
+      "derived_from": [
+        "CLM-0646"
+      ],
+      "artifacts": [
+        "src/test_locks.rs",
+        "src/oauth/token.rs",
+        "src/store/keys/idle_tests.rs"
+      ],
+      "tags": [
+        "from-issue:652"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0817",
+          "kind": "analysis",
+          "locator": "src/store/keys/idle_tests.rs:655,730,739; src/oauth/token.rs:894; src/test_locks.rs:135",
+          "summary": "All four waiter confirmations (token.rs:894, idle_tests.rs:655/730/739) call expect_row_lock_waiter, defined at src/test_locks.rs:135 (pg_locks/pg_blocking_pids, not query text). pg_stat_activity appears in idle_tests.rs only at 318-514, in tests this PR did not touch (diff starts at line 529); none in the added hunks.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/test_locks.rs",
+              "lines": {
+                "start": 97,
+                "end": 140
+              },
+              "commit": "aec88412758f862aed0fa65cebd4dabd0775e833"
+            }
+          },
+          "recorded_at": "2026-11-23T06:19:50.713798922Z",
+          "seal": {
+            "by": "server",
+            "mac": "0316cddc303800590f14358182601dc7292216a565e505c9126c81f539d695a5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All added waits use the shared helper; no pg_stat_activity in added hunks (existing uses at idle_tests.rs:318-514 predate the PR).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0817"
+          ],
+          "recorded_at": "2026-11-23T06:20:08.742909896Z",
+          "seal": {
+            "by": "server",
+            "mac": "bbb76038ea9956ea7e9770e3679cc6cfff6daf8fd60838eb6de2fbe8b862d1c9"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T06:19:19.184673783Z",
+      "updated_at": "2026-11-23T06:20:08.742909896Z",
+      "seal": {
+        "by": "server",
+        "mac": "e9ba502fd5ba766d7da2dc3f802de57d092bd158386a5573bdfff29f2d389a6b"
+      }
+    },
+    {
+      "id": "CLM-0650",
+      "statement": "The change adds a dated changelog entry under changelog/",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #652 requirement (4)",
+      "derived_from": [
+        "CLM-0646"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T06-08-18Z-issue-652-grant-lock-race-tests.md"
+      ],
+      "tags": [
+        "from-issue:652"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0818",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T06-08-18Z-issue-652-grant-lock-race-tests.md",
+          "summary": "New file, timestamped 2026-11-23T06-08-18Z, describes the three tests and notes test-only.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T06-08-18Z-issue-652-grant-lock-race-tests.md",
+              "commit": "aec88412758f862aed0fa65cebd4dabd0775e833"
+            }
+          },
+          "recorded_at": "2026-11-23T06:19:50.751571927Z",
+          "seal": {
+            "by": "server",
+            "mac": "db34b009828dcd4934fa527633b0df589f82877c4f17ec8d8bc6c7bfe11591b4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Timestamped changelog file exists and covers the change.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0818"
+          ],
+          "recorded_at": "2026-11-23T06:20:08.779509236Z",
+          "seal": {
+            "by": "server",
+            "mac": "dfd7349e86803753e66d44420df667f12d7d96ea8ecbb16feb11bf55377ebcbd"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T06:19:19.184673783Z",
+      "updated_at": "2026-11-23T06:20:08.779509236Z",
+      "seal": {
+        "by": "server",
+        "mac": "1cae6868d2c81d17d6f0e9c169e77afdef57d759f0fedaf62988bf25692b96fe"
+      }
+    },
+    {
+      "id": "CLM-0651",
+      "statement": "The change is test-only: no non-test code changed",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #652 requirement (5); PR body: \"Test-only; no production code changed.\"",
+      "derived_from": [
+        "CLM-0646"
+      ],
+      "artifacts": [
+        "src/oauth/token.rs",
+        "src/store/keys/idle_tests.rs"
+      ],
+      "tags": [
+        "from-issue:652"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0819",
+          "kind": "analysis",
+          "locator": "git diff --name-only origin/main..HEAD; git diff origin/main..HEAD -- src/oauth/token.rs",
+          "summary": "Files changed: the changelog, src/oauth/token.rs and src/store/keys/idle_tests.rs. The token.rs hunks are an import change inside mod tests (line 623) and a new test at 857-917, both in #[cfg(test)]; idle_tests.rs is a test module. No production hunk.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/token.rs",
+              "lines": {
+                "start": 621,
+                "end": 626
+              },
+              "commit": "aec88412758f862aed0fa65cebd4dabd0775e833"
+            }
+          },
+          "recorded_at": "2026-11-23T06:19:50.795239574Z",
+          "seal": {
+            "by": "server",
+            "mac": "f28cb0fd9a041d6e9c402ac717aaf6db18a3389467a7f22f896cef4d79fd030d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Only test code and a changelog changed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0819"
+          ],
+          "recorded_at": "2026-11-23T06:20:08.816105076Z",
+          "seal": {
+            "by": "server",
+            "mac": "cd60e0cdef3fe62b405266415140a37c582d2ca911cea29207dcd02a04fb786c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T06:19:19.184673783Z",
+      "updated_at": "2026-11-23T06:20:08.816105076Z",
+      "seal": {
+        "by": "server",
+        "mac": "4922d1b24a4c07624d6eeabeb26969d43c30ffcf9c201c80b321556640923acd"
+      }
+    },
+    {
+      "id": "CLM-0652",
+      "statement": "In the exchange test, the exchange is confirmed waiting on the api_keys row behind the revocation's pid, and after the commit a second exchange of the code is also refused with invalid_grant",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"the exchange is confirmed waiting on that row behind the revocation's pid (expect_row_lock_waiter); after the commit the exchange answers invalid_grant, no oauth_tokens row exists, and a second exchange of the code is refused.\"",
+      "derived_from": [
+        "CLM-0646"
+      ],
+      "artifacts": [
+        "src/oauth/token.rs"
+      ],
+      "tags": [
+        "from-issue:652"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0820",
+          "kind": "inspection",
+          "locator": "src/oauth/token.rs:891-917",
+          "summary": "expect_row_lock_waiter(pool, holder, \"api_keys\") at 894 with holder = revocation pid; invalid_grant at 905; replay token(exchange(code)) asserts 400 invalid_grant at 914-916 with zero tokens at 917.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/token.rs",
+              "lines": {
+                "start": 891,
+                "end": 917
+              },
+              "commit": "aec88412758f862aed0fa65cebd4dabd0775e833"
+            }
+          },
+          "recorded_at": "2026-11-23T06:19:50.833249539Z",
+          "seal": {
+            "by": "server",
+            "mac": "c6f4eeba6cfda1595a272b1f1b7c48dab16eba7d319504fa3a465516ec6f935b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code asserts each stated step.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0820"
+          ],
+          "recorded_at": "2026-11-23T06:20:08.853480569Z",
+          "seal": {
+            "by": "server",
+            "mac": "438d0cc1db2cb7affb6a404e4933efd133391b0ee4b0cf91fa95c1cb900c194d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T06:19:19.184673783Z",
+      "updated_at": "2026-11-23T06:20:08.853480569Z",
+      "seal": {
+        "by": "server",
+        "mac": "72dd8d266f09850079219f0ae9d17287755ab41a14a59678bba85215ab4abe16"
+      }
+    },
+    {
+      "id": "CLM-0653",
+      "statement": "In a_user_deletion_queues_behind_an_admitted_refresh_..., the deletion is confirmed queued on api_keys behind the refresh's pid, the refresh mints and commits, and the deletion then cascades all grant, user and token rows with no SQLSTATE 40P01",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"the deletion is confirmed queued on api_keys behind it; the refresh mints and commits; the deletion cascades everything. Neither side gets SQLSTATE 40P01.\"",
+      "derived_from": [
+        "CLM-0646"
+      ],
+      "artifacts": [
+        "src/store/keys/idle_tests.rs"
+      ],
+      "tags": [
+        "from-issue:652"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0821",
+          "kind": "inspection",
+          "locator": "src/store/keys/idle_tests.rs:636-711",
+          "summary": "Waiter confirmed on api_keys behind rotation_pid (655); successors minted (660-678); commit and deletion expect no 40P01 (679-690); asserts users, oauth api_keys and oauth_tokens counts are all 0 (693-710). use_refresh takes grant FOR SHARE then family then token FOR UPDATE (src/store/oauth/tokens.rs:392-405).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/keys/idle_tests.rs",
+              "lines": {
+                "start": 636,
+                "end": 711
+              },
+              "commit": "aec88412758f862aed0fa65cebd4dabd0775e833"
+            }
+          },
+          "recorded_at": "2026-11-23T06:19:50.888499601Z",
+          "seal": {
+            "by": "server",
+            "mac": "819c791e4c555c43c150af1350325e721b9e80cf924e1149cb05d3c0479e4328"
+          }
+        },
+        {
+          "id": "EVD-0826",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_user_deletion_queues a_refresh_queues a_code_exchange_waiting",
+          "summary": "store::keys::idle_tests::a_user_deletion_queues_behind_an_admitted_refresh_and_removes_what_it_minted ... ok",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T06:20:12.844704250Z",
+          "seal": {
+            "by": "server",
+            "mac": "97852decf7dcac3d9ec031d2a826c657c91c36b0ae8a0971418f82938c48da7f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code asserts each stated step; test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0821",
+            "EVD-0826"
+          ],
+          "recorded_at": "2026-11-23T06:20:16.439335419Z",
+          "seal": {
+            "by": "server",
+            "mac": "3eaba70cf0615d4b684667bdfc69ca900ed843da9f2b09cce995db8f74281013"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T06:19:19.184673783Z",
+      "updated_at": "2026-11-23T06:20:16.439335419Z",
+      "seal": {
+        "by": "server",
+        "mac": "258d9ed00a5708eb90237fba2902436b3e392d43e998572c22006dc5063ce465"
+      }
+    },
+    {
+      "id": "CLM-0654",
+      "statement": "In a_refresh_queues_behind_a_user_deletion_and_is_refused, the deletion holds the grant parked on a token row confirmed on oauth_tokens, the refresh is confirmed queued on api_keys behind the deletion, and after release the refresh gets RefreshUse::Unknown and all rows are gone",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"the deletion holds the grant, parked on a token row a third transaction holds (confirmed on oauth_tokens); the refresh is confirmed queued on api_keys behind the deletion; after release the refresh gets RefreshUse::Unknown and all rows are gone.\"",
+      "derived_from": [
+        "CLM-0646"
+      ],
+      "artifacts": [
+        "src/store/keys/idle_tests.rs"
+      ],
+      "tags": [
+        "from-issue:652"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0822",
+          "kind": "inspection",
+          "locator": "src/store/keys/idle_tests.rs:713-768",
+          "summary": "Parking tx holds access token FOR UPDATE; deletion confirmed on oauth_tokens behind parking_pid (730); refresh confirmed on api_keys behind deletion_pid (739); after rollback asserts RefreshUse::Unknown (755) and zero oauth api_keys and oauth_tokens rows (756-767).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/keys/idle_tests.rs",
+              "lines": {
+                "start": 713,
+                "end": 768
+              },
+              "commit": "aec88412758f862aed0fa65cebd4dabd0775e833"
+            }
+          },
+          "recorded_at": "2026-11-23T06:19:50.933944324Z",
+          "seal": {
+            "by": "server",
+            "mac": "db9253a4aaf25a976b7f512bcc8d1ff7c406f0fa76ca59f3eb4ae0b793b9c0c2"
+          }
+        },
+        {
+          "id": "EVD-0827",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_user_deletion_queues a_refresh_queues a_code_exchange_waiting",
+          "summary": "store::keys::idle_tests::a_refresh_queues_behind_a_user_deletion_and_is_refused ... ok",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T06:20:12.901323916Z",
+          "seal": {
+            "by": "server",
+            "mac": "640a6d0d07488f7f58a58832654f855f9130a939b2dffc7c4a44247d6edd9b5e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code asserts each stated step; test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0822",
+            "EVD-0827"
+          ],
+          "recorded_at": "2026-11-23T06:20:16.489375924Z",
+          "seal": {
+            "by": "server",
+            "mac": "4057a1f2c4576b184c6a16ac996c278f5a8d367ef34e1bed74a4af4c905cac05"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T06:19:19.184673783Z",
+      "updated_at": "2026-11-23T06:20:16.489375924Z",
+      "seal": {
+        "by": "server",
+        "mac": "b77034e73b2ce9537a6f4762bd584812606af9222b3e2017ad16792d0fdc1d92"
+      }
+    },
+    {
+      "id": "CLM-0655",
+      "statement": "The three new tests pass on the head commit",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"The three new tests passed three times in a row.\" (one run rechecked)",
+      "derived_from": [
+        "CLM-0646"
+      ],
+      "artifacts": [
+        "src/oauth/token.rs",
+        "src/store/keys/idle_tests.rs"
+      ],
+      "tags": [
+        "from-issue:652"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0823",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_user_deletion_queues a_refresh_queues a_code_exchange_waiting",
+          "summary": "One run on head aec8841: 3 passed, 0 failed, 2862 filtered out. The 'three times in a row' repeat was not rerun.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T06:19:50.967669774Z",
+          "seal": {
+            "by": "server",
+            "mac": "073a3f6ae163ebf3930f45a0fed10a0cdae947bf1c9c5baa22442141c4c0a473"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The three tests pass on head in one run (the three-in-a-row repetition was not repeated, the claim as restated is one pass).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0823"
+          ],
+          "recorded_at": "2026-11-23T06:20:08.935046251Z",
+          "seal": {
+            "by": "server",
+            "mac": "f52e614b25d9c9458cafc253187574669ed4afa7ff23000098eba4208a910a35"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T06:19:19.184673783Z",
+      "updated_at": "2026-11-23T06:20:08.935046251Z",
+      "seal": {
+        "by": "server",
+        "mac": "7e4ee89b5b64c0cb96af005fa410f02b5cbf1ac20e6ecdca98d5813846ab1437"
+      }
+    },
+    {
+      "id": "CLM-0656",
+      "statement": "gate.sh fmt, lint, dylint and test are all green with 2863 lib tests passed and 2 ignored",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "source": "PR body: \"tools/agentic/gate.sh fmt, lint, dylint, test: all green (2863 lib tests passed, 2 ignored, plus the integration binaries).\"",
+      "derived_from": [
+        "CLM-0646"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:652"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0824",
+          "kind": "analysis",
+          "locator": "target/i652-pr-body.md Validation",
+          "summary": "Only the three new tests were run by the auditor (3 passed); full fmt/lint/dylint/test gates and the 2863 count were not rerun.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T06:19:51.007676297Z",
+          "seal": {
+            "by": "server",
+            "mac": "a1860f8d953f63de774b252a65653cefeefd5a9093778225f35916b9dfc03920"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Full gates were not rerun by the auditor. Fix: run tools/agentic/gate.sh fmt, lint, dylint and test on the head commit and confirm the counts quoted in the PR body.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0824"
+          ],
+          "recorded_at": "2026-11-23T06:20:08.972286063Z",
+          "seal": {
+            "by": "server",
+            "mac": "8ec5fd9d1464186c88e92506e597bad2775eacafea3474498255f82197ca9f81"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T06:19:19.184673783Z",
+      "updated_at": "2026-11-23T06:20:08.972286063Z",
+      "seal": {
+        "by": "server",
+        "mac": "74a1f32e0a26722824dea5cb3ddd5839baccc7016274ca6b54d73e160927a2f1"
+      }
+    },
+    {
+      "id": "CLM-0657",
+      "statement": "Reverting the grant lock ordering or the lock_grant check makes the new tests fail as the PR describes (deadlock abort; exchange answers 200 and mints tokens)",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"Revert checks: ... All changes were restored.\"",
+      "derived_from": [
+        "CLM-0646"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:652"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0825",
+          "kind": "analysis",
+          "locator": "src/store/oauth/tokens.rs:392-393; src/oauth/token.rs:447",
+          "summary": "Code shows the lock_grant calls the revert checks target, so the described reverts are plausible, but the reverts were not rerun by the auditor.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/store/oauth/tokens.rs",
+              "lines": {
+                "start": 392,
+                "end": 393
+              },
+              "commit": "aec88412758f862aed0fa65cebd4dabd0775e833"
+            }
+          },
+          "recorded_at": "2026-11-23T06:19:51.052099666Z",
+          "seal": {
+            "by": "server",
+            "mac": "8301b950c09aa3f3f2d512c3a9abcfd921ba5974598b985203a400d23900e492"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Reverts were not rerun by the auditor; code only makes them plausible. Fix: apply each revert (grant lock after token row in use_refresh; no lock_grant in use_refresh; lock_grant check removed from the exchange) and record which of the three tests fails and how.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0825"
+          ],
+          "recorded_at": "2026-11-23T06:20:09.009050254Z",
+          "seal": {
+            "by": "server",
+            "mac": "c2631dba7bb2ee445c331e6de45f9dc4807c0077e27ad842d4b39cc46a69ceb3"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T06:19:19.184673783Z",
+      "updated_at": "2026-11-23T06:20:09.009050254Z",
+      "seal": {
+        "by": "server",
+        "mac": "0f22590fd4da9c3811ee8e8c4b915916b82605cd98ef3499e90ca137bc21f2a2"
       }
     }
   ]

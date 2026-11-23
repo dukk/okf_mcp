@@ -1,11 +1,13 @@
 //! `revoke_idle_grants` (issue #269): which grants count as idle, how they
 //! are revoked and audited, and that passes running at once revoke each
-//! grant once. Each test has an isolated database.
+//! grant once; and (issue #652) the grant lock protocol against user
+//! deletion. Each test has an isolated database.
 use super::*;
 use crate::db::{test_db, TEST_TEAM, TEST_USER};
 use crate::store::audit::testing::entries;
 use crate::store::oauth::testing::{insert_client, insert_grant};
 use crate::store::oauth::tokens::{self, RefreshUse};
+use crate::test_locks::expect_row_lock_waiter;
 use chrono::TimeDelta;
 use std::time::Duration;
 
@@ -526,4 +528,241 @@ async fn a_rotation_after_a_revocation_is_refused() {
         .expect("the refresh's task")
         .expect("present the token");
     assert_eq!(found, RefreshUse::Unknown);
+}
+
+// Refresh rotation against user deletion (issue #652). The old order could
+// deadlock: a rotation held the token row and then needed the grant (the
+// foreign key's `FOR KEY SHARE`), while the deletion held the grant and
+// then needed the token row (the cascade). `use_refresh` now takes the
+// grant first (`lock_grant`), as the deletion does, so the two queue. A
+// deadlock shows only when each side holds its first lock before it asks
+// for the second, so each test parks one side there.
+
+/// How long any wait on a spawned task may take; longer than Postgres's
+/// default `deadlock_timeout` (1 s) many times over, and longer than the
+/// lock-wait helpers' own 10 s bound.
+const RACE_LIMIT: Duration = Duration::from_secs(30);
+
+/// Creates user `alice` and a grant of hers with an access token made a day
+/// ago (byte 1) and a refresh token made an hour ago (byte 2), so a
+/// cascade that scans the grant's tokens by age reaches the access token
+/// first.
+///
+/// # Returns
+/// The grant's id.
+async fn alices_grant(pool: &PgPool) -> String {
+    let client = setup(pool).await;
+    users::create(
+        pool,
+        &users::NewUser {
+            name: "alice",
+            display_name: &crate::labels::DisplayName::default(),
+        },
+        &AuditActor::cli(),
+        now(),
+    )
+    .await
+    .expect("create alice");
+    let grant = insert_grant(
+        pool,
+        &client,
+        Access::Read,
+        &["main"],
+        now() - TimeDelta::days(2),
+    )
+    .await;
+    sqlx::query(
+        "UPDATE api_keys SET user_id = (SELECT id FROM users WHERE name = 'alice') WHERE id = $1",
+    )
+    .bind(&grant)
+    .execute(pool)
+    .await
+    .expect("give the grant to alice");
+    token(
+        pool,
+        &grant,
+        1,
+        tokens::TokenKind::Access,
+        now() - TimeDelta::days(1),
+        TimeDelta::days(30),
+    )
+    .await;
+    token(
+        pool,
+        &grant,
+        2,
+        tokens::TokenKind::Refresh,
+        now() - TimeDelta::hours(1),
+        TimeDelta::days(30),
+    )
+    .await;
+    grant
+}
+
+/// Starts deleting `alice` in its own task.
+fn delete_alice(pool: &PgPool) -> tokio::task::JoinHandle<Result<users::DeletedUser, OkfError>> {
+    let pool = pool.clone();
+    tokio::spawn(async move {
+        users::delete(
+            &pool,
+            "alice",
+            users::DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+    })
+}
+
+/// `conn`'s backend pid.
+async fn backend_pid(conn: &mut PgConnection) -> i32 {
+    sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(conn)
+        .await
+        .expect("read the backend pid")
+}
+
+/// What the one-value count query `sql` answers.
+async fn rows_in(pool: &PgPool, sql: &'static str) -> i64 {
+    sqlx::query_scalar(sql)
+        .fetch_one(pool)
+        .await
+        .expect("count rows")
+}
+
+/// A refresh that is admitted (it holds its grant, family and token) before
+/// the deletion starts: the deletion queues for the grant behind it, the
+/// refresh mints its successors and commits, and the deletion then cascades
+/// away the grant and every token, successors included.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_user_deletion_queues_behind_an_admitted_refresh_and_removes_what_it_minted() {
+    let db = test_db().await;
+    let grant = alices_grant(&db.pool).await;
+    let presented_at = now();
+    let mut rotation = db.pool.begin().await.expect("begin");
+    let rotation_pid = backend_pid(&mut rotation).await;
+    let admitted = tokens::use_refresh(&mut rotation, &[2; 32], presented_at, TimeDelta::zero())
+        .await
+        .expect("present the token");
+    assert!(
+        matches!(admitted, RefreshUse::Rotated { .. }),
+        "{admitted:?}"
+    );
+
+    let deletion = delete_alice(&db.pool);
+    // The deletion has locked alice and now waits for the grant's row,
+    // which the rotation holds `FOR SHARE`.
+    let waiter = expect_row_lock_waiter(&db.pool, rotation_pid, "api_keys").await;
+    assert_ne!(waiter, rotation_pid);
+
+    // The rotation mints its successor pair and commits; neither step may
+    // wait for the deletion.
+    for (byte, kind) in [
+        (3_u8, tokens::TokenKind::Access),
+        (4_u8, tokens::TokenKind::Refresh),
+    ] {
+        tokens::insert(
+            &mut rotation,
+            &tokens::NewToken {
+                sha256: [byte; 32],
+                grant_id: &grant,
+                kind,
+                family_id: &grant,
+                resource: "https://okf.example.com/mcp",
+                expires_at: presented_at + TimeDelta::days(30),
+            },
+            presented_at,
+        )
+        .await
+        .expect("mint a successor (no deadlock with the deletion)");
+    }
+    tokio::time::timeout(RACE_LIMIT, rotation.commit())
+        .await
+        .expect("the rotation committed within 30 s")
+        .expect("commit the rotation (not a deadlock, SQLSTATE 40P01)");
+    let deleted = tokio::time::timeout(RACE_LIMIT, deletion)
+        .await
+        .expect("the deletion finished within 30 s of the rotation's commit")
+        .expect("the deletion's task")
+        .expect("delete alice (not a deadlock, SQLSTATE 40P01)");
+
+    assert_eq!(deleted.keys, 1);
+    assert_eq!(
+        rows_in(&db.pool, "SELECT count(*) FROM users WHERE name = 'alice'").await,
+        0
+    );
+    assert_eq!(
+        rows_in(
+            &db.pool,
+            "SELECT count(*) FROM api_keys WHERE kind = 'oauth'"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        rows_in(&db.pool, "SELECT count(*) FROM oauth_tokens").await,
+        0,
+        "the cascade removed the successors too"
+    );
+}
+
+/// A deletion that holds the grant (parked on a token row a third
+/// transaction holds, so it has not yet cascaded) before the refresh starts:
+/// the refresh queues for the grant behind it, and once the deletion
+/// finishes it finds no grant and is refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refresh_queues_behind_a_user_deletion_and_is_refused() {
+    let db = test_db().await;
+    let _grant = alices_grant(&db.pool).await;
+    // The parking transaction holds the access token's row, the oldest of
+    // the grant's tokens, which the deletion's cascade reaches first.
+    let mut parking = db.pool.begin().await.expect("begin");
+    let parking_pid = backend_pid(&mut parking).await;
+    sqlx::query("SELECT 1 FROM oauth_tokens WHERE sha256 = $1 FOR UPDATE")
+        .bind([1_u8; 32].as_slice())
+        .execute(&mut *parking)
+        .await
+        .expect("hold the access token");
+
+    let deletion = delete_alice(&db.pool);
+    // The deletion holds the grant `FOR UPDATE` (its keys-and-grants lock)
+    // and waits to cascade onto the parked token row.
+    let deletion_pid = expect_row_lock_waiter(&db.pool, parking_pid, "oauth_tokens").await;
+
+    let pool = db.pool.clone();
+    let refresh = tokio::spawn(async move {
+        let mut tx = pool.begin().await.expect("begin");
+        tokens::use_refresh(&mut tx, &[2; 32], now(), TimeDelta::zero()).await
+    });
+    // The refresh waits for the grant's row behind the deletion, not the
+    // other way round.
+    let refresh_pid = expect_row_lock_waiter(&db.pool, deletion_pid, "api_keys").await;
+    assert_ne!(refresh_pid, deletion_pid);
+
+    parking.rollback().await.expect("release the access token");
+    let deleted = tokio::time::timeout(RACE_LIMIT, deletion)
+        .await
+        .expect("the deletion finished within 30 s")
+        .expect("the deletion's task")
+        .expect("delete alice (not a deadlock, SQLSTATE 40P01)");
+    let found = tokio::time::timeout(RACE_LIMIT, refresh)
+        .await
+        .expect("the refresh finished within 30 s of the deletion's commit")
+        .expect("the refresh's task")
+        .expect("present the token (not a deadlock, SQLSTATE 40P01)");
+
+    assert_eq!(deleted.keys, 1);
+    assert_eq!(found, RefreshUse::Unknown, "the grant is gone");
+    assert_eq!(
+        rows_in(
+            &db.pool,
+            "SELECT count(*) FROM api_keys WHERE kind = 'oauth'"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        rows_in(&db.pool, "SELECT count(*) FROM oauth_tokens").await,
+        0
+    );
 }

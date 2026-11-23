@@ -620,7 +620,7 @@ async fn revoke(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use axum::http::{HeaderMap, StatusCode};
 
@@ -852,6 +852,69 @@ mod tests {
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"], "invalid_grant");
+    }
+
+    /// A code exchange racing a revocation of its grant (issue #652): the
+    /// revocation holds the grant's `api_keys` row `FOR UPDATE`, which the
+    /// exchange's `lock_grant` (`FOR SHARE`) waits behind. The credential
+    /// cache check before it still sees the grant live (the revocation is
+    /// uncommitted), so only the lock protocol can refuse the exchange.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_code_exchange_waiting_on_a_revocation_is_refused_and_mints_nothing() {
+        let test = oauth_app().await;
+        let code = authorization_code(&test).await;
+        let pool = test.app.pool();
+        let grant: String = sqlx::query_scalar("SELECT id FROM api_keys WHERE kind = 'oauth'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        // The revocation, as `revoke_by_id` takes it: the row `FOR UPDATE`,
+        // then the update, committed later.
+        let mut revocation = pool.begin().await.unwrap();
+        let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *revocation)
+            .await
+            .unwrap();
+        sqlx::query("SELECT 1 FROM api_keys WHERE id = $1 FOR UPDATE")
+            .bind(&grant)
+            .execute(&mut *revocation)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE api_keys SET revoked_at = $2 WHERE id = $1")
+            .bind(&grant)
+            .bind(test.app.clock().now())
+            .execute(&mut *revocation)
+            .await
+            .unwrap();
+
+        // The exchange runs beside the driver, which commits the revocation
+        // only once the exchange is confirmed waiting on the grant's row.
+        let exchanging = token(&test, exchange(&code));
+        let driver = async {
+            let waiter = crate::test_locks::expect_row_lock_waiter(pool, holder, "api_keys").await;
+            assert_ne!(waiter, holder);
+            revocation.commit().await.unwrap();
+        };
+        let ((status, _, body), ()) = tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(exchanging, driver)
+        })
+        .await
+        .expect("the exchange finished within 30 s of the revocation");
+
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"], "invalid_grant");
+        assert_eq!(body["error_description"], "the grant was revoked");
+        let minted = |pool| {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM oauth_tokens WHERE grant_id = $1")
+                .bind(grant.clone())
+                .fetch_one(pool)
+        };
+        assert_eq!(minted(pool).await.unwrap(), 0, "no token row was minted");
+        // The code was spent by the refused attempt: it cannot be tried again.
+        let (status, _, body) = token(&test, exchange(&code)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"], "invalid_grant");
+        assert_eq!(minted(pool).await.unwrap(), 0, "the replay minted nothing");
     }
 
     #[tokio::test(flavor = "multi_thread")]
