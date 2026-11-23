@@ -216,6 +216,14 @@ async fn search_within_the_cap_names_no_catalogs_and_shows_no_chooser() {
         ui.open("/search/needle");
         ui.wait_text("#search-count", "3 hits");
         assert!(!ui.present("#search-chooser"));
+        // The request names no catalogs: the server's own every-reachable path applies.
+        let urls = ui.eval(
+            "() => performance.getEntriesByType('resource').map(entry => entry.name).filter(name => name.includes('/api/v1/search'))",
+            json!(null),
+        );
+        let urls = urls.as_array().expect("urls");
+        assert_eq!(urls.len(), 1, "{urls:?}");
+        assert!(!urls[0].as_str().unwrap_or_default().contains("catalogs="), "{urls:?}");
     })
     .await;
 }

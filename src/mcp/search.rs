@@ -36,7 +36,7 @@ pub struct SearchParams {
     /// description or body; free text matches tags by substring. Empty
     /// matches every concept that passes the filters.
     pub query: String,
-    /// The catalog ids to search (the `name`s from `list_catalogs`; default: this connection's selection, which may be the only catalog the key reaches; when `list_catalogs` shows an empty selection, pass `catalogs`).
+    /// The catalog ids to search (the `name`s from `list_catalogs`; default: this connection's selection, which may be the only catalog the key reaches; when `list_catalogs` shows an empty selection, pass `catalogs`). At most the server's `search_fanout_max` (default 25) distinct catalogs may be named; more is refused.
     pub catalogs: Option<Vec<String>>,
     /// Only concepts of this `type` (case-insensitive).
     // `type` is a Rust keyword, so the field has another name and serde
