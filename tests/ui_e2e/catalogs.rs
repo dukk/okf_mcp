@@ -635,6 +635,117 @@ async fn a_member_imports_where_they_write_and_only_exports_where_they_read() {
     );
 }
 
+/// Issue #647: while a catalog's owner team is suspended, a writer sees the
+/// Import panel disabled with a note saying why (the server would refuse the
+/// upload with 403 `Suspended`), export still works, and an admin keeps a
+/// working import.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_suspended_catalog_disables_import_for_a_writer_but_not_an_admin() {
+    let server = server().await;
+    let writer = server
+        .key(
+            "console-suspended-writer",
+            Access::Write,
+            &["main"],
+            Some("main"),
+        )
+        .await;
+    let admin = server
+        .key("console-suspended-admin", Access::Admin, &[], Some("main"))
+        .await;
+    crate::support::server::applied(&server.app, async {
+        teams::suspend(
+            &server.db.pool,
+            OWNER,
+            Some("Paused for review."),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("suspend the owner team");
+    })
+    .await;
+    let generation = server
+        .app
+        .catalog("main")
+        .await
+        .unwrap()
+        .expect("main")
+        .current()
+        .generation();
+    let archive = tarball(&[("index.md", "# Main\n\nImported by an admin.\n")]);
+    // The import controls' state: the note, and whether each control is
+    // disabled (the button itself, and the fieldset holding the file input).
+    const CONTROLS: &str = "() => ({ \
+        note: !document.querySelector('#import-suspended').hidden, \
+        button: document.querySelector('#import-btn').disabled, \
+        fieldset: document.querySelector('#import-controls').disabled, \
+        file: document.querySelector('#upload-file').matches(':disabled') })";
+
+    let writer_archive = archive.clone();
+    drive(server.base.clone(), move |ui| {
+        ui.login(&writer);
+        ui.open("/transfer/main");
+        ui.wait_visible("#import-panel");
+        ui.wait_visible("#import-suspended");
+        let text = ui.text("#import-suspended");
+        assert!(
+            text.contains("suspended") && text.contains("only an admin"),
+            "{text}"
+        );
+        // A file chosen anyway (the input is disabled, so only a script can
+        // do it) must not enable the button.
+        let chosen = ui.eval(
+            CHOOSE_FILE,
+            json!({ "name": "main.tar.gz", "data": STANDARD.encode(&writer_archive) }),
+        );
+        assert_eq!(chosen, json!(1));
+        assert_eq!(
+            ui.eval(CONTROLS, json!(null)),
+            json!({ "note": true, "button": true, "fieldset": true, "file": true })
+        );
+        // Export is not refused for a suspended catalog.
+        ui.click("#export-btn");
+        ui.wait_visible("#export-link");
+    })
+    .await;
+
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/transfer/main");
+        ui.wait_visible("#import-panel");
+        assert_eq!(
+            ui.eval(CONTROLS, json!(null)),
+            json!({ "note": false, "button": true, "fieldset": false, "file": false }),
+            "no file chosen yet: only the button waits for one"
+        );
+        let chosen = ui.eval(
+            CHOOSE_FILE,
+            json!({ "name": "main.tar.gz", "data": STANDARD.encode(&archive) }),
+        );
+        assert_eq!(chosen, json!(1));
+        ui.wait_text("#upload-name", "main.tar.gz");
+        ui.click("#import-replace");
+        ui.click("#import-btn");
+        ui.wait_visible("#import-report");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert_eq!(
+        server
+            .app
+            .catalog("main")
+            .await
+            .unwrap()
+            .expect("main")
+            .current()
+            .generation(),
+        generation + 1
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn member_access_read_makes_a_team_catalog_read_only_for_its_members() {
     let server = login_server().await;

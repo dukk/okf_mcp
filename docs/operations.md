@@ -4085,7 +4085,9 @@ page sits in the main navigation, outside Administer, for anyone signed in.
 Its picker lists the catalogs the credential reaches; it exports the picked
 catalog as a `.tar.gz` download for `read` or more, and, for `write` or more
 on that catalog, uploads one with the import options, a progress bar and the
-import report (or the refusal and its problems). It pre-fills the expected generation from `GET /api/v1/catalogs`,
+import report (or the refusal and its problems). While the catalog's owner team is
+suspended, only an admin can import: anyone else sees the panel disabled, with a note
+saying so, and export still works. It pre-fills the expected generation from `GET /api/v1/catalogs`,
 so an import is refused if the catalog moved since the page loaded; clear the
 field to skip the check.
 
