@@ -957,6 +957,12 @@ pub async fn find_auth(
     .await?)
 }
 
+/// Deletes a user's undelivered feedback (`$1`: the user's name). The
+/// predicate is the one of the partial index `feedback_undelivered_user`
+/// (migration 0035), so the planner can use it.
+const DELETE_UNDELIVERED_FEEDBACK: &str =
+    "DELETE FROM feedback WHERE user_slug = $1 AND status IN ('pending', 'failed')";
+
 /// What a user deletion removed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DeletedUser {
@@ -1421,7 +1427,7 @@ async fn delete_checked(
     // job for a deleted row finds nothing and ends as skipped. The rows
     // are taken in no order relative to other writers: nothing else locks
     // a feedback row together with a user.
-    sqlx::query("DELETE FROM feedback WHERE user_slug = $1 AND status IN ('pending', 'failed')")
+    sqlx::query(DELETE_UNDELIVERED_FEEDBACK)
         .bind(name)
         .execute(&mut *tx)
         .await?;
@@ -2633,6 +2639,31 @@ pub(crate) mod tests {
             .unwrap();
 
         assert_eq!(count(&db.pool, "SELECT count(*) FROM feedback").await, 0);
+    }
+
+    /// Review of PR #951: the deletion's feedback delete can use the partial
+    /// index on `user_slug`, so it does not scan the table under the user
+    /// and admin locks. (Sequential scans are switched off: on a handful of
+    /// rows the planner would choose one whatever the indexes are.)
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_feedback_delete_on_user_deletion_uses_its_partial_index() {
+        let db = test_db().await;
+        let mut tx = db.pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL enable_seqscan = off")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+
+        let plan: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN {DELETE_UNDELIVERED_FEEDBACK}"
+        )))
+        .bind("alice")
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+
+        let plan = plan.join("\n");
+        assert!(plan.contains("feedback_undelivered_user"), "{plan}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

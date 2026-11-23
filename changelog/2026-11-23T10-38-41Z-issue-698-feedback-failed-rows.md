@@ -17,6 +17,15 @@
   in its transaction, so a deleted user's undelivered feedback is not
   forwarded with their name. `sent` rows are left: they are delivered, and
   the prune removes them.
+- Migration `0035_feedback_undelivered_user_index.sql` (`no-transaction`): partial index
+  `feedback_undelivered_user` on `feedback (user_slug) WHERE status IN
+  ('pending', 'failed')`, built `CONCURRENTLY` and listed in
+  `CONCURRENT_INDEXES`, so the user deletion's feedback delete (which runs
+  under the user and admin row locks) is an index lookup. The statement is
+  the const `DELETE_UNDELIVERED_FEEDBACK`, and a test checks its plan uses
+  the index. `feedback list` and `retry` need no new index: `retry` is by
+  primary key, `list` is an operator command over a table the prune bounds,
+  and `submit`'s rate-limit count already has `feedback_credential_created`.
 - `feedback::submit` takes the sender's user row `FOR KEY SHARE` first (when
   `registered`, i.e. the credential has a user) and refuses with
   `Unauthenticated` if the user is gone, so a submission cannot land after
