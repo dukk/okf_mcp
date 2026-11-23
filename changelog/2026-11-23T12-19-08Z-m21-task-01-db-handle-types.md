@@ -6,6 +6,7 @@
 - `OkfError::StoreUnavailable { store }`, answered 503 over HTTP. Its message says only that the catalog's data is temporarily unavailable. `OkfError::store_unavailable` logs the store name in the local half of a `split_event!`, never in the response or OTLP.
 
 ## Changed
+- `StoreName` deserializes through `StoreName::parse` (`#[serde(try_from = "String")]`), so an invalid name cannot be built from JSON either (review of PR #981).
 - `App::pool()` is `#[deprecated]`; `#![allow(deprecated)]` in `src/lib.rs` keeps the crate building until Task 6 removes both.
 - The two browser end-to-end tests that called `app.pool()` use `app.accounts().executor()`, since they are a separate crate the crate-wide allow does not cover.
 - The plan notes the shipped shapes (`Display`, `pub(crate)` constructor, `main_store()` by reference).
