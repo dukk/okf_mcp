@@ -289,15 +289,13 @@ impl App {
         // Shared with the credential cache, which resolves self-issued
         // credentials' ceilings against its rows (issue #728).
         let stores = Stores::new(pool.clone(), PoolSettings::from_config(&config));
-        let directory = Arc::new(
-            CatalogDirectory::new(
-                pool.clone(),
-                config.catalog_directory_entries,
-                config.catalog_ttl,
-                metrics.clone(),
-            )
-            .with_stores(stores.clone()),
-        );
+        let directory = Arc::new(CatalogDirectory::new(
+            pool.clone(),
+            stores.clone(),
+            config.catalog_directory_entries,
+            config.catalog_ttl,
+            metrics.clone(),
+        ));
         // `clock` moves into `Self` below, so the caches get their own handle.
         let credentials = Credentials::new(
             pool.clone(),

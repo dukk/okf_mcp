@@ -20,7 +20,7 @@ use okf_mcp::shared::Redis;
 use okf_mcp::store::audit::AuditActor;
 use okf_mcp::store::import::{import, ImportOptions, ImportScope};
 use okf_mcp::store::keys::{self, Access, Grants, NewKey};
-use okf_mcp::store::{catalogs, users};
+use okf_mcp::store::users;
 use okf_mcp::telemetry::metrics::Metrics;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
@@ -278,7 +278,7 @@ impl TestServer {
         let db = TestDb::start_migrated().await;
         migrate_with_owner(&db.pool).await;
         for (name, files) in catalogs_and_files {
-            catalogs::create(
+            super::stores::create_catalog(
                 &db.pool,
                 &okf_mcp::store::catalogs::NewCatalog {
                     name,
@@ -301,7 +301,7 @@ impl TestServer {
                 now: Utc::now(),
             };
             import(
-                &okf_mcp::stores::CatalogDb::main_in(&db.pool),
+                &crate::support::stores::main_store(&db.pool),
                 name,
                 files,
                 &options,

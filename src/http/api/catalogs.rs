@@ -917,8 +917,8 @@ async fn delete_catalog(
             .require_in(app.directory(), Access::Admin, &catalog)
             .await?;
     }
-    catalog_rows::delete(
-        app.accounts().executor(),
+    catalog_rows::delete_in(
+        app.stores(),
         &catalog,
         query.force,
         &actor,

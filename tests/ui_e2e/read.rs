@@ -1806,7 +1806,7 @@ async fn publish(
     };
     crate::support::server::applied(app, async {
         import(
-            &okf_mcp::stores::CatalogDb::main_in(pool),
+            &crate::support::stores::main_store(pool),
             catalog,
             entries,
             &options,
@@ -2569,7 +2569,7 @@ async fn publish_as(server: &TestServer, actor: &str, entries: okf_mcp::archive:
     };
     crate::support::server::applied(&server.app, async {
         import(
-            &okf_mcp::stores::CatalogDb::main_in(&server.db.pool),
+            &crate::support::stores::main_store(&server.db.pool),
             "notes",
             entries,
             &options,

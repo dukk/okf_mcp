@@ -36,7 +36,7 @@ use crate::cache::{Bounded, CacheName, Limit};
 use crate::error::OkfError;
 use crate::invalidate::Invalidation;
 use crate::store::catalogs::{self, CatalogRow};
-use crate::stores::{CatalogDb, StoreName, Stores};
+use crate::stores::{StoreName, Stores};
 use crate::telemetry::metrics::Metrics;
 
 /// How long a name with no catalog is remembered (spec Decision 6).
@@ -160,10 +160,9 @@ pub fn parse_cursor(cursor: Option<&str>) -> Result<Option<String>, OkfError> {
 pub struct CatalogDirectory {
     pool: PgPool,
     // Where each catalog's generation is read: its store's `catalog_state`.
-    // `None` until [`CatalogDirectory::with_stores`] (the tests): the
-    // `main` store in the account database, through `fallback`.
-    stores: Option<Stores>,
-    fallback: CatalogDb,
+    // The server's own registry, so a store's pool is the one pool the
+    // process holds for it.
+    stores: Stores,
     // `None` is a name with no catalog. It is dropped from here at once (see
     // `remember_absent`) and kept in `absent` instead, for the shorter time.
     rows: Bounded<String, Loaded>,
@@ -191,7 +190,9 @@ impl CatalogDirectory {
     /// An empty directory.
     ///
     /// # Arguments
-    /// * `pool` - the database.
+    /// * `pool` - the account database.
+    /// * `stores` - the registry of stores (each catalog's generation is
+    ///   read from its store).
     /// * `entries` - the most rows (and, separately, absent names) kept
     ///   (`catalog_directory_entries`).
     /// * `ttl` - how long a row is served (`catalog_ttl`).
@@ -200,8 +201,29 @@ impl CatalogDirectory {
     /// # Returns
     /// The directory.
     #[tracing::instrument(level = "trace", skip_all)]
-    pub fn new(pool: PgPool, entries: u64, ttl: Duration, metrics: Metrics) -> Self {
-        Self::with_absent_ttl(pool, entries, ttl, ABSENT_TTL, metrics)
+    pub fn new(
+        pool: PgPool,
+        stores: Stores,
+        entries: u64,
+        ttl: Duration,
+        metrics: Metrics,
+    ) -> Self {
+        Self::with_absent_ttl(pool, stores, entries, ttl, ABSENT_TTL, metrics)
+    }
+
+    /// [`CatalogDirectory::new`] with a registry of its own over `pool`
+    /// (the tests: one pool, `main` in the account database).
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "test constructor")
+    )]
+    pub(crate) fn for_tests(pool: PgPool, entries: u64, ttl: Duration, metrics: Metrics) -> Self {
+        let stores = Stores::new(
+            pool.clone(),
+            crate::stores::PoolSettings::from_config(&crate::config::Config::default()),
+        );
+        Self::new(pool, stores, entries, ttl, metrics)
     }
 
     /// [`CatalogDirectory::new`] with the lifetime of an absent name given:
@@ -209,35 +231,20 @@ impl CatalogDirectory {
     #[tracing::instrument(level = "trace", skip_all)]
     fn with_absent_ttl(
         pool: PgPool,
+        stores: Stores,
         entries: u64,
         ttl: Duration,
         absent_ttl: Duration,
         metrics: Metrics,
     ) -> Self {
         Self {
-            fallback: CatalogDb::main_in(&pool),
             pool,
-            stores: None,
+            stores,
             rows: Bounded::new(CacheName::Directory, Limit::Entries(entries), ttl)
                 .with_metrics(metrics),
             absent: Bounded::new(CacheName::Directory, Limit::Entries(entries), absent_ttl),
             meta_changes: AtomicU64::new(0),
         }
-    }
-
-    /// Reads each row's generation (the floor the catalog cache checks its
-    /// state against) from the catalog's store, from `stores`. Without
-    /// this the directory reads the `main` store in the account database.
-    ///
-    /// # Arguments
-    /// * `stores` - the registry of stores.
-    ///
-    /// # Returns
-    /// The directory.
-    #[tracing::instrument(level = "trace", skip_all)]
-    pub fn with_stores(mut self, stores: Stores) -> Self {
-        self.stores = Some(stores);
-        self
     }
 
     /// Sets each row's `generation` from its store's `catalog_state`: the
@@ -254,12 +261,9 @@ impl CatalogDirectory {
         }
         let mut generations: HashMap<i64, i64> = HashMap::with_capacity(rows.len());
         for (store, ids) in by_store {
-            let db = match &self.stores {
-                // Boxed: opening a pool is a deep future, and this sits on every
-                // request's path.
-                Some(stores) => Box::pin(stores.get(&store)).await?,
-                None => self.fallback.clone(),
-            };
+            // Boxed: opening a pool is a deep future, and this sits on every
+            // request's path.
+            let db = Box::pin(self.stores.get(&store)).await?;
             generations.extend(catalogs::generations(db.executor(), &ids).await?);
         }
         for row in rows.iter_mut() {
@@ -620,7 +624,7 @@ mod tests {
     const LONG: Duration = Duration::from_secs(3600);
 
     fn directory(pool: &PgPool) -> CatalogDirectory {
-        CatalogDirectory::new(pool.clone(), 100, LONG, Metrics::global())
+        CatalogDirectory::for_tests(pool.clone(), 100, LONG, Metrics::global())
     }
 
     async fn seed(pool: &PgPool, name: &str) -> i64 {
@@ -777,7 +781,7 @@ mod tests {
         let db = test_db().await;
         seed(&db.pool, "pg").await;
         let (_provider, metrics, registry) = local_metrics();
-        let directory = CatalogDirectory::new(db.pool.clone(), 100, LONG, metrics);
+        let directory = CatalogDirectory::for_tests(db.pool.clone(), 100, LONG, metrics);
 
         let first = directory.resolve("pg").await.unwrap().unwrap();
         // Changed behind the directory's back: only a read would see it.
@@ -823,6 +827,10 @@ mod tests {
         let db = test_db().await;
         let directory = CatalogDirectory::with_absent_ttl(
             db.pool.clone(),
+            Stores::new(
+                db.pool.clone(),
+                crate::stores::PoolSettings::from_config(&crate::config::Config::default()),
+            ),
             100,
             LONG,
             Duration::from_millis(100),

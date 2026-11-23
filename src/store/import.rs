@@ -131,7 +131,7 @@ struct Analyzed {
 ///
 /// Into an empty catalog every file is inserted; with `replace`, or into a
 /// catalog at generation 0 (holding only its starter files, see
-/// [`catalogs::create`]), only the differences are written: changed and new files get `import` revisions,
+/// `catalogs::create_in`), only the differences are written: changed and new files get `import` revisions,
 /// live documents missing from `files` become tombstones with `delete`
 /// revisions (message `import`), and unchanged files keep their revision.
 /// A path that had been deleted continues its revision numbers. The

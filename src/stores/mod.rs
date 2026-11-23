@@ -298,6 +298,7 @@ impl CatalogDb {
     /// # Returns
     /// A handle for the store `main`. The server itself never calls this: it
     /// gets its handles from [`Stores`].
+    #[cfg(test)]
     #[tracing::instrument(level = "trace", skip_all)]
     pub fn main_in(accounts: &PgPool) -> Self {
         let pool = sqlx::postgres::PgPoolOptions::new()
@@ -438,6 +439,79 @@ mod tests {
             .as_database_error()
             .and_then(|database| database.code())
             .is_some_and(|code| code == UNDEFINED_TABLE)
+    }
+
+    /// Issue #970 review: with `database_max_connections = 1` the process
+    /// holds one connection per pool, and every path reaches the `main`
+    /// store through the registry's one pool for it, never a pool of its
+    /// own: a create, an import (the publish write path), the directory
+    /// load and a deletion all run, within a time limit, and the registry
+    /// opened exactly one store pool.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_one_connection_configuration_never_opens_a_second_pool_for_main() {
+        use crate::archive::files;
+        use crate::cache::directory::CatalogDirectory;
+        use crate::labels::DisplayName;
+        use crate::store::audit::AuditActor;
+        use crate::store::catalogs::{self, NewCatalog};
+        use crate::store::import::{import, ImportOptions, ImportScope};
+        use crate::telemetry::metrics::Metrics;
+        use std::time::Duration;
+
+        let db = crate::db::test_db().await;
+        let one = crate::db::connect(&db.url, 1).await.unwrap();
+        let stores = Stores::new(
+            one.clone(),
+            PoolSettings {
+                max_connections: 1,
+                idle_timeout: Duration::from_secs(60),
+                connect_timeout: Duration::from_secs(5),
+            },
+        );
+        let limit = Duration::from_secs(30);
+        let cli = AuditActor::cli();
+        let name = DisplayName::default();
+        let new = NewCatalog {
+            name: "solo",
+            display_name: &name,
+            description: "",
+            owner_team: crate::db::TEST_TEAM,
+        };
+
+        let work = async {
+            catalogs::create_in(&stores, &new, &cli, chrono::Utc::now()).await?;
+            let main = stores.get(&StoreName::main()).await?;
+            let options = ImportOptions {
+                replace: true,
+                scope: ImportScope::Everything,
+                expect_generation: None,
+                expect_catalog_id: None,
+                actor: "t",
+                audit: &cli,
+                now: chrono::Utc::now(),
+            };
+            import(&main, "solo", files(&[("a.md", "# A\n")]), &options).await?;
+            let directory = CatalogDirectory::new(
+                one.clone(),
+                stores.clone(),
+                10,
+                Duration::from_secs(60),
+                Metrics::global(),
+            );
+            let row = directory.resolve("solo").await?.expect("the catalog");
+            assert_eq!(row.generation, 1);
+            catalogs::delete_in(&stores, "solo", true, &cli, chrono::Utc::now()).await
+        };
+        tokio::time::timeout(limit, work)
+            .await
+            .expect("finished on one connection")
+            .unwrap();
+
+        assert_eq!(stores.pools_opened(), 1);
+        assert!(one.size() <= 1);
+        let main = stores.get(&StoreName::main()).await.unwrap();
+        assert!(main.executor().size() <= 1);
+        assert_eq!(stores.pools_opened(), 1);
     }
 
     /// Migration 0041 (issue #970): a store's connections see schema

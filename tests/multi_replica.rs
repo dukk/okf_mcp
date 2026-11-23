@@ -1180,7 +1180,7 @@ async fn a_catalog_imported_through_the_store_is_served_on_both_replicas() {
         now: Utc::now(),
     };
     let report = okf_mcp::store::import::import(
-        &okf_mcp::stores::CatalogDb::main_in(&a.db.pool),
+        &support::stores::main_store(&a.db.pool),
         "main",
         files(&[("b.md", "---\ntype: Note\n---\n# B\n")]),
         &options,
@@ -1226,7 +1226,7 @@ async fn a_catalog_created_on_one_replica_is_readable_on_the_other() {
         description: "",
         owner_team: OWNER,
     };
-    okf_mcp::store::catalogs::create(&a.db.pool, &new, &AuditActor::cli(), Utc::now())
+    support::stores::create_catalog(&a.db.pool, &new, &AuditActor::cli(), Utc::now())
         .await
         .expect("create notes");
 

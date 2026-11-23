@@ -216,6 +216,8 @@ Each release ends deployable: after Task 6 (types only, rolling), after Task 10b
 
 > **Corrected (issue #969, 2026-11-23).** Review of PR #999 found that the by-name and ceiling readers Task 8 left unfiltered would, in the same release that first writes a NULL `provisioned_at`, let a release-2 replica see or act on a half-made catalog: a break of P11. Task 10b is therefore two PRs. Part 1 ("hide unprovisioned catalogs from every by-name reader") adds `provisioned_at IS NOT NULL` to `catalogs::{find, list, set_owner, update_details, set_maintenance}`, every read and by-name write in `ceiling.rs` (`highest`, `page`, `ceiling_in`, `entitlements_in`, `member_access`, `team_access`, `entitle`, `set_member_access`), the team catalog list in `teams.rs`, `keys::catalog_ids` and `repair::missing_root_index`, and ends release 2. Part 2 (the two-step create, `ProvisionCatalogs` and recovery) is release 2b and may be rolled out only after part 1 is on every replica. No mixed-version test harness exists: the order is enforced by the release sequence, and part 1's tests (`src/store/catalogs_unprovisioned_tests.rs`) show that every reader hides a row seeded directly with `provisioned_at` NULL.
 
+> **Done in #970 (2026-11-23).** The change Task 10b left for Task 11 is made: `registration` runs on an account connection, and `store_side_exists` and `write_starter_files` use `catalog.catalog_state`.
+
 ---
 
 ## Release 1: types only

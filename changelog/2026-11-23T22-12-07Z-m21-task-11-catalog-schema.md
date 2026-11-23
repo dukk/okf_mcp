@@ -55,6 +55,32 @@ scale `serve` to zero, `okf-mcp migrate`, start release 3.
 - `users::delete` uses `main_in` until Task 13. The "crosses in release 1"
   items this covers are removed from the Task 2, 3 and 4 changelogs.
 
+## Pools (review of PR #1001)
+
+`CatalogDb::main_in`, which builds a pool of its own, is test-only now.
+Every production path reaches the `main` store through the registry's one
+pool for it: the server's handlers use `app.stores()`/`store_db`,
+`CatalogDirectory::new` takes the `Stores` (no fallback handle),
+`users::delete_on` and `delete_own_on` take the store handle (the
+command line gets it from a `Stores` it builds once per command), and the
+HTTP catalog deletion uses `catalogs::delete_in`. The pool-of-one test is
+`a_one_connection_configuration_never_opens_a_second_pool_for_main`
+(create, import, directory load and delete on `database_max_connections = 1`,
+and the registry opens one store pool). The test-only forms are
+`catalogs::{create, delete}` and `users::{delete, delete_own}`; the
+integration tests use `tests/support/stores.rs`.
+
+## Evidence
+
+Gates on this change (`tools/agentic/gate.sh`: fmt, lint, dylint, test) ran
+green; the named tests, each seen to fail with its change reverted, are
+`maintenance_run_end_is_audited_after_the_trigger_is_gone`,
+`an_empty_maintenance_run_is_audited_after_the_trigger_is_gone`,
+`publish_bumps_generation_in_catalog_state`,
+`a_store_pool_cannot_see_account_tables`,
+`an_account_pool_cannot_see_catalog_tables` and
+`no_foreign_key_crosses_between_schemas`.
+
 ## Known gaps (Task 13)
 
 - A key id left on a changeset or run after its key is deleted is now a

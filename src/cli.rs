@@ -1071,9 +1071,10 @@ async fn dispatch(
         }
         Command::User(command) => {
             let pool = connect(cli.database_url.as_deref(), &config).await?;
+            let stores = Stores::new(pool.clone(), PoolSettings::from_config(&config));
             print!(
                 "{}",
-                people::user(&pool, &config, command, clock.now()).await?
+                people::user(&pool, &stores, &config, command, clock.now()).await?
             );
         }
         Command::Team(command) => {

@@ -45,7 +45,7 @@ async fn publish(server: &TestServer, catalog: &str, entries: Files, actor: &str
     };
     crate::support::server::applied(&server.app, async {
         import(
-            &okf_mcp::stores::CatalogDb::main_in(&server.db.pool),
+            &crate::support::stores::main_store(&server.db.pool),
             catalog,
             entries,
             &options,
@@ -106,7 +106,7 @@ async fn add_late(pool: &sqlx::PgPool, app: &std::sync::Arc<okf_mcp::app::App>) 
     };
     crate::support::server::applied(app, async {
         import(
-            &okf_mcp::stores::CatalogDb::main_in(pool),
+            &crate::support::stores::main_store(pool),
             "main",
             entries,
             &options,

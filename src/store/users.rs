@@ -334,12 +334,12 @@ pub async fn find<'e>(
 /// The id of the user called `name`, inside a caller's transaction.
 ///
 /// The row is held `FOR KEY SHARE` until that transaction ends, so a
-/// concurrent [`delete`] (which locks the user `FOR UPDATE`) waits for the
+/// concurrent [`delete_on`] (which locks the user `FOR UPDATE`) waits for the
 /// caller and then sees what it wrote (a key or code naming the user); one
 /// that got there first leaves no row, which is `UnknownName` here rather
 /// than a foreign-key failure at the caller's write.
 ///
-/// Lock order: call this before locking any team row. [`delete`] locks the
+/// Lock order: call this before locking any team row. [`delete_on`] locks the
 /// user and then its personal team, so a caller holding a team while it
 /// waits here could deadlock with it (`teams::set_member` resolves the user
 /// first for this reason).
@@ -991,7 +991,7 @@ const SOLE_OWNED_TEAMS: &str = "\
 /// be deleted`), so a client matches on this prefix.
 pub const SHARED_MEMBER_REFUSAL: &str = "the user is a member of shared team(s)";
 
-/// What [`delete`] allows and requires of the user it deletes.
+/// What [`delete_on`] allows and requires of the user it deletes.
 ///
 /// The `Default` is the API's: the last admin user stays, and shared-team
 /// memberships go with the user.
@@ -1016,7 +1016,7 @@ impl DeleteOptions {
 }
 
 /// How the person deleting their own account proved it is them, moments
-/// before ([`delete_own`]). Checked again under the user's row lock, so a
+/// before ([`delete_own_on`]). Checked again under the user's row lock, so a
 /// change that commits in between refuses the deletion.
 // `Copy`: two borrowed values, cheap to pass by value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1065,7 +1065,7 @@ impl std::fmt::Debug for OwnDeletion<'_> {
 }
 
 /// Deletes the signed-in person's own account (issue #355): exactly
-/// [`delete`] with the API's [`DeleteOptions`] (so the last admin user
+/// [`delete_on`] with the API's [`DeleteOptions`] (so the last admin user
 /// stays, and every other refusal of `delete` applies), the person as the
 /// actor, and, under the user's row lock, three more checks:
 /// - the name still names `own.user_id`;
@@ -1091,16 +1091,18 @@ impl std::fmt::Debug for OwnDeletion<'_> {
 /// # Errors
 /// [`OkfError::Unauthenticated`] once the session has ended or the user is
 /// gone; [`OkfError::Forbidden`] when the password changed or the passkey
-/// was removed since it was checked; otherwise as [`delete`].
+/// was removed since it was checked; otherwise as [`delete_on`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete_own"))]
-pub async fn delete_own(
+pub async fn delete_own_on(
     pool: &PgPool,
+    store: &CatalogDb,
     own: &OwnDeletion<'_>,
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<DeletedUser, OkfError> {
-    match delete_checked(
+    match delete_in(
         pool,
+        store,
         own.name,
         DeleteOptions::default(),
         Some(own),
@@ -1113,6 +1115,25 @@ pub async fn delete_own(
         Err(OkfError::UnknownName { noun: "user", .. }) => Err(session_ended()),
         other => other,
     }
+}
+
+/// [`delete_own_on`] on the `main` store inside the account database, on a
+/// pool of its own: for the tests, which hold only the account pool.
+///
+/// # Errors
+/// As [`delete_own_on`].
+#[cfg(test)]
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) async fn delete_own(
+    pool: &PgPool,
+    own: &OwnDeletion<'_>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<DeletedUser, OkfError> {
+    let main = CatalogDb::main_in(pool);
+    let deleted = delete_own_on(pool, &main, own, actor, now).await;
+    main.executor().close().await;
+    deleted
 }
 
 /// The 401 for a deletion whose session (or user) is gone.
@@ -1129,7 +1150,7 @@ fn session_ended() -> OkfError {
     }
 }
 
-/// [`delete_own`]'s checks, run under the user's row lock (which every
+/// [`delete_own_on`]'s checks, run under the user's row lock (which every
 /// writer of the password, a passkey or a session's user takes first, or
 /// which, for a session revoke, never follows a session row lock).
 ///
@@ -1140,7 +1161,7 @@ fn session_ended() -> OkfError {
 /// * `now` - the server clock.
 ///
 /// # Errors
-/// As [`delete_own`]; [`OkfError::Database`].
+/// As [`delete_own_on`]; [`OkfError::Database`].
 #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.check_own_deletion"))]
 async fn check_own_deletion(
     conn: &mut PgConnection,
@@ -1199,7 +1220,7 @@ async fn check_own_deletion(
 /// Lock order: every admin row in id order, then the user with every other
 /// user its entries resolve (the actor, its credential's owner, the people
 /// of its open changesets' personal owner teams), in id order
-/// ([`audit::lock_people`], as [`set_admin`]), then (for [`delete_own`]
+/// ([`audit::lock_people`], as [`set_admin`]), then (for [`delete_own_on`]
 /// only) the asking session's row `FOR SHARE`, then its personal team, then
 /// its shared teams in id order, then its keys and grants in id order, then
 /// their open changesets in id order. A key or code being created for the
@@ -1229,55 +1250,51 @@ async fn check_own_deletion(
 /// team owns, the shared teams it is the only owner of, or that it is the
 /// last admin user; [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete"))]
-pub async fn delete(
+pub async fn delete_on(
     pool: &PgPool,
+    store: &CatalogDb,
     name: &str,
     options: DeleteOptions,
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<DeletedUser, OkfError> {
-    delete_checked(pool, name, options, None, actor, now).await
+    delete_in(pool, store, name, options, None, actor, now).await
 }
 
-/// The one deletion path: [`delete`], plus [`delete_own`]'s checks when
-/// `own` is given, run right after the user's row is locked.
-///
-/// # Arguments
-/// As [`delete`]; `own` - a self-service deletion's request, if it is one.
-///
-/// # Returns
-/// What went.
+/// [`delete_on`] on the `main` store inside the account database, on a pool
+/// of its own: for the tests, which hold only the account pool.
 ///
 /// # Errors
-/// As [`delete`] and [`delete_own`].
-#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete_checked"))]
-async fn delete_checked(
+/// As [`delete_on`].
+#[cfg(test)]
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) async fn delete(
     pool: &PgPool,
     name: &str,
     options: DeleteOptions,
-    own: Option<&OwnDeletion<'_>>,
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<DeletedUser, OkfError> {
-    // A malformed name (a NUL, which Postgres refuses) names nobody.
-    if !is_valid_name(name) {
-        return Err(unknown(name));
-    }
-    // The store half: the open changesets of the user's keys. Until Task 13
-    // fans this out over every store (and host stores are enabled, Task 20),
-    // every catalog's data is in the `main` store, inside the account
-    // database; its own pool carries the store's `search_path`.
     let main = CatalogDb::main_in(pool);
-    let deleted = delete_in(pool, &main, name, options, own, actor, now).await;
+    let deleted = delete_on(pool, &main, name, options, actor, now).await;
     // Closes the connections now rather than when the last handle drops.
     main.executor().close().await;
     deleted
 }
 
-/// [`delete_checked`] with the store handle given.
+/// The one deletion path: [`delete_on`], plus [`delete_own_on`]'s checks when
+/// `own` is given, run right after the user's row is locked. The store half
+/// (the open changesets of the user's keys) is on `store`: until Task 13
+/// fans it out over every store, the caller passes the `main` store.
+///
+/// # Arguments
+/// As [`delete_on`]; `own` - a self-service deletion's request, if it is one.
+///
+/// # Returns
+/// What went.
 ///
 /// # Errors
-/// As [`delete_checked`].
+/// As [`delete_on`] and [`delete_own_on`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete_in"))]
 async fn delete_in(
     pool: &PgPool,
@@ -1288,6 +1305,10 @@ async fn delete_in(
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<DeletedUser, OkfError> {
+    // A malformed name (a NUL, which Postgres refuses) names nobody.
+    if !is_valid_name(name) {
+        return Err(unknown(name));
+    }
     // Dropping `tx` without `commit()` (any `?` or early return) rolls back.
     let mut tx = pool.begin().await?;
     // As in `set_admin`: an admin cleared concurrently drops out of the list
@@ -2678,7 +2699,7 @@ pub(crate) mod tests {
     async fn a_feedback_submit_that_waited_on_the_users_deletion_is_refused() {
         let db = test_db().await;
         seed_user(&db.pool, "alice", None).await;
-        // The deletion's lock, held `FOR UPDATE` as `delete_checked` does.
+        // The deletion's lock, held `FOR UPDATE` as `delete_in` does.
         let mut deleting = db.pool.begin().await.unwrap();
         let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
             .fetch_one(&mut *deleting)

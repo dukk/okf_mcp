@@ -137,7 +137,7 @@ async fn storage_round_trip_on_a_real_catalog() {
     let root = std::env::var_os("OKF_PARITY_CATALOG").expect("set OKF_PARITY_CATALOG");
     let db = support::pg::TestDb::start_migrated().await;
     support::server::migrate_with_owner(&db.pool).await;
-    catalogs::create(
+    support::stores::create_catalog(
         &db.pool,
         &okf_mcp::store::catalogs::NewCatalog {
             name: "pg",
@@ -170,7 +170,7 @@ async fn storage_round_trip_on_a_real_catalog() {
         now: Utc::now(),
     };
     let report = import(
-        &okf_mcp::stores::CatalogDb::main_in(&db.pool),
+        &support::stores::main_store(&db.pool),
         "pg",
         files,
         &options,
@@ -190,7 +190,7 @@ async fn storage_round_trip_on_a_real_catalog() {
         .await
         .unwrap()
         .expect("pg");
-    let state = CatalogState::load(&okf_mcp::stores::CatalogDb::main_in(&db.pool), &row)
+    let state = CatalogState::load(&support::stores::main_store(&db.pool), &row)
         .await
         .unwrap();
     eprintln!("load snapshot: {:?}", started.elapsed());
@@ -224,7 +224,7 @@ async fn storage_round_trip_on_a_real_catalog() {
 
     let started = Instant::now();
     let (tarball, _generation) = export::export(
-        &okf_mcp::stores::CatalogDb::main_in(&db.pool),
+        &support::stores::main_store(&db.pool),
         "pg",
         Vec::new(),
         &export::ExportOptions {

@@ -1362,13 +1362,22 @@ mod tests {
             .fetch_one(&mut *first)
             .await
             .unwrap();
-        let mut refreshes = stores.credential_task(&name).await.unwrap();
-
-        set_password(&db.pool, &role, "pw-2").await;
+        // The secret changes first, then the login; a refused `begin`
+        // (classified, as the store layer's calls are) makes the credential
+        // task refresh. Retry until one connects under the new login.
         secrets.set(Ok(format!(r#"{{"username":"{role}","password":"pw-2"}}"#)));
-        store.begin().await.unwrap_err();
-        refreshes.wait_for(|count| *count >= 1).await.unwrap();
-        let mut second = store.executor().acquire().await.unwrap();
+        set_password(&db.pool, &role, "pw-2").await;
+        let mut second = None;
+        for _ in 0..100 {
+            match store.begin().await {
+                Ok(transaction) => {
+                    second = Some(transaction);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        }
+        let mut second = second.expect("a connection under the refreshed login");
         let after: String = sqlx::query_scalar("SHOW search_path")
             .fetch_one(&mut *second)
             .await

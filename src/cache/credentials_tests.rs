@@ -43,7 +43,7 @@ fn credentials_with(
     };
     // The ceilings of self-issued credentials are resolved against this
     // directory's rows; `apply_messages_of` applies each message to it too.
-    let directory = Arc::new(CatalogDirectory::new(
+    let directory = Arc::new(CatalogDirectory::for_tests(
         pool.clone(),
         100,
         ttl,

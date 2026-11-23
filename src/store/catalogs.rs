@@ -84,7 +84,7 @@ pub fn is_valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// A catalog to create: [`create`]'s input.
+/// A catalog to create: `create`'s input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NewCatalog<'a> {
     /// The new catalog's name, `[a-z0-9-]+`.
@@ -119,11 +119,11 @@ pub struct NewCatalog<'a> {
 ///
 /// A create that stops after step 1 or 2 leaves a half-created row, which
 /// the `provision_catalogs` housekeeping task finishes or removes ([`recover`]).
-/// This form serves the command line's tools and the tests, which hold
-/// only the account pool: the store is the `main` store inside the account
-/// database, opened on a pool of its own with the store's `search_path`
-/// ([`CatalogDb::main_in`]). A server uses [`create_in`], with the
-/// registry's handle for whichever store the catalog is placed on.
+/// This form is for the tests, which hold only the account pool: the store
+/// is the `main` store inside the account database, opened on a pool of its
+/// own with the store's `search_path` ([`CatalogDb::main_in`]). The server
+/// and the command line use [`create_in`], with the registry's handle for
+/// whichever store the catalog is placed on.
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -139,8 +139,9 @@ pub struct NewCatalog<'a> {
 /// [`OkfError::UnknownName`] for an unknown team; [`OkfError::Busy`] if the
 /// recovery task removed the half-created row first (nothing was written:
 /// retry); [`OkfError::Database`] otherwise, a failed audit write included.
+#[cfg(test)]
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.create"))]
-pub async fn create(
+pub(crate) async fn create(
     pool: &PgPool,
     new: &NewCatalog<'_>,
     actor: &AuditActor,
@@ -162,7 +163,7 @@ pub async fn create(
     finish_create(&db, catalog, actor, now).await
 }
 
-/// [`create`] on the store the registry holds for the catalog's placement:
+/// Creates a catalog on the store the registry holds for its placement:
 /// what the server's handlers and the command line call.
 ///
 /// # Arguments
@@ -176,7 +177,7 @@ pub async fn create(
 /// The new row.
 ///
 /// # Errors
-/// As [`create`]; also [`OkfError::StoreUnavailable`] when the placed
+/// As `create`; also [`OkfError::StoreUnavailable`] when the placed
 /// store cannot be opened (the half-created row is left for the recovery
 /// task).
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.create_in"))]
@@ -192,10 +193,10 @@ pub async fn create_in(
     finish_create(&db, catalog, actor, now).await
 }
 
-/// Steps 2 and 3 of [`create`] on the store handle `db`.
+/// Steps 2 and 3 of `create` on the store handle `db`.
 ///
 /// # Errors
-/// As [`create`].
+/// As `create`.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.finish_create", catalog_id = catalog.id))]
 async fn finish_create(
     db: &CatalogDb,
@@ -208,7 +209,7 @@ async fn finish_create(
     Ok(catalog)
 }
 
-/// Step 1 of [`create`]: inserts the registry row, unprovisioned, with the
+/// Step 1 of `create`: inserts the registry row, unprovisioned, with the
 /// store placement chose for the owner team, and records `catalog.created`,
 /// in one account transaction. `placement::choose` runs in this
 /// transaction so the choice and the insert read one snapshot.
@@ -223,7 +224,7 @@ async fn finish_create(
 /// The new row and the store it was placed on.
 ///
 /// # Errors
-/// As [`create`], less the abort of step 2.
+/// As `create`, less the abort of step 2.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.register"))]
 pub(crate) async fn register(
     pool: &PgPool,
@@ -348,7 +349,7 @@ async fn registration(conn: &mut PgConnection, id: i64) -> Result<Registration, 
     })
 }
 
-/// Whether catalog `id` has its store side: the data [`create`] writes
+/// Whether catalog `id` has its store side: the data `create` writes
 /// under the catalog's lock: its `catalog.catalog_state` row, which
 /// [`write_starter_files`] writes first, in the same transaction as the
 /// starter files, so the row says the whole store side is there. This is the
@@ -374,7 +375,7 @@ pub(crate) async fn store_side_exists(
     )
 }
 
-/// Step 2 of [`create`] (decision P9): in one store transaction, takes the
+/// Step 2 of `create` (decision P9): in one store transaction, takes the
 /// catalog's lock, checks that the registry row still exists and is still
 /// unprovisioned, writes the starter files, and commits.
 ///
@@ -464,7 +465,7 @@ async fn mark_provisioned_in(
     }
 }
 
-/// Step 3 of [`create`]: [`mark_provisioned_in`] in its own transaction.
+/// Step 3 of `create`: [`mark_provisioned_in`] in its own transaction.
 ///
 /// # Arguments
 /// * `pool` - the account database.
@@ -1738,9 +1739,10 @@ mod provision_tests;
 
 /// Deletes a catalog with its documents, history, changesets and grants
 /// (cascading foreign keys), under the catalog's lock, and bumps the
-/// administrative generation. This form serves the tests and the tools that
-/// hold only the account pool (see [`create`]): the catalog's store is the
-/// `main` store inside the account database. A server uses [`delete_in`].
+/// administrative generation. This form is for the tests, which hold only
+/// the account pool (see `create`): the catalog's store is the `main`
+/// store inside the account database. The server and the command line use
+/// [`delete_in`].
 ///
 /// # Arguments
 /// * `pool` - the account database.
@@ -1752,8 +1754,9 @@ mod provision_tests;
 /// # Errors
 /// As [`delete_on`]; also [`OkfError::Refused`] if the catalog is not on the
 /// `main` store.
+#[cfg(test)]
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.delete"))]
-pub async fn delete(
+pub(crate) async fn delete(
     pool: &PgPool,
     name: &str,
     force: bool,
