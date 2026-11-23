@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 680,
+  "next_claim_seq": 694,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "e58df8864c0dcbedd91b51fc4da46fa9a71737dfbdc336807d453bb04c995009"
+    "mac": "7cff03b0cd27bb3977c9c65be3dc67b6169a8f12048eacc4e2eae03c70102083"
   },
-  "next_evidence_seq": 865,
+  "next_evidence_seq": 880,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "8b5d05df744f473f169ee88bd88e2b33f861f0308faac80f09448844a2ddc9a6"
+    "mac": "3d306c592dcf45207ff7c43ee900c02a75441a1374ff1dfa9ef7b16bc36acfe9"
   },
   "claims": [
     {
@@ -52859,6 +52859,952 @@
       "seal": {
         "by": "server",
         "mac": "3e6323f61988dc083eab8cbec23dd76d33ee5f0daedfb1818ab7c22224e1d1c5"
+      }
+    },
+    {
+      "id": "CLM-0680",
+      "statement": "Issue #672 is resolved: a write on a lagging replica records the current base revision, and the new-catalog announcement gap is either fixed or shown not to exist.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/672",
+      "derived_from": [],
+      "artifacts": [
+        "src/write.rs"
+      ],
+      "tags": [
+        "from-issue:672"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [],
+      "verdicts": [],
+      "created_at": "2026-11-23T08:12:15.185449087Z",
+      "updated_at": "2026-11-23T08:12:15.185449087Z",
+      "seal": {
+        "by": "server",
+        "mac": "0b728e5ad59e66d655368a4a59db1730548d5a53a8bbd97c819a904311fa9b38"
+      }
+    },
+    {
+      "id": "CLM-0681",
+      "statement": "write::apply_audited refreshes the catalog snapshot (state.refresh, then catalog_cache().refreshed_if_moved) after taking the changeset's write queue and before app.pool().begin().",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"call `state.refresh(...)` (one generation read; a rebuild only if it moved) and `refreshed_if_moved`\" / issue #672 possible fix",
+      "source_anchor": {
+        "path": "src/write.rs",
+        "lines": {
+          "start": 160,
+          "end": 178
+        },
+        "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+      },
+      "derived_from": [
+        "CLM-0680"
+      ],
+      "artifacts": [
+        "src/write.rs"
+      ],
+      "tags": [
+        "from-issue:672"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0865",
+          "kind": "inspection",
+          "locator": "src/write.rs:166-175",
+          "summary": "write_queue lock taken at 166, then state.refresh(pool, rebuild_locks) and refreshed_if_moved at 174-175, then app.pool().begin() at 178. Same ordering pattern as current_covering use at src/mcp/changesets.rs:819-823.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/write.rs",
+              "lines": {
+                "start": 164,
+                "end": 178
+              },
+              "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+            }
+          },
+          "recorded_at": "2026-11-23T08:12:40.658795316Z",
+          "seal": {
+            "by": "server",
+            "mac": "7ee3ef118de198e33084e9d7c55688fd356da61dcfdf35aaeee04ce0d053d012"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code order verified at src/write.rs:166-178; behavior covered by the passing lagging-replica test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0865"
+          ],
+          "recorded_at": "2026-11-23T08:13:21.624719775Z",
+          "seal": {
+            "by": "server",
+            "mac": "e79c9b65fa804e66418ac9032325888a03aa286106e0bd7369df3fd046c4da1c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:12:15.185449087Z",
+      "updated_at": "2026-11-23T08:13:21.624719775Z",
+      "seal": {
+        "by": "server",
+        "mac": "a9030266e436aaff72c5458edb90c594ffeb2dec29f721e26ba8c2e5eb1d7daa"
+      }
+    },
+    {
+      "id": "CLM-0682",
+      "statement": "The refresh in apply_audited does one generation read and rebuilds only if the generation moved (CatalogState::refresh), and no pooled connection is held at that point so the #671 rebuild lock order holds.",
+      "kind": "constraint",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"No pooled connection is held at that point, so #671's lock order holds.\"",
+      "derived_from": [
+        "CLM-0680"
+      ],
+      "artifacts": [
+        "src/write.rs",
+        "src/catalog.rs"
+      ],
+      "tags": [
+        "from-issue:672"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0866",
+          "kind": "inspection",
+          "locator": "src/catalog.rs:272-276,416-440; src/write.rs:174-178",
+          "summary": "refresh reads generation_in(pool) (one scalar query), refresh_to returns Ok(false) if generation <= current, else takes the rebuild lock then builds. In write.rs nothing between ctx.changeset() and pool().begin() holds a pooled connection (only the in-process write_queue guard). Doc comment on refresh says rebuild lock precedes the build's connection and callers holding a connection must not wait on it, which is satisfied here.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 272,
+                "end": 276
+              },
+              "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+            }
+          },
+          "recorded_at": "2026-11-23T08:12:40.802570674Z",
+          "seal": {
+            "by": "server",
+            "mac": "ea32f1796bb7d64524b47b27cd847bc06ba2ec999297a07cb5a2bd4aad6b7dde"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "refresh is a single generation read plus a rebuild only if newer; no pooled connection is held before begin().",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0866"
+          ],
+          "recorded_at": "2026-11-23T08:13:21.666604411Z",
+          "seal": {
+            "by": "server",
+            "mac": "9753c87afbb1fe2e91e99e2e364f14cf39ddf29aa7869c1ebd1403c600e95e90"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:12:15.185449087Z",
+      "updated_at": "2026-11-23T08:13:21.666604411Z",
+      "seal": {
+        "by": "server",
+        "mac": "4fc0f20a791fb913960ee940c2017d92b4d97a2b28dca2a7c7e4e488d47248c6"
+      }
+    },
+    {
+      "id": "CLM-0683",
+      "statement": "Test an_edit_on_a_lagging_replica_records_the_fresh_base_and_publishes_cleanly makes B lag A, edits on B, asserts the stored base_revision equals A's current revision, publishes without conflict, and passes.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"New test `an_edit_on_a_lagging_replica_records_the_fresh_base_and_publishes_cleanly`\"",
+      "derived_from": [
+        "CLM-0680"
+      ],
+      "artifacts": [
+        "src/shared/announce/catalog_tests.rs"
+      ],
+      "tags": [
+        "from-issue:672"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0867",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow an_edit_on_a_lagging_replica",
+          "summary": "1 passed; 0 failed. Read the test at src/shared/announce/catalog_tests.rs:502-556: asserts stale < fresh, then base_revision (queried from changeset_entries) == Some(fresh), then publish succeeds and text holds both edits.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce/catalog_tests.rs",
+              "lines": {
+                "start": 497,
+                "end": 556
+              },
+              "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+            }
+          },
+          "recorded_at": "2026-11-23T08:12:40.848669155Z",
+          "seal": {
+            "by": "server",
+            "mac": "a0997ab701a5883561569be56096355d25d5ec9e6a6615d4439d4b35dbe8f027"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test ran and passed; its assertions are on the stored base_revision and a clean publish, as claimed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0867"
+          ],
+          "recorded_at": "2026-11-23T08:13:21.707078391Z",
+          "seal": {
+            "by": "server",
+            "mac": "e557be678e8630e83b8cc4e3c250d3399df0ceb83b6f15e078470d7ec5e02a1a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:12:15.185449087Z",
+      "updated_at": "2026-11-23T08:13:21.707078391Z",
+      "seal": {
+        "by": "server",
+        "mac": "5ab0b0842086edbae0d4cd831533809842fa50e66f905929f7169185619be9c8"
+      }
+    },
+    {
+      "id": "CLM-0684",
+      "statement": "The new lagging-replica test fails without the fix (base Some(2), expected Some(3)).",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"it fails without the fix (base `Some(2)`, expected `Some(3)`)\"",
+      "derived_from": [
+        "CLM-0680"
+      ],
+      "artifacts": [
+        "src/shared/announce/catalog_tests.rs"
+      ],
+      "tags": [
+        "from-issue:672"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0879",
+          "kind": "analysis",
+          "locator": "src/shared/announce/catalog_tests.rs:502-556 vs src/write.rs:233",
+          "summary": "By reading: without the refresh, base comes from overlay.base().revision (write.rs:233) on B's stale snapshot, so base would equal stale (< fresh) and the assert_eq base==Some(fresh) would fail. The literal numbers Some(2)/Some(3) are from the old changesets.rs test, not this test, and I did not run the test with the fix removed.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/write.rs",
+              "lines": {
+                "start": 224,
+                "end": 234
+              },
+              "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+            }
+          },
+          "recorded_at": "2026-11-23T08:12:57.695971323Z",
+          "seal": {
+            "by": "server",
+            "mac": "c690afa6a615fb5b424cc22f401d00adcd4ce86435f1e94fcca86ba2e5429809"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Reading suggests it would fail, but I did not run it with the fix removed, and the quoted values (Some(2) vs Some(3)) belong to the changesets.rs revert test, not to this test. Fix: run the lagging-replica test with the refresh lines in src/write.rs removed and record the failing assertion, and correct the PR body to quote that test's actual values.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0879"
+          ],
+          "recorded_at": "2026-11-23T08:13:21.747094999Z",
+          "seal": {
+            "by": "server",
+            "mac": "fe51b685a7496fb9ee6e159c5d043cc582cbe863095d7fa910d867f118f518e1"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:12:15.185449087Z",
+      "updated_at": "2026-11-23T08:13:21.747094999Z",
+      "seal": {
+        "by": "server",
+        "mac": "c6ee0aefc8fefdd4555e55670e6e6ff6cb86d78fbf4cd45952aa9e0d071313a0"
+      }
+    },
+    {
+      "id": "CLM-0685",
+      "statement": "a_revert_on_a_stale_snapshot_keeps_the_older_base_and_conflicts was renamed a_revert_on_a_stale_snapshot_refreshes_and_takes_the_current_base, now asserts base Some(3) and a clean publish, and passes; the old name no longer exists.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"`a_revert_on_a_stale_snapshot_keeps_the_older_base_and_conflicts` encoded the old behaviour; it is now `a_revert_on_a_stale_snapshot_refreshes_and_takes_the_current_base`.\"",
+      "derived_from": [
+        "CLM-0680"
+      ],
+      "artifacts": [
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:672"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0868",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow a_revert_on_a_stale_snapshot",
+          "summary": "1 passed: a_revert_on_a_stale_snapshot_refreshes_and_takes_the_current_base. src/mcp/changesets.rs:2382 asserts seen==Some(2), entry.base_revision==Some(3), publish unwrap succeeds. Old name absent from the test run (filter matched only the new one).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets.rs",
+              "lines": {
+                "start": 2376,
+                "end": 2425
+              },
+              "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+            }
+          },
+          "recorded_at": "2026-11-23T08:12:40.894829836Z",
+          "seal": {
+            "by": "server",
+            "mac": "499f21cb5d5c27e69294f9b29aab1de487188fb84e4a1a0e7b8cfc2f9e13fbf3"
+          }
+        },
+        {
+          "id": "EVD-0874",
+          "kind": "analysis",
+          "locator": "git grep keeps_the_older_base_and_conflicts -- src tests",
+          "summary": "Zero hits in src and tests; only the changelog (which explains the rename) and the ledger mention the old name.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "keeps_the_older_base_and_conflicts",
+              "scope": [
+                "src",
+                "tests"
+              ],
+              "hits": 0,
+              "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+            }
+          },
+          "recorded_at": "2026-11-23T08:12:57.488793528Z",
+          "seal": {
+            "by": "server",
+            "mac": "68ab585c5d99066566b1659eeb85920ea6f1cbc78f2fa2ef33eafad117d3a022"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "New-named test passes with the stated assertions; old name is gone from src and tests.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0868",
+            "EVD-0874"
+          ],
+          "recorded_at": "2026-11-23T08:13:21.787088827Z",
+          "seal": {
+            "by": "server",
+            "mac": "18d4ce54e8a79166422c1ac94961cec28594264931375cea8862469289499db6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:12:15.185449087Z",
+      "updated_at": "2026-11-23T08:13:21.787088827Z",
+      "seal": {
+        "by": "server",
+        "mac": "6f7b00ca4fd7d65674ea7ac1036a6600933a96dabc97c1fca560c03a23fa45a6"
+      }
+    },
+    {
+      "id": "CLM-0686",
+      "statement": "Creating a catalog sends Invalidation::CatalogMeta from store::catalogs::create.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"Creating a catalog sends `Invalidation::CatalogMeta` (`src/store/catalogs.rs`, `create`)\"",
+      "derived_from": [
+        "CLM-0680"
+      ],
+      "artifacts": [
+        "src/store/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:672",
+        "gap-1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0869",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:121,192-198",
+          "summary": "create() (starts line 121) calls invalidate(&mut tx, &[Invalidation::CatalogMeta{id,name}]) inside its transaction.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 190,
+                "end": 200
+              },
+              "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+            }
+          },
+          "recorded_at": "2026-11-23T08:12:40.987698442Z",
+          "seal": {
+            "by": "server",
+            "mac": "674096c49f4db5da8e09c23b9fa29d054a6fe7e652dc0de426116a50e87e38b1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "create sends CatalogMeta in its transaction.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0869"
+          ],
+          "recorded_at": "2026-11-23T08:13:21.826408102Z",
+          "seal": {
+            "by": "server",
+            "mac": "ac07be2c55da02befbbd5aa26be8c8f94827455117d2bf775363d01356e4c920"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:12:15.185449087Z",
+      "updated_at": "2026-11-23T08:13:21.826408102Z",
+      "seal": {
+        "by": "server",
+        "mac": "e0fee2f985e8d0750f0ccea0841371ca7d428326a2b2f60cc867f3448ee34c32"
+      }
+    },
+    {
+      "id": "CLM-0687",
+      "statement": "CatalogDirectory::apply on a CatalogMeta message drops the directory's row and absent-name entry for the name, on every replica that receives it.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"which `CatalogDirectory::apply` uses to drop the row and absent-name entries on every replica\"",
+      "derived_from": [
+        "CLM-0680"
+      ],
+      "artifacts": [
+        "src/cache/directory.rs"
+      ],
+      "tags": [
+        "from-issue:672",
+        "gap-1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0870",
+          "kind": "inspection",
+          "locator": "src/cache/directory.rs:478-484",
+          "summary": "apply on CatalogMeta bumps meta_changes, calls rows.invalidate(name) and absent.invalidate(name). Delivery to every replica is via the change feed (App applies it, src/app.rs:1274-1310); not exercised by me beyond reading.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/directory.rs",
+              "lines": {
+                "start": 478,
+                "end": 484
+              },
+              "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+            }
+          },
+          "recorded_at": "2026-11-23T08:12:41.032990360Z",
+          "seal": {
+            "by": "server",
+            "mac": "f962aeb3ecdc0c252ddf649cac99a8021874f6dc0289350687fb96942c6435d7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "apply drops row and absent entries on CatalogMeta.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0870"
+          ],
+          "recorded_at": "2026-11-23T08:13:21.867475314Z",
+          "seal": {
+            "by": "server",
+            "mac": "afb746e6441c22c409e989b0afe0701a25f3e27896bcd576a986c6cbbd5d619d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:12:15.185449087Z",
+      "updated_at": "2026-11-23T08:13:21.867475314Z",
+      "seal": {
+        "by": "server",
+        "mac": "fc037a4d140b050de89d31b3dd9c7005185b979d6d3e774d4647bb77001bdc79"
+      }
+    },
+    {
+      "id": "CLM-0688",
+      "statement": "A catalog not yet loaded on a replica is loaded on first use by CatalogCache::get.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"the catalog is then loaded on first use (`CatalogCache::get`)\"",
+      "derived_from": [
+        "CLM-0680"
+      ],
+      "artifacts": [
+        "src/cache/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:672",
+        "gap-1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0871",
+          "kind": "inspection",
+          "locator": "src/cache/catalogs.rs:226-251",
+          "summary": "CatalogCache::get does states.get_or_load(row.id, CatalogState::load(pool,row)), so an unloaded catalog is loaded on first use; a loaded one is refreshed if behind its row generation.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/catalogs.rs",
+              "lines": {
+                "start": 226,
+                "end": 251
+              },
+              "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+            }
+          },
+          "recorded_at": "2026-11-23T08:12:41.077926636Z",
+          "seal": {
+            "by": "server",
+            "mac": "7e5aeb488b57ab8bce4133ca1aac928cd0edfeb1b9f6057097b42bf3e7187973"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "get_or_load loads an unloaded state.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0871"
+          ],
+          "recorded_at": "2026-11-23T08:13:21.907480302Z",
+          "seal": {
+            "by": "server",
+            "mac": "dc4faf6da4ff763927d258b7e5c4d7d026717d430ac4c0cc5363cf9b2a08ca4e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:12:15.185449087Z",
+      "updated_at": "2026-11-23T08:13:21.907480302Z",
+      "seal": {
+        "by": "server",
+        "mac": "d1fd9785d265962a93f188a9a83b0765e8dc2080ef8e900d93d52c6f08002298"
+      }
+    },
+    {
+      "id": "CLM-0689",
+      "statement": "No catalog poll loop exists in the current code.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"there is no poll loop\"",
+      "derived_from": [
+        "CLM-0680"
+      ],
+      "artifacts": [
+        "src/app.rs",
+        "src/housekeeping.rs"
+      ],
+      "tags": [
+        "from-issue:672",
+        "gap-1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0872",
+          "kind": "analysis",
+          "locator": "git grep -niE 'poll' src (catalog/snapshot/loop lines)",
+          "summary": "Every poll hit about catalogs is a comment saying the loop is gone (src/app.rs:4, src/invalidate.rs:605, src/housekeeping.rs:5, src/mcp/changesets.rs:1561); no code path polls catalogs. Search for any poll-loop function is a comment-only match set.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/app.rs",
+              "lines": {
+                "start": 3,
+                "end": 6
+              },
+              "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+            }
+          },
+          "recorded_at": "2026-11-23T08:12:41.121335876Z",
+          "seal": {
+            "by": "server",
+            "mac": "106f66ce3fbe013c793bc9d0cc64a02ec3376788af75faec7dfca5c778780d93"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All poll mentions are comments or tests stating the loop is gone; I found no poll task. (Stale doc comments still reference a poll loop at src/shared/announce.rs:65 and src/store/oauth/*, outside this PR.)",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0872"
+          ],
+          "recorded_at": "2026-11-23T08:13:21.946911858Z",
+          "seal": {
+            "by": "server",
+            "mac": "c39fda80a54c80ff728703ea37e7a14f935aa1c279292aee70407ece7bd32ee1"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:12:15.185449087Z",
+      "updated_at": "2026-11-23T08:13:21.946911858Z",
+      "seal": {
+        "by": "server",
+        "mac": "af66257c15f0ed504c22aa359b0093c2b2fb6fb1327b8d7d4fb3e875710517f0"
+      }
+    },
+    {
+      "id": "CLM-0690",
+      "statement": "A replica that lost the CatalogMeta message misses a new catalog only until the absent entry's 5 s TTL (ABSENT_TTL) expires, or a resubscribe's catch-up (App::catch_up_catalogs) marks directory rows stale.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Changelog: \"A replica misses a new catalog only if it lost the message (then until the absent entry's 5 s TTL, or a resubscribe's catch-up, `App::catch_up_catalogs`).\"",
+      "derived_from": [
+        "CLM-0680"
+      ],
+      "artifacts": [
+        "src/cache/directory.rs",
+        "src/app.rs",
+        "changelog/2026-11-23T08-30-00Z-issue-672-write-refreshes-lagging-base.md"
+      ],
+      "tags": [
+        "from-issue:672",
+        "gap-1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0873",
+          "kind": "inspection",
+          "locator": "src/cache/directory.rs:42; src/app.rs:1403-1405; src/cache/directory.rs:525",
+          "summary": "ABSENT_TTL = 5 s; catch_up_catalogs calls directory.mark_all_stale() (rows stale, read again on next use). Note: catch-up marks rows stale; whether it also clears absent entries was not checked, but the claim's catch-up half concerns row staleness.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/app.rs",
+              "lines": {
+                "start": 1395,
+                "end": 1405
+              },
+              "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+            }
+          },
+          "recorded_at": "2026-11-23T08:12:41.168279691Z",
+          "seal": {
+            "by": "server",
+            "mac": "81a2455de14516ae99b30bdb2a3219e783483212bed435133e9529c1db2eb523"
+          }
+        },
+        {
+          "id": "EVD-0875",
+          "kind": "inspection",
+          "locator": "src/cache/directory.rs:521-527",
+          "summary": "mark_all_stale marks every row stale AND invalidates every absent entry (\"no absence is trusted\"), so catch-up covers absent names as well.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/directory.rs",
+              "lines": {
+                "start": 521,
+                "end": 527
+              },
+              "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+            }
+          },
+          "recorded_at": "2026-11-23T08:12:57.531698375Z",
+          "seal": {
+            "by": "server",
+            "mac": "02315082fb56286098427c0b420749659f3d1a1d0ab0a556f37955c1091b5150"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "ABSENT_TTL is 5 s; catch_up_catalogs -> mark_all_stale stales rows and clears absent entries.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0873",
+            "EVD-0875"
+          ],
+          "recorded_at": "2026-11-23T08:13:21.986431464Z",
+          "seal": {
+            "by": "server",
+            "mac": "248cab3580513767bc7a96c0fdef59c747b8254f0a06d26c4aa34612b5793032"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:12:15.185449087Z",
+      "updated_at": "2026-11-23T08:13:21.986431464Z",
+      "seal": {
+        "by": "server",
+        "mac": "37ea67c6bf1bfc608021f146b9f80fc4280cd064e1453051d0e4311b67dd2080"
+      }
+    },
+    {
+      "id": "CLM-0691",
+      "statement": "The change adds no new announcement message type and the only non-test source change is in src/write.rs (the src/mcp/changesets.rs hunks are test-only; a comment in write.rs changed).",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Changelog: \"No new message type is needed.\" / PR body: \"no announcement change is made\"",
+      "derived_from": [
+        "CLM-0680"
+      ],
+      "artifacts": [
+        "src/write.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:672"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0876",
+          "kind": "inspection",
+          "locator": "git diff origin/main..HEAD -- src",
+          "summary": "Diffstat src: changesets.rs (hunks inside mod publish_tests, test rename/assertions only), catalog_tests.rs (new test), write.rs (+refresh block, comment edit at ~226). No change to Invalidation enum or any announce code. write.rs behavioural hunk is the described refresh.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/write.rs",
+              "lines": {
+                "start": 164,
+                "end": 176
+              },
+              "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+            }
+          },
+          "recorded_at": "2026-11-23T08:12:57.571460479Z",
+          "seal": {
+            "by": "server",
+            "mac": "56a60dc25d3bac50e9f3e37f90893607798e9770709f09f10a004f6c53c18414"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Only write.rs changes non-test behavior, and it is the described refresh.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0876"
+          ],
+          "recorded_at": "2026-11-23T08:13:22.026267101Z",
+          "seal": {
+            "by": "server",
+            "mac": "884bf79c77d58bef950d013e88ab54dc4d1cca3a82e7e09d3e4a6af93f7a2264"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:12:15.185449087Z",
+      "updated_at": "2026-11-23T08:13:22.026267101Z",
+      "seal": {
+        "by": "server",
+        "mac": "6e64019f5cac8a238a1ff49a6eaa7ef498c650eb173c2b1da24600663723c33f"
+      }
+    },
+    {
+      "id": "CLM-0692",
+      "statement": "The multi-replica spec carries a dated correction (issue #672, 2026-11-23) saying the poll loop is gone, a created catalog is found by B on its next request, and a write refreshes a behind snapshot before its transaction.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"a dated correction in the multi-replica spec\"",
+      "source_anchor": {
+        "path": "docs/superpowers/specs/2026-11-17-okf-multi-replica-design.md",
+        "lines": {
+          "start": 93,
+          "end": 100
+        },
+        "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+      },
+      "derived_from": [
+        "CLM-0680"
+      ],
+      "artifacts": [
+        "docs/superpowers/specs/2026-11-17-okf-multi-replica-design.md"
+      ],
+      "tags": [
+        "from-issue:672"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0877",
+          "kind": "inspection",
+          "locator": "docs/superpowers/specs/2026-11-17-okf-multi-replica-design.md:93-100",
+          "summary": "Added blockquote begins \"Corrected (issue #672, 2026-11-23)\", says no poll loop, catalog loaded on first use, CatalogMeta drops absent entry so B finds it on next request, and write refreshes a behind snapshot before its transaction. Matches code evidence for CLM-0686..0688 and 0681.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/specs/2026-11-17-okf-multi-replica-design.md",
+              "lines": {
+                "start": 93,
+                "end": 100
+              },
+              "commit": "2e5679603a2d82436f8398a942f98d143fe675ee"
+            }
+          },
+          "recorded_at": "2026-11-23T08:12:57.615540891Z",
+          "seal": {
+            "by": "server",
+            "mac": "53105d9c7eef5dea9ae58ad4e8f708fd6ddff66e74e11698bb061197455bf68b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Spec text matches and agrees with code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0877"
+          ],
+          "recorded_at": "2026-11-23T08:13:22.066129598Z",
+          "seal": {
+            "by": "server",
+            "mac": "116e25dbc3db08d89bf0122d805af47e5e91a06cae65d79b0d5cbdfdde7e13d4"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:12:15.185449087Z",
+      "updated_at": "2026-11-23T08:13:22.066129598Z",
+      "seal": {
+        "by": "server",
+        "mac": "25e343d675ac0f4c776098635f538fe5f7985052f6f7f8c0c363f510dae1ed40"
+      }
+    },
+    {
+      "id": "CLM-0693",
+      "statement": "fmt, lint, dylint and test gates passed through tools/agentic/gate.sh on the pushed head, with 2866 unit tests passed.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"`fmt`, `lint`, `dylint`, `test` through `tools/agentic/gate.sh` on the pushed head: all green (2866 unit tests passed).\"",
+      "derived_from": [
+        "CLM-0680"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:672"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0878",
+          "kind": "test",
+          "locator": "gate.sh narrow runs (lib test binary \"2867 filtered out\" + 1 run)",
+          "summary": "The lib test binary at HEAD holds 2868 tests (1 run + 2867 filtered out), not 2866; the gate runs themselves were not rerun (only narrow gates allowed), so green fmt/lint/dylint/test cannot be confirmed and the count differs from the claim.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T08:12:57.651805680Z",
+          "seal": {
+            "by": "server",
+            "mac": "c71b642479044ab163e79a74b250140d6b68c6d65ec08fd2b3590d2ac519209d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Only narrow gates were permitted, so the full gates were not rerun; the lib test binary lists 2868 tests, not 2866. Fix: rerun fmt, lint, dylint and test through tools/agentic/gate.sh on the head commit and quote the printed counts in the PR body (the unit-test count there should be what that run prints).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0878"
+          ],
+          "recorded_at": "2026-11-23T08:13:22.105522664Z",
+          "seal": {
+            "by": "server",
+            "mac": "aee1f823f38f3d284e8ad552d9ccef5ea0b5d18ae8bf49bc8aed282fd27bac0d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:12:15.185449087Z",
+      "updated_at": "2026-11-23T08:13:22.105522664Z",
+      "seal": {
+        "by": "server",
+        "mac": "271a6a8b1ce7cb5b3172d06db01a21de4b12988ed2de7a27ad03098c7dc6646e"
       }
     }
   ]

@@ -2373,12 +2373,13 @@ mod publish_tests {
         assert_eq!(published_revision(&test, "a.md").await, None);
     }
 
-    /// The revert's base is the revision in the snapshot its write's overlay
-    /// is built on, never a newer one: a publish that snapshot has not seen
-    /// (here an import, with no refresh) leaves the base behind, and publish
-    /// reports the conflict instead of writing over that revision.
+    /// A revert on a snapshot this server has not refreshed (here after an
+    /// import, which refreshes nothing) refreshes it first, so the entry's
+    /// base is the revision published now and publish writes the revert over
+    /// it instead of reporting a conflict on a base that was only ever out
+    /// of date (issue #672).
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_revert_on_a_stale_snapshot_keeps_the_older_base_and_conflicts() {
+    async fn a_revert_on_a_stale_snapshot_refreshes_and_takes_the_current_base() {
         let test = pg().await;
         let ours = writer(&test, "writer-a", "pg").await;
         let theirs = writer(&test, "writer-b", "pg").await;
@@ -2411,26 +2412,16 @@ mod publish_tests {
         // still names the old generation, so no read here refreshes it).
         // The assertion on `seen` checks that premise.
         let seen = published_revision(&test, "a.md").await;
+        assert_eq!(seen, Some(2));
 
         revert_in(&ours, &handle, "/a.md", 1).await;
 
-        // Neither the first edit's base (1) nor the database's revision (3):
-        // the revision the write's snapshot holds.
+        // Not the stale snapshot's 2, nor the first edit's 1: the revision
+        // published now.
         let entry = entry_for(&test, &handle, "a.md").await.unwrap();
-        assert_eq!((seen, entry.base_revision), (Some(2), Some(2)));
-        let error = publish_as(&ours, &handle, "revert").await.unwrap_err();
-        assert!(
-            matches!(
-                error,
-                OkfError::Conflict { ref files } if files == &[ConflictFile {
-                    path: "/a.md".to_string(),
-                    base_revision: Some(2),
-                    current_revision: Some(3),
-                }]
-            ),
-            "{error:?}"
-        );
-        assert_eq!(published_text(&test, "a.md").await, "# Imported\n");
+        assert_eq!(entry.base_revision, Some(3));
+        publish_as(&ours, &handle, "revert").await.unwrap();
+        assert_ne!(published_text(&test, "a.md").await, "# Imported\n");
     }
 
     /// An entry nobody published over keeps today's diff: its stored text

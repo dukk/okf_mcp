@@ -89,6 +89,15 @@ The last two are not part of this milestone.
   > reads through a changeset do refresh a snapshot older than an entry's
   > base, so a changeset is never shown against text older than its own
   > entries. Snapshots themselves stay per instance.
+
+  > **Corrected (issue #672, 2026-11-23).** There is no poll loop any more
+  > (the "left to the poll loop" above is out of date): a catalog this
+  > instance has not loaded is loaded on its first use, and creating a
+  > catalog sends `CatalogMeta`, which drops the directory's absent-name
+  > entry, so a catalog created on A is found by B on its next request (no
+  > new announcement needed). A write (`write::apply`) also refreshes a
+  > snapshot that is behind the database before its transaction starts, so
+  > an edit on a lagging instance records the current base revision.
 - **SSE resumption (`EventStore`).** `sse_retry` stays off. A `GET /mcp`
   stream belongs to one instance, and a client that loses it reconnects.
 - **Rate limits (#357) and the mail worker (#458).** The Redis connection
