@@ -375,7 +375,9 @@ async fn exchange_code(
     // recognized and revokes its family. The closure reads and changes only
     // `stored`, so a rerun on a fresh copy answers the same (`lessons.md`).
     // A Redis failure (`?`) answers 503 and never falls back to memory
-    // (spec Decision 16): the code is neither spent nor exchanged. The same script that marks the code used also keeps it at least
+    // (spec Decision 16): the code is neither spent nor exchanged.
+    //
+    // The same script that marks the code used also keeps it at least
     // `USED_CODE_FLOOR` longer, so the check after the commit finds it even
     // when the code's own lifetime ran out meanwhile (a code is only ever
     // extended once it is spent, never while it could still be exchanged).
