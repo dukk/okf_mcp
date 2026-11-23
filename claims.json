@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 872,
+  "next_claim_seq": 894,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "76507f18ac1e161950107f7424a4d996ddd1c03b9673be9b77c50a89248e94b1"
+    "mac": "286e7fde7b3ba9aadbb43dccd6762c186fb285b2bab363a55785a8e884c05197"
   },
-  "next_evidence_seq": 1185,
+  "next_evidence_seq": 1224,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "d7231b7c1a83e13d46e3dfff41efa031a5b5ed92c11e0bc56e4ba45a56d5f8ba"
+    "mac": "4042bc7debaadb24df3bb458c6769f32960b93eed0286cdfc940271b8557878a"
   },
   "claims": [
     {
@@ -2574,6 +2574,28 @@
             "by": "server",
             "mac": "4460e3bcaea5a5ace1d5ff4302794583ad2398e77cc8c889d7a25943f80c1549"
           }
+        },
+        {
+          "id": "EVD-1210",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0019_display_names.sql:82-87 (renamed from migrations/0019_display_names.sql, 100% similar)",
+          "summary": "Same lines, same text at the new path: users and teams CHECK char_length(display_name) <= 80, and catalogs ADD COLUMN display_name with its CHECK.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0019_display_names.sql",
+              "lines": {
+                "start": 82,
+                "end": 87
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:26:40.383655071Z",
+          "seal": {
+            "by": "server",
+            "mac": "6e87a8bab1e10c401cab42d05dca1ff7c9616676b70de7b094be03253c3a600f"
+          }
         }
       ],
       "verdicts": [
@@ -2589,13 +2611,26 @@
             "by": "server",
             "mac": "f9fc9432e68b259b0841a5ee59f81676be22d7935873b98fab19c96f0cd30db7"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head: file renamed unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1210"
+          ],
+          "recorded_at": "2026-11-23T16:26:57.753374554Z",
+          "seal": {
+            "by": "server",
+            "mac": "092995ea89ff5d9977db054b9aae647321afd306d215ae50454e5e317bdfe355"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:29.655947925Z",
-      "updated_at": "2026-11-21T19:09:16.139713399Z",
+      "updated_at": "2026-11-23T16:26:57.753374554Z",
       "seal": {
         "by": "server",
-        "mac": "19b70947d404e66997a1ee07683b63cc4a8e31da8b0fd8809202599de56ad237"
+        "mac": "5b7283a9c3ea648f557d056201128c24e64e3bf92b5a2309f4b6d8bf03101cdb"
       }
     },
     {
@@ -3101,6 +3136,28 @@
             "by": "server",
             "mac": "5c5772b5602b89f4f380e58ac1ca3db63741a54475af1729b54f1e4740df8243"
           }
+        },
+        {
+          "id": "EVD-1211",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0012_audit.sql:161-183 (renamed, 100% similar)",
+          "summary": "File moved without change; the append-only trigger text is identical at the new path.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0012_audit.sql",
+              "lines": {
+                "start": 161,
+                "end": 183
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:26:40.549025355Z",
+          "seal": {
+            "by": "server",
+            "mac": "f29f855e6f89d7443192ddcac1f10da742a3ff2c60af0e9dd75b87c1acf0753f"
+          }
         }
       ],
       "verdicts": [
@@ -3116,13 +3173,26 @@
             "by": "server",
             "mac": "2ac1319841b19a336fb784c3cd114469a53dfae9e6b28f82e17b1e360346307a"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head: file renamed unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1211"
+          ],
+          "recorded_at": "2026-11-23T16:26:57.806994545Z",
+          "seal": {
+            "by": "server",
+            "mac": "aa8924004685921b90826575bffbaac497f1081387d60fa0632d5a99840bdfae"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:29.655947925Z",
-      "updated_at": "2026-11-21T19:09:16.249598714Z",
+      "updated_at": "2026-11-23T16:26:57.806994545Z",
       "seal": {
         "by": "server",
-        "mac": "7b4db150978dbbcbad0c0fd8fcd61f7c7f25302c98ce10eda07bd08becb48e81"
+        "mac": "f6f257c6f243c63c695dccd040249ce27a746a8e984db6e6433fd04f08f0deb9"
       }
     },
     {
@@ -7932,6 +8002,28 @@
             "by": "server",
             "mac": "06fc244abe525cbbe4056c02c2cfcb824620d9d76c5027195efb3cc0af662dfd"
           }
+        },
+        {
+          "id": "EVD-1212",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0008_oauth.sql:31-35 (renamed, 100% similar)",
+          "summary": "api_keys_oauth_caps CHECK (kind = 'key' OR (access <> 'admin' AND NOT maintenance_report)) is at the same lines at the new path.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0008_oauth.sql",
+              "lines": {
+                "start": 31,
+                "end": 35
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:26:40.641242993Z",
+          "seal": {
+            "by": "server",
+            "mac": "f0e28af04840a47ce2f71a03e2bfe974ecad00ef9cf4f65572b1a3281aeb17f2"
+          }
         }
       ],
       "verdicts": [
@@ -7947,13 +8039,26 @@
             "by": "server",
             "mac": "4b59883bd2a705ee7044e93c76f0e9ce3b31acf06ae4a3349ab1faacb8acde7c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head: file renamed unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1212"
+          ],
+          "recorded_at": "2026-11-23T16:26:57.859730823Z",
+          "seal": {
+            "by": "server",
+            "mac": "044325cf99d103fd678bdbed3c31e866abb98c7ce1f1921ccf24d5a8c000d311"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:56.236553050Z",
-      "updated_at": "2026-11-21T19:10:45.613378626Z",
+      "updated_at": "2026-11-23T16:26:57.859730823Z",
       "seal": {
         "by": "server",
-        "mac": "d8ebb8b1e9deabf40b98719029d1b3e1fa239a53c47a85cc4910ac110e805632"
+        "mac": "2e3956a38d020cb57a178c16322e918917f0d49a9436631ef6c91f261ba4230e"
       }
     },
     {
@@ -10062,6 +10167,28 @@
             "by": "server",
             "mac": "6f549438295e221e2c3ccd5873f47020c0ce4412342fc4a9e6a9f4caca4e8ed3"
           }
+        },
+        {
+          "id": "EVD-1213",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0013_user_deletion.sql:12-24 (renamed, 100% similar)",
+          "summary": "The api_keys, sign_in_codes and team_members user_id FK redefinitions are unchanged at the new path.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0013_user_deletion.sql",
+              "lines": {
+                "start": 12,
+                "end": 24
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:26:40.809012607Z",
+          "seal": {
+            "by": "server",
+            "mac": "42b65062a19d0302fd2e5ff3210ba019fa2adf5db151116752d9d37120358389"
+          }
         }
       ],
       "verdicts": [
@@ -10077,13 +10204,26 @@
             "by": "server",
             "mac": "295db9bf86c50490e47edad8610e8b275b06eeed6cba8ee2a9745deee65c36ea"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head: file renamed unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1213"
+          ],
+          "recorded_at": "2026-11-23T16:26:57.910078380Z",
+          "seal": {
+            "by": "server",
+            "mac": "199ace9d01e7abcad76e87cb1be91df3c77a79fb760f19c87b34770a28861c3d"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:56.236553050Z",
-      "updated_at": "2026-11-21T19:10:46.153883175Z",
+      "updated_at": "2026-11-23T16:26:57.910078380Z",
       "seal": {
         "by": "server",
-        "mac": "e28b70b45f2f65d1444cadd0905c621f1832fabf0d3a01d17b3650dca3e84c34"
+        "mac": "a892454143ed4d38a512d413a832d0090e88e78253505bc95b897ee79e86d032"
       }
     },
     {
@@ -37495,6 +37635,28 @@
             "by": "server",
             "mac": "59d4d26e0362159ac713e9478af8301f26880d9e41005eb7a180ca0ba3e0e3db"
           }
+        },
+        {
+          "id": "EVD-1214",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0031_provisioner_audit.sql:12-15 (renamed, 100% similar)",
+          "summary": "0031 still drops and re-adds audit_entries_target_kind_check with 'route' added, NOT VALID. 0036 later widens it again with 'store' but 0031 itself is unchanged.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0031_provisioner_audit.sql",
+              "lines": {
+                "start": 12,
+                "end": 15
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:26:40.933300804Z",
+          "seal": {
+            "by": "server",
+            "mac": "bed6a8ebe05c922c2601c3a640dda6b974fce741c482a77261a83aa69828d6be"
+          }
         }
       ],
       "verdicts": [
@@ -37523,13 +37685,26 @@
             "by": "server",
             "mac": "07007e8689491a1bedc28d5a063b3d745016a513e69149bf3fde0d77794a4ab0"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head: file renamed unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1214"
+          ],
+          "recorded_at": "2026-11-23T16:26:57.961462622Z",
+          "seal": {
+            "by": "server",
+            "mac": "c015667e162fe6552aee91bf0386f94e7421893ec356ec17e2055fe878700a83"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T20:26:44.381679476Z",
+      "updated_at": "2026-11-23T16:26:57.961462622Z",
       "seal": {
         "by": "server",
-        "mac": "5e91ce25f661f579a28f6b0cd8a9476f8662bafc307335ded04cc74d9e50ae6b"
+        "mac": "aa91ffd661e579ef6e5bdc15d5cf088cf997c958aaab3a36198ab0abe89e0c19"
       }
     },
     {
@@ -56343,6 +56518,28 @@
             "by": "server",
             "mac": "8f4d4f6b5fd875e888de309945e9b4971431933eda20977381aac7a22dea287c"
           }
+        },
+        {
+          "id": "EVD-1215",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0033_feedback_finished_index.sql:9-10 and 0034_feedback_drop_sent_index.sql:6 (renamed, 100% similar)",
+          "summary": "0033 creates feedback_finished ON feedback (finished_at) WHERE status IN ('sent','failed'); 0034 drops feedback_sent_finished. Unchanged at the new path.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0033_feedback_finished_index.sql",
+              "lines": {
+                "start": 9,
+                "end": 10
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:26:41.085417590Z",
+          "seal": {
+            "by": "server",
+            "mac": "18dc8c6c74cec1b97026f40f34a7dfc893ee1a16d6b6259ea01a690c2fd6cb21"
+          }
         }
       ],
       "verdicts": [
@@ -56372,13 +56569,26 @@
             "by": "server",
             "mac": "5e634725f9958c54d157cbfc2d6db38081d9b7d52268b19c663dd4737c6e8a57"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head: files renamed unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1215"
+          ],
+          "recorded_at": "2026-11-23T16:26:58.011867719Z",
+          "seal": {
+            "by": "server",
+            "mac": "d2b1b6a9bc191e2263c91915907a0048848f3efc3609bd3aeb6bf18c88b5234f"
+          }
         }
       ],
       "created_at": "2026-11-23T10:45:51.402016283Z",
-      "updated_at": "2026-11-23T11:03:06.420093940Z",
+      "updated_at": "2026-11-23T16:26:58.011867719Z",
       "seal": {
         "by": "server",
-        "mac": "5caa9e542298505524c87b59e7f5f0492ae1244d60e3617114b861c1622e4dab"
+        "mac": "2372eebfd9a993a515361aa1442b5399a00df6371a5a3bd2257cf9225f83ae54"
       }
     },
     {
@@ -57449,6 +57659,28 @@
             "by": "server",
             "mac": "95de8eb98dae680fe31011b361b3b60dd7b14712615df70d046ba8ca975a5e5e"
           }
+        },
+        {
+          "id": "EVD-1216",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0033_feedback_finished_index.sql:1-10; 0034_feedback_drop_sent_index.sql:1-6 (renamed, 100% similar)",
+          "summary": "Both begin with '-- no-transaction' and hold one statement (CREATE INDEX CONCURRENTLY IF NOT EXISTS; DROP INDEX CONCURRENTLY IF EXISTS); unchanged at the new path.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0033_feedback_finished_index.sql",
+              "lines": {
+                "start": 1,
+                "end": 10
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:26:41.249846370Z",
+          "seal": {
+            "by": "server",
+            "mac": "e8f84fc036fc24d11929972324cbbc184f70a430256c91e5a6d151f07296d66d"
+          }
         }
       ],
       "verdicts": [
@@ -57464,13 +57696,26 @@
             "by": "server",
             "mac": "0a52d21930b8b499108a60879adf70924f62ef271cb5f3d75109b4bda47d89ff"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head: files renamed unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1216"
+          ],
+          "recorded_at": "2026-11-23T16:26:58.063216691Z",
+          "seal": {
+            "by": "server",
+            "mac": "102c38c7bd2fd9d6f53abe76c943485e46af77514091ea9fdd14d1cc94bda6c4"
+          }
         }
       ],
       "created_at": "2026-11-23T11:02:24.530532595Z",
-      "updated_at": "2026-11-23T11:03:06.303601219Z",
+      "updated_at": "2026-11-23T16:26:58.063216691Z",
       "seal": {
         "by": "server",
-        "mac": "657705a19033aa6a6eadc93e592152547e9906ea377592885ec22edf660d07e2"
+        "mac": "30861fffdd8be9732fc521c50ff9a7925c6d536e2be33011c36e2b93aea4bbfe"
       }
     },
     {
@@ -57619,6 +57864,28 @@
             "by": "server",
             "mac": "2d89adeda458840995fe03ded32547179710f989749f2a898cecadc31c9efbce"
           }
+        },
+        {
+          "id": "EVD-1217",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0035_feedback_undelivered_user_index.sql:1-9 (renamed, 100% similar)",
+          "summary": "Still a '-- no-transaction' single CREATE INDEX CONCURRENTLY IF NOT EXISTS feedback_undelivered_user; unchanged at the new path.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0035_feedback_undelivered_user_index.sql",
+              "lines": {
+                "start": 1,
+                "end": 9
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:26:41.335930081Z",
+          "seal": {
+            "by": "server",
+            "mac": "590fc67014438895c08c1b744080dcabd6cf71d0a21a0695079b26c654f72a54"
+          }
         }
       ],
       "verdicts": [
@@ -57634,13 +57901,26 @@
             "by": "server",
             "mac": "4b6eb203da42ac8ade9628ab12dd6a420eeaa3d0777b8a0b914ab0f6027553c4"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head: file renamed unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1217"
+          ],
+          "recorded_at": "2026-11-23T16:26:58.113727069Z",
+          "seal": {
+            "by": "server",
+            "mac": "b0f0f8f8ddacfec0c4cb884febd198261c6a799022aadc0d593288f03164ff30"
+          }
         }
       ],
       "created_at": "2026-11-23T11:15:30.010087013Z",
-      "updated_at": "2026-11-23T11:15:55.998138895Z",
+      "updated_at": "2026-11-23T16:26:58.113727069Z",
       "seal": {
         "by": "server",
-        "mac": "293715071edb94e36e72279aa77a7959fb0e6f04ecab7718541f4bbdb34bc67f"
+        "mac": "e95fb96793ade053ae9d94ac915add2ab65096ccb84b4ce49ef7265cc64d6232"
       }
     },
     {
@@ -57686,6 +57966,28 @@
             "by": "server",
             "mac": "1e4b50ae57950ad31a45954d2ddcfbf4fb6e590c9b9696f208606a1e658a4007"
           }
+        },
+        {
+          "id": "EVD-1218",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0022_feedback.sql:8 (renamed, 100% similar)",
+          "summary": "'id text PRIMARY KEY' is still at line 8 of the moved file.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0022_feedback.sql",
+              "lines": {
+                "start": 8,
+                "end": 8
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:26:41.436020623Z",
+          "seal": {
+            "by": "server",
+            "mac": "7abc1fbc0621ab299098b189a4d47fe65b970437a0c236d6f61e2f9406091a60"
+          }
         }
       ],
       "verdicts": [
@@ -57701,13 +58003,26 @@
             "by": "server",
             "mac": "7a30ed8c33113fd355cedd71e276aebc4e6c244f744057efec5e48cde28ef0f3"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head: file renamed unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1218"
+          ],
+          "recorded_at": "2026-11-23T16:26:58.163934645Z",
+          "seal": {
+            "by": "server",
+            "mac": "098cb17a6d6705b42979335c607ca6d08ec55afa399e5ec425030aa693a0c1ab"
+          }
         }
       ],
       "created_at": "2026-11-23T11:15:30.010087013Z",
-      "updated_at": "2026-11-23T11:15:56.040441726Z",
+      "updated_at": "2026-11-23T16:26:58.163934645Z",
       "seal": {
         "by": "server",
-        "mac": "bd8e9c715c31120b8a684772d0d383f21090a168d98f9506acf5eec20d2f3fbb"
+        "mac": "0415239d2d9bb7016cc9261913cf988f89c1d46da600fd1252e9a8dc6ad40fdc"
       }
     },
     {
@@ -63442,6 +63757,28 @@
             "by": "server",
             "mac": "591c72e4d39a7a217e547d5e9c2ee1ef39e3e855e5e8c7386883ef892407e165"
           }
+        },
+        {
+          "id": "EVD-1219",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0006_maintenance.sql:14-18 (renamed, 100% similar)",
+          "summary": "The REFERENCES catalogs ON DELETE CASCADE and key_id SET NULL lines are unchanged at the new path. Note the claim's own text still cites the old path migrations/0006_maintenance.sql; only the path moved.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0006_maintenance.sql",
+              "lines": {
+                "start": 14,
+                "end": 18
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:26:41.566637657Z",
+          "seal": {
+            "by": "server",
+            "mac": "3c4482a817388d2d2e309b939e435c8fee8de60c221fd9eb9ebca1ba4056d6b4"
+          }
         }
       ],
       "verdicts": [
@@ -63457,13 +63794,26 @@
             "by": "server",
             "mac": "2469440422142fe75133f37fcc8c04eb7828cb16ad9b0b81ede709b5fcd7f0ff"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head: file renamed unchanged (statement text still cites the old path).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1219"
+          ],
+          "recorded_at": "2026-11-23T16:26:58.215860510Z",
+          "seal": {
+            "by": "server",
+            "mac": "eab4f9802d69a77215cdbdc5ef2de8f944efdcd358d1bbcf757a76efeb9eca49"
+          }
         }
       ],
       "created_at": "2026-11-23T14:19:25.478862135Z",
-      "updated_at": "2026-11-23T14:22:04.437514239Z",
+      "updated_at": "2026-11-23T16:26:58.215860510Z",
       "seal": {
         "by": "server",
-        "mac": "3bf6f0ab86165166a6126e7210d4120f9f38d0b7efad9ad79d9771ff58cecd5a"
+        "mac": "b65952ec3b8d726a1026c4ff7dd28c27d7f502b2482dbcfb6f8afadc6f1f58b5"
       }
     },
     {
@@ -63509,6 +63859,28 @@
             "by": "server",
             "mac": "9f0ffadb38ffc6d99114c4d019d9f31f9e67f2943e474d702f78286616241d23"
           }
+        },
+        {
+          "id": "EVD-1220",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0017_maintenance_audit.sql:26-63 (renamed, 100% similar)",
+          "summary": "audit_maintenance_run function body unchanged at the new path.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0017_maintenance_audit.sql",
+              "lines": {
+                "start": 26,
+                "end": 63
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:26:41.644171941Z",
+          "seal": {
+            "by": "server",
+            "mac": "56857254b757a0c5f83ce1599119e723a29f932421d382928328423dbfd7b723"
+          }
         }
       ],
       "verdicts": [
@@ -63524,13 +63896,26 @@
             "by": "server",
             "mac": "6904cacb320f9917379669b894d858aab9b28a588fafa71b0408bc4b612ef6cd"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head: file renamed unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1220"
+          ],
+          "recorded_at": "2026-11-23T16:26:58.267016440Z",
+          "seal": {
+            "by": "server",
+            "mac": "58d077e8baaeca8901117d944ea82679f87988b94321faa0bcc84d45249c032b"
+          }
         }
       ],
       "created_at": "2026-11-23T14:19:25.478862135Z",
-      "updated_at": "2026-11-23T14:22:04.513872338Z",
+      "updated_at": "2026-11-23T16:26:58.267016440Z",
       "seal": {
         "by": "server",
-        "mac": "c031834bbe157d86b8eb2c0d214804563c6ab3d01d5f77b55fc2f43456185ec3"
+        "mac": "f005cd6948377e36cdd69f77d6605171f2affe60e38185c5ed02f9b28e9669ea"
       }
     },
     {
@@ -68882,6 +69267,1551 @@
       "seal": {
         "by": "server",
         "mac": "2099bf58e0aa569cfdac3e055720c038c1a92d02acc95704d2c97c7699694b83"
+      }
+    },
+    {
+      "id": "CLM-0872",
+      "statement": "Issue #965 (M21.07) is delivered: the migrations moved to migrations/accounts/ without changing history, and migration 0036 adds stores, placement and registry columns as the plan's Task 7 specifies.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/965",
+      "derived_from": [],
+      "artifacts": [
+        "migrations/accounts",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1209",
+          "kind": "analysis",
+          "locator": "children of CLM-0872",
+          "summary": "The substance is delivered (folder move with proven history, 0036/0037 schema, six named tests, changelog, no placeholders breach), but two children are refuted: CLM-0876 (stale MIGRATOR doc comment at src/db.rs:19) and CLM-0890 (plan note has no date). CLM-0891 is undecided (full gate not rerun).",
+          "stance": "refutes",
+          "recorded_at": "2026-11-23T16:26:12.237767583Z",
+          "seal": {
+            "by": "server",
+            "mac": "0fd09087f919690070a8b377ce28246c062def763cf9f3f919f07166edd8a2b0"
+          }
+        },
+        {
+          "id": "EVD-1223",
+          "kind": "analysis",
+          "locator": "children of CLM-0872",
+          "summary": "After 4ef3b7b, CLM-0876 and CLM-0890 are supported, so every decided child is supported; CLM-0891 stays not_enough_info (full gate not rerun by the auditor).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T16:27:47.519987113Z",
+          "seal": {
+            "by": "server",
+            "mac": "7fc3e6a702e0d7950206d3fb1a1979324afdc444e005d2ae58e663285f5a4bee"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Two child claims are refuted (a stale doc comment and an undated plan note); both are small and in the author's change.\nFix: apply the fixes for CLM-0876 (update src/db.rs:19 to name migrations/accounts/) and CLM-0890 (date the plan's #965 Corrected note 2026-11-23), then re-audit them.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1209"
+          ],
+          "recorded_at": "2026-11-23T16:26:40.187503405Z",
+          "seal": {
+            "by": "server",
+            "mac": "72bbfe45bc79d6f41455966fb1c9857dd6cce87774a17363a648df958329b33c"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All decided children are supported at 4ef3b7b; only the unrerun full-gate claim (CLM-0891) remains undecided and does not block.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1223"
+          ],
+          "recorded_at": "2026-11-23T16:27:50.699325681Z",
+          "seal": {
+            "by": "server",
+            "mac": "f29551f1d6d2450afe205dd1f695527289050aa6d2f8dfb90ae3f280e629ddd8"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:27:50.699325681Z",
+      "seal": {
+        "by": "server",
+        "mac": "4eecc3ef64c14255d8385a628266a4d7a64c94e98b25bea040a096736186a6c5"
+      }
+    },
+    {
+      "id": "CLM-0873",
+      "statement": "Moving migrations/*.sql to migrations/accounts/ changes no sqlx version, description or checksum: the 35 moved files are byte-identical renames, and a test compares the embedded and recorded history with a fixture taken before the move.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #965: 'without changing history (sqlx versions and checksums identical; prove with a test)'",
+      "derived_from": [
+        "CLM-0872"
+      ],
+      "artifacts": [
+        "tests/fixtures/migration_history_0035.txt",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1185",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- db::tests (29 passed, 0 failed)",
+          "summary": "moving_the_migrations_folder_keeps_their_history passes: migrates to 35, compares _sqlx_migrations (version, description, checksum) with the fixture before and after the server's migrate, and checks each checksum equals SHA-384 of the embedded file text.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 2032,
+                "end": 2084
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:02.876417842Z",
+          "seal": {
+            "by": "server",
+            "mac": "cdccfa14465949b401b86e7b68c03843dcce01e2ec0ddbdb800769dcb3be5f3f"
+          }
+        },
+        {
+          "id": "EVD-1186",
+          "kind": "log",
+          "locator": "git diff -M100% --summary origin/milestone/958-catalog-stores..HEAD -- migrations; git diff -M --numstat",
+          "summary": "35 files show as 'rename migrations/{ => accounts}/...' at 100% similarity; numstat lists only 0036 (+99) and 0037 (+8) as having line changes, so no moved file changed.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T16:25:02.927175372Z",
+          "seal": {
+            "by": "server",
+            "mac": "a9d5b573f2b295e9c5d8d84a0f5c913d6bcaa5cafe6a21bdd22c980a03587dec"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test passes and compares the recorded and embedded history with the fixture; renames are 100% identical.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1185",
+            "EVD-1186"
+          ],
+          "recorded_at": "2026-11-23T16:26:03.797072238Z",
+          "seal": {
+            "by": "server",
+            "mac": "dafa38aacf5df1f791d41516f22f8c3689a8d8d360414738d184407de088ad96"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:03.797072238Z",
+      "seal": {
+        "by": "server",
+        "mac": "253d1015223e033fae8cf22d3b394b3770405ad5a04cace17a96510397f6f904"
+      }
+    },
+    {
+      "id": "CLM-0874",
+      "statement": "The tests/fixtures/migration_history_0035.txt fixture holds the version, description and SHA-384 checksum that the 35 files had at the base commit, before the move.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Changelog: 'taken before the move'",
+      "derived_from": [
+        "CLM-0873"
+      ],
+      "artifacts": [
+        "tests/fixtures/migration_history_0035.txt"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1187",
+          "kind": "analysis",
+          "locator": "python: SHA-384 of git show origin/milestone/958-catalog-stores:migrations/<file> for 35 files vs tests/fixtures/migration_history_0035.txt",
+          "summary": "I hashed each pre-move file from the base commit and compared version, description and checksum with the fixture: 35 of 35 match, 0 mismatches; the base's highest version is 35.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/fixtures/migration_history_0035.txt",
+              "lines": {
+                "start": 1,
+                "end": 35
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:02.982195330Z",
+          "seal": {
+            "by": "server",
+            "mac": "80bda961fcbc4a5c5f2cc0207c710c630dbc64d9c811aa365bf6cf359e4b8fa2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Independent hashing of the base commit's files reproduces every fixture line.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1187"
+          ],
+          "recorded_at": "2026-11-23T16:26:03.897938388Z",
+          "seal": {
+            "by": "server",
+            "mac": "dc5e3b2ddd903bb83515eac3c3e1a1d05117b5521566a3dfd77bcac7950e72cc"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:03.897938388Z",
+      "seal": {
+        "by": "server",
+        "mac": "0587bf15ec966ec997f2de13bffc8dc2500f91f445d4c7f3d18ee59f311281f4"
+      }
+    },
+    {
+      "id": "CLM-0875",
+      "statement": "Every functional reference to the old migrations folder is updated: sqlx::migrate! in src/db.rs and tests/support/pg.rs, the include_str! paths, the telemetry_privacy directory scan; build.rs (rerun-if-changed=migrations), Dockerfile.maintenance and scripts/test_maintenance_image.py copy the whole migrations directory and need no change.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #965: 'update src/db.rs, build.rs, tests/support/pg.rs and anything else naming the folder'",
+      "derived_from": [
+        "CLM-0872"
+      ],
+      "artifacts": [
+        "src/db.rs",
+        "build.rs",
+        "tests/support/pg.rs",
+        "tests/telemetry_privacy.rs",
+        "Dockerfile.maintenance"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1188",
+          "kind": "inspection",
+          "locator": "src/db.rs:22; tests/support/pg.rs:94; tests/telemetry_privacy.rs:323-325; git grep -n 'migrations/' (src tests build.rs README.md docs Dockerfile* scripts)",
+          "summary": "migrate!(\\\"./migrations/accounts\\\") in both db.rs and pg.rs; include_str! paths all use migrations/accounts; telemetry_privacy scans migrations/accounts. Dockerfile.maintenance 'COPY migrations ./migrations' and the image test script copy the whole directory; build.rs watches 'migrations' so the subfolder is covered. No remaining code path names an old flat file.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 19,
+                "end": 22
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:03.034856458Z",
+          "seal": {
+            "by": "server",
+            "mac": "bb1bf42f74557b8a59dfa803a047caea48cc68f8f380c29f46f551031086d691"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All functional references (migrate!, include_str!, directory scan) use migrations/accounts, and the narrow test run compiles and passes; copy-whole-directory consumers need no change.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1188"
+          ],
+          "recorded_at": "2026-11-23T16:26:03.948130969Z",
+          "seal": {
+            "by": "server",
+            "mac": "81e677c2e5b248d4dfe36a261e9538bf5b294607a3c438e470106c117748e41f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:03.948130969Z",
+      "seal": {
+        "by": "server",
+        "mac": "f65ab4b58f44d854deb09b53c4b7f83e2a8129f5b672e88c61d9aa8c8c6f89f6"
+      }
+    },
+    {
+      "id": "CLM-0876",
+      "statement": "PR body: \"include_str! paths, the telemetry_privacy directory scan, comments and README follow\" - every comment that names the migrations folder says migrations/accounts/.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "PR body Changes: '`include_str!` paths, the `telemetry_privacy` directory scan, comments and README follow.'",
+      "derived_from": [
+        "CLM-0872"
+      ],
+      "artifacts": [
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1189",
+          "kind": "inspection",
+          "locator": "src/db.rs:19",
+          "summary": "The doc comment on MIGRATOR still reads 'The schema migrations in `migrations/`, embedded at compile time.' directly above the line that now embeds ./migrations/accounts; the module doc at line 1 was updated, this one was not.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 19,
+                "end": 22
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:03.099243856Z",
+          "seal": {
+            "by": "server",
+            "mac": "a5a2687e44c76ff55ffc1790bbf8073de61e9a85355e3277bfd5d0f0a579d234"
+          }
+        },
+        {
+          "id": "EVD-1221",
+          "kind": "inspection",
+          "locator": "src/db.rs:19; git grep -nE 'migrations/' -- src tests build.rs README.md (excluding migrations/accounts and migrations/catalog)",
+          "summary": "At 4ef3b7b src/db.rs:19 reads 'The account schema migrations in `migrations/accounts/`'. The only remaining bare 'migrations/' in src, tests, build.rs and README is src/db.rs:2026, which deliberately names the old folder in the history test's doc comment.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 19,
+                "end": 22
+              },
+              "commit": "4ef3b7b679c7346778198c7f561899970174fb1f"
+            }
+          },
+          "recorded_at": "2026-11-23T16:27:42.333835449Z",
+          "seal": {
+            "by": "server",
+            "mac": "7a66bd4151d076017bad24202b3f19aac9f1ba5c92eca2245b506285c27f1d4d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The MIGRATOR doc comment at src/db.rs:19 still names `migrations/`, so not every comment follows the move. Cosmetic.\nFix: change src/db.rs:19 to read \"The account schema migrations in `migrations/accounts/`, embedded at compile time.\"",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1189"
+          ],
+          "recorded_at": "2026-11-23T16:26:03.996991124Z",
+          "seal": {
+            "by": "server",
+            "mac": "48c11a122bf81e94ac1b464468f34cb32de331b165da8f34d7cce0af42cfe549"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 4ef3b7b: stale comment fixed, no other bare folder reference remains.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1221"
+          ],
+          "recorded_at": "2026-11-23T16:27:47.420177620Z",
+          "seal": {
+            "by": "server",
+            "mac": "8217a6ea92d5f1d483aa6ad98ee0746367805e3756b1ff319446c1b753b82fe6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:27:47.420177620Z",
+      "seal": {
+        "by": "server",
+        "mac": "7406c892783feb34fc4b0d95a66786bbfd13ea0bc72ed7b910724e9d3115dce4"
+      }
+    },
+    {
+      "id": "CLM-0877",
+      "statement": "migrations/accounts/0036_stores.sql creates the stores table (name, location_kind account-database or host, host, port, database, credential_kind, credential_ref, created_at) with CHECKs tying the kind to the columns, and inserts a single 'main' account-database row.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Plan Task 7 (docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md, lines 300-332)",
+      "derived_from": [
+        "CLM-0872"
+      ],
+      "artifacts": [
+        "migrations/accounts/0036_stores.sql"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1190",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0036_stores.sql:34-56",
+          "summary": "CREATE TABLE stores with the plan's columns, both kind CHECKs, the 'main' account-database insert, and the two partial unique indexes; the DDL equals the plan's SQL block (plan lines 302-327).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0036_stores.sql",
+              "lines": {
+                "start": 34,
+                "end": 56
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:03.154581255Z",
+          "seal": {
+            "by": "server",
+            "mac": "58713f3fae8af7b2077165a291de99d9e4591b5637149621053c882b30293f18"
+          }
+        },
+        {
+          "id": "EVD-1207",
+          "kind": "analysis",
+          "locator": "children of CLM-0877",
+          "summary": "The DDL matches the plan, and four constraint tests (host row, account-database row, second main, second host/port/database) pass, so the table shape and its uniqueness rules are verified.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T16:26:12.135444437Z",
+          "seal": {
+            "by": "server",
+            "mac": "ad297297e4b87a96829371c60f81966aff4171859dee22c1224c917f44245f1a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Children verify the table and its constraints.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1190",
+            "EVD-1207"
+          ],
+          "recorded_at": "2026-11-23T16:26:39.887402520Z",
+          "seal": {
+            "by": "server",
+            "mac": "cd2c0cca472920ee6dac516292c6e3f734cd4b16f70a33c3530769668a9a7d0a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:39.887402520Z",
+      "seal": {
+        "by": "server",
+        "mac": "a8f50487473fac70abf76af6af6851769a739cf8349c082686bdcf5e4d07084c"
+      }
+    },
+    {
+      "id": "CLM-0878",
+      "statement": "stores holds no credentials, only a reference: the only credential columns are credential_kind (iam, secrets-manager, env) and credential_ref, and no column or default stores a secret value.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "Issue #965: 'Stores hold no credentials, only a reference'",
+      "derived_from": [
+        "CLM-0877"
+      ],
+      "artifacts": [
+        "migrations/accounts/0036_stores.sql"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1191",
+          "kind": "analysis",
+          "locator": "migrations/accounts/0036_stores.sql:34-46 and header lines 5-8",
+          "summary": "Columns are name, location_kind, host, port, database, credential_kind (CHECK iam/secrets-manager/env), credential_ref, created_at; there is no password, token or key column and no default on any of them. The header states a reference is an env var name, a secret ARN or an IAM identity. Constraint-level only; the code that writes rows comes in later tasks.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0036_stores.sql",
+              "lines": {
+                "start": 34,
+                "end": 46
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:03.210159466Z",
+          "seal": {
+            "by": "server",
+            "mac": "a65e3408fca0a295587474a59ea6ac859a01830e2e94e473253bb190f45d6873"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Schema holds only a kind and a reference; no column could hold a secret value (constraint-level; later tasks write the rows).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1191"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.046296957Z",
+          "seal": {
+            "by": "server",
+            "mac": "533517a4ad825ed926c3e4ad1a1136109246bde672ee151c0d2203b124360eb9"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:04.046296957Z",
+      "seal": {
+        "by": "server",
+        "mac": "22292695a1e27c036c496bedcdd7aa650db60451b42ec9a2a4ec4f92e6a9418e"
+      }
+    },
+    {
+      "id": "CLM-0879",
+      "statement": "Test stores_refuses_a_host_row_without_a_credential_reference passes and asserts that a host row with a NULL credential_ref, and one with no credential kind, are each refused by the stores CHECK, while a complete host row is accepted.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #965 named tests",
+      "derived_from": [
+        "CLM-0877"
+      ],
+      "artifacts": [
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1192",
+          "kind": "test",
+          "locator": "cargo test db::tests::stores_refuses_a_host_row_without_a_credential_reference (via gate.sh narrow, ok)",
+          "summary": "Passes. Inserts a host row with credential_kind env and NULL credential_ref, and one with credential None; both assert constraint name stores_check1; a complete row with secrets-manager and a reference is accepted.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 2189,
+                "end": 2215
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:03.264693892Z",
+          "seal": {
+            "by": "server",
+            "mac": "b3955c1a4bb7e80c69a9fc00eca0d337fb2356101108e067f7966eb561a66ae0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test ran green and asserts the refusal and the accepted case.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1192"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.095519411Z",
+          "seal": {
+            "by": "server",
+            "mac": "9b321f50abe9a2feb8b25d3b1033ee1a7f81ef01db30357801fd993a6717da3d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:04.095519411Z",
+      "seal": {
+        "by": "server",
+        "mac": "6f57973daf3357797c6512b3ba5cfa98f2e7c29e1e8eede2bd1d25adbe27c375"
+      }
+    },
+    {
+      "id": "CLM-0880",
+      "statement": "Test stores_refuses_an_account_database_row_with_a_host passes and asserts that an account-database row carrying a host, and one carrying a credential, are each refused by the stores CHECK.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #965 named tests",
+      "derived_from": [
+        "CLM-0877"
+      ],
+      "artifacts": [
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1193",
+          "kind": "test",
+          "locator": "cargo test db::tests::stores_refuses_an_account_database_row_with_a_host (via gate.sh narrow, ok)",
+          "summary": "Passes. An account-database row with host/port/database, and one with a credential, each fail with constraint stores_check (the account-database arm).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 2218,
+                "end": 2240
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:03.321414517Z",
+          "seal": {
+            "by": "server",
+            "mac": "1c4b4111f629b2d32f1eb2beace444108c527811d839c309d985c0d0317422fe"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test ran green and asserts both refusals by constraint name.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1193"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.145759391Z",
+          "seal": {
+            "by": "server",
+            "mac": "f6570444524425305adad782bddb0114638ed17d88439b53b1de51091f7904d5"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:04.145759391Z",
+      "seal": {
+        "by": "server",
+        "mac": "8135c32ef111111ce328db1eba6857d2610cc887ffd16b5334a92f6e51c39914"
+      }
+    },
+    {
+      "id": "CLM-0881",
+      "statement": "Test a_second_account_database_store_is_refused passes and asserts a second account-database row is refused by the unique index stores_one_account_database.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #965 named tests",
+      "derived_from": [
+        "CLM-0877"
+      ],
+      "artifacts": [
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1194",
+          "kind": "test",
+          "locator": "cargo test db::tests::a_second_account_database_store_is_refused (via gate.sh narrow, ok)",
+          "summary": "Passes. Inserting 'also-main' as account-database fails with constraint stores_one_account_database.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 2242,
+                "end": 2252
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:03.374053685Z",
+          "seal": {
+            "by": "server",
+            "mac": "e71ce37c737036e0453eb5b0b1a50964900c211f6e34bc1f6158cf1fb6ab61c3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test ran green and asserts the unique index name.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1194"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.196431771Z",
+          "seal": {
+            "by": "server",
+            "mac": "01426f1e7ff82a094f77821a8f91fbe72f585f85d8748bf3d5cba5ee2c428cb0"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:04.196431771Z",
+      "seal": {
+        "by": "server",
+        "mac": "837e81127503966b5bcd13e0d94d30be6e1a7e6d5205b29c51962dc101be1aaf"
+      }
+    },
+    {
+      "id": "CLM-0882",
+      "statement": "Test a_second_row_for_the_same_host_port_and_database_is_refused passes and asserts a second host row for the same host (also in another case), port and database is refused by stores_one_row_per_database, while another database is accepted.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #965 named tests",
+      "derived_from": [
+        "CLM-0877"
+      ],
+      "artifacts": [
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1195",
+          "kind": "test",
+          "locator": "cargo test db::tests::a_second_row_for_the_same_host_port_and_database_is_refused (via gate.sh narrow, ok)",
+          "summary": "Passes. Same host/port/database under another name, and with host 'DB.Example.Internal', both fail with stores_one_row_per_database; a different database is accepted.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 2254,
+                "end": 2280
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:03.423320428Z",
+          "seal": {
+            "by": "server",
+            "mac": "b59eb786428446516ac5fdbd591979925a5813fe17235c5afc6696272e478bdf"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test ran green; it checks same name-different, mixed-case host, and the accepted other database.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1195"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.246369562Z",
+          "seal": {
+            "by": "server",
+            "mac": "d1e41308ac2f1384828fbf9548d504c9a25bc828ac95df63d7c31148543134d0"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:04.246369562Z",
+      "seal": {
+        "by": "server",
+        "mac": "24abf5b4d470a8bb21c7ab91f7e69f982ec8d0f585c13732ff84915f5481bdf9"
+      }
+    },
+    {
+      "id": "CLM-0883",
+      "statement": "0036 inserts the default_store setting with value \"main\" (ON CONFLICT DO NOTHING) and adds teams.store as a nullable foreign key to stores(name) ON DELETE RESTRICT, so no existing team is pinned.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Plan Task 7 lines 329-335; issue #965",
+      "derived_from": [
+        "CLM-0872"
+      ],
+      "artifacts": [
+        "migrations/accounts/0036_stores.sql"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1196",
+          "kind": "test",
+          "locator": "migrations/accounts/0036_stores.sql:57-64; cargo test db::tests::migration_0036_puts_every_catalog_on_main_provisioned (ok)",
+          "summary": "SQL inserts default_store '\\\"main\\\"' ON CONFLICT DO NOTHING and ALTER TABLE teams ADD COLUMN store text REFERENCES stores (name) ON DELETE RESTRICT (nullable). The passing test asserts default_store = \\\"main\\\" and count of teams with store NOT NULL = 0. The removal-restriction is covered by a_store_cannot_be_removed_while_a_catalog_or_team_uses_it (catalog side only).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0036_stores.sql",
+              "lines": {
+                "start": 57,
+                "end": 64
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:34.028459154Z",
+          "seal": {
+            "by": "server",
+            "mac": "69bc4bf066d0025d603b009094002a8327c22157be5de1fb3e5354d0ea5b9f42"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "SQL matches the plan and the migration test asserts the setting and no pinned team.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1196"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.295690796Z",
+          "seal": {
+            "by": "server",
+            "mac": "fe6f76541c34f0a197d051cdb78e8074a88d0c422c0689fcaa1400a88e34a1ac"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:04.295690796Z",
+      "seal": {
+        "by": "server",
+        "mac": "5ef46a608f71423fa18a25a14377e0ba8883bf4d16e038a189e699bf42636ee6"
+      }
+    },
+    {
+      "id": "CLM-0884",
+      "statement": "0036 adds catalogs.store (NOT NULL DEFAULT 'main', FK to stores ON DELETE RESTRICT) and catalogs.provisioned_at (DEFAULT now()), sets provisioned_at = created_at for existing rows, and creates partial index catalogs_unprovisioned WHERE provisioned_at IS NULL.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Plan Task 7 lines 337-347; issue #965 (P11 release-1-compatible defaults)",
+      "derived_from": [
+        "CLM-0872"
+      ],
+      "artifacts": [
+        "migrations/accounts/0036_stores.sql"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1197",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0036_stores.sql:66-76",
+          "summary": "ADD COLUMN store text NOT NULL DEFAULT 'main' REFERENCES stores (name) ON DELETE RESTRICT, ADD COLUMN provisioned_at timestamptz DEFAULT now(); UPDATE catalogs SET provisioned_at = created_at; CREATE INDEX catalogs_unprovisioned ON catalogs (created_at) WHERE provisioned_at IS NULL. Matches the plan block (lines 337-347).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0036_stores.sql",
+              "lines": {
+                "start": 66,
+                "end": 76
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:34.084040914Z",
+          "seal": {
+            "by": "server",
+            "mac": "7406f2606060ba3e02da99e9e98dbed4d2e78ff45a1b622dc3e2b5f1cdc7061c"
+          }
+        },
+        {
+          "id": "EVD-1208",
+          "kind": "analysis",
+          "locator": "children of CLM-0884",
+          "summary": "The migration test shows existing catalogs on main with provisioned_at = created_at, and the release-1 insert test shows the defaults apply to a create that names neither column.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T16:26:12.186723355Z",
+          "seal": {
+            "by": "server",
+            "mac": "933fe1c658f6465d853c27f11a72cdec27ccd67771f5dc1b86512529178afc15"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "SQL matches the plan and both child tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1197",
+            "EVD-1208"
+          ],
+          "recorded_at": "2026-11-23T16:26:40.023960209Z",
+          "seal": {
+            "by": "server",
+            "mac": "89c5fa29d2c2966d4629f566e651063b3a12dec77a8b4b2325557fa410cc013f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:40.023960209Z",
+      "seal": {
+        "by": "server",
+        "mac": "ad127d58771acb087d0f7644d157da7a13e0acef0dbdb3f9cf37d54fab393651"
+      }
+    },
+    {
+      "id": "CLM-0885",
+      "statement": "Test migration_0036_puts_every_catalog_on_main_provisioned passes: a database at 0035 with catalogs, migrated to 0036, has every catalog on 'main' with provisioned_at = created_at, one stores row, default_store \"main\" and no pinned team.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #965 named tests",
+      "derived_from": [
+        "CLM-0884"
+      ],
+      "artifacts": [
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1198",
+          "kind": "test",
+          "locator": "cargo test db::tests::migration_0036_puts_every_catalog_on_main_provisioned (gate.sh narrow, ok)",
+          "summary": "Passes. Inserts two catalogs at 0035 with distinct created_at, runs to 36, and asserts rows [(newer, main, true), (old, main, true)] for provisioned_at = created_at, stores = [(main, account-database)], default_store = \\\"main\\\", pinned teams = 0.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 2087,
+                "end": 2139
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:34.136690422Z",
+          "seal": {
+            "by": "server",
+            "mac": "01c5b991c3909a4c7cf41830a63c8d73a360f867d2af554280e46069a1289935"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test ran green with the stated assertions.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1198"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.346972194Z",
+          "seal": {
+            "by": "server",
+            "mac": "fe3b7302aabece58dcbc2e0a4a4230118cb026e8bc515f555438ceecc1f07055"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:04.346972194Z",
+      "seal": {
+        "by": "server",
+        "mac": "29691170b44a152524093d8983f3d6e9e4d76f6f9213bb336d7f76b2a1dec53a"
+      }
+    },
+    {
+      "id": "CLM-0886",
+      "statement": "Test a_release_one_create_after_0036_lands_on_main_provisioned passes: an INSERT INTO catalogs naming only the pre-0036 columns lands with store 'main' and provisioned_at not null.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #965 named tests; plan P11",
+      "derived_from": [
+        "CLM-0884"
+      ],
+      "artifacts": [
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1199",
+          "kind": "test",
+          "locator": "cargo test db::tests::a_release_one_create_after_0036_lands_on_main_provisioned (gate.sh narrow, ok)",
+          "summary": "Passes. On a fully migrated DB, INSERT (name, description, generation, created_at) yields store 'main' and provisioned_at not null; also asserts an unprovisioned row is findable and an unknown store is refused by catalogs_store_fkey.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 2142,
+                "end": 2186
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:34.192501214Z",
+          "seal": {
+            "by": "server",
+            "mac": "dd6d34620e9fa485ec8ba4f6f96c7072fa354b8697bda0e2c92d03d23dc017d9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test ran green; the insert names only pre-0036 columns and the assertions read the defaults.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1199"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.397038065Z",
+          "seal": {
+            "by": "server",
+            "mac": "febf3b1d488eee0b1b3f3da87c1be50920f074ad217de3cbdbbba6dfb751e04c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:04.397038065Z",
+      "seal": {
+        "by": "server",
+        "mac": "a53446c021de65bb2cb11e641e7f4348a6797c9667b6eea5aeb65c9196aaf706"
+      }
+    },
+    {
+      "id": "CLM-0887",
+      "statement": "0036 adds the audit target kind 'store' to audit_entries_target_kind_check and a WHEN 'store' arm (target_name NOT NULL, team ref, credential ref and person NULL) to audit_entries_target_shape; the rest of the shape text is 0012's, and both are added NOT VALID then validated by 0037.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #965: 'the audit store target kind'; plan Task 7 line 352",
+      "derived_from": [
+        "CLM-0872"
+      ],
+      "artifacts": [
+        "migrations/accounts/0036_stores.sql",
+        "migrations/accounts/0037_stores_audit_validate.sql"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1200",
+          "kind": "test",
+          "locator": "cargo test db::tests::audit_entries_accept_a_store_target_by_name_only (gate.sh narrow, ok); diff of 0036:78-99 against 0012_audit.sql:72-81",
+          "summary": "Test passes: a store target with a name is accepted; without a name, or with a person, is refused by audit_entries_target_shape; kind 'volume' is refused by the kind check; both constraints report convalidated = true after all migrations. Reading 0036 against 0012: the CASE is 0012's with one added WHEN 'store' arm, and the kind list is 0031's plus 'store'.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0036_stores.sql",
+              "lines": {
+                "start": 78,
+                "end": 99
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:34.242803881Z",
+          "seal": {
+            "by": "server",
+            "mac": "e45c1c184f5d5f0b6723a4211b78a78dfd97255d8c1a0d20412bbbf155f531e4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test runs green and asserts accepted and refused shapes plus validated constraints; the SQL text matches 0012 plus one arm.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1200"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.447242926Z",
+          "seal": {
+            "by": "server",
+            "mac": "99c3030365133293146a6f6395fd6cf9ccd5dde974669452a4fa3b9dc84ef76c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:04.447242926Z",
+      "seal": {
+        "by": "server",
+        "mac": "5247d91a8d79c9e29aa8ab12b6b5254eadd9af06c34d5dd9da25d710752e404d"
+      }
+    },
+    {
+      "id": "CLM-0888",
+      "statement": "changelog/2026-11-23T16-04-00Z-m21-task-07-stores-migration.md states the lock each statement of 0036/0037 takes and that adding the columns with defaults is metadata-only, and those statements are correct (ACCESS EXCLUSIVE on teams and catalogs; non-volatile defaults stored in the catalog without a row rewrite; NOT VALID checks then VALIDATE under SHARE UPDATE EXCLUSIVE).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #965: 'A changelog entry ... must state the lock each statement takes and that adding the columns with defaults is metadata-only'",
+      "derived_from": [
+        "CLM-0872"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T16-04-00Z-m21-task-07-stores-migration.md"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1201",
+          "kind": "analysis",
+          "locator": "changelog/2026-11-23T16-04-00Z-m21-task-07-stores-migration.md:22-29; migrations/accounts/0036_stores.sql:9-30",
+          "summary": "The 'Locks, statement by statement' note gives a lock for CREATE TABLE/inserts, teams ADD COLUMN, catalogs ADD COLUMN (metadata-only, non-volatile default, now() is STABLE, PG 11+), the UPDATE, the index, the two NOT VALID CHECKs and 0037's VALIDATE under SHARE UPDATE EXCLUSIVE. Each matches Postgres behavior. Nuance: the catalogs FK validates the table with one RI scan under the same lock, which the note describes as checking the single value 'main'; harmless on the small registry.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T16-04-00Z-m21-task-07-stores-migration.md",
+              "lines": {
+                "start": 22,
+                "end": 29
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:34.298923654Z",
+          "seal": {
+            "by": "server",
+            "mac": "1ae74d7747829ad7f278a9c584888dad93381e9c227f73bfc539ae85d2a823ca"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The changelog lists a lock for every statement and states metadata-only for the default columns, consistent with PostgreSQL 11+ semantics.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1201"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.496523519Z",
+          "seal": {
+            "by": "server",
+            "mac": "f88519058ed8ee3c94cafc88b774237cfdd6f4deb713a52afc5c69077a23ed6a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:04.496523519Z",
+      "seal": {
+        "by": "server",
+        "mac": "98b777fd5cfb6081b92c4bd0571db4a09831ede8e966c6fe5fb067429978705c"
+      }
+    },
+    {
+      "id": "CLM-0889",
+      "statement": "No real hostnames, domains or personal names appear in the lines this change adds; tests and docs use placeholders (db.example.internal, alice).",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #965: 'No real hostnames/domains/personal names anywhere (placeholders only)'",
+      "derived_from": [
+        "CLM-0872"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1202",
+          "kind": "analysis",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD | grep '^+' | grep -Ei '\\\\.(com|net|org|io|me|dev)\\\\b|pgrace|peter|grace|k\\\\.vsix'",
+          "summary": "Zero hits across all added lines (code, SQL, changelog, plan, fixture). The only host-like strings are db.example.internal and DB.Example.Internal in tests; the only person name is alice.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T16:25:34.349722184Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa54a851011aa8457fbbcf2b6bf57fd53b35d1027ba3ee3ca0eb86233c753cd1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The grep of every added line for domains and names is empty.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1202"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.545819742Z",
+          "seal": {
+            "by": "server",
+            "mac": "fc7ff6f6983e88c13225ba13ed0e34f24444823013bd0419fad03b5038b2df15"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:04.545819742Z",
+      "seal": {
+        "by": "server",
+        "mac": "6ca7d81a5160f820df78d149de85ec561d4b3ac976acdea26a438db4ad094e40"
+      }
+    },
+    {
+      "id": "CLM-0890",
+      "statement": "The plan carries a dated '> **Corrected (issue #965).**' note at Task 7 recording the divergence (0037 validation migration, later migrations 0038 and 0039), and every later plan reference to those migration numbers is updated.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "Issue #965: 'Plan divergences must be corrected in the plan with a dated `> **Corrected (issue #965).**` note'; plan line 40",
+      "derived_from": [
+        "CLM-0872"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1203",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:350 (compare :201, :237, :246, :260, :273, :288)",
+          "summary": "The note reads '> **Corrected (issue #965).** The audit widening ...' with no date anywhere in it, while every sibling note carries one ('Corrected (issue #964, 2026-11-23)') and plan line 40 requires 'a dated `> **Corrected (issue #N).**` note'. The content and the renumbering of Tasks 11 and 12 (0038, 0039) are otherwise correct and consistent: no stale 0037-0038 reference remains in the plan.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 350,
+                "end": 350
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:34.404150239Z",
+          "seal": {
+            "by": "server",
+            "mac": "837cdac8363ad711ef38174341b8f8649dc2c06bb7e32da7d3d320ff61d2a141"
+          }
+        },
+        {
+          "id": "EVD-1222",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:350",
+          "summary": "At 4ef3b7b the note opens '> **Corrected (issue #965, 2026-11-23).**', matching the sibling notes; the renumbering was already verified.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 350,
+                "end": 350
+              },
+              "commit": "4ef3b7b679c7346778198c7f561899970174fb1f"
+            }
+          },
+          "recorded_at": "2026-11-23T16:27:42.446825293Z",
+          "seal": {
+            "by": "server",
+            "mac": "adeb9b7d3e466ae376de647f91342f97b21a4cdac74647ad0b80f1818941daa9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The Corrected (issue #965) note has no date, though the issue and plan line 40 require a dated note and sibling notes carry 2026-11-23.\nFix: change the note opener at plan line 350 to \"> **Corrected (issue #965, 2026-11-23).**\".",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1203"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.595186236Z",
+          "seal": {
+            "by": "server",
+            "mac": "dca9ccfd975c992bf11125b6cb641d3b840392c8d69855ce247293ba1846f7d9"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 4ef3b7b: the note is now dated.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1222"
+          ],
+          "recorded_at": "2026-11-23T16:27:47.470118227Z",
+          "seal": {
+            "by": "server",
+            "mac": "cd4a2317ec7391a727c17be40c48798baaeb05315219d19032eeb48dfa5e551c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:27:47.470118227Z",
+      "seal": {
+        "by": "server",
+        "mac": "709cbf1439f4faecd3d2337d8ec4ea76c371f203331fb21e3c4396d2e08c23e0"
+      }
+    },
+    {
+      "id": "CLM-0891",
+      "statement": "PR body: 'gate.sh fmt, lint, test (3400 passed, 0 failed across all targets), dylint: all exit 0'.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body Validation",
+      "derived_from": [
+        "CLM-0872"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1204",
+          "kind": "analysis",
+          "locator": "scope limit: auditor was told to run only gate.sh narrow --lib -- db::tests",
+          "summary": "I did not rerun fmt, lint, the full test gate or dylint, so the 3400 count and the exit codes are not independently checked. The narrow db::tests run (29 passed) is consistent with, but does not show, a full pass.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T16:25:34.453570083Z",
+          "seal": {
+            "by": "server",
+            "mac": "d87cab4b9b5bd23d9559fd5dda72c3c6191bd7152bda8d29cc112fe9c045eaa6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Only the narrow db::tests run was permitted; the full gate results cannot be confirmed here.\nFix: rerun gate.sh fmt, lint, test and dylint on the head commit and compare the printed counts with the PR body.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1204"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.645090507Z",
+          "seal": {
+            "by": "server",
+            "mac": "4e5f17cac925814f4fb8f9e2ff388674f1e3bc2d9a8c877009270f399f6de504"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:04.645090507Z",
+      "seal": {
+        "by": "server",
+        "mac": "0aa1e0089ef77c967ce2693a5e44bda17529fb58a6ac4612e09e61e43d081366"
+      }
+    },
+    {
+      "id": "CLM-0892",
+      "statement": "PR body: 'the nine new tests' of db::tests pass (the six named, plus moving_the_migrations_folder_keeps_their_history, a_store_cannot_be_removed_while_a_catalog_or_team_uses_it and audit_entries_accept_a_store_target_by_name_only).",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body Manual Test Plan; changelog Tests list",
+      "derived_from": [
+        "CLM-0872"
+      ],
+      "artifacts": [
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1205",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- db::tests: 29 passed; 0 failed",
+          "summary": "All nine tests appear as ok in the run: moving_the_migrations_folder_keeps_their_history, migration_0036_puts_every_catalog_on_main_provisioned, a_release_one_create_after_0036_lands_on_main_provisioned, stores_refuses_a_host_row_without_a_credential_reference, stores_refuses_an_account_database_row_with_a_host, a_second_account_database_store_is_refused, a_second_row_for_the_same_host_port_and_database_is_refused, a_store_cannot_be_removed_while_a_catalog_or_team_uses_it, audit_entries_accept_a_store_target_by_name_only.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 2032,
+                "end": 2370
+              },
+              "commit": "f1efd9bca56da12b36e178b0c59d9f3cfca8fc5a"
+            }
+          },
+          "recorded_at": "2026-11-23T16:25:34.510461959Z",
+          "seal": {
+            "by": "server",
+            "mac": "905d81ddb45b928e91e46b2f647a12d7514a772d924b0aa406d65452bee9d41d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All nine named tests ran and passed in the 29-test db::tests run.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1205"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.695416878Z",
+          "seal": {
+            "by": "server",
+            "mac": "4432645f02409e0311d7bbe6733b298db0781371c724fef9b8160c7167581194"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:04.695416878Z",
+      "seal": {
+        "by": "server",
+        "mac": "40244b8c790179ab6d166afdadc502de11ca979e21cb720f7c4b5fd381668993"
+      }
+    },
+    {
+      "id": "CLM-0893",
+      "statement": "PR body: comments were left on #970 and #971 about the migration renumbering.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body Changes",
+      "derived_from": [
+        "CLM-0872"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:965"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1206",
+          "kind": "log",
+          "locator": "gh issue view 970 --comments; gh issue view 971 --comments",
+          "summary": "The latest comment on #970 and on #971 begins 'Heads-up from #965 (Task 7)' and gives the new file name (0038_catalog_schema.sql, 0039_catalog_audit.sql).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T16:25:34.560991248Z",
+          "seal": {
+            "by": "server",
+            "mac": "38f2b4c7a2022a132c4ed2c502feb677e15cb7904ac7d60eb099c3f748926196"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "gh shows the comments on both issues.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1206"
+          ],
+          "recorded_at": "2026-11-23T16:26:04.744960401Z",
+          "seal": {
+            "by": "server",
+            "mac": "c200673ff6e676250bc92aa536ce87da3db6998b9ef67a191db46fc9ea327e11"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T16:24:37.683722557Z",
+      "updated_at": "2026-11-23T16:26:04.744960401Z",
+      "seal": {
+        "by": "server",
+        "mac": "416b000dd38284db0a3f85204d1d5780e63a3fcd56ce9b202ca2af0743d70411"
       }
     }
   ]
