@@ -157,6 +157,7 @@ pub(crate) async fn send(
     let sender = Sender {
         credential: &principal.key_id,
         user_slug: principal.user.as_deref().unwrap_or(UNASSIGNED_USER),
+        registered: principal.user.is_some(),
         client: &client,
         credential_kind,
     };
@@ -251,6 +252,22 @@ mod tests {
             };
         }
         Arc::new(made)
+    }
+
+    /// Creates the user `alice` that [`reader`] names: a submission from a
+    /// user takes that user's row lock and is refused when it is gone.
+    async fn seed_alice(test: &TestApp) {
+        crate::store::users::create(
+            test.app.pool(),
+            &crate::store::users::NewUser {
+                name: "alice",
+                display_name: &crate::labels::DisplayName::default(),
+            },
+            &crate::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
     }
 
     /// Every stored row's forwarded fields, oldest first.
@@ -375,6 +392,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_read_key_and_an_oauth_grant_can_both_send_without_a_catalog() {
         let test = app_with(&[], configured()).await;
+        seed_alice(&test).await;
         let mut full = params("  the search results were confusing  ");
         full.kind = Some("confusing".to_string());
         full.from = Some("user".to_string());
@@ -435,6 +453,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn bad_arguments_and_long_messages_are_refused_with_clear_errors() {
         let test = app_with(&[], configured()).await;
+        seed_alice(&test).await;
         let ctx = context(&test, reader(false), None);
         let with = |change: fn(&mut SendFeedbackParams)| {
             let mut made = params("fine");
@@ -489,6 +508,7 @@ mod tests {
         let mut config = configured();
         config.feedback.as_mut().unwrap().max_per_hour = 2;
         let test = app_with(&[], config).await;
+        seed_alice(&test).await;
         let ctx = context(&test, reader(false), None);
 
         for _ in 0..2 {

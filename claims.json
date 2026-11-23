@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 694,
+  "next_claim_seq": 729,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "7cff03b0cd27bb3977c9c65be3dc67b6169a8f12048eacc4e2eae03c70102083"
+    "mac": "4833e2e9ab729b48904addf0e9916c68879df6007e8a4a9de5c2a02e9695ff28"
   },
-  "next_evidence_seq": 880,
+  "next_evidence_seq": 977,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "3d306c592dcf45207ff7c43ee900c02a75441a1374ff1dfa9ef7b16bc36acfe9"
+    "mac": "65d8ea74f12cb6ec4164d80f752235903adb959fb0bd40dedc89295332b15b18"
   },
   "claims": [
     {
@@ -13765,6 +13765,28 @@
             "by": "server",
             "mac": "6b98f4f4c94cd600453c19daca66d96649e7c4559301d52085e24eb8115bf17e"
           }
+        },
+        {
+          "id": "EVD-0941",
+          "kind": "inspection",
+          "locator": "src/cli.rs:531 (UnlockCommand), 552, 569 (MailCommand), 605 (AuditCommand), 343 (user list), 243 (SetMaintenance)",
+          "summary": "At head 713fbca the PR's insertion (FeedbackCommand at 592-601) only shifted the lines; UnlockCommand, AuditCommand, user list --email and CatalogCommand::SetMaintenance are all still present and unchanged by the diff.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli.rs",
+              "lines": {
+                "start": 531,
+                "end": 568
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:48:02.875348817Z",
+          "seal": {
+            "by": "server",
+            "mac": "d6dcd4f75a3124b69749b121391115dc09eb351a1acae4f9cf4fdd008c6521b9"
+          }
         }
       ],
       "verdicts": [
@@ -13780,13 +13802,26 @@
             "by": "server",
             "mac": "2bf6f1416e6c098cfcea3c3031a69b61811d9bf8cf4bb1febd438a8d241ae200"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 713fbca: the listed subcommands still exist; the PR only inserted a new enum.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0941"
+          ],
+          "recorded_at": "2026-11-23T10:48:07.001859715Z",
+          "seal": {
+            "by": "server",
+            "mac": "a0685d848bd6d925b4a6be8d0d704b9963cf09848f16e169ce1e16c11ba68f5f"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:06.412184286Z",
-      "updated_at": "2026-11-21T19:09:35.633976262Z",
+      "updated_at": "2026-11-23T10:48:07.001859715Z",
       "seal": {
         "by": "server",
-        "mac": "2b41a46c148e6eb1989de473d921fbe79021c3d838f45479fc0afe426fe7ddb7"
+        "mac": "036fcae281093c54b785c12cb445f6ceab498e285e71972272616bf74938092a"
       }
     },
     {
@@ -19753,6 +19788,28 @@
             "by": "server",
             "mac": "2308b472482252887a1a7e692509aa77b1843cb9c90c5668335617a50a9e5ec9"
           }
+        },
+        {
+          "id": "EVD-0942",
+          "kind": "inspection",
+          "locator": "docs/operations.md:154-158",
+          "summary": "The PR edited only the retention row's trailing sentence; the default \"30d\" and the 1 day to 10 years range, worker true and max_per_hour 10 rows are unchanged, so the claim's statement of defaults still matches the doc.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 154,
+                "end": 158
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:48:02.938208619Z",
+          "seal": {
+            "by": "server",
+            "mac": "0cbe4b4540f48a6996451bae9c0ac7db689e1bc77ee945c994a7bf237040a68f"
+          }
         }
       ],
       "verdicts": [
@@ -19768,13 +19825,26 @@
             "by": "server",
             "mac": "1c6c15e1b4f4d0387d26fedf3d82492f929c185cf729bfd711cc7e0c94cc1394"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 713fbca: the defaults the claim names are unchanged in the doc and in config (the PR changed only the retention row's prose about failed rows).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0942"
+          ],
+          "recorded_at": "2026-11-23T10:48:07.076529346Z",
+          "seal": {
+            "by": "server",
+            "mac": "ddec6e3f8b6d0055ba10571b110cc6360d275fd3a9ac342f8328872e3094b785"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:50.360239770Z",
-      "updated_at": "2026-11-21T19:09:00.140404785Z",
+      "updated_at": "2026-11-23T10:48:07.076529346Z",
       "seal": {
         "by": "server",
-        "mac": "9867537bbffab9236517b7ad85c21313c0d92e0c43f7de036b524e0e1d9b6e99"
+        "mac": "19b4a11f6f3fd90d239526e84e3e36a7485763c455bc855b0f865ce632c3d135"
       }
     },
     {
@@ -53805,6 +53875,3885 @@
       "seal": {
         "by": "server",
         "mac": "271a6a8b1ce7cb5b3172d06db01a21de4b12988ed2de7a27ad03098c7dc6646e"
+      }
+    },
+    {
+      "id": "CLM-0694",
+      "statement": "Issue #675 is resolved: every watchdog.sh call that reads the process table, another process's memory, git or the logs is time-bounded and abandon-capable, a hung call never freezes or alarms the watchdog, and tests cover each call.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/675",
+      "derived_from": [],
+      "artifacts": [
+        "tools/agentic/watchdog.sh",
+        "tools/agentic/tests/run.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0890",
+          "kind": "analysis",
+          "locator": "children of CLM-0694",
+          "summary": "Children cover the bounded scans, skip semantics, the stub-ps test, command-line secrecy, test run, unbounded-call survey and README; all supported.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T08:38:00.147052703Z",
+          "seal": {
+            "by": "server",
+            "mac": "5ae883414da00b1b0488dc0a3707f25e0d4ee0d7125d6007e923fda4a6932ffe"
+          }
+        },
+        {
+          "id": "EVD-0906",
+          "kind": "analysis",
+          "locator": "children CLM-0695..CLM-0702 re-audited at 7e0a933",
+          "summary": "At 7e0a933 all eight children hold on independent re-reading: all process-table, /proc-memory (tr cmdline), git and find calls go through bounded_capture; timeouts warn and skip, never alarm; each call has a hang test with mutation checks; 89/89 three times; README and header limit list complete.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T09:35:03.899783881Z",
+          "seal": {
+            "by": "server",
+            "mac": "1a6fd6003529b47130acbc96417165705be948c075c18508080ca5869c56363f"
+          }
+        },
+        {
+          "id": "EVD-0911",
+          "kind": "analysis",
+          "locator": "children CLM-0695, CLM-0699, CLM-0703 re-audited at 40988d0",
+          "summary": "The three children changed since the last audit hold at 40988d0 (EVD-0907 to EVD-0910); the other children were not re-audited this round. Gap: the 'stopped them' warning prints even if a member survived KILL.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T09:53:35.828561341Z",
+          "seal": {
+            "by": "server",
+            "mac": "d4b95bea2b53e71ca552536118d581f24df0be99c38e0cc398fb6ef261a075a9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All seven children supported; together they cover bounding, skip semantics, test, and secrecy.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0890"
+          ],
+          "recorded_at": "2026-11-23T08:38:06.336893873Z",
+          "seal": {
+            "by": "server",
+            "mac": "d0698b832a2a576cad2569a5333c1c492323727fadd25e819f2dbc81e0197088"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All children supported at 7e0a933.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0906"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.671776146Z",
+          "seal": {
+            "by": "server",
+            "mac": "f58176bffd8232c5b350255a85ff1b575500bb12523a1d138b330e85c86e31de"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Children 0695, 0699 and 0703 hold at 40988d0; the others were supported at 7e0a933 and not re-audited this round.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0911"
+          ],
+          "recorded_at": "2026-11-23T09:53:38.864632226Z",
+          "seal": {
+            "by": "server",
+            "mac": "009b42dac1526278d6d8675c5046aa02098ced97411cc7f514a7b9ea03ab003f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T09:53:38.864632226Z",
+      "seal": {
+        "by": "server",
+        "mac": "ce11227cf450ea195c6c0dc9bddfb0b346e2f91beb2936f564a52226f4a88cef"
+      }
+    },
+    {
+      "id": "CLM-0695",
+      "statement": "Every external command a watchdog.sh pass runs that reads the process table, another process's memory, git or the logs goes through one supervisor, bounded_capture: the three ps -eo scans, both per-process ps -p re-reads, the tr read of an idle tail's /proc/<pid>/cmdline, git worktree list, git reflog, find over target/i*-logs, and the start-up git rev-parse. bounded_capture captures output to a private temp file, polls the leader with a deadline (AGENTIC_CALL_TIMEOUT), then stops the call's process group, and abandons a leader that survives KILL without waiting for it or for its output to close. watchdog.sh no longer calls agentic_bounded_call, agentic_git or a $(...) around any of these commands.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #675 plus review of PR #947 round 3 (per-PID rechecks at watchdog.sh:236 and :263 still on agentic_bounded_call); PR: \"every external command that reads the process table, another process's memory, git or the logs runs under bounded_capture\"",
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/watchdog.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0880",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh:105-112,123,174",
+          "summary": "scan_ps runs agentic_bounded_call ps and stores output via printf -v. Three scans use it: procs (line 123, check_expectations), all_procs and readers (line 174); loops read them by here-string. No unbounded ps -eo remains (the other two ps calls, lines 187/214, are also bounded).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 101,
+                "end": 112
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:46.670437185Z",
+          "seal": {
+            "by": "server",
+            "mac": "2b099838b7c467430ed1479e68648a038979d8d0d03522249d6ec44ebfe3af11"
+          }
+        },
+        {
+          "id": "EVD-0881",
+          "kind": "analysis",
+          "locator": "git grep -nE \"ps -eo|\\bps \" tools/agentic/watchdog.sh (search anchor)",
+          "summary": "Every ps invocation in watchdog.sh sits behind agentic_bounded_call; only scan_ps's own ps -eo lines are arguments to scan_ps. Mutation check: replacing the bounded call with plain ps makes the two new tests fail.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 170,
+                "end": 178
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:46.722837491Z",
+          "seal": {
+            "by": "server",
+            "mac": "ede51faecb18fc113859d9b5755da56f412872b4a14319940fee0b43abea6eaa"
+          }
+        },
+        {
+          "id": "EVD-0893",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh: scan_ps and its call in the main loop",
+          "summary": "scan_ps starts ps with setsid, output to a mktemp file, polls kill -0 up to the budget, sends TERM, then KILL, then disowns a survivor and deletes the file; no wait on a timed-out child. The main loop calls it three times before any alert. The only part not run by a test is the final disown branch (a real D-state process cannot be made in a test).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 101,
+                "end": 155
+              },
+              "commit": "647c1465643d58db3fda8c66ef972113eddb0ed0"
+            }
+          },
+          "recorded_at": "2026-11-23T08:59:17.315714264Z",
+          "seal": {
+            "by": "server",
+            "mac": "01e0d8dcf6c31abd7c6fe33a93a58d2409c5413a12802e15326cb21aa1a337ba"
+          }
+        },
+        {
+          "id": "EVD-0896",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh: scan_ps at 9a939ad",
+          "summary": "Same behaviour as before; the INT and TERM traps are now installed right after mktemp (before ps starts) so a signal cannot leave the temp file. Three runs of tools/agentic/tests/run.sh on this code: 83 passed, 0 failed, and no watchdog-scan files left in a dedicated TMPDIR.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 111,
+                "end": 159
+              },
+              "commit": "9a939ad4262b88060cee6206354a624848dda0df"
+            }
+          },
+          "recorded_at": "2026-11-23T09:07:16.247759797Z",
+          "seal": {
+            "by": "server",
+            "mac": "b3c0a142b8a78f840843e0d77ba9939e2b1b76a7937dedab3ce0558729b8286a"
+          }
+        },
+        {
+          "id": "EVD-0897",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh:120,247,266,276-278,293,313,322,78 at 7e0a933",
+          "summary": "Every named call is a bounded_capture call: find (120), git reflog (247), git worktree list (266), three ps -eo scans (276-278), ps -p rereads (293, 322), tr on /proc/pid/cmdline via -i (313), git rev-parse (78). bounded_capture (145-206) uses mktemp file, setsid child, 0.1 s kill -0 polling to agentic_call_budget (AGENTIC_CALL_TIMEOUT), TERM, KILL, then disown of a survivor with no wait. No agentic_git; remaining $(...) are sort|tail on captured text, mktemp, readlink, agentic_* helpers, getconf, dirname, none wrapping ps/git/find/tr. The old file at 6d33448 had $(agentic_bounded_call ps -o etimes= -p) at 236 and 263.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 131,
+                "end": 206
+              },
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:33:48.964235531Z",
+          "seal": {
+            "by": "server",
+            "mac": "45d6d5e5c3050dd13a4135618d4cebdc43184b5d87b889131ae69db2be53fe28"
+          }
+        },
+        {
+          "id": "EVD-0898",
+          "kind": "analysis",
+          "locator": "git grep -nE 'agentic_bounded_call|agentic_git' tools/agentic/watchdog.sh",
+          "summary": "Only one hit, the comment at line 133; no call remains.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "agentic_bounded_call|agentic_git",
+              "scope": [
+                "tools/agentic/watchdog.sh"
+              ],
+              "hits": 1,
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:33:49.009207793Z",
+          "seal": {
+            "by": "server",
+            "mac": "c93b37ab6925bc63784f6ddd1b1c75a6258165ffc90bf3e1e66c60bfd6eb41b2"
+          }
+        },
+        {
+          "id": "EVD-0909",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh:152-210 and grep of bounded_capture (15 hits) at 40988d0",
+          "summary": "The restated sentence (private temp file, poll to AGENTIC_CALL_TIMEOUT, stop the call's process group, abandon a leader that survives KILL without waiting) matches bounded_capture: mktemp file, setsid child, 0.1 s kill -0 polling to agentic_call_budget, agentic_stop_group on the group, disown of a surviving leader, no wait. watchdog.sh has no agentic_bounded_call/agentic_git call. The call-site set is unchanged from the 7e0a933 audit (EVD-0897); I did not re-verify each call site beyond the grep.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 152,
+                "end": 210
+              },
+              "commit": "40988d0fb551b4a79997091d4a5685bcf748c09c"
+            }
+          },
+          "recorded_at": "2026-11-23T09:53:28.524677583Z",
+          "seal": {
+            "by": "server",
+            "mac": "d7156a55266ac8cd63fcd8ba1a86cfb77baeda1c05a63a556468b7f1807cf3fb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code shows all three scans via scan_ps/agentic_bounded_call, captured then looped; mutation shows the bound is what the tests exercise.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0880",
+            "EVD-0881"
+          ],
+          "recorded_at": "2026-11-23T08:37:59.865848244Z",
+          "seal": {
+            "by": "server",
+            "mac": "83f3be1ca989585e1c04e30bf5caa1ff6ba3bac402d306f81aad108917aa0da7"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "scan_ps code matches the restated claim; the disown branch is by inspection only.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0893"
+          ],
+          "recorded_at": "2026-11-23T08:59:22.198349101Z",
+          "seal": {
+            "by": "server",
+            "mac": "39e07d8b7fa0b05c157976e49b1ed25ff54b0783f109dbf2cbd05c53af471a0f"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "scan_ps still matches the claim after the trap hardening.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0896"
+          ],
+          "recorded_at": "2026-11-23T09:07:19.009637273Z",
+          "seal": {
+            "by": "server",
+            "mac": "3eeb9ed45f725c0d0dc223b85863bfd538b419b2de3d30b71703d73e9cba48b0"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All listed calls run via bounded_capture; no agentic_bounded_call/agentic_git call or $(...) wraps them.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0897",
+            "EVD-0898"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.711913611Z",
+          "seal": {
+            "by": "server",
+            "mac": "533530c4b7333bec41da0174924d9361cf1bf5e4594e35fe6256d4304cfd3193"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Restated wording matches bounded_capture at 40988d0; no agentic_bounded_call/agentic_git call remains.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0909"
+          ],
+          "recorded_at": "2026-11-23T09:53:35.743365159Z",
+          "seal": {
+            "by": "server",
+            "mac": "9f40e1ecfe158c4aac14267f470d5b26b38a661f5858f8a61e7db58cc58e9ed5"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T09:53:35.743365159Z",
+      "seal": {
+        "by": "server",
+        "mac": "4f77443984687ef3fff258a63edfa6e13cf388a93ed85852f29c7db5c1b061c8"
+      }
+    },
+    {
+      "id": "CLM-0696",
+      "statement": "A supervised watchdog.sh call that times out prints a warning on stderr naming only the command and never raises an alarm (no WATCHDOG output, no exit 3): a timed-out or failed ps -eo scan skips the whole pass, a timed-out ps -p re-read drops that process for the pass, a timed-out find or git reflog skips that expectation for the pass, and a timed-out git worktree list leaves only the main checkout for the pass. In looping mode the next pass runs; with --once it exits 0. A failed or timed-out start-up git rev-parse makes it exit 1 with an error.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #675: a timed-out scan is a skipped pass with a warning, not an alarm and not an exit; PR: \"A scan that times out or fails skips that pass with a warning; it is not an alarm and does not exit.\"",
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/watchdog.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0882",
+          "kind": "test",
+          "locator": "bash tools/agentic/tests/run.sh: test_watchdog_skips_a_pass_when_the_ps_scan_hangs, test_watchdog_once_exits_0_when_the_ps_scan_hangs",
+          "summary": "Both ok (3106 ms, 1113 ms). Loop test: exit 124 from timeout (still running), warning present at least twice, no WATCHDOG output. --once: exit 0, warning, no WATCHDOG.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/tests/run.sh",
+              "lines": {
+                "start": 541,
+                "end": 561
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:46.762111199Z",
+          "seal": {
+            "by": "server",
+            "mac": "2997a04260d3480f4b6e589506ee69ca4d876ab2f7a26fdc626e014aa2c13b74"
+          }
+        },
+        {
+          "id": "EVD-0883",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh:105-112,123,172-178",
+          "summary": "scan_ps warns to stderr and returns 1; the main loop then exits 0 only if --once, else sleeps and continues (before any WATCHDOG echo/exit 3); check_expectations returns 0 on a failed scan. Skip never reaches found/alarm.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 172,
+                "end": 178
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:46.806554870Z",
+          "seal": {
+            "by": "server",
+            "mac": "b509e411a45d9bec2ad195bc4a633d2425c8fd953dbfa10ad6d030c2727d745c"
+          }
+        },
+        {
+          "id": "EVD-0892",
+          "kind": "test",
+          "locator": "tools/agentic/tests/run.sh: test_watchdog_skips_the_pass_when_only_the_third_scan_fails, test_watchdog_loop_skips_the_pass_when_only_the_third_scan_fails",
+          "summary": "A stub ps that finds an over-limit process in the first scan and hangs only the third scan gives a warning, no WATCHDOG alert, exit 0 with --once and a still-running loop. Both tests fail against the previous watchdog.sh and pass now (82 passed, 3 runs in a row).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 170,
+                "end": 182
+              },
+              "commit": "5e07135227a4f7f38778be8bce5664473c0b5b95"
+            }
+          },
+          "recorded_at": "2026-11-23T08:45:06.031281594Z",
+          "seal": {
+            "by": "server",
+            "mac": "561a1ba2b6be46b8259572a34ea0445ecbfb2385ea1305dae6f87648b8c63051"
+          }
+        },
+        {
+          "id": "EVD-0901",
+          "kind": "test",
+          "locator": "tools/agentic/tests/run.sh:568-770; target/i675-logs/run-c1.log, run-c2.log",
+          "summary": "Control flow at 7e0a933: bounded_capture warns with only the command name and returns 124 (195-198); a failed scan chain skips the pass, exit 0 under --once (276-282); ps -p timeouts continue (293, 322); find timeout continues (242); reflog continue (248); worktree list is -q and leaves only the main checkout (264-268); start-up failure exits 1 (78-81). Tests: skip/once scan tests (568,582), abandon tests for scan, reread, cmdline, worktree list, reflog, find (659-722), start-up exit 1 (733), third-scan tests (771,780); all in the 89-pass runs c1 and c2. Gap: no test asserts exit 0 with --once for the non-scan timeouts, and the second ps -p site (322) has no hang test.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 195,
+                "end": 198
+              },
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:34:10.683758492Z",
+          "seal": {
+            "by": "server",
+            "mac": "0fff310da75b2e546447103e0dfc757a023cd0f65d84996afa90c6caaf69de78"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Tests run both modes against a hanging ps and pass; control flow confirms skip is before any alarm or exit 3.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0882",
+            "EVD-0883"
+          ],
+          "recorded_at": "2026-11-23T08:37:59.907606733Z",
+          "seal": {
+            "by": "server",
+            "mac": "4bdaa573f868fd11f371bf7ded126fcfc48d058179f064cbe0f91f9f35a3cde6"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "A failing scan skips the pass even after an earlier scan found an alert; tested for --once and the loop.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0892"
+          ],
+          "recorded_at": "2026-11-23T08:45:12.523768972Z",
+          "seal": {
+            "by": "server",
+            "mac": "0e82a1a2803029c136caba35cc9583f7f85eb252af3ef42544cafe4fe3e0221f"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Control flow and tests match each skip rule and the exit 1 at start-up; minor test gaps noted.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0901"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.749169955Z",
+          "seal": {
+            "by": "server",
+            "mac": "8e0bf79965172ddec3f82f10fee77bf13b74fe27054922c9760e661df6c8ae87"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T09:35:16.749169955Z",
+      "seal": {
+        "by": "server",
+        "mac": "e13ad1bc5bd420c53bb9d30244c3139e1d555b4498b685b478d5b8d0a627b0b1"
+      }
+    },
+    {
+      "id": "CLM-0697",
+      "statement": "tools/agentic/tests/run.sh has a test per supervised call (ps -eo, ps -p only, tr on cmdline, git worktree list, git reflog, find) with a stub that ignores TERM and leaves a detached grandchild holding its output open: the looping watchdog keeps running, starts the hung command again on a later pass, warns at least twice, raises no alarm and leaves no temp file; plus a start-up git rev-parse test (exit 1) and the earlier stub-ps tests (sleep past the bound; third scan only). Each per-call test fails when its call site goes back to $(agentic_bounded_call ...), $(agentic_git ...) or $(tr ...), and the ps -p test fails against watchdog.sh at 6d33448.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #675: add a tools/agentic/tests/run.sh case with a stub ps that sleeps past the bound; PR: \"With the old unbounded scan restored, both fail.\"",
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/tests/run.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0884",
+          "kind": "test",
+          "locator": "bash tools/agentic/tests/run.sh (both ps_scan_hangs tests ok); mutation in scratch copy replacing agentic_bounded_call ps with ps",
+          "summary": "Stub ps is `exec sleep 30` first on PATH with AGENTIC_CALL_TIMEOUT=1. Assertions read: rc 124, warning text, no WATCHDOG, warning count >= 2; once: rc 0. With the unbounded call restored in a scratch copy, run.sh reported 78 passed, 2 failed, exactly these two.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/tests/run.sh",
+              "lines": {
+                "start": 533,
+                "end": 561
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:46.845761059Z",
+          "seal": {
+            "by": "server",
+            "mac": "efb61e386cdcf5fbdbfa45210fda77b28ccbf680299c4fff7466bc32f0e043c0"
+          }
+        },
+        {
+          "id": "EVD-0894",
+          "kind": "test",
+          "locator": "tools/agentic/tests/run.sh: test_watchdog_abandons_a_ps_scan_it_cannot_stop",
+          "summary": "A stub ps ignores TERM and leaves a detached grandchild holding its output open. The watchdog warns twice, keeps running, leaves no temp file, and the test kills and confirms every grandchild by pid. With the previous watchdog.sh (pipe capture) this test fails (82 passed, 1 failed).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/tests/run.sh",
+              "lines": {
+                "start": 583,
+                "end": 620
+              },
+              "commit": "647c1465643d58db3fda8c66ef972113eddb0ed0"
+            }
+          },
+          "recorded_at": "2026-11-23T08:59:17.354571169Z",
+          "seal": {
+            "by": "server",
+            "mac": "5beea7ebe2443769a1e3eb101b05299b697ccae93c841cfd9651822c768be601"
+          }
+        },
+        {
+          "id": "EVD-0902",
+          "kind": "test",
+          "locator": "target/i675-logs/mutations.log; tools/agentic/tests/run.sh:596-740",
+          "summary": "abandoning_stub ignores TERM and leaves a detached setsid sleep grandchild holding the output; watch_abandoning checks still running, a later pass restarts the command (2 grandchildren), >=2 warnings, no WATCHDOG, empty TMPDIR, grandchildren gone. Tests exist for scan, ps -p, tr, worktree list, reflog, find, and rev-parse (exit 1). mutations.log shows seven mutations (reread, cmdline, worktree, reflog, find, scan, revparse), each failing exactly its test with 0 passed, 1 failed, plus test_watchdog_abandons_a_ps_reread_it_cannot_stop failing against 6d33448's watchdog.sh. Caveats: one test per command kind, so only one of the three ps -eo scans and one of the two ps -p sites (293) is hang-tested; the mutations.log does not say which ps -p site was reverted; the ps -p test's stub emits 5000 s but the cmdline test's ps -p site (322) has no hang test.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/tests/run.sh",
+              "lines": {
+                "start": 596,
+                "end": 740
+              },
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:34:10.722637422Z",
+          "seal": {
+            "by": "server",
+            "mac": "e1f2d6ee4d1e7c9959fa3b49a25f27eb0145bfbe6962a1ae715eff17a7149c2d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Tests exist with the stated assertions and both fail (2 of 80) when the unbounded ps is restored.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0884"
+          ],
+          "recorded_at": "2026-11-23T08:37:59.948444819Z",
+          "seal": {
+            "by": "server",
+            "mac": "2fc9137e2a3e39c66709020393f4e7a9cb9abed3ffb03c1b0381a518c0c6e3b2"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The abandon test passes now and fails against the pipe-capture watchdog.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0894"
+          ],
+          "recorded_at": "2026-11-23T08:59:22.282122093Z",
+          "seal": {
+            "by": "server",
+            "mac": "d014524b6d9c259548f4e42e007dd6d743f31ee66b401caf88953247c50e588d"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Per-command-kind hang tests exist; mutations.log shows each fails when its call site is reverted and the ps -p test fails on 6d33448. Caveat: one site each for ps -eo and ps -p.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0902"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.792528861Z",
+          "seal": {
+            "by": "server",
+            "mac": "bbe10823ee2642f305d4065e2d5ec033dc5ee5ef72143fc8892dcfc00df0386b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T09:35:16.792528861Z",
+      "seal": {
+        "by": "server",
+        "mac": "2580fd4486ca5b1f311b2424aae64d0fde34d6139408324ed4e6a889a8d1b2d0"
+      }
+    },
+    {
+      "id": "CLM-0698",
+      "statement": "The watchdog never prints or logs process command lines (ps args= output or /proc/<pid>/cmdline): bounded_capture's warnings name only the command (its first word), never its arguments or output.",
+      "kind": "security",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "Brief for #675: the watchdog must never print or log process command lines; PR: \"A timed-out scan prints a warning on stderr without any scan output.\"",
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/watchdog.sh",
+        "tools/agentic/lib.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0885",
+          "kind": "analysis",
+          "locator": "tools/agentic/watchdog.sh:105-112,192,218,222; tools/agentic/lib.sh:52-58",
+          "summary": "The scan_ps warning prints only a fixed text and the numeric status; captured output is discarded on failure. found+= lines carry only pid, elapsed, comm, cwd. $args is used only inside case/grep matching, never echoed. lib.sh's leftover-process warning prints '$2', the command name (ps), not its arguments. ps stderr is not captured but ps does not print command lines in errors. Tests also assert no WATCHDOG output on a hung scan.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 101,
+                "end": 112
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:46.891567096Z",
+          "seal": {
+            "by": "server",
+            "mac": "c8f7d11dbcc46184ce38dd23228bf4282fcb2b261b7bb0d0db6cc80d0c756474"
+          }
+        },
+        {
+          "id": "EVD-0886",
+          "kind": "analysis",
+          "locator": "gap: no test asserts a command-line sentinel is absent from the warning",
+          "summary": "The tests check only for WATCHDOG and the warning text. Nothing asserts that a unique token placed in the stub ps's args or output never reaches stdout/stderr. Support rests on code reading alone.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T08:37:46.933000445Z",
+          "seal": {
+            "by": "server",
+            "mac": "813e53fe0de5495dc8ce762e55d1222676eb15c11a0f5e7500485bbc24024bde"
+          }
+        },
+        {
+          "id": "EVD-0899",
+          "kind": "analysis",
+          "locator": "tools/agentic/watchdog.sh:197,203,298,326,330-331 at 7e0a933",
+          "summary": "Warnings (197, 203) print only $2 (the command's first word), the reason and a status. Output captured by bounded_capture goes to a variable and is never echoed; stub stderr goes to /dev/null (163). The only output paths (231, 298, 326, 330-331) carry pid, elapsed, comm (from /proc/pid/comm), cwd, name and label; $args is used only inside case/regex tests (218, 287, 314). The cmdline read at 313 is captured into args, never printed. An existing test (run.sh:1322-1324) asserts a --token=SECRETVALUE argv does not appear in an alert. Caveat: no test puts a sentinel in a timed-out call's arguments.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 195,
+                "end": 205
+              },
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:33:49.053994294Z",
+          "seal": {
+            "by": "server",
+            "mac": "ee134956ea79bc50fc0d91683af557524e2157645dcbf5ea0fe408685a972d2a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "No path echoes ps args or scan output; the warning is fixed text plus a status number. Caveat (neutral EVD-0886): no test pins this with a sentinel in the stub's args.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0885"
+          ],
+          "recorded_at": "2026-11-23T08:37:59.988378191Z",
+          "seal": {
+            "by": "server",
+            "mac": "c1f786cadf0d583b68542692838e9b5894ca8a44c29217ad5f4e3ad950164750"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "No code path prints ps args or cmdline content; warnings name only the command word.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0899"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.836083568Z",
+          "seal": {
+            "by": "server",
+            "mac": "5cd507ffe4a934030d897e3bb4824e778f5ad906b861c13acfd016dbdefb7a61"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T09:35:16.836083568Z",
+      "seal": {
+        "by": "server",
+        "mac": "f1ca60e526a9d9bace35513fbaa18080f97e9987e768c9150e2417d8f16fb618"
+      }
+    },
+    {
+      "id": "CLM-0699",
+      "statement": "tools/agentic/tests/run.sh passes with 91 passed, 0 failed on the code commit 6a832e0, three runs in a row.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"`tools/agentic/tests/run.sh`: 80 passed, 0 failed\"",
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/tests/run.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0887",
+          "kind": "test",
+          "locator": "bash tools/agentic/tests/run.sh",
+          "summary": "Ran on head f100e25: \"80 passed, 0 failed\" (48 s).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T08:37:46.973291588Z",
+          "seal": {
+            "by": "server",
+            "mac": "ffe68388fcfeefdb62a0a3e47d07f6b342d5152c0ce3ce2d88ce008c24230d47"
+          }
+        },
+        {
+          "id": "EVD-0895",
+          "kind": "test",
+          "locator": "bash tools/agentic/tests/run.sh (3 runs)",
+          "summary": "83 passed, 0 failed in each of three runs in a row on the code commit 647c146.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T08:59:17.389676699Z",
+          "seal": {
+            "by": "server",
+            "mac": "cd826d0bf173ab8ebc74dfa2ebd6c52f13c393fdd9e53e4c2937068f6285125f"
+          }
+        },
+        {
+          "id": "EVD-0905",
+          "kind": "log",
+          "locator": "target/i675-logs/run-c1.log, run-c2.log, run-c3.log (last line of each)",
+          "summary": "Each of the three full runs on 7e0a933 ends with \"89 passed, 0 failed\" (read directly by the auditor; run-c3 had finished). I did not run the suite myself.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T09:35:00.621760073Z",
+          "seal": {
+            "by": "server",
+            "mac": "07467dbf6195a1239e0ffab394e1ed18b5304215b34966b687a80d4cf2f941e3"
+          }
+        },
+        {
+          "id": "EVD-0910",
+          "kind": "log",
+          "locator": "target/i675-logs/run-d1.log, run-d2.log, run-d3.log (last line of each); worktree HEAD 40988d0",
+          "summary": "Each of the three logs ends with '91 passed, 0 failed' with no FAIL line; both new tests are among the passes. Worktree HEAD is 40988d0. I read the logs and did not run the suite; which commit each ran on rests on the implementer's statement.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T09:53:28.567491840Z",
+          "seal": {
+            "by": "server",
+            "mac": "01adb578876b4a0176b1b25143d5b3f7fe007f0d9683b1e17d41504f9db741ed"
+          }
+        },
+        {
+          "id": "EVD-0913",
+          "kind": "log",
+          "locator": "target/i675-logs/run-e1.log, run-e2.log, run-e3.log (last lines); worktree HEAD 6a832e0",
+          "summary": "Each of the three logs ends with \"91 passed, 0 failed\"; the last lines include test_watchdog_stops_what_a_call_leaves_behind_on_a_normal_exit as ok (about 3.85 s each). Worktree HEAD is 6a832e0. I read the last 6 lines of each log and did not run the suite; that each ran on 6a832e0 rests on the caller's statement.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:00:15.793950804Z",
+          "seal": {
+            "by": "server",
+            "mac": "66671aeb789944eaf8f49799177171cbc143ae30d7cf93e4111a4f40322b78df"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reran on head: 80 passed, 0 failed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0887"
+          ],
+          "recorded_at": "2026-11-23T08:38:00.028766265Z",
+          "seal": {
+            "by": "server",
+            "mac": "07487339383fa7cfe7d6789a87201f7a5b050916f9a158373dd2e204faa755ea"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Three runs of 83 passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0895"
+          ],
+          "recorded_at": "2026-11-23T08:59:22.319559462Z",
+          "seal": {
+            "by": "server",
+            "mac": "ed575d2de82574b9162c437a4e2da48d574891d41bf8117c41f69b06abecca68"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Three logs each end \"89 passed, 0 failed\".",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0905"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.878994212Z",
+          "seal": {
+            "by": "server",
+            "mac": "0e8e261fb4587d0459da15e5c726da5576c876799e664be6f2ddd19368eecf6c"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Three logs each end 91 passed, 0 failed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0910"
+          ],
+          "recorded_at": "2026-11-23T09:53:35.786221096Z",
+          "seal": {
+            "by": "server",
+            "mac": "98a176d2b8bd9536ed141b16d3db48587e0b1fe4fd48addf4f7f6bcfd1e6c02c"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Three logs on 6a832e0 each end 91 passed, 0 failed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0913"
+          ],
+          "recorded_at": "2026-11-23T10:00:20.280781308Z",
+          "seal": {
+            "by": "server",
+            "mac": "aec0ad44b32d6d1d027b10271dcef22770664bd615ce2c3edaa218f19b70e978"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T10:00:20.280781308Z",
+      "seal": {
+        "by": "server",
+        "mac": "5854bbdee43469160a4f3d0e7af63826a1b6c34c68ccd12d03bf6e4908db5fd9"
+      }
+    },
+    {
+      "id": "CLM-0700",
+      "statement": "Among process-table commands (ps, pgrep) in tools/agentic/*.sh, the watchdog's are all supervised by bounded_capture and the only unbounded one is pgrep -c -g in lib.sh:56.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR: \"Other unbounded external calls in `tools/agentic/*.sh`: only `pgrep -c -g` in `lib.sh`\"",
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/lib.sh",
+        "tools/agentic/watchdog.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0888",
+          "kind": "analysis",
+          "locator": "git grep -nE \"\\bpgrep\\b|\\bps\\b\" tools/agentic/*.sh; tools/agentic/lib.sh:56",
+          "summary": "The only non-watchdog pgrep/ps in the scripts is lib.sh:56 pgrep -c -g (unbounded). Remaining watchdog calls are bounded (ps, find, git) or local builtins/coreutils (readlink on /proc, date, tr, awk, grep, read of /proc files). A readlink or read on a stuck /proc entry is theoretically unbounded but is not an external-tool call of the kind meant.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/lib.sh",
+              "lines": {
+                "start": 56,
+                "end": 56
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:47.017615739Z",
+          "seal": {
+            "by": "server",
+            "mac": "5bd0ea983310091dbcf7e60e1f616a9058c9dc0858d4b0e72ab81affe5093819"
+          }
+        },
+        {
+          "id": "EVD-0891",
+          "kind": "analysis",
+          "locator": "git grep -nE \"\\bpgrep\\b|\\bps\\b\" tools/agentic/*.sh",
+          "summary": "Re-run after the review fix: every ps in watchdog.sh goes through scan_ps or agentic_bounded_call; the only other process-table command is the unbounded pgrep -c -g at lib.sh:56. readlink and getconf are local reads, outside the narrowed claim.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/lib.sh",
+              "lines": {
+                "start": 56,
+                "end": 56
+              },
+              "commit": "5e07135227a4f7f38778be8bce5664473c0b5b95"
+            }
+          },
+          "recorded_at": "2026-11-23T08:45:05.986235359Z",
+          "seal": {
+            "by": "server",
+            "mac": "dbd2c68d4b5777db173349be8f799b2a92e2e55c26c9198038c9d0d658e907e7"
+          }
+        },
+        {
+          "id": "EVD-0903",
+          "kind": "analysis",
+          "locator": "git grep -nE '\\bpgrep\\b|\\bps\\b' tools/agentic/*.sh at 7e0a933",
+          "summary": "Every ps in watchdog.sh is an argument to bounded_capture (276-278, 293, 322); lib.sh:56 pgrep -c -g is the process-table command outside it. See anchor for lib.sh:56.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "\\bpgrep\\b",
+              "scope": [
+                "tools/agentic"
+              ],
+              "hits": 1,
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:34:10.765730757Z",
+          "seal": {
+            "by": "server",
+            "mac": "48bf737f52154224eac83c5b3ab60870e12052e8a63f60548ebba6b093693315"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Grep of all tools/agentic scripts finds only lib.sh:56 pgrep unbounded outside the now-bounded ps scans.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0888"
+          ],
+          "recorded_at": "2026-11-23T08:38:00.068341545Z",
+          "seal": {
+            "by": "server",
+            "mac": "126553776f532225133e168677750172b0a1df20256fefad0bbef2470e118b97"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The narrowed statement holds: only lib.sh:56 pgrep is an unbounded process-table command outside the bounded scans.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0891"
+          ],
+          "recorded_at": "2026-11-23T08:45:12.482326250Z",
+          "seal": {
+            "by": "server",
+            "mac": "82abdfb490578848406bb46e0f371e4121f40e20f4c55e13cf679bc8c2d63624"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Only lib.sh:56 pgrep is unbounded among ps/pgrep uses.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0903"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.922925580Z",
+          "seal": {
+            "by": "server",
+            "mac": "fdc9450335167162e2d06f171d4baee1b60db58dd922a32bbbb21e020c9d1875"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T09:35:16.922925580Z",
+      "seal": {
+        "by": "server",
+        "mac": "9a9754c9f8c1368ca0ef1208302b1b030bb56dd5cf91b1b686f87c4158fe753b"
+      }
+    },
+    {
+      "id": "CLM-0701",
+      "statement": "tools/agentic/README.md documents which watchdog calls are bounded by AGENTIC_CALL_TIMEOUT (ps -eo scans, ps -p re-reads, the tail cmdline read, git rev-parse, git worktree list, git reflog, find), that a timeout warns and is never an alarm, and what is not bounded.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR: \"README and changelog updated.\"",
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/README.md"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0889",
+          "kind": "inspection",
+          "locator": "tools/agentic/README.md:13 and :54",
+          "summary": "Row for watchdog.sh states each ps scan is bounded by AGENTIC_CALL_TIMEOUT and a hung or failed scan skips the pass with a warning, never an alarm, --once still exits 0. The AGENTIC_CALL_TIMEOUT row now names watchdog ps calls.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/README.md",
+              "lines": {
+                "start": 13,
+                "end": 13
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:47.062420681Z",
+          "seal": {
+            "by": "server",
+            "mac": "4efe608060eb82b3dde8c9d46954df5673bddda0c4e31c1d2e92b1f2d1ee018c"
+          }
+        },
+        {
+          "id": "EVD-0904",
+          "kind": "inspection",
+          "locator": "tools/agentic/README.md:13 and :54 at 7e0a933",
+          "summary": "Line 13 lists the bounded calls (three ps -eo scans, ps -p re-reads, tail command-line read, git rev-parse, worktree list, reflog, find), says AGENTIC_CALL_TIMEOUT bounds them, a timeout warns and is never an alarm (per-call skip rules, --once exits 0, rev-parse exits 1), and lists what is not bounded in the same set as the watchdog header. Line 54 names supervised watchdog calls under AGENTIC_CALL_TIMEOUT.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/README.md",
+              "lines": {
+                "start": 13,
+                "end": 13
+              },
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:34:10.803867354Z",
+          "seal": {
+            "by": "server",
+            "mac": "ab069e44121ef11e94056cb808723a475d202162e8cf68dc7a026c1e8cc351ab"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "README.md line 13 states the bound and skip behavior.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0889"
+          ],
+          "recorded_at": "2026-11-23T08:38:00.107906865Z",
+          "seal": {
+            "by": "server",
+            "mac": "85ef7a390096dab13dad9d661d47e23657adcf7baddfefd1d4ea1a1cbaac382e"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "README line 13 and 54 cover the bounded calls, warn-not-alarm and the unbounded list.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0904"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.970427472Z",
+          "seal": {
+            "by": "server",
+            "mac": "597a4a7271dbaa53d610eb32dac2ae2638c5916306a11cee627d7e1127e30de6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T09:35:16.970427472Z",
+      "seal": {
+        "by": "server",
+        "mac": "bc8c99eb1f74fe6888dec449ff572a527666b7fe9301eb5fa1e46a4235864bbb"
+      }
+    },
+    {
+      "id": "CLM-0702",
+      "statement": "The watchdog.sh header names exactly what it leaves unsupervised, and that list is complete: every external command or /proc read in watchdog.sh not run through bounded_capture is one of bash's reads of /proc/<pid>/comm, /proc/<pid>/stat and /proc/uptime, readlink of /proc/<pid>/cwd and /proc/<pid>/fd/0, dirname and getconf at start-up, mktemp, date, sleep, rm, sed and head on expectation files, or grep, sed, awk, sort and tail on captured text.",
+      "kind": "documentation",
+      "level": "component",
+      "verification_method": "inspection",
+      "source": "Brief for the PR #947 round-3 takeover: state the exact remaining limit in the header, README and PR",
+      "source_anchor": {
+        "path": "tools/agentic/watchdog.sh",
+        "lines": {
+          "start": 56,
+          "end": 62
+        },
+        "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+      },
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/watchdog.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0900",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh whole file at 7e0a933, plus lib.sh agentic_call_budget/now/uptime/expect_field",
+          "summary": "Enumerated every external command, $(...), process substitution, pipe and /proc read. Inside bounded_capture: git (78,247,266), find (120), ps (276-278,293,322), tr (313), and its setsid launcher (163). Outside, each is in the header list (56-62): dirname (69), getconf (92), mktemp (155), date (330, and lib agentic_now), sleep (167,280,335 etc.), rm (156,196,201,230), sed|head on expectation files (lib agentic_expect_field, 225-227), sed on captured text (268), sort|tail (122), grep (221,300-301), awk (327), readlink of /proc/pid/cwd (220,284,307) and fd/0 (309), bash reads of /proc/pid/comm (297), /proc/pid/stat (318), /proc/uptime (lib agentic_uptime 270). agentic_call_budget runs only agentic_now. Builtins (kill, wait, disown, [ -d/-f ], $(<tempfile), cd) are not external commands; the filesystem-hang caveat sentence covers the stat and temp-file reads. Nothing missing, nothing extra in the list. Test-only AGENTIC_NOW_CMD hook in lib is unlisted but is not part of the watchdog's own calls. Minor: line 61 of the header is over-long (cosmetic).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 56,
+                "end": 62
+              },
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:34:10.642829094Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa75c8c37c1bdc130914f06fb38cc4831afef17a19bd6b3183611473f597cd92"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Independent enumeration found every unsupervised command and /proc read in the header list; none missing.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0900"
+          ],
+          "recorded_at": "2026-11-23T09:35:17.015409994Z",
+          "seal": {
+            "by": "server",
+            "mac": "668b97af54fe50d2bcb02ea6a29549c81522e5445e75b8af1b8079324d94ea18"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T09:32:28.536164062Z",
+      "updated_at": "2026-11-23T09:35:17.015409994Z",
+      "seal": {
+        "by": "server",
+        "mac": "d2ea93b32bd4a5b46ccc34fc97655070f44f983f5c8c41873d686b6e93fe64ec"
+      }
+    },
+    {
+      "id": "CLM-0703",
+      "statement": "On every bounded_capture path that started a process (timed out or exited on its own), the call's whole process group is stopped by agentic_stop_group, which escalates by the group's liveness (kill -0 -- -pgid), not the leader's: TERM, then KILL while any member is left, each wait bounded. The leader is reaped before the group check on a normal exit, there is no unconditional wait, and a leader still alive after KILL is disowned. A leader that exits on TERM while a same-group member ignores TERM, and a member left behind by a leader that exits normally, are both gone when the call returns. Tests test_watchdog_kills_a_group_member_that_ignores_term_after_a_timeout and test_watchdog_stops_what_a_call_leaves_behind_on_a_normal_exit check this and fail against watchdog.sh at 69f280d.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Review of PR #947 round 4 (comment 4664032178): escalation checked only bc_pid; the normal-exit path did not clean up descendants",
+      "source_anchor": {
+        "path": "tools/agentic/watchdog.sh",
+        "lines": {
+          "start": 131,
+          "end": 198
+        },
+        "commit": "40988d0fb551b4a79997091d4a5685bcf748c09c"
+      },
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/watchdog.sh",
+        "tools/agentic/tests/run.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0907",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh:152-210 (bounded_capture) and tools/agentic/lib.sh:14-30 (agentic_stop_group) at 40988d0",
+          "summary": "Traced every path. No budget: nothing started, stop_group not called. mktemp failure: returns before traps/spawn. INT/TERM traps: set before spawn, KILL the group by pgid, rm the file, re-raise, no wait. Normal exit: kill -0 on leader false, then wait (returns at once, leader already gone/reaped), then kill -0 -pgid sets bc_left, then agentic_stop_group. Timeout: same stop_group call; it TERMs the group, polls kill -0 -pgid (group liveness, not leader) for agentic_kill_after s, KILLs, polls up to 5 s more, each loop bounded. Leader survives KILL: kill -0 bc_pid still true so disown, no wait. Leader dies leaving members: group check still true so KILL escalation happens. A zombie leader cannot pin the group: on normal exit it is reaped by wait first; on timeout bash reaps on SIGCHLD during the 0.1 s sleeps. The only wait is after kill -0 failed. lib.sh is unchanged from 69f280d, so stop_group is pre-existing code. The old code at 69f280d escalated by kill -0 bc_pid only and did no cleanup on normal exit. Untested: the disown branch (needs a D-state process).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 152,
+                "end": 210
+              },
+              "commit": "40988d0fb551b4a79997091d4a5685bcf748c09c"
+            }
+          },
+          "recorded_at": "2026-11-23T09:53:28.443036236Z",
+          "seal": {
+            "by": "server",
+            "mac": "d355254b5b5fe266bd89d848b74f247b743041fa73a2ec0a7efd353264f137a8"
+          }
+        },
+        {
+          "id": "EVD-0908",
+          "kind": "test",
+          "locator": "target/i675-logs/mutations-r4.log; tools/agentic/tests/run.sh:733-785; run-d1.log..run-d3.log",
+          "summary": "group_stub starts a TERM-ignoring same-group member holding the output; want_members_gone checks /proc/<pid> absence. Against 69f280d's watchdog.sh both new tests FAIL (mutations-r4.log: 'group member outlived the call' for the timeout test; 'output lacks warning: ps call exited leaving processes behind' for the normal-exit test; 0 passed, 2 failed). On 40988d0 both pass in all three full runs (run-d1, d2, d3: 91 passed, 0 failed). I read the logs; I did not run the suite.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/tests/run.sh",
+              "lines": {
+                "start": 733,
+                "end": 785
+              },
+              "commit": "40988d0fb551b4a79997091d4a5685bcf748c09c"
+            }
+          },
+          "recorded_at": "2026-11-23T09:53:28.484239766Z",
+          "seal": {
+            "by": "server",
+            "mac": "c62303797de5c16fc70479acef45d464fd31aa994e216411e8f479bcdd579a66"
+          }
+        },
+        {
+          "id": "EVD-0912",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh:152-215 (bounded_capture) at 6a832e0; git show 6a832e0",
+          "summary": "6a832e0 changes only the warning after agentic_stop_group: the old unconditional echo \"stopped them\" became an if on bc_left that sets bc_left to \"stopped them\" or, when kill -0 -- -bc_pid is still true, \"some survived KILL and were left behind\", then echoes. Added code is one kill -0 and one echo: no wait, sleep or loop. The reap (wait after leader exit), the group-liveness stop (agentic_stop_group) and the disown branch are unchanged and run before the new check, so cleanup is unaltered. bc_left is reused after its last use as a flag and only affects the message. EVD-0907 traced these paths at 40988d0 and the diff does not touch them.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 152,
+                "end": 215
+              },
+              "commit": "6a832e0734bb136d76c0fd173a2525054e0973f4"
+            }
+          },
+          "recorded_at": "2026-11-23T10:00:15.749768947Z",
+          "seal": {
+            "by": "server",
+            "mac": "70727c6aec3a4abe15b146d88c130a8fb3fbe531370be606c7170080efa6d096"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All paths traced use group liveness, have bounded waits, and the leader is reaped before the group check; both tests fail on 69f280d and pass 3 of 3 on 40988d0. The disown branch is by inspection only.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0907",
+            "EVD-0908"
+          ],
+          "recorded_at": "2026-11-23T09:53:35.700188951Z",
+          "seal": {
+            "by": "server",
+            "mac": "66f3049c3bd8b912567f665aa69004e05276671760cfd699f0d44023cc9288e9"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The 6a832e0 diff only changes the message after cleanup: one extra kill -0 and an echo, no wait, and the stop, reap and disown logic is untouched.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0912"
+          ],
+          "recorded_at": "2026-11-23T10:00:20.237333014Z",
+          "seal": {
+            "by": "server",
+            "mac": "802159927e0fd142567ee669a664f80d5e14604e6f621aceec663ab97520e86c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T09:46:38.002577735Z",
+      "updated_at": "2026-11-23T10:00:20.237333014Z",
+      "seal": {
+        "by": "server",
+        "mac": "f1ff25d84b78d5be9a9e59d70e258212c54edb8096ea484d0df8124bc424550a"
+      }
+    },
+    {
+      "id": "CLM-0704",
+      "statement": "Issue #698 is resolved: failed feedback rows have an operator path (see, clear or retry), a warning log with the error code, and prune after the same retention; and user deletion handles pending/failed rows in the same transaction with a decision about sent rows.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/698",
+      "derived_from": [],
+      "artifacts": [
+        "src/mail/feedback.rs",
+        "src/cli/feedback.rs",
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0940",
+          "kind": "analysis",
+          "locator": "children of CLM-0704",
+          "summary": "Children cover each requirement: CLI list and retry (CLM-0705/0707), existing warn log (0709), prune of failed rows (0710), user deletion with the sent-row decision (0712), console/REST not added (0716), docs (0717). All supported.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:47:28.222035147Z",
+          "seal": {
+            "by": "server",
+            "mac": "fef2b7c12525fc7e6f7262ebdc8694c8c0d1c6d84083a469846b27af991f6304"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Each requirement of the issue is met by a supported child.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0940"
+          ],
+          "recorded_at": "2026-11-23T10:47:37.386742763Z",
+          "seal": {
+            "by": "server",
+            "mac": "a81bbbc7886097ffc4d40be97f72bb939adcd4f51fe477bdcaeeeba0147da8f6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:37.386742763Z",
+      "seal": {
+        "by": "server",
+        "mac": "597bd2d86f098bf08d775fda31215ac9bfb5cbb24034785001df7311fc50b552"
+      }
+    },
+    {
+      "id": "CLM-0705",
+      "statement": "An operator can list failed feedback rows from the command line with `okf-mcp feedback list`, which prints id, user, kind, attempts, failed-at time and error code per row.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #698 req 1; PR: \"`okf-mcp feedback list` lists `failed` rows (id, user, kind, attempts, failed-at, error; never the message).\"",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "src/cli/feedback.rs",
+        "src/cli.rs",
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0914",
+          "kind": "inspection",
+          "locator": "src/cli/feedback.rs:25-60; src/cli.rs:107-109,589-600,1014-1018",
+          "summary": "`Command::Feedback(FeedbackCommand::List)` is dispatched to feedback::feedback, which calls list_failed (status='failed', ordered by finished_at,id) and prints one tab row per failed row: id, user, kind, attempts, failed at, error; prints 'no failed feedback' when empty.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli/feedback.rs",
+              "lines": {
+                "start": 25,
+                "end": 60
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:27.716056952Z",
+          "seal": {
+            "by": "server",
+            "mac": "769a9cfbf757634e90b1ae6218cdcd672a6fde7ea3640576781aaf723481ad9c"
+          }
+        },
+        {
+          "id": "EVD-0915",
+          "kind": "test",
+          "locator": "src/cli/feedback.rs tests::list_shows_failed_rows_and_retry_requeues_one",
+          "summary": "Test inserts a failed row, runs the parsed `feedback list` and asserts the exact line \"f1\\tuser alice\\tkind bug\\tattempts 1\\tfailed at 2026-11-23T12:00:00Z\\terror FORM_NOT_FOUND\". Result recorded separately after the run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli/feedback.rs",
+              "lines": {
+                "start": 85,
+                "end": 120
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:27.757914369Z",
+          "seal": {
+            "by": "server",
+            "mac": "b3cad29c67dc950229e3caeb2f1e12823fbfc47c575b6d24a49def69ea43dbf0"
+          }
+        },
+        {
+          "id": "EVD-0930",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- cli::feedback",
+          "summary": "1 passed, 0 failed: cli::feedback::tests::list_shows_failed_rows_and_retry_requeues_one, on HEAD 713fbca.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:46:55.135340932Z",
+          "seal": {
+            "by": "server",
+            "mac": "a12f8b4a88e6a7d7d493e98116d50150d16e01d4c9be47c88459e1b7bd73afb0"
+          }
+        },
+        {
+          "id": "EVD-0936",
+          "kind": "analysis",
+          "locator": "children of CLM-0705",
+          "summary": "The one child (the list output never carries the message) is supported, and the list behaviour itself is tested directly.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:47:28.055520044Z",
+          "seal": {
+            "by": "server",
+            "mac": "af98cdc350610cc940875e603e66f28abbca28331a0012d959398b8f17df0a4d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Dispatch code and a passing CLI test asserting the exact output line.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0914",
+            "EVD-0915",
+            "EVD-0930"
+          ],
+          "recorded_at": "2026-11-23T10:47:17.455297916Z",
+          "seal": {
+            "by": "server",
+            "mac": "4aa51bf5f7c16e07def79b337767ee63760564d7a16f2d4dc34c741155afde00"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Dispatch code, a passing CLI test with the exact line, and the supported child.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0914",
+            "EVD-0915",
+            "EVD-0930",
+            "EVD-0936"
+          ],
+          "recorded_at": "2026-11-23T10:47:37.184292109Z",
+          "seal": {
+            "by": "server",
+            "mac": "da8b1b74aa9e60a7b5b6b6c15cfc43a04026ad254a1fb70825318e5197fbd8a8"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:37.184292109Z",
+      "seal": {
+        "by": "server",
+        "mac": "61411ee797ae7452b78d789afd1502ee5faccf032b76ddc3207de8bec12e99c8"
+      }
+    },
+    {
+      "id": "CLM-0706",
+      "statement": "`okf-mcp feedback list` never prints the feedback message text.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR: \"never the message\"",
+      "derived_from": [
+        "CLM-0705"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs",
+        "src/cli/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0916",
+          "kind": "analysis",
+          "locator": "src/mail/feedback.rs:583-613 (FailedFeedback, list_failed)",
+          "summary": "FailedFeedback has fields id, user_slug, kind, attempts, last_error, finished_at; the list_failed SELECT names exactly those columns, not message or credential. format_failed prints only those fields.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 583,
+                "end": 613
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:27.797144597Z",
+          "seal": {
+            "by": "server",
+            "mac": "9b2599c8c86cc2d762462a432c8bd69f0d223fc3b4ede4b43bfc5d68129d0c54"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The struct and SELECT omit the message column entirely, so it cannot be printed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0916"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.211670378Z",
+          "seal": {
+            "by": "server",
+            "mac": "46f93e712b2b4166da05d089ab4c598d1bb05fbe03886a4de97dcd5129445cf9"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:09.211670378Z",
+      "seal": {
+        "by": "server",
+        "mac": "970f3eda3d27fb8b2704a8f253a889c9bc5acf913deba4c5ede43e8e75049910"
+      }
+    },
+    {
+      "id": "CLM-0707",
+      "statement": "`okf-mcp feedback retry <id>` sets a failed row back to pending with 0 attempts and queues a new job, in one transaction.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR: \"`okf-mcp feedback retry <id>` sets a failed row back to `pending` with 0 attempts and queues a new job, in one transaction.\"",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs",
+        "src/cli/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0917",
+          "kind": "inspection",
+          "locator": "src/mail/feedback.rs:615-662 (retry)",
+          "summary": "retry begins a tx, UPDATE sets status='pending', attempts=0, finished_at=NULL WHERE id and status='failed', then queue_job on the same tx connection, then commit. last_error is kept (doc says so).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 615,
+                "end": 662
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:27.843730833Z",
+          "seal": {
+            "by": "server",
+            "mac": "9cf7f80e6fe88b89c6f4c93832abf5eebf51994de74aeb4da469263312c41bc8"
+          }
+        },
+        {
+          "id": "EVD-0918",
+          "kind": "test",
+          "locator": "src/mail/feedback.rs tests::a_failed_row_is_listed_and_retried_once",
+          "summary": "Asserts after retry the row state is (pending, 0), list_failed is empty, and apalis.jobs count rose by exactly 1. Run result recorded separately.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1863,
+                "end": 1919
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:27.893088021Z",
+          "seal": {
+            "by": "server",
+            "mac": "16d7722b7ebd54bd3b1c903dca3b391fb78ac813aa3d6621000677a5d54bf329"
+          }
+        },
+        {
+          "id": "EVD-0931",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "37 passed, 0 failed (2834 filtered), including mail::feedback::tests::a_failed_row_is_listed_and_retried_once.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:46:55.187260162Z",
+          "seal": {
+            "by": "server",
+            "mac": "8fbe7fa3b39ffa7424c01723c67bac7194a94219e2ba15303a2fc56b741e5dc8"
+          }
+        },
+        {
+          "id": "EVD-0937",
+          "kind": "analysis",
+          "locator": "children of CLM-0707",
+          "summary": "The child (unknown or non-failed rows are refused) is supported and complements the happy path.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:47:28.098596818Z",
+          "seal": {
+            "by": "server",
+            "mac": "169b4655d03a6e81c0431f7b1817e30cc4fc2e2151057d250ef20249ed9529a7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "retry's UPDATE and queue_job share one tx; test asserts pending/0 state and exactly one new job; passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0917",
+            "EVD-0918",
+            "EVD-0931"
+          ],
+          "recorded_at": "2026-11-23T10:47:17.412831774Z",
+          "seal": {
+            "by": "server",
+            "mac": "8a477accae80bbbcfe6c15eb8a1325bc6ac58d6b7db977cacc6f91e72351d1ee"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "One tx, tested state and job count, supported child.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0917",
+            "EVD-0918",
+            "EVD-0931",
+            "EVD-0937"
+          ],
+          "recorded_at": "2026-11-23T10:47:37.264087960Z",
+          "seal": {
+            "by": "server",
+            "mac": "8fa02332ffc74859aa0eb8e228c33de51d12c9fccd8f48c14f204f1fac845380"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:37.264087960Z",
+      "seal": {
+        "by": "server",
+        "mac": "11dbf667e467a0b9ac1c84e769b3c152a8a7d1e7016a001f55bc3a1e7dfd3ed7"
+      }
+    },
+    {
+      "id": "CLM-0708",
+      "statement": "`feedback retry` refuses a row that is unknown or not `failed`.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"A row that is unknown or not `failed` is refused.\"",
+      "derived_from": [
+        "CLM-0707"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0919",
+          "kind": "test",
+          "locator": "src/mail/feedback.rs tests::a_failed_row_is_listed_and_retried_once",
+          "summary": "Asserts a second retry of the now pending row and a retry of a never-failed pending row both return OkfError::Refused, and an unknown id returns OkfError::UnknownName{noun:\"feedback\"}. CLI test also asserts a pending row retry is an error.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1896,
+                "end": 1919
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:27.938015941Z",
+          "seal": {
+            "by": "server",
+            "mac": "eb73692b2620b325a5b2f9d6b0d087e775b84f03abdc0dc4df85a6678dcc717c"
+          }
+        },
+        {
+          "id": "EVD-0932",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "37 passed, 0 failed, including a_failed_row_is_listed_and_retried_once.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:46:55.228921081Z",
+          "seal": {
+            "by": "server",
+            "mac": "1c5dc1bc988293b934d172385c7939f55235f9f3c3717adc56d2053d03fdc218"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test asserts Refused for a pending row, UnknownName for an unknown id; test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0919",
+            "EVD-0932"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.274124750Z",
+          "seal": {
+            "by": "server",
+            "mac": "3b3fb790df61a115714e751a53e04b85e4b3119d65fca422c1707826b092b38f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:09.274124750Z",
+      "seal": {
+        "by": "server",
+        "mac": "514ee6ee67fd3d58a1e23bc2a9c0bf22c0f851e8e582d5a0fc3f8938fd2a77b2"
+      }
+    },
+    {
+      "id": "CLM-0709",
+      "statement": "The feedback worker logs a warning carrying the error code (as `reason`) when it marks a row failed, with no new log added by this change.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR: \"The worker already logs a warning with the error code (`reason`) when it marks a row `failed` (`feedback not delivered; marked failed`), so no new log was added.\"",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0920",
+          "kind": "inspection",
+          "locator": "src/mail/feedback.rs:1072-1095 (forward)",
+          "summary": "When give_up is Some(reason) (Forminit refusal code, or gave up after MAX_TRIES), forward emits split_event!(warn, ... %reason, \"feedback not delivered; marked failed\") before settling the row failed. The diff to this function and log lines is empty: no log added by the change.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1072,
+                "end": 1095
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:27.984938089Z",
+          "seal": {
+            "by": "server",
+            "mac": "e722d45e4de7e36b0ff4d8e6f6fcb04d34cfe349323c75a7db8f7e1f10546589"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The warn event with reason precedes settle(failed) on both give-up paths, and the diff does not touch it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0920"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.316525602Z",
+          "seal": {
+            "by": "server",
+            "mac": "e728b4fb0dca3a6a9cd9518772528c9fae720c6cf45ee160d92a48e5266f1fbe"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:09.316525602Z",
+      "seal": {
+        "by": "server",
+        "mac": "465b9f167ac1720f871e0ab37ef5f29099c3138139d494f1f917edd8ba0f9169"
+      }
+    },
+    {
+      "id": "CLM-0710",
+      "statement": "`feedback::prune` deletes `failed` rows as well as `sent` rows once finished_at is older than the same retention.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR: \"`feedback::prune` now deletes `failed` rows after the same retention as `sent` rows.\"",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0921",
+          "kind": "test",
+          "locator": "src/mail/feedback.rs tests::prune_deletes_sent_and_failed_feedback_past_retention_only",
+          "summary": "Four rows: old sent, recent sent (29d), old failed (31d), pending. prune with 30d returns 2 and leaves 2, with old sent and old failed gone. Delete query is status IN ('sent','failed') AND finished_at < before.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1828,
+                "end": 1862
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.030363061Z",
+          "seal": {
+            "by": "server",
+            "mac": "d1a91e083a846129894da712e366f5237530561db8c0aa26665fc62679511578"
+          }
+        },
+        {
+          "id": "EVD-0933",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "37 passed, 0 failed, including prune_deletes_sent_and_failed_feedback_past_retention_only.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:46:55.269741816Z",
+          "seal": {
+            "by": "server",
+            "mac": "e0a262e10c24908997e1b5ea72f4005f4aab06cd23c3d6ede4eb868e28fffdbb"
+          }
+        },
+        {
+          "id": "EVD-0938",
+          "kind": "analysis",
+          "locator": "children of CLM-0710",
+          "summary": "The child (index widened to both statuses) is supported; prune behaviour and its index agree.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:47:28.139633114Z",
+          "seal": {
+            "by": "server",
+            "mac": "9546b227467fbf13c83d270ab03c741d36b7f51ae8dd2e7fbd95acd466d0510f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Delete predicate covers failed; test with an old failed row and 30d retention prunes it while a recent sent and a pending row stay; passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0921",
+            "EVD-0933"
+          ],
+          "recorded_at": "2026-11-23T10:47:17.326982637Z",
+          "seal": {
+            "by": "server",
+            "mac": "cbe3c1ae33e6aef198ef688fb07dcc763cebaf10dd61caa09bb6df06c4438495"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Passing prune test with an old failed row, plus the supported index child.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0921",
+            "EVD-0933",
+            "EVD-0938"
+          ],
+          "recorded_at": "2026-11-23T10:47:37.305267006Z",
+          "seal": {
+            "by": "server",
+            "mac": "bbe84e847851af3ee519b04475db2a8b54c2991327a9f0739b9ddbc70199447b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:37.305267006Z",
+      "seal": {
+        "by": "server",
+        "mac": "e71cc37ab51ae7743fd625f1c551dd937e377e3db8dec6a6b7b48905ccdd62b1"
+      }
+    },
+    {
+      "id": "CLM-0711",
+      "statement": "Migration 0033 replaces the prune index with one on finished_at covering both sent and failed rows.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR: \"Migration 0033 widens the prune index to both statuses.\"",
+      "derived_from": [
+        "CLM-0710"
+      ],
+      "artifacts": [
+        "migrations/0033_feedback_failed_prune_index.sql"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0922",
+          "kind": "inspection",
+          "locator": "migrations/0033_feedback_failed_prune_index.sql:4-5; migrations/0022_feedback.sql:36",
+          "summary": "0022 created feedback_sent_finished ON feedback(finished_at) WHERE status='sent'. 0033 drops it and creates feedback_finished ON feedback(finished_at) WHERE status IN ('sent','failed'). Index name is not referenced elsewhere in the repo (git grep). Prune predicate matches the partial-index predicate.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/0033_feedback_failed_prune_index.sql",
+              "lines": {
+                "start": 4,
+                "end": 5
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.071476836Z",
+          "seal": {
+            "by": "server",
+            "mac": "47eca82c03fe67d26f2be8707f922926e01ff7bcf2e8985c8eaa5eb297f3eeb1"
+          }
+        },
+        {
+          "id": "EVD-0949",
+          "kind": "inspection",
+          "locator": "migrations/0033_feedback_finished_index.sql:9-10; migrations/0034_feedback_drop_sent_index.sql:6",
+          "summary": "At 91690b0 0033 creates feedback_finished (finished_at, status IN sent/failed) and the new 0034 drops feedback_sent_finished, so the net effect of the pair is the replacement. 0033 alone no longer drops the old index; the PR text should say 0033/0034 for exactness. The old 0033_feedback_failed_prune_index.sql is gone, so the EVD-0922 anchor is stale.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/0033_feedback_finished_index.sql",
+              "lines": {
+                "start": 9,
+                "end": 10
+              },
+              "commit": "91690b0f7de02ad6819bc6bf58af1b3baec2ed23"
+            }
+          },
+          "recorded_at": "2026-11-23T11:02:44.962560874Z",
+          "seal": {
+            "by": "server",
+            "mac": "a7f9b6820b08469584bebe00613d59d00a2f6bea4b14db9cd44f1a69453bbbd3"
+          }
+        },
+        {
+          "id": "EVD-0954",
+          "kind": "analysis",
+          "locator": "children of CLM-0711",
+          "summary": "The one child (the migration pair is concurrent, CLM-0720) is supported; it covers the build and drop mechanics behind the replacement.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:02:54.246801098Z",
+          "seal": {
+            "by": "server",
+            "mac": "8f4d4f6b5fd875e888de309945e9b4971431933eda20977381aac7a22dea287c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The migration SQL does exactly this and the prune predicate matches the index predicate.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0922"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.360636770Z",
+          "seal": {
+            "by": "server",
+            "mac": "6101239d6d7c6d977c865e61793a93d490bb5b2e8260c034650e48b9ab804758"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 91690b0: the pair 0033 (create) and 0034 (drop old) replaces the index; wording \"0033 alone\" is now loose.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0949",
+            "EVD-0954"
+          ],
+          "recorded_at": "2026-11-23T11:03:06.420093940Z",
+          "seal": {
+            "by": "server",
+            "mac": "5e634725f9958c54d157cbfc2d6db38081d9b7d52268b19c663dd4737c6e8a57"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T11:03:06.420093940Z",
+      "seal": {
+        "by": "server",
+        "mac": "5caa9e542298505524c87b59e7f5f0492ae1244d60e3617114b861c1622e4dab"
+      }
+    },
+    {
+      "id": "CLM-0712",
+      "statement": "`store::users::delete` deletes the user's pending and failed feedback rows in the same transaction as the user deletion.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #698 req 2; PR: \"`store::users::delete` ... deletes the user's `pending` and `failed` feedback rows in the same transaction.\"",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0923",
+          "kind": "inspection",
+          "locator": "src/store/users.rs:1416-1427 (delete_checked)",
+          "summary": "DELETE FROM feedback WHERE user_slug=$1 AND status IN ('pending','failed') runs on `&mut *tx`, the same transaction as the later audit::forget_person and user delete in delete_checked.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 1416,
+                "end": 1427
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.118300613Z",
+          "seal": {
+            "by": "server",
+            "mac": "1b6d349c5fe5976e8b28ac2e073f3bfe34cd5c9e6b7ba9c6b2f03f32dcaceb97"
+          }
+        },
+        {
+          "id": "EVD-0924",
+          "kind": "test",
+          "locator": "src/store/users.rs tests::deleting_a_user_removes_its_undelivered_feedback_only",
+          "summary": "Seeds alice pending/failed/sent and bob pending, deletes alice, asserts remaining ids == [f-other, f-sent]. Run result recorded separately. It does not assert rollback atomicity (same-transaction is shown by code only).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 2526,
+                "end": 2567
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.164262588Z",
+          "seal": {
+            "by": "server",
+            "mac": "654f5f845a9599452dad76d00414553c0efc6d4b370d3c4af54aba4b55231458"
+          }
+        },
+        {
+          "id": "EVD-0934",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "37 passed, 0 failed, including store::users::tests::deleting_a_user_removes_its_undelivered_feedback_only.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:46:55.311581095Z",
+          "seal": {
+            "by": "server",
+            "mac": "b5d7338183974d4aa679114353e490a5aa39c10948b03b0831851338d760784b"
+          }
+        },
+        {
+          "id": "EVD-0939",
+          "kind": "analysis",
+          "locator": "children of CLM-0712",
+          "summary": "Children (delete_own covered, sent rows and others untouched, orphan job skipped) are all supported and cover the paths and the sent-row decision.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:47:28.181550793Z",
+          "seal": {
+            "by": "server",
+            "mac": "6f2b87f61064e80d5f16a87336c807d113ea682e5799431b00101da08cb63dbf"
+          }
+        },
+        {
+          "id": "EVD-0950",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "Re-run on HEAD 91690b0: 39 passed, 0 failed; deleting_a_user_removes_its_undelivered_feedback_only still passes alongside the two new race tests. The DELETE in delete_checked is unchanged in the diff.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:02:45.011265751Z",
+          "seal": {
+            "by": "server",
+            "mac": "37770cad6ca5f2b80f283d47d47fc4d5f8583ed8039a1d67b5e987e0870b690c"
+          }
+        },
+        {
+          "id": "EVD-0953",
+          "kind": "analysis",
+          "locator": "children of CLM-0712",
+          "summary": "Children now are delete_own coverage, sent and other rows left, orphan job skipped, the submit-versus-delete serialization (CLM-0718) and both entry points setting registered (CLM-0719); all supported, so deletion removes undelivered feedback and none can be stored after it.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:02:54.203739790Z",
+          "seal": {
+            "by": "server",
+            "mac": "20e381cadb5bd8314c05b3751d2aca7f270324847a55e5c6c0e7f06ee1f7cf2b"
+          }
+        },
+        {
+          "id": "EVD-0961",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "On HEAD 8593239: 40 passed, 0 failed; the delete is the same SQL moved into a const (diff shows identical text); deleting_a_user_removes_its_undelivered_feedback_only and both race tests still pass.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:15:46.838454991Z",
+          "seal": {
+            "by": "server",
+            "mac": "81db3900f7f8dfedfc306eb771e40969d30e5ee27a99d3db8a6fdcd36883012b"
+          }
+        },
+        {
+          "id": "EVD-0962",
+          "kind": "analysis",
+          "locator": "children of CLM-0712",
+          "summary": "Children now also include CLM-0721 (delete uses its partial index) and CLM-0722 (index migration concurrent); with the earlier children all supported.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:15:46.878870048Z",
+          "seal": {
+            "by": "server",
+            "mac": "ab98dabf9fe890dc88d3d8611e7b35c3e66cd99ddd55dffd1ebda2dbb61e54a1"
+          }
+        },
+        {
+          "id": "EVD-0974",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib mail::feedback on ac3e052 (15 passed); src/store/users.rs:1421-1440",
+          "summary": "ac3e052 only rewrote the comment above the DELETE; the SQL (const DELETE_UNDELIVERED_FEEDBACK) still runs on &mut *tx in delete_checked, before the user row delete. The new test deletes alice with a pending row in flight and finds count(*)==0 afterwards.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 1421,
+                "end": 1440
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:44.123923646Z",
+          "seal": {
+            "by": "server",
+            "mac": "a5872a742059eaa96b85c400d489d92c0462533b847935f9af32a5b2f6b569c8"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The DELETE runs on the transaction in delete_checked; test confirms pending and failed rows of the deleted user are gone. Atomicity rests on code reading (same &mut *tx), which is direct.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0923",
+            "EVD-0924",
+            "EVD-0934"
+          ],
+          "recorded_at": "2026-11-23T10:47:17.377303010Z",
+          "seal": {
+            "by": "server",
+            "mac": "1e3a97e32c217401340b042d8b633c6d49e1990ad0d070e46bb5052e4c4b0e67"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Delete runs in delete_checked's tx; passing test; supported children.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0923",
+            "EVD-0924",
+            "EVD-0934",
+            "EVD-0939"
+          ],
+          "recorded_at": "2026-11-23T10:47:37.345877229Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d472b3f2d6eec8a8c9cd19e739bdb17715b4f70ecd796ede71547ab3635f7a2"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 91690b0: delete unchanged and passing, plus the new race children supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0923",
+            "EVD-0950",
+            "EVD-0953"
+          ],
+          "recorded_at": "2026-11-23T11:03:06.626367363Z",
+          "seal": {
+            "by": "server",
+            "mac": "77012e412eb22af70270b89756e07551cdadc34470e1f60f7f5ff44fbf2a8aca"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 8593239: same delete, tests pass, new children supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0923",
+            "EVD-0961",
+            "EVD-0962"
+          ],
+          "recorded_at": "2026-11-23T11:15:56.163281790Z",
+          "seal": {
+            "by": "server",
+            "mac": "e0c9d70e2ba155dc3ba5be7e585cac3e4b1840accbf9b6d68a1d23615b5affbe"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at ac3e052: old anchor lines changed only because the comment was rewritten; the DELETE is unchanged, same tx, tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0974",
+            "EVD-0924"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.725962943Z",
+          "seal": {
+            "by": "server",
+            "mac": "5997f6b9ff27b4a7e00fd92244df688db1d979e68b3bd109e53f48869af0a57d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T11:29:59.725962943Z",
+      "seal": {
+        "by": "server",
+        "mac": "bd3017db186a9a9aa03c48fe6ea2c7e559bc0ad21cab83c17c696bb4a30f54e5"
+      }
+    },
+    {
+      "id": "CLM-0713",
+      "statement": "`store::users::delete_own` also deletes the user's pending and failed feedback, because it goes through the same delete path.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR: \"(and so `delete_own`)\"",
+      "derived_from": [
+        "CLM-0712"
+      ],
+      "artifacts": [
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0925",
+          "kind": "analysis",
+          "locator": "src/store/users.rs:1087-1105 (delete_own), 1223-1231 (delete)",
+          "summary": "Both delete_own and delete call delete_checked, where the feedback DELETE lives. No test calls delete_own with feedback rows, so this rests on code reading.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 1087,
+                "end": 1105
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.210199912Z",
+          "seal": {
+            "by": "server",
+            "mac": "c514a4d076d66826e7a9d9a8ef4dda1d5180b65846d15a835904df98e5b377fc"
+          }
+        },
+        {
+          "id": "EVD-0951",
+          "kind": "analysis",
+          "locator": "src/store/users.rs delete_own/delete -> delete_checked at HEAD 91690b0",
+          "summary": "The 91690b0 diff does not touch delete_own, delete or delete_checked; both still go through delete_checked with the feedback DELETE. Still code reading only, no delete_own feedback test.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:02:54.103005063Z",
+          "seal": {
+            "by": "server",
+            "mac": "85fb3e6706d39ec208dcab8ac6bf090241b6daacbd16e27dfe27cbef0c90858a"
+          }
+        },
+        {
+          "id": "EVD-0963",
+          "kind": "analysis",
+          "locator": "src/store/users.rs delete_checked at HEAD 8593239",
+          "summary": "delete_own and delete still reach delete_checked, which runs DELETE_UNDELIVERED_FEEDBACK; the commit only extracted the const. Code reading only.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:15:46.924823048Z",
+          "seal": {
+            "by": "server",
+            "mac": "265b082aa135aba9ce9220e02bca5edce312c435cb0c69c58fb8c42d78db9763"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "delete_own calls delete_checked, which holds the new DELETE.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0925"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.404833049Z",
+          "seal": {
+            "by": "server",
+            "mac": "21882b15acd983f9299db44212930e0f11cbdff0e2cc9b9e0ef95eb90b66b7a1"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited: unchanged path through delete_checked.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0951"
+          ],
+          "recorded_at": "2026-11-23T11:03:06.521716950Z",
+          "seal": {
+            "by": "server",
+            "mac": "df684c7b8c52b32d6002d37398a75ff5e3d70fe3d42130e413d7e4a464a805d0"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 8593239: path unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0963"
+          ],
+          "recorded_at": "2026-11-23T11:15:56.080997819Z",
+          "seal": {
+            "by": "server",
+            "mac": "58f2d610b2ff2052c6cc959fa45a52d624ea490e25f83f55aad82591025973df"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T11:15:56.080997819Z",
+      "seal": {
+        "by": "server",
+        "mac": "7297d29e769ad92090cd899be79f1010961902099a03b718fe8933c1e254930c"
+      }
+    },
+    {
+      "id": "CLM-0714",
+      "statement": "User deletion leaves the user's `sent` feedback rows in place, for the prune to remove, and does not touch other users' rows.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"`sent` rows are left: they are already delivered and the prune removes them.\"",
+      "derived_from": [
+        "CLM-0712"
+      ],
+      "artifacts": [
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0926",
+          "kind": "test",
+          "locator": "src/store/users.rs tests::deleting_a_user_removes_its_undelivered_feedback_only",
+          "summary": "After deleting alice the survivors are f-sent (alice, sent) and f-other (bob, pending); the delete's status filter excludes 'sent' and filters on user_slug.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 1416,
+                "end": 1427
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.251944379Z",
+          "seal": {
+            "by": "server",
+            "mac": "f1f558e4bc26a33909c92fb9461258791771bb6cb3185a2f8ef7ae077fb3b196"
+          }
+        },
+        {
+          "id": "EVD-0935",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "37 passed, 0 failed, including deleting_a_user_removes_its_undelivered_feedback_only (asserts survivors f-other, f-sent).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T10:46:55.358267564Z",
+          "seal": {
+            "by": "server",
+            "mac": "da748d1b81ebe5d8418f0acab854cff8f77fcf83cdc767a75bc3883fa95c14fa"
+          }
+        },
+        {
+          "id": "EVD-0952",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "On HEAD 91690b0: 39 passed, 0 failed, including deleting_a_user_removes_its_undelivered_feedback_only (survivors f-other, f-sent); the test and the DELETE are unchanged.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:02:54.160960803Z",
+          "seal": {
+            "by": "server",
+            "mac": "1b52784560622bdebaba8d71978e654b1eaa2f8ba10aafe81a83d3b52fbd95ce"
+          }
+        },
+        {
+          "id": "EVD-0964",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "On HEAD 8593239: 40 passed, 0 failed, including deleting_a_user_removes_its_undelivered_feedback_only; the status filter text is unchanged.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:15:46.969588894Z",
+          "seal": {
+            "by": "server",
+            "mac": "c1f3074c00a0ad7324e18b960e05eac2db131afbd91ae94b2cfbee772db8f6f4"
+          }
+        },
+        {
+          "id": "EVD-0975",
+          "kind": "inspection",
+          "locator": "src/store/users.rs:963-964, 1435-1438 at ac3e052",
+          "summary": "The DELETE text (user_slug = $1 AND status IN ('pending','failed')) is unchanged by ac3e052, which only edited the comment above it; the sent-row and other-user filters therefore still hold. The survivor test is outside this commit's hunks.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 960,
+                "end": 964
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:44.166048393Z",
+          "seal": {
+            "by": "server",
+            "mac": "08c87a57f80705a5ddd5655bba2c626260a3d571f5758be8fc33541195ce655f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Passing test shows sent row and other user's pending row survive.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0926",
+            "EVD-0935"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.445916715Z",
+          "seal": {
+            "by": "server",
+            "mac": "dc732f1bfcaad5c5ab36cd0ecba37871ca9fbd5c17e39dc45a67af1895924956"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited: test still passes on 91690b0.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0952"
+          ],
+          "recorded_at": "2026-11-23T11:03:06.572664866Z",
+          "seal": {
+            "by": "server",
+            "mac": "cbcd2c5658bc5a7b43609f2eb830b72f9ae8d3441fb09a2b6b52210006674954"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 8593239: test passes, filter unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0964"
+          ],
+          "recorded_at": "2026-11-23T11:15:56.121718402Z",
+          "seal": {
+            "by": "server",
+            "mac": "279b1b4af1204823e8ce8858345145d9e0650de902f8af8aa84e77c71e707670"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at ac3e052: the anchor changed only by the comment rewrite; the DELETE's sent and user_slug filters are unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0975",
+            "EVD-0964"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.792350537Z",
+          "seal": {
+            "by": "server",
+            "mac": "b2d07595156e77122566154deec5ed60b06cccc5115491a5606096f6621b20c9"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T11:29:59.792350537Z",
+      "seal": {
+        "by": "server",
+        "mac": "ea1e53b416464914c01810dc7c2554ac587485239419ad8055f619dc2902ee3a"
+      }
+    },
+    {
+      "id": "CLM-0715",
+      "statement": "A queued job whose feedback row was deleted finds nothing and ends as skipped.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR: \"A queued job for a deleted row finds nothing and ends as skipped.\"",
+      "derived_from": [
+        "CLM-0712"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0927",
+          "kind": "analysis",
+          "locator": "src/mail/feedback.rs:959-968 (take), 1038-1041 (forward)",
+          "summary": "take runs UPDATE ... WHERE id AND status='pending' RETURNING and gives Ok(None) for a missing row; forward turns Ok(None) into (Ok(()), \"skipped\"). No test deletes a row under a queued job; code reading only.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 959,
+                "end": 968
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.293818086Z",
+          "seal": {
+            "by": "server",
+            "mac": "bcb6132c4acd93ba507f3032f2a58e09c6db033c5b4f94d9e104681d913904ef"
+          }
+        },
+        {
+          "id": "EVD-0973",
+          "kind": "test",
+          "locator": "cargo gate narrow --lib mail::feedback: a_delivery_in_flight_is_not_cancelled_by_user_deletion_and_never_retried ... ok",
+          "summary": "After user deletion removed the row, the job's next forward() returned \\\"skipped\\\" and the mock Forminit saw no further post, for both the 200 and the 503 first answer.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 2046,
+                "end": 2054
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:08.498835979Z",
+          "seal": {
+            "by": "server",
+            "mac": "77fe7b4147c98c504bdae1331ae27c33ffbecd8806ce7054cb4648899fe5a2bd"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "take returns None for an absent row and forward maps that to skipped; no test exercises it, but the code path is direct.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0927"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.487470923Z",
+          "seal": {
+            "by": "server",
+            "mac": "1552c2ef983099eb7dec1c230f7d6e423ad1247291cde3ea00dadc631c75f996"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Now backed by a test as well as code reading: after deletion the next try returned skipped with no post, for 200 and 503 first answers.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0927",
+            "EVD-0973"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.673947727Z",
+          "seal": {
+            "by": "server",
+            "mac": "d3277a4cba9dd5dcd20cab0555de11c672bf8a6ac2f03b3a5cd766b54222b14c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T11:29:59.673947727Z",
+      "seal": {
+        "by": "server",
+        "mac": "3c622da76b5e66c6f4666fe24d80608568dbb1420fdb5acc07f24cc1f318a5d8"
+      }
+    },
+    {
+      "id": "CLM-0716",
+      "statement": "There is no console page or REST route for failed feedback in this change; the CLI follows the `mail queue` / `mail retry` pattern.",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR: \"It follows `mail queue` / `mail retry`; no console page or REST route\"",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "src/cli/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0928",
+          "kind": "analysis",
+          "locator": "git diff --name-only origin/main..HEAD; src/cli/admin.rs:96-107",
+          "summary": "The diff touches no file under src/http or any console asset; the only addition is the CLI handler. MailCommand::Queue/Retry in admin.rs use the same list/retry-and-print shape as the new FeedbackCommand.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli/admin.rs",
+              "lines": {
+                "start": 96,
+                "end": 107
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.339572670Z",
+          "seal": {
+            "by": "server",
+            "mac": "d361eaa616b7edc9d74b8f037f06f8984eec4bcac246b8a5412cdbea6c203138"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "No http or console file in the diff; CLI mirrors mail queue/retry.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0928"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.528703530Z",
+          "seal": {
+            "by": "server",
+            "mac": "aad96e790354cfcae5531e01e0c338753dfd5f6e5ffb40cdafa8de7c92d6c647"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T10:47:09.528703530Z",
+      "seal": {
+        "by": "server",
+        "mac": "c1d7a825849457a621a2f519010822ee1530cd58b06f72ea0d6fb0a198b0a252"
+      }
+    },
+    {
+      "id": "CLM-0717",
+      "statement": "docs/operations.md documents the feedback list/retry commands, the failed-row prune and the user-deletion behaviour, and no longer says failed feedback is kept.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR: \"Docs: `docs/operations.md` (Feedback section, retention row); changelog entry.\"",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0929",
+          "kind": "inspection",
+          "locator": "docs/operations.md:158, 2783-2802",
+          "summary": "Retention row now says failed feedback is pruned after the same time; the Feedback section shows `feedback list` and `feedback retry ID`, the warning log, user-deletion behaviour and sent rows left for the prune. Searching other docs for 'failed ... kept' finds no stale statement (only a historical migration 0029 comment); the sample-config comment at docs/operations.md:2742 says 'how long sent feedback is kept', which is imprecise but not wrong.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2783,
+                "end": 2802
+              },
+              "commit": "713fbcab6e7944d1bd5d1089201b71f9af147980"
+            }
+          },
+          "recorded_at": "2026-11-23T10:46:28.383232595Z",
+          "seal": {
+            "by": "server",
+            "mac": "814f8819b8d7591a76c22b0a5d4170f7ec0a4cae8ac21f58a20d6bb88d6df157"
+          }
+        },
+        {
+          "id": "EVD-0955",
+          "kind": "inspection",
+          "locator": "docs/operations.md:2742, 2783-2802",
+          "summary": "At 91690b0 the sample-config comment now reads \"how long sent and failed feedback is kept\"; the Feedback section keeps list/retry, the failed-row prune and user deletion, and adds the race sentence (lands before and goes with the user, or refused). No statement that failed feedback is kept indefinitely remains.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2783,
+                "end": 2802
+              },
+              "commit": "91690b0f7de02ad6819bc6bf58af1b3baec2ed23"
+            }
+          },
+          "recorded_at": "2026-11-23T11:03:16.983533222Z",
+          "seal": {
+            "by": "server",
+            "mac": "363dacd6830467f4280c46a9c110d390dc436ba656484f60c0102e6e5d165049"
+          }
+        },
+        {
+          "id": "EVD-0976",
+          "kind": "inspection",
+          "locator": "docs/operations.md:2783-2805 at ac3e052",
+          "summary": "The Feedback section still shows feedback list and retry, the warning log, the failed-row prune and user deletion; ac3e052 adds the sentences on a post in flight. Retention row (line 158) still says failed feedback is pruned after the same time. Nothing says failed feedback is kept.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2783,
+                "end": 2805
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:44.234412802Z",
+          "seal": {
+            "by": "server",
+            "mac": "80922a18c2720f71def1ce0ca3a69f71b42e073a35a06f87bba98c1c486b9b22"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Retention row and Feedback section updated as described; no remaining statement that failed rows are kept.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0929"
+          ],
+          "recorded_at": "2026-11-23T10:47:09.569355994Z",
+          "seal": {
+            "by": "server",
+            "mac": "bff97c8e88c6a43111c422a2b6b206f8a85e7a4c620c152a9bd0ca90d47388e0"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 91690b0 after the doc edits.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0955"
+          ],
+          "recorded_at": "2026-11-23T11:03:20.030273852Z",
+          "seal": {
+            "by": "server",
+            "mac": "67128b7bfe4813bb75740ad9c70b35e0ce95b30c421c4b12d85eb2129cc9fd77"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at ac3e052: the section changed only by the added in-flight sentences; list/retry, prune and deletion statements remain and nothing says failed feedback is kept.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0976",
+            "EVD-0955"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.849906965Z",
+          "seal": {
+            "by": "server",
+            "mac": "cde3514374bf450d55c6383b08b951fd988cd0f8c8d8985fd5e84ed135225bad"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T10:45:51.402016283Z",
+      "updated_at": "2026-11-23T11:29:59.849906965Z",
+      "seal": {
+        "by": "server",
+        "mac": "db6e2f2d4b1bf6c6ffa7077d0cc932e19ba2e6b98080d70bfc5f480ed241eb48"
+      }
+    },
+    {
+      "id": "CLM-0718",
+      "statement": "feedback::submit with `registered` set locks the sender's users row FOR KEY SHARE before storing, returns Unauthenticated when that user is gone, and so a submission cannot be stored after the user's deletion commits: it is stored before (and deleted with the user) or refused.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Review follow-up on #698 req 2 (user deletion must not leave or admit pending feedback); commit 91690b0",
+      "derived_from": [
+        "CLM-0712"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs",
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0943",
+          "kind": "inspection",
+          "locator": "src/mail/feedback.rs:293-309 (submit)",
+          "summary": "When registered, submit runs SELECT id FROM users WHERE name=$1 FOR KEY SHARE on its tx first; None returns OkfError::Unauthenticated. FOR KEY SHARE conflicts with the deletion's FOR UPDATE on the user row, which delete_checked holds while deleting pending feedback, so the two serialize.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 293,
+                "end": 309
+              },
+              "commit": "91690b0f7de02ad6819bc6bf58af1b3baec2ed23"
+            }
+          },
+          "recorded_at": "2026-11-23T11:02:44.687049586Z",
+          "seal": {
+            "by": "server",
+            "mac": "2747c6b958a8e7aa8476bef906e0ca8c44b78a8c777ebe069148f24f5401db78"
+          }
+        },
+        {
+          "id": "EVD-0944",
+          "kind": "test",
+          "locator": "src/store/users.rs tests::a_feedback_submit_that_waited_on_the_users_deletion_is_refused",
+          "summary": "A deletion holds the user FOR UPDATE, a submit is spawned and observed waiting, the deletion commits; the submit returns Unauthenticated and the feedback table is empty. Real lock interleaving, not mocked.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 2549,
+                "end": 2592
+              },
+              "commit": "91690b0f7de02ad6819bc6bf58af1b3baec2ed23"
+            }
+          },
+          "recorded_at": "2026-11-23T11:02:44.733144264Z",
+          "seal": {
+            "by": "server",
+            "mac": "a41fc5b7ef8fe203a7fa9cbc948ffdd186e9785b78378fc2a6aaec995e7e1b8a"
+          }
+        },
+        {
+          "id": "EVD-0945",
+          "kind": "test",
+          "locator": "src/store/users.rs tests::a_feedback_submit_in_flight_is_deleted_with_the_user",
+          "summary": "A submit tx holds the user row, delete() is spawned and observed waiting; the submit inserts its row and commits; delete completes and the feedback table is empty (the committed row was deleted with the user).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 2595,
+                "end": 2636
+              },
+              "commit": "91690b0f7de02ad6819bc6bf58af1b3baec2ed23"
+            }
+          },
+          "recorded_at": "2026-11-23T11:02:44.782065723Z",
+          "seal": {
+            "by": "server",
+            "mac": "a584ceeb2054c7dbd18f96d71fd818acc42f536d430484a9eccda2f07cfc7d81"
+          }
+        },
+        {
+          "id": "EVD-0946",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "39 passed, 0 failed (2834 filtered) on HEAD 91690b0, including both new interleaving tests.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:02:44.824319278Z",
+          "seal": {
+            "by": "server",
+            "mac": "453863cfa95a8f358e545d623d54204e4115875d17f72dda984b7fd4bafeca89"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The lock conflict is in code, and two tests drive both interleavings with real transactions and assert the refusal and the deletion; the tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0943",
+            "EVD-0944",
+            "EVD-0945",
+            "EVD-0946"
+          ],
+          "recorded_at": "2026-11-23T11:03:06.178685144Z",
+          "seal": {
+            "by": "server",
+            "mac": "8d73cd86ba50c9af703699a2f00d5e03a2a9eb0458f5e633b5ed5ad084df3239"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:02:24.530532595Z",
+      "updated_at": "2026-11-23T11:03:06.178685144Z",
+      "seal": {
+        "by": "server",
+        "mac": "528857644ca91bddb892b9ef724426c1ceaa181422cfa34042c0fdc01afbc42c"
+      }
+    },
+    {
+      "id": "CLM-0719",
+      "statement": "Both entry points pass through feedback::submit with `registered` set correctly: the console POST /api/v1/feedback always sets it true (session user), and the send_feedback tool sets it to whether the principal has a user, so a key with no user is not registered.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Commit 91690b0: Sender.registered in src/http/api/feedback.rs and src/mcp/feedback.rs",
+      "derived_from": [
+        "CLM-0712"
+      ],
+      "artifacts": [
+        "src/http/api/feedback.rs",
+        "src/mcp/feedback.rs",
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0947",
+          "kind": "analysis",
+          "locator": "src/http/api/feedback.rs:132-152; src/mcp/feedback.rs:157-172; src/mail/feedback.rs:486,548-552",
+          "summary": "Console send matches only a Session principal with Some(user) (others get Forbidden) and builds Sender{registered:true}. The tool builds Sender{registered: principal.user.is_some(), user_slug falls back to UNASSIGNED_USER}, so a no-user key is unregistered. Both call check_and_submit, which copies sender.registered into NewFeedback for submit. git grep shows no other Sender or NewFeedback construction outside tests. Test a_read_key_and_an_oauth_grant... still sends as an unassigned key without seeding that user.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/feedback.rs",
+              "lines": {
+                "start": 157,
+                "end": 172
+              },
+              "commit": "91690b0f7de02ad6819bc6bf58af1b3baec2ed23"
+            }
+          },
+          "recorded_at": "2026-11-23T11:02:44.870482677Z",
+          "seal": {
+            "by": "server",
+            "mac": "a03b604f0546d3683ca68a9e1878b2ac9b7ffda4c544c3532b24763c6ff2c5fc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both Sender constructions set registered as claimed and both go through check_and_submit; no other constructors exist.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0947"
+          ],
+          "recorded_at": "2026-11-23T11:03:06.251439058Z",
+          "seal": {
+            "by": "server",
+            "mac": "ab82b59695e7f4d5fd0ff84b4f4214555bc22c51b3a57a6854032a62c9252e4c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:02:24.530532595Z",
+      "updated_at": "2026-11-23T11:03:06.251439058Z",
+      "seal": {
+        "by": "server",
+        "mac": "6d38a3880f9013adf771b5dbd38bd97ce721a864937f024df0400aaac90919a3"
+      }
+    },
+    {
+      "id": "CLM-0720",
+      "statement": "The feedback prune index migration is concurrent: 0033 is a no-transaction CREATE INDEX CONCURRENTLY IF NOT EXISTS feedback_finished, 0034 drops feedback_sent_finished with DROP INDEX CONCURRENTLY, and feedback_finished is in db::CONCURRENT_INDEXES so an INVALID leftover is dropped before a retry.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Commit 91690b0 message and migrations 0033/0034",
+      "derived_from": [
+        "CLM-0711"
+      ],
+      "artifacts": [
+        "migrations/0033_feedback_finished_index.sql",
+        "migrations/0034_feedback_drop_sent_index.sql",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0948",
+          "kind": "inspection",
+          "locator": "migrations/0033_feedback_finished_index.sql:1-10; migrations/0034_feedback_drop_sent_index.sql:1-6; src/db.rs:49-54",
+          "summary": "Both migrations start with \"-- no-transaction\" and hold one statement each: CREATE INDEX CONCURRENTLY IF NOT EXISTS feedback_finished ON feedback(finished_at) WHERE status IN ('sent','failed'), and DROP INDEX CONCURRENTLY IF EXISTS feedback_sent_finished. CONCURRENT_INDEXES now lists feedback_finished. Same header as 0025-0027. No test exercises a failed-build retry of this index.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/0033_feedback_finished_index.sql",
+              "lines": {
+                "start": 1,
+                "end": 10
+              },
+              "commit": "91690b0f7de02ad6819bc6bf58af1b3baec2ed23"
+            }
+          },
+          "recorded_at": "2026-11-23T11:02:44.916142214Z",
+          "seal": {
+            "by": "server",
+            "mac": "95de8eb98dae680fe31011b361b3b60dd7b14712615df70d046ba8ca975a5e5e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both files are one-statement no-transaction migrations with CONCURRENTLY, and the index is in the INVALID-cleanup list. The retry cleanup itself is untested for this index; it reuses existing machinery.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0948"
+          ],
+          "recorded_at": "2026-11-23T11:03:06.303601219Z",
+          "seal": {
+            "by": "server",
+            "mac": "0a52d21930b8b499108a60879adf70924f62ef271cb5f3d75109b4bda47d89ff"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:02:24.530532595Z",
+      "updated_at": "2026-11-23T11:03:06.303601219Z",
+      "seal": {
+        "by": "server",
+        "mac": "657705a19033aa6a6eadc93e592152547e9906ea377592885ec22edf660d07e2"
+      }
+    },
+    {
+      "id": "CLM-0721",
+      "statement": "The user-deletion feedback delete (const DELETE_UNDELIVERED_FEEDBACK) has the predicate of partial index feedback_undelivered_user (user_slug, status IN pending/failed), so the planner can use it; a test confirms the plan names the index.",
+      "kind": "performance",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Commit 8593239 message and migration 0035",
+      "derived_from": [
+        "CLM-0712"
+      ],
+      "artifacts": [
+        "src/store/users.rs",
+        "migrations/0035_feedback_undelivered_user_index.sql"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0956",
+          "kind": "test",
+          "locator": "src/store/users.rs tests::the_feedback_delete_on_user_deletion_uses_its_partial_index",
+          "summary": "With enable_seqscan off, EXPLAIN of the exact const DELETE_UNDELIVERED_FEEDBACK (the one delete_checked executes) must contain feedback_undelivered_user. Caveat: with seqscan disabled it proves the index is usable, not that the planner prefers it on a large table.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 2644,
+                "end": 2667
+              },
+              "commit": "8593239016b2ef88b21b1c07b12b054ae459803e"
+            }
+          },
+          "recorded_at": "2026-11-23T11:15:46.595865838Z",
+          "seal": {
+            "by": "server",
+            "mac": "3f1135631ff7c9d5fe29ae4d60233de22b08cc0efaf0b06164504b2c35830e95"
+          }
+        },
+        {
+          "id": "EVD-0957",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "On HEAD 8593239: 40 passed, 0 failed (includes the EXPLAIN test is named users::tests::the_feedback_delete_on_user_deletion_uses_its_partial_index; it matches the filter 'feedback').",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:15:46.657900142Z",
+          "seal": {
+            "by": "server",
+            "mac": "372a97f9e8b7b3f74cc423d14698db24867dba4f4134f0e177d331346ed95c1d"
+          }
+        },
+        {
+          "id": "EVD-0958",
+          "kind": "inspection",
+          "locator": "src/store/users.rs:960-965, 1430-1433; migrations/0035:8-9",
+          "summary": "The const is `DELETE FROM feedback WHERE user_slug = $1 AND status IN ('pending','failed')`; delete_checked executes that const; the index is ON feedback(user_slug) WHERE status IN ('pending','failed'): same predicate.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 960,
+                "end": 965
+              },
+              "commit": "8593239016b2ef88b21b1c07b12b054ae459803e"
+            }
+          },
+          "recorded_at": "2026-11-23T11:15:46.705093344Z",
+          "seal": {
+            "by": "server",
+            "mac": "22bd9054982940528ee5392bff24c8f28e61c209d5bb1b35b8423f6f76f3167a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Same predicate in const and index, and the EXPLAIN test on the executed const names the index; passes. It shows usability, not the planner's choice at scale.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0956",
+            "EVD-0957",
+            "EVD-0958"
+          ],
+          "recorded_at": "2026-11-23T11:15:55.953614745Z",
+          "seal": {
+            "by": "server",
+            "mac": "096d8dd6dfa198f722de81f07e42968296d6ab245863bd9fb28d65f3d2416730"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:15:30.010087013Z",
+      "updated_at": "2026-11-23T11:15:55.953614745Z",
+      "seal": {
+        "by": "server",
+        "mac": "8701078955a132356c8e9396733b90d5c406421d4a1395581d19926f9d2dce26"
+      }
+    },
+    {
+      "id": "CLM-0722",
+      "statement": "Migration 0035 is a no-transaction, single-statement CREATE INDEX CONCURRENTLY IF NOT EXISTS feedback_undelivered_user, and the index is listed in db::CONCURRENT_INDEXES.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Commit 8593239 and migration 0035",
+      "derived_from": [
+        "CLM-0712"
+      ],
+      "artifacts": [
+        "migrations/0035_feedback_undelivered_user_index.sql",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0959",
+          "kind": "inspection",
+          "locator": "migrations/0035_feedback_undelivered_user_index.sql:1-9; src/db.rs:49-56",
+          "summary": "First line \"-- no-transaction\", one statement CREATE INDEX CONCURRENTLY IF NOT EXISTS feedback_undelivered_user ON feedback(user_slug) WHERE status IN ('pending','failed'); db.rs CONCURRENT_INDEXES is [&str;5] ending with that name.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/0035_feedback_undelivered_user_index.sql",
+              "lines": {
+                "start": 1,
+                "end": 9
+              },
+              "commit": "8593239016b2ef88b21b1c07b12b054ae459803e"
+            }
+          },
+          "recorded_at": "2026-11-23T11:15:46.754323690Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d89adeda458840995fe03ded32547179710f989749f2a898cecadc31c9efbce"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Migration text and CONCURRENT_INDEXES entry match the claim.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0959"
+          ],
+          "recorded_at": "2026-11-23T11:15:55.998138895Z",
+          "seal": {
+            "by": "server",
+            "mac": "4b6eb203da42ac8ade9628ab12dd6a420eeaa3d0777b8a0b914ab0f6027553c4"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:15:30.010087013Z",
+      "updated_at": "2026-11-23T11:15:55.998138895Z",
+      "seal": {
+        "by": "server",
+        "mac": "293715071edb94e36e72279aa77a7959fb0e6f04ecab7718541f4bbdb34bc67f"
+      }
+    },
+    {
+      "id": "CLM-0723",
+      "statement": "feedback retry, feedback list and the rate-limit count need no new index: retry looks up by primary key id, the rate-limit count is served by feedback_credential_created, and list_failed is an operator command over failed rows bounded by the prune.",
+      "kind": "performance",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "Commit 8593239 rationale",
+      "derived_from": [
+        "CLM-0704"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs",
+        "migrations/0022_feedback.sql"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0960",
+          "kind": "analysis",
+          "locator": "migrations/0022_feedback.sql:8,34; src/mail/feedback.rs:320 (rate count), retry UPDATE/SELECT WHERE id = $1",
+          "summary": "id is the primary key, so retry's lookups are indexed; the rate-limit count filters credential = $1 AND created_at > $2, matching feedback_credential_created(credential, created_at); list_failed scans for status='failed' ordered by finished_at, which has no dedicated index but runs only from the operator CLI on rows pruned after retention. Not measured.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/0022_feedback.sql",
+              "lines": {
+                "start": 8,
+                "end": 8
+              },
+              "commit": "8593239016b2ef88b21b1c07b12b054ae459803e"
+            }
+          },
+          "recorded_at": "2026-11-23T11:15:46.798591405Z",
+          "seal": {
+            "by": "server",
+            "mac": "1e4b50ae57950ad31a45954d2ddcfbf4fb6e590c9b9696f208606a1e658a4007"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "PK, existing credential/created_at index, and bounded operator scan, by reading; not measured.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0960"
+          ],
+          "recorded_at": "2026-11-23T11:15:56.040441726Z",
+          "seal": {
+            "by": "server",
+            "mac": "7a30ed8c33113fd355cedd71e276aebc4e6c244f744057efec5e48cde28ef0f3"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:15:30.010087013Z",
+      "updated_at": "2026-11-23T11:15:56.040441726Z",
+      "seal": {
+        "by": "server",
+        "mac": "bd8e9c715c31120b8a684772d0d383f21090a168d98f9506acf5eec20d2f3fbb"
+      }
+    },
+    {
+      "id": "CLM-0724",
+      "statement": "User deletion (`store::users::delete`, `delete_checked`) does not wait for, or cancel, a feedback post the worker already claimed with `take`: no lock on the user or feedback row is held across `Forminit::post`, so such a post can still reach Forminit after the deletion commits.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Commit ac3e052 message and changelog: 'A post the worker claimed before the deletion is not cancelled and can still reach Forminit ... the deletion does not wait for it'",
+      "source_anchor": {
+        "path": "src/store/users.rs",
+        "lines": {
+          "start": 1422,
+          "end": 1440
+        },
+        "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/mail/feedback.rs",
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0965",
+          "kind": "inspection",
+          "locator": "src/mail/feedback.rs:993-1005, 1067-1080",
+          "summary": "take is a single autocommit UPDATE on the pool (no transaction, no SELECT FOR UPDATE); forward then awaits Forminit::post holding no connection, row lock or user lock. delete_checked's DELETE runs in its own tx and never references the worker.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1067,
+                "end": 1082
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.450866066Z",
+          "seal": {
+            "by": "server",
+            "mac": "7a365b81c87b92922bcf753492c81740773b05d53ac9355a5c76a07ea90311b7"
+          }
+        },
+        {
+          "id": "EVD-0966",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib mail::feedback (15 passed; 0 failed), log target/i698-logs/audit-narrow.log",
+          "summary": "The test holds the mock post after take, then runs delete() under a 30 s timeout whose expect would fail if the deletion waited on the post; it completes, then the held post is released and still reaches the mock (mock.seen().len()==1). Passed for both answers.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1989,
+                "end": 2055
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.543880025Z",
+          "seal": {
+            "by": "server",
+            "mac": "db5c00a7560f8fa7f3bd3abc068a5de584d25c667ad01eb28ab801c57ff85c97"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "take is an autocommit UPDATE and post runs with no lock held; the passing test shows the deletion completes within the timeout while the post is held and the held post still reaches Forminit.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0965",
+            "EVD-0966"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.349426765Z",
+          "seal": {
+            "by": "server",
+            "mac": "68b1d124d7c6504ae8ab132fe741c57b240247a76b11ec2c8d98c2a83817786b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:28:43.582166763Z",
+      "updated_at": "2026-11-23T11:29:59.349426765Z",
+      "seal": {
+        "by": "server",
+        "mac": "fa86918a999b85447a67de5a28523f4c9ad783300bf2c1e55d4c727ca14e0aa2"
+      }
+    },
+    {
+      "id": "CLM-0725",
+      "statement": "Every feedback worker try either claims its row (`take`) before the user deletion commits or, if it claims after, finds no row and ends as \"skipped\" with no post, because take's UPDATE and the deletion's DELETE contend on the same row.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "Commit ac3e052: 'no try that claims its row after the deletion commits posts it'",
+      "source_anchor": {
+        "path": "src/mail/feedback.rs",
+        "lines": {
+          "start": 22,
+          "end": 29
+        },
+        "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/mail/feedback.rs",
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0967",
+          "kind": "analysis",
+          "locator": "src/mail/feedback.rs:993-1005 (take), src/store/users.rs:963-964, 1435-1438 (DELETE)",
+          "summary": "take is UPDATE ... WHERE id=$1 AND status='pending' RETURNING; the deletion is DELETE ... WHERE user_slug=$1 AND status IN ('pending','failed'). Both write the same row, so Postgres serialises them: if the DELETE commits first, the UPDATE matches no row, fetch_optional gives None and forward returns (Ok, \\\"skipped\\\") before any post (feedback.rs:1074). If take commits first the row was claimed. No third path.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 993,
+                "end": 1005
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.594132380Z",
+          "seal": {
+            "by": "server",
+            "mac": "d3bdc9b9186df7447a5cb5a131c0bb9e409ebfaebd1b2ff3108255a7bfca20a2"
+          }
+        },
+        {
+          "id": "EVD-0968",
+          "kind": "test",
+          "locator": "mail::feedback::tests::a_delivery_in_flight_is_not_cancelled_by_user_deletion_and_never_retried (passed)",
+          "summary": "Covers only the sequential 'after' side: a take after the deletion returns skipped and posts nothing (mock.seen stays 1). The test does not run take concurrently with an uncommitted DELETE, so the lock-contention part rests on Postgres semantics, not a test.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 2046,
+                "end": 2054
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.638360800Z",
+          "seal": {
+            "by": "server",
+            "mac": "9e4fc2d1f982a3d76018b61bc8f2581b61a1871f9f0f651fa3aa8217a25536af"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "take's UPDATE and the deletion's DELETE write the same row, so Postgres orders them; a take after the commit matches no row and forward returns skipped before any post (the sequential case is also tested). The truly concurrent interleaving (take blocked on an uncommitted DELETE) rests on Postgres row-lock semantics and is not exercised by a test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0967"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.417693427Z",
+          "seal": {
+            "by": "server",
+            "mac": "e47bb8db0a484b38e000c2e88135f81cf6582f2974cf7d65fac8ae46110555be"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:28:43.582166763Z",
+      "updated_at": "2026-11-23T11:29:59.417693427Z",
+      "seal": {
+        "by": "server",
+        "mac": "d7af6e0311c9e12741aa8395967f16f5d714c877be5cb06569a335c395140f58"
+      }
+    },
+    {
+      "id": "CLM-0726",
+      "statement": "After the user deletion, the in-flight try's outcome (sent via settle, or a retryable failure via settle 'pending') updates no row, so the deleted row is not recreated and later tries do not post it again.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Commit ac3e052: 'the in-flight try's outcome updates no row, so it is not posted again'",
+      "source_anchor": {
+        "path": "src/mail/feedback.rs",
+        "lines": {
+          "start": 22,
+          "end": 29
+        },
+        "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0969",
+          "kind": "inspection",
+          "locator": "src/mail/feedback.rs:1014-1036 (settle), 1083-1160 (forward)",
+          "summary": "settle is UPDATE feedback ... WHERE id=$1 only (no insert/upsert), so on a deleted row it affects 0 rows and returns Ok. Both the 'sent' and the retryable 'pending' paths use it; the retry path only reschedules the apalis job, which on its next take finds no row.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1014,
+                "end": 1036
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.686692217Z",
+          "seal": {
+            "by": "server",
+            "mac": "c77b743e3ea0c3601d0f73e2844d79a8ee3b20e60eb4e7b59a3b22294664b718"
+          }
+        },
+        {
+          "id": "EVD-0970",
+          "kind": "test",
+          "locator": "cargo gate narrow --lib mail::feedback: a_delivery_in_flight_is_not_cancelled_by_user_deletion_and_never_retried ... ok",
+          "summary": "For the 200 case (first == \\\"sent\\\") and the 503 case (first == \\\"retry\\\") the test asserts SELECT count(*) FROM feedback == 0 after the in-flight try settled, then a later forward() returns \\\"skipped\\\" and the mock still saw 1 post.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 2038,
+                "end": 2054
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.734946774Z",
+          "seal": {
+            "by": "server",
+            "mac": "474cc94c02caf39325633a66743f21f60c79bbec78c0a2819681fc039b8c3d91"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "settle is a plain UPDATE by id, a no-op on a deleted row; the test checks zero rows after both a sent and a retry outcome and a skipped later try with no extra post.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0969",
+            "EVD-0970"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.486619962Z",
+          "seal": {
+            "by": "server",
+            "mac": "ea2c72bef284ebf572b517dc598523074608df045b59ce428ae3c0a434346d5b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:28:43.582166763Z",
+      "updated_at": "2026-11-23T11:29:59.486619962Z",
+      "seal": {
+        "by": "server",
+        "mac": "a22a8031f8ef317fd6d63752569fa9b1faa84ead8435e2a4243e620645b6095f"
+      }
+    },
+    {
+      "id": "CLM-0727",
+      "statement": "The test `mail::feedback::tests::a_delivery_in_flight_is_not_cancelled_by_user_deletion_and_never_retried` deterministically (no sleeps; Notify signals in the mock Forminit) holds the post after take, deletes the user meanwhile, and checks that the deletion does not wait, the held post goes out once, the row is not recreated and the next try is skipped, for both a 200 and a 503 answer.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Commit ac3e052 message: 'A test holds the mock post after the claim, deletes the user meanwhile...'",
+      "source_anchor": {
+        "path": "src/mail/feedback.rs",
+        "lines": {
+          "start": 1989,
+          "end": 2055
+        },
+        "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0971",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib mail::feedback: 15 passed, 0 failed",
+          "summary": "The named test passes. Reading it: holds via Hold.arrived/release Notify (notify_one keeps a permit), waits on hold.arrived before deleting, delete under a 30 s timeout, loops over (200,sent) and (503,retry), asserts outcome, seen()==1, row count 0, later=='skipped', seen()==1. No sleep in the test or in the new hold code (the sleeps at feedback.rs:1338 etc. are in other helpers).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 1989,
+                "end": 2055
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.783463832Z",
+          "seal": {
+            "by": "server",
+            "mac": "f7b7b564653dc1dd1a38210508a32cf8d6b91866c8dfb490a6d057a66ea6b1c5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test ran and passed (15 passed, 0 failed); it uses Notify handshakes and a timeout, no sleeps, and asserts each listed property for both answers.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0971"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.549425232Z",
+          "seal": {
+            "by": "server",
+            "mac": "aa56bd2fdb152612b06ecfc910d66ed99bb0f71a17695292bcc1599f8966f411"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:28:43.582166763Z",
+      "updated_at": "2026-11-23T11:29:59.549425232Z",
+      "seal": {
+        "by": "server",
+        "mac": "5ebcd826fe617f944c7583806dd3aac30cd9268e103ea729ccd8faf741038a5c"
+      }
+    },
+    {
+      "id": "CLM-0728",
+      "statement": "The changelog, docs/operations.md (Feedback section), the module doc of src/mail/feedback.rs (item 5) and the comment in delete_checked state that no try claiming after the deletion commits posts, that an in-flight post is not cancelled and can reach Forminit, and that its outcome updates no row; none still claims a deleted user's undelivered feedback is never forwarded.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Commit ac3e052 diff of those four files",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 2795,
+          "end": 2805
+        },
+        "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "changelog/2026-11-23T10-38-41Z-issue-698-feedback-failed-rows.md",
+        "docs/operations.md",
+        "src/mail/feedback.rs",
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0972",
+          "kind": "inspection",
+          "locator": "docs/operations.md:2796-2805; changelog ...issue-698...md:16-24; src/mail/feedback.rs:25-29; src/store/users.rs:1422-1434",
+          "summary": "All four texts state: no try that claims/starts after the commit sends; a post already claimed is not cancelled and can still reach Forminit; its outcome updates no row so it is not sent again. Repo-wide grep for 'never forwarded|not forwarded|outlive its sender' finds only migrations/0022_feedback.sql:6 (about the rate-limit table, unrelated) and the delete_checked comment explaining why the rows go; no remaining blanket promise.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2795,
+                "end": 2805
+              },
+              "commit": "ac3e0529bf0c67e414149a4acdd57b42fe3d9bf2"
+            }
+          },
+          "recorded_at": "2026-11-23T11:29:03.830900495Z",
+          "seal": {
+            "by": "server",
+            "mac": "a169d77ad79451cfbc83c33e62e374080ab6d498ada0eb4ea73b1e56413d959e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All four texts carry the narrowed guarantee and a repo-wide search finds no remaining blanket never-forwarded promise.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0972"
+          ],
+          "recorded_at": "2026-11-23T11:29:59.609435090Z",
+          "seal": {
+            "by": "server",
+            "mac": "e9bbe7c5829e3e6dcc62719d19d7e1421838cb31f56e9a712181deffe17d8799"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:28:43.582166763Z",
+      "updated_at": "2026-11-23T11:29:59.609435090Z",
+      "seal": {
+        "by": "server",
+        "mac": "3676f3144aa5918626372b6e84c0d2ae69d06ca023e831df0b6e4f544a402412"
       }
     }
   ]

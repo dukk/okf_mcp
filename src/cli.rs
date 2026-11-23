@@ -46,6 +46,7 @@ use crate::telemetry::{self, StartUp, Telemetry};
 mod admin;
 // `src/cli/audit.rs`: the `audit` handlers.
 mod audit;
+mod feedback;
 // `src/cli/people.rs`: the user, team, assignment and `unassigned` handlers.
 mod people;
 // `src/cli/unlock.rs`: the `unlock` handlers.
@@ -103,6 +104,9 @@ pub enum Command {
     /// Send a test email, and list, retry or delete queued mail.
     #[command(subcommand)]
     Mail(MailCommand),
+    /// List failed feedback, and send one failed row again.
+    #[command(subcommand)]
+    Feedback(FeedbackCommand),
     /// Unlock a customer catalog for an admin user, list unlocks, or end
     /// one early.
     #[command(subcommand)]
@@ -582,6 +586,19 @@ pub enum MailCommand {
     },
 }
 
+/// `okf-mcp feedback ...`: the operator's path for feedback the worker gave
+/// up on (`failed`).
+#[derive(Debug, Subcommand)]
+pub enum FeedbackCommand {
+    /// List failed feedback, oldest first (never the messages).
+    List,
+    /// Send a failed row again: it goes back to pending, with no tries.
+    Retry {
+        /// Its id, from `feedback list`.
+        id: String,
+    },
+}
+
 /// `okf-mcp audit ...`. The CLI has operator access: it reads every entry,
 /// unredacted, as an every-catalog admin does over REST.
 #[derive(Debug, Subcommand)]
@@ -993,6 +1010,11 @@ async fn dispatch(
                 "{}",
                 admin::mail(&pool, &config.auth, command, clock.now()).await?
             );
+        }
+        Command::Feedback(command) => {
+            // Only reads and requeues: a running server's worker sends.
+            let pool = connect(cli.database_url.as_deref(), &config).await?;
+            print!("{}", feedback::feedback(&pool, command).await?);
         }
         Command::Unlock(command) => {
             let pool = connect(cli.database_url.as_deref(), &config).await?;

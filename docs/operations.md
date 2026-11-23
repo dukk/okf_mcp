@@ -73,11 +73,11 @@ changesets and the routes in detail.
 
 ## 2. The image
 
-- **Name:** `ghcr.io/hypotheosis/okf-mcp:<version>`, for example `:0.27.0`.
+- **Name:** `ghcr.io/hypotheosis/okf-mcp:<version>`, for example `:0.28.0`.
   Every build is also tagged `:sha-<short commit>`. There is no `:latest`:
   manifests pin a version.
-- **Built by** `.github/workflows/image.yml` when a `v*` tag is pushed (`v0.27.0`
-  gives `:0.27.0`), and on a manual dispatch (which publishes `:sha-<short>`
+- **Built by** `.github/workflows/image.yml` when a `v*` tag is pushed (`v0.28.0`
+  gives `:0.28.0`), and on a manual dispatch (which publishes `:sha-<short>`
   only). The workflow runs no tests; they run before each merge.
 - **Contents:** Debian bookworm-slim with `ca-certificates`, and the binary at
   `/usr/local/bin/okf-mcp`. No git. The binary uses rustls and links no
@@ -155,7 +155,7 @@ unknown keys are ignored, so one file serves every version.
 | `feedback.api_key_env` | none | The environment variable holding the form's API key, sent as `X-API-KEY`. Optional, but without a key Forminit takes one submission per 5 seconds from the server's address (5 per second with one), and a protected form needs it |
 | `feedback.worker` | `true` | Run the feedback worker in `serve`. With several replicas, turn it on for one only. Its own pool opens up to 3 connections, on top of `database_max_connections` |
 | `feedback.max_per_hour` | `10` | Submissions one credential (API key or OAuth grant) may make in any hour, 1 to 1000. Counted in Postgres, so it holds across replicas |
-| `feedback.retention` | `"30d"` | How long forwarded feedback is kept before the hourly prune deletes it, 1 day to 10 years. Failed feedback is kept |
+| `feedback.retention` | `"30d"` | How long forwarded feedback is kept before the hourly prune deletes it, 1 day to 10 years. Failed feedback is pruned after the same time, counted from when it failed |
 | `redis.url_env` | none | The `[redis]` table turns on shared state for several replicas (the [Redis](#redis) section). `url_env` is required: the name of the environment variable holding the URL, `redis://` or `rediss://`, which may carry a password (so it never goes in the file). Unknown keys in this table are an error |
 | `redis.key_prefix` | `"okf:"` | Starts every key and channel, so one Redis can serve several deployments. 1 to 64 bytes, with no whitespace, control character or brace: it goes inside the hash tag `{<key_prefix>}` |
 | `redis.mode` | `"standalone"` | `"standalone"` for one Redis or Valkey primary (or a managed primary endpoint), `"cluster"` for a cluster-aware client: ElastiCache Serverless, which runs only in cluster mode, and other clusters |
@@ -891,7 +891,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: okf-mcp
-          image: ghcr.io/hypotheosis/okf-mcp:0.27.0
+          image: ghcr.io/hypotheosis/okf-mcp:0.28.0
           args: ["serve"]
           ports:
             - name: http
@@ -2739,7 +2739,7 @@ forminit_form_id = "<form id>"            # not a secret
 api_key_env = "OKF_MCP_FORMINIT_API_KEY"  # optional: the variable holding the X-API-KEY
 # worker = true                           # one replica only, as [mail] worker
 # max_per_hour = 10                       # per credential
-# retention = "30d"                       # how long sent feedback is kept
+# retention = "30d"                       # how long sent and failed feedback is kept
 ```
 
 What a submission holds, and nothing else: text blocks `message`, `kind`
@@ -2780,8 +2780,29 @@ the post, or a failure to mark the row `sent` afterwards, sends it again on
 the next try, possibly from another replica. A duplicate carries the same
 `feedback_id`, so de-duplicate on that field in Forminit.
 
-The hourly prune deletes `sent` rows `retention` (30 days) after they were
-sent. `failed` rows stay, for the operator to read:
+The hourly prune deletes `sent` and `failed` rows `retention` (30 days)
+after they were sent or given up on. Until then the operator sees and
+retries failed rows from the command line (a running server's worker does
+the sending):
+
+```sh
+okf-mcp feedback list         # failed rows: id, user, kind, attempts, failed at, error
+okf-mcp feedback retry ID     # back to pending with no tries, and queued again
+```
+
+A `failed` row with `FORM_NOT_FOUND` or `VALIDATION_ERROR` fails every
+submission until the form id or the rating block is fixed, so check
+`[feedback]` before retrying. The worker logs a warning for each row it
+marks `failed` (`feedback not delivered; marked failed`, with the error
+code as `reason`). Deleting a user deletes that user's `pending` and
+`failed` feedback in the same transaction, and a submission racing the
+deletion either lands before it (and goes with it) or is refused because
+the user is gone; `sent` rows, already delivered,
+are left for the prune. No try that starts after the deletion commits
+sends the deleted rows. A post the worker had already started is not
+cancelled and can still reach Forminit with the user's name (the deletion
+does not wait up to 30 seconds for it); its answer then updates nothing,
+so it is not sent again. For anything else, read the table:
 
 ```sql
 SELECT id, status, attempts, last_error, created_at

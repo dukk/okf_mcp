@@ -957,6 +957,12 @@ pub async fn find_auth(
     .await?)
 }
 
+/// Deletes a user's undelivered feedback (`$1`: the user's name). The
+/// predicate is the one of the partial index `feedback_undelivered_user`
+/// (migration 0035), so the planner can use it.
+const DELETE_UNDELIVERED_FEEDBACK: &str =
+    "DELETE FROM feedback WHERE user_slug = $1 AND status IN ('pending', 'failed')";
+
 /// What a user deletion removed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DeletedUser {
@@ -1413,6 +1419,23 @@ async fn delete_checked(
             .execute(&mut *tx)
             .await?;
     }
+    // Feedback not yet delivered (`pending`, or `failed` with no one to
+    // retry it for) must not outlive its sender: a pending row would still
+    // be forwarded with the name as `sender.userId`. `feedback` has no
+    // foreign key by design (migration 0022), so it goes here. `sent` rows
+    // are delivered already and the hourly prune removes them. A try that
+    // claims its row (`feedback::take`) after this commits finds nothing
+    // and the job ends as skipped. A post already claimed before it is not
+    // cancelled and can still reach Forminit: waiting for it would hold
+    // these locks across an outside call bounded only by its 30 s timeout.
+    // Settling that try then finds no row, so it is not posted again
+    // (review of PR #951). The rows are taken in no order relative to
+    // other writers: nothing else locks a feedback row together with a
+    // user.
+    sqlx::query(DELETE_UNDELIVERED_FEEDBACK)
+        .bind(name)
+        .execute(&mut *tx)
+        .await?;
     // Before the user row goes: it finds the user's credentials through
     // `api_keys` and `sign_in_codes`, which that delete cascades.
     audit::forget_person(&mut tx, &user_id).await?;
@@ -2509,6 +2532,186 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert!(after > before, "the delete bumps the admin generation");
+    }
+
+    /// A feedback submission for `alice`, as the tool and the console make
+    /// it (`registered`: it names a user).
+    async fn submit_feedback_for_alice(pool: &PgPool) -> Result<String, OkfError> {
+        use crate::mail::feedback::{submit, FeedbackKind, FeedbackOrigin, NewFeedback};
+        let new = NewFeedback {
+            credential: "key-1",
+            user_slug: "alice",
+            registered: true,
+            message: "late",
+            kind: FeedbackKind::Other,
+            origin: FeedbackOrigin::User,
+            tool: None,
+            rating: None,
+            client: "test",
+            credential_kind: "api_key",
+        };
+        submit(pool, &new, 10, now()).await
+    }
+
+    /// Review of PR #951: a submission that starts while a deletion holds
+    /// the user row waits for it and then finds the user gone; it stores
+    /// nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_feedback_submit_that_waited_on_the_users_deletion_is_refused() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        // The deletion's lock, held `FOR UPDATE` as `delete_checked` does.
+        let mut deleting = db.pool.begin().await.unwrap();
+        let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *deleting)
+            .await
+            .unwrap();
+        let user_id: String =
+            sqlx::query_scalar("SELECT id FROM users WHERE name = 'alice' FOR UPDATE")
+                .fetch_one(&mut *deleting)
+                .await
+                .unwrap();
+        let pool = db.pool.clone();
+        let submission = tokio::spawn(async move { submit_feedback_for_alice(&pool).await });
+        let mut probe = db.pool.acquire().await.unwrap();
+        crate::test_locks::wait_waiter(&mut probe, holder).await;
+        sqlx::query("DELETE FROM teams WHERE personal_of = $1")
+            .bind(&user_id)
+            .execute(&mut *deleting)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(&user_id)
+            .execute(&mut *deleting)
+            .await
+            .unwrap();
+        deleting.commit().await.unwrap();
+
+        let outcome = tokio::time::timeout(LOCK_WAIT, submission)
+            .await
+            .expect("the submission waited for the deletion for too long")
+            .unwrap();
+
+        assert!(
+            matches!(outcome, Err(OkfError::Unauthenticated { .. })),
+            "{outcome:?}"
+        );
+        assert_eq!(count(&db.pool, "SELECT count(*) FROM feedback").await, 0);
+    }
+
+    /// Review of PR #951: a submission already holding the user row when the
+    /// deletion starts is stored first, so the deletion waits for it and
+    /// deletes the row it committed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_feedback_submit_in_flight_is_deleted_with_the_user() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        // A submission in flight holds alice `FOR KEY SHARE`.
+        let mut submitting = db.pool.begin().await.unwrap();
+        let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *submitting)
+            .await
+            .unwrap();
+        id_of(&mut submitting, "alice").await.unwrap();
+        let pool = db.pool.clone();
+        let deletion = tokio::spawn(async move {
+            delete(
+                &pool,
+                "alice",
+                DeleteOptions::default(),
+                &AuditActor::cli(),
+                now(),
+            )
+            .await
+        });
+        let mut probe = db.pool.acquire().await.unwrap();
+        crate::test_locks::wait_waiter(&mut probe, holder).await;
+        sqlx::query(
+            "INSERT INTO feedback (id, credential, user_slug, message, kind, origin, \
+                 server_version, client, credential_kind, created_at) \
+             VALUES ('late', 'key-1', 'alice', 'm', 'bug', 'user', '0', 'c', 'api_key', $1)",
+        )
+        .bind(now())
+        .execute(&mut *submitting)
+        .await
+        .unwrap();
+        submitting.commit().await.unwrap();
+
+        tokio::time::timeout(LOCK_WAIT, deletion)
+            .await
+            .expect("the delete waited for the submission for too long")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(count(&db.pool, "SELECT count(*) FROM feedback").await, 0);
+    }
+
+    /// Review of PR #951: the deletion's feedback delete can use the partial
+    /// index on `user_slug`, so it does not scan the table under the user
+    /// and admin locks. (Sequential scans are switched off: on a handful of
+    /// rows the planner would choose one whatever the indexes are.)
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_feedback_delete_on_user_deletion_uses_its_partial_index() {
+        let db = test_db().await;
+        let mut tx = db.pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL enable_seqscan = off")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+
+        let plan: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN {DELETE_UNDELIVERED_FEEDBACK}"
+        )))
+        .bind("alice")
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+
+        let plan = plan.join("\n");
+        assert!(plan.contains("feedback_undelivered_user"), "{plan}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deleting_a_user_removes_its_undelivered_feedback_only() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        seed_user(&db.pool, "bob", None).await;
+        for (id, slug, status) in [
+            ("f-pending", "alice", "pending"),
+            ("f-failed", "alice", "failed"),
+            ("f-sent", "alice", "sent"),
+            ("f-other", "bob", "pending"),
+        ] {
+            sqlx::query(
+                "INSERT INTO feedback (id, credential, user_slug, message, kind, origin, \
+                     server_version, client, credential_kind, status, created_at, finished_at) \
+                 VALUES ($1, 'key-1', $2, 'm', 'bug', 'user', '0', 'c', 'api_key', $3, $4, \
+                     CASE WHEN $3 = 'pending' THEN NULL ELSE $4 END)",
+            )
+            .bind(id)
+            .bind(slug)
+            .bind(status)
+            .bind(now())
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+
+        delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        let left: Vec<String> = sqlx::query_scalar("SELECT id FROM feedback ORDER BY id")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(left, ["f-other", "f-sent"]);
     }
 
     #[tokio::test(flavor = "multi_thread")]
