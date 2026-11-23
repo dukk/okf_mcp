@@ -276,7 +276,14 @@ mod tests {
             };
             let text = format!("# {version}\n");
             let entries = files(&[("a.md", &text), ("b.md", "# B\n")]);
-            import(&db.pool, "pg", entries, &options).await.unwrap();
+            import(
+                &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+                "pg",
+                entries,
+                &options,
+            )
+            .await
+            .unwrap();
         }
         let options = ImportOptions {
             replace: true,
@@ -287,9 +294,14 @@ mod tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
         };
-        import(&db.pool, "pg", files(&[("b.md", "# B\n")]), &options)
-            .await
-            .unwrap();
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            files(&[("b.md", "# B\n")]),
+            &options,
+        )
+        .await
+        .unwrap();
 
         let all = revisions(&db.pool, catalog.id, "a.md", 20).await.unwrap();
         let one = revisions(&db.pool, catalog.id, "a.md", 1).await.unwrap();
@@ -338,9 +350,14 @@ mod tests {
                 audit: &crate::store::audit::AuditActor::cli(),
                 now: Utc::now(),
             };
-            import(&db.pool, "pg", files(entries), &options)
-                .await
-                .unwrap();
+            import(
+                &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+                "pg",
+                files(entries),
+                &options,
+            )
+            .await
+            .unwrap();
         }
 
         let first = content_at(&db.pool, catalog.id, "a.md", 1).await.unwrap();

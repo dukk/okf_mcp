@@ -146,7 +146,7 @@ async fn replacement_import_race(submit: bool) {
     let pool = db.pool.clone();
     let importer = tokio::spawn(async move {
         import(
-            &pool,
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
             "pg",
             [(
                 "b.md".into(),

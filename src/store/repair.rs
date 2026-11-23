@@ -30,6 +30,7 @@ use crate::store::audit::{self, Action, AuditActor, People};
 use crate::store::catalogs::{self, CatalogEvent, CatalogGeneration};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::store::import::{existing_rows, ExistingRow};
+use crate::stores::CatalogDb;
 
 /// The `revisions.message` of a repair.
 pub const REPAIR_MESSAGE: &str = "repair indexes";
@@ -71,7 +72,7 @@ pub struct RepairReport {
 /// Repairs a catalog's indexes and log in place (see the module docs).
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `db` - the store holding the catalog.
 /// * `catalog` - the catalog's name.
 /// * `options` - dry run, actor and time.
 ///
@@ -89,12 +90,12 @@ pub struct RepairReport {
 /// included. Every error rolls back, leaving the catalog as it was.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "repair.repair"))]
 pub async fn repair(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog: &str,
     options: &RepairOptions<'_>,
 ) -> Result<RepairReport, OkfError> {
     // Dropping `tx` without `commit()` (any `?`, or a dry run) rolls back.
-    let mut tx = pool.begin().await?;
+    let mut tx = db.begin().await?;
     audit::lock_people(
         &mut tx,
         options.audit,
@@ -324,9 +325,14 @@ mod tests {
             audit: &AuditActor::cli(),
             now: at(1),
         };
-        import(pool, name, crate::archive::files(files), &options)
-            .await
-            .unwrap();
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+            name,
+            crate::archive::files(files),
+            &options,
+        )
+        .await
+        .unwrap();
     }
 
     fn options(audit: &AuditActor, dry_run: bool) -> RepairOptions<'_> {
@@ -361,12 +367,20 @@ mod tests {
         .await;
         let audit = AuditActor::cli();
 
-        let report = repair(&db.pool, "pg", &options(&audit, false))
-            .await
-            .unwrap();
-        let again = repair(&db.pool, "pg", &options(&audit, false))
-            .await
-            .unwrap();
+        let report = repair(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            &options(&audit, false),
+        )
+        .await
+        .unwrap();
+        let again = repair(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            &options(&audit, false),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             report.written,
@@ -450,7 +464,12 @@ mod tests {
         let pool = db.pool.clone();
         let waiting = tokio::spawn(async move {
             let audit = AuditActor::cli();
-            repair(&pool, "pg", &options(&audit, false)).await
+            repair(
+                &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+                "pg",
+                &options(&audit, false),
+            )
+            .await
         });
         catalogs::tests::until_a_lock_is_awaited(&db.pool).await;
         let curated = "---\nokf_version: \"0.2\"\n---\n# Ours\n\nCurated words.\n";
@@ -497,9 +516,13 @@ mod tests {
         legacy(&db.pool, "pg", "", &[("a.md", NOTE)]).await;
         let audit = AuditActor::cli();
 
-        let dry = repair(&db.pool, "pg", &options(&audit, true))
-            .await
-            .unwrap();
+        let dry = repair(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            &options(&audit, true),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(dry.written, ["/index.md", "/log.md"]);
         assert_eq!(dry.generation, None);
@@ -529,11 +552,20 @@ mod tests {
         let audit = AuditActor::cli();
 
         let before = missing_root_index(&db.pool).await.unwrap();
-        repair(&db.pool, "old", &options(&audit, false))
-            .await
-            .unwrap();
+        repair(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "old",
+            &options(&audit, false),
+        )
+        .await
+        .unwrap();
         let after = missing_root_index(&db.pool).await.unwrap();
-        let unknown = repair(&db.pool, "nope", &options(&audit, false)).await;
+        let unknown = repair(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "nope",
+            &options(&audit, false),
+        )
+        .await;
 
         assert_eq!(before, ["old"]);
         assert!(after.is_empty(), "{after:?}");
@@ -548,7 +580,12 @@ mod tests {
             .await;
         let audit = AuditActor::cli();
 
-        let refused = repair(&db.pool, "pg", &options(&audit, false)).await;
+        let refused = repair(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            &options(&audit, false),
+        )
+        .await;
 
         assert!(refused.is_err());
         assert_eq!(live_text(&db.pool, "index.md").await, None);

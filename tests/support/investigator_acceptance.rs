@@ -289,7 +289,10 @@ async fn server(aging: bool) -> TestServer {
     );
     crate::support::server::applied(&server.app, async {
         import(
-            &server.db.pool,
+            &okf_mcp::stores::CatalogDb::new(
+                okf_mcp::stores::StoreName::main(),
+                server.db.pool.clone(),
+            ),
             "pg",
             data,
             &ImportOptions {
@@ -574,7 +577,10 @@ async fn investigator_lost_response_replay_and_historical_superseded() {
                     .to_vec();
             crate::support::server::applied(&server.app, async {
                 import(
-                    &server.db.pool,
+                    &okf_mcp::stores::CatalogDb::new(
+                        okf_mcp::stores::StoreName::main(),
+                        server.db.pool.clone(),
+                    ),
                     "pg",
                     data,
                     &ImportOptions {

@@ -226,9 +226,14 @@ mod tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now,
         };
-        import(&db.pool, "pg", files.clone(), &options)
-            .await
-            .unwrap();
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            files.clone(),
+            &options,
+        )
+        .await
+        .unwrap();
         // A later import that changes `a.md` and deletes `gone.md`:
         // `tools/run.sh` keeps its first `updated_at`.
         let later = Utc.with_ymd_and_hms(2026, 11, 2, 13, 0, 0).unwrap();
@@ -243,9 +248,14 @@ mod tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: later,
         };
-        import(&db.pool, "pg", files.clone(), &options)
-            .await
-            .unwrap();
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            files.clone(),
+            &options,
+        )
+        .await
+        .unwrap();
 
         let (tarball, generation) = export(
             &db.pool,

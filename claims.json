@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 754,
+  "next_claim_seq": 764,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "fe873e1d854610a8856e135260a05526f1059490e4f03b045de5e57e74c876a4"
+    "mac": "4ee4184af547e8617aeb9e1cc31f8fc0344651ce95e8c089aaacb5b429676163"
   },
-  "next_evidence_seq": 1006,
+  "next_evidence_seq": 1020,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "f60c77eba4e5b01fc0e03eb4858056d86ec9335a0103a2a77ce417614c676d3d"
+    "mac": "ebfe2df02827161b2d956349e7efdcfc34fc3c23ed6ff3fd2271d3fb45bb6d71"
   },
   "claims": [
     {
@@ -53113,6 +53113,28 @@
             "by": "server",
             "mac": "7ee3ef118de198e33084e9d7c55688fd356da61dcfdf35aaeee04ce0d053d012"
           }
+        },
+        {
+          "id": "EVD-1016",
+          "kind": "inspection",
+          "locator": "src/write.rs:166-178 at 99f5680",
+          "summary": "Order is unchanged: write_queue lock, state.refresh(app.pool()), refreshed_if_moved, then the transaction begins. The only change is the begin line, now `app.main_store().begin()` (same pool in release 1), so the statement's literal `app.pool().begin()` is out of date but the ordering it asserts holds.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/write.rs",
+              "lines": {
+                "start": 166,
+                "end": 178
+              },
+              "commit": "99f568081e476dc2fba17b2aa55c5c2d408f0f93"
+            }
+          },
+          "recorded_at": "2026-11-23T13:18:44.107876103Z",
+          "seal": {
+            "by": "server",
+            "mac": "8e5252fe05a079e61554a1d05bec7e35a294244985a53f9197f5ed36e1481eae"
+          }
         }
       ],
       "verdicts": [
@@ -53128,13 +53150,26 @@
             "by": "server",
             "mac": "e79c9b65fa804e66418ac9032325888a03aa286106e0bd7369df3fd046c4da1c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head: the refresh-before-begin ordering holds; only the begin receiver changed to main_store().",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1016"
+          ],
+          "recorded_at": "2026-11-23T13:18:51.032593387Z",
+          "seal": {
+            "by": "server",
+            "mac": "84a7f6760684e546f137604a252e5a4b0836adcb649d9a95515d96ea0f8aa2e5"
+          }
         }
       ],
       "created_at": "2026-11-23T08:12:15.185449087Z",
-      "updated_at": "2026-11-23T08:13:21.624719775Z",
+      "updated_at": "2026-11-23T13:18:51.032593387Z",
       "seal": {
         "by": "server",
-        "mac": "a9030266e436aaff72c5458edb90c594ffeb2dec29f721e26ba8c2e5eb1d7daa"
+        "mac": "47f399c54bcf5d87e3a6cc3f86b03da013a0d57b6d79aa9a6633bf6d78c02a82"
       }
     },
     {
@@ -53401,6 +53436,28 @@
             "by": "server",
             "mac": "68ab585c5d99066566b1659eeb85920ea6f1cbc78f2fa2ef33eafad117d3a022"
           }
+        },
+        {
+          "id": "EVD-1017",
+          "kind": "test",
+          "locator": "target/i960-logs/test.log:1760; src/mcp/changesets.rs:2383",
+          "summary": "At head the test passes in the gate log (`mcp::changesets::publish_tests::a_revert_on_a_stale_snapshot_refreshes_and_takes_the_current_base ... ok`). The PR only changed its import call to take main_store(); assertions are unchanged.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets.rs",
+              "lines": {
+                "start": 2383,
+                "end": 2425
+              },
+              "commit": "99f568081e476dc2fba17b2aa55c5c2d408f0f93"
+            }
+          },
+          "recorded_at": "2026-11-23T13:18:44.156893462Z",
+          "seal": {
+            "by": "server",
+            "mac": "90c782ecf814dd518e34945aa5c9e63ebee9adf03d6374001f0b089031fbaef0"
+          }
         }
       ],
       "verdicts": [
@@ -53417,13 +53474,26 @@
             "by": "server",
             "mac": "18d4ce54e8a79166422c1ac94961cec28594264931375cea8862469289499db6"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head: the test still exists and passes in the gate log.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1017"
+          ],
+          "recorded_at": "2026-11-23T13:18:51.255190330Z",
+          "seal": {
+            "by": "server",
+            "mac": "c25bb6656622ad241a765fa3f060c9ceb1cd82e4659f285b7edf422e8a664a21"
+          }
         }
       ],
       "created_at": "2026-11-23T08:12:15.185449087Z",
-      "updated_at": "2026-11-23T08:13:21.787088827Z",
+      "updated_at": "2026-11-23T13:18:51.255190330Z",
       "seal": {
         "by": "server",
-        "mac": "6f7b00ca4fd7d65674ea7ac1036a6600933a96dabc97c1fca560c03a23fa45a6"
+        "mac": "43c2b404aa0b304dc0bdaf1eb21e2ae537cfb50d48d26fadfc51cfca75d23507"
       }
     },
     {
@@ -59020,6 +59090,28 @@
             "by": "server",
             "mac": "532022c5ac3770807bfdb80c80897a96bd07f621d1ff588bfd6e095e8279e2d9"
           }
+        },
+        {
+          "id": "EVD-1018",
+          "kind": "inspection",
+          "locator": "src/stores/mod.rs:134-209 at 99f5680",
+          "summary": "AccountDb and CatalogDb still have new, begin, executor (CatalogDb also store()), each wrapping a PgPool; the only change in this PR is CatalogDb::new going pub(crate) -> pub.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 134,
+                "end": 209
+              },
+              "commit": "99f568081e476dc2fba17b2aa55c5c2d408f0f93"
+            }
+          },
+          "recorded_at": "2026-11-23T13:18:44.206672234Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa494e04b463fe3af7973762134b06e75a37019a01630fd8ea28d0233129d74f"
+          }
         }
       ],
       "verdicts": [
@@ -59035,13 +59127,26 @@
             "by": "server",
             "mac": "516d6aafb9ce7812ef82a20f8660f60721c2c6da4dd5a11ecac6f02ced57e7fa"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head: the interface is unchanged apart from CatalogDb::new visibility.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1018"
+          ],
+          "recorded_at": "2026-11-23T13:18:51.453610536Z",
+          "seal": {
+            "by": "server",
+            "mac": "4799a1d75a7acf92b4e6ec5ffd1a2ee029d2eae331e15c28c663df7d73b966de"
+          }
         }
       ],
       "created_at": "2026-11-23T12:26:36.728383559Z",
-      "updated_at": "2026-11-23T12:27:28.503530805Z",
+      "updated_at": "2026-11-23T13:18:51.453610536Z",
       "seal": {
         "by": "server",
-        "mac": "c62fd269bda6330b5bfdf70f14969572d81a1b4442463544f23b82a359ee0bd1"
+        "mac": "15a13d68ace527d3dcf39fa73d6e9a92d625b54f0e0a647bd907f83b1923b671"
       }
     },
     {
@@ -59508,6 +59613,679 @@
       "seal": {
         "by": "server",
         "mac": "c0f4399058d5ff979eac036ffb7f21623b0dd195202ae73ecaa1b56b88018cd1"
+      }
+    },
+    {
+      "id": "CLM-0754",
+      "statement": "Issue #960 (M21.02) is delivered: catalog write entry points take or begin their transaction on a CatalogDb, the account-table crossings are inventoried in the changelog, behaviour is unchanged, there is one changelog entry, and the plan carries a dated correction.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/960",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/import.rs",
+        "src/store/repair.rs",
+        "src/write.rs"
+      ],
+      "tags": [
+        "from-issue:960"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1019",
+          "kind": "analysis",
+          "locator": "children of CLM-0754",
+          "summary": "Children cover signatures (import/repair), transaction begin sites (publish, edit, revert, open, discard), the pool-free scope search, callers, the inventory, no behaviour change, gates, plan note and one changelog entry; all supported.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T13:18:51.625659923Z",
+          "seal": {
+            "by": "server",
+            "mac": "c80dd9c3e06b23cf236e7c108bc4d2a57aa3b2bcf04b696f1c93a31a683bdde9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All nine child claims supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1019"
+          ],
+          "recorded_at": "2026-11-23T13:18:54.730209168Z",
+          "seal": {
+            "by": "server",
+            "mac": "4243c2042646e1603e5a45aedf6acfa4dfdbe0fed0fcd52436982a1279b86198"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:17:22.860036306Z",
+      "updated_at": "2026-11-23T13:18:54.730209168Z",
+      "seal": {
+        "by": "server",
+        "mac": "f9b08509cd8109d98d8f086274cfdf38968ed60aa46fab023572555965beef08"
+      }
+    },
+    {
+      "id": "CLM-0755",
+      "statement": "store::import::import and store::repair::repair take &CatalogDb and begin their transaction with CatalogDb::begin.",
+      "kind": "interface",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"`store::import::import` and `store::repair::repair` take `&CatalogDb` and begin with `CatalogDb::begin`.\"",
+      "derived_from": [
+        "CLM-0754"
+      ],
+      "artifacts": [
+        "src/store/import.rs",
+        "src/store/repair.rs"
+      ],
+      "tags": [
+        "from-issue:960"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1006",
+          "kind": "inspection",
+          "locator": "src/store/import.rs:168-177; src/store/repair.rs:91-98",
+          "summary": "import signature is `db: &CatalogDb` and opens `db.begin().await?`; repair likewise.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/import.rs",
+              "lines": {
+                "start": 168,
+                "end": 177
+              },
+              "commit": "99f568081e476dc2fba17b2aa55c5c2d408f0f93"
+            }
+          },
+          "recorded_at": "2026-11-23T13:17:42.754259205Z",
+          "seal": {
+            "by": "server",
+            "mac": "9949f02a66f553b0b5f155498912a844272b91b35dc83c8b443027060824d1cc"
+          }
+        },
+        {
+          "id": "EVD-1007",
+          "kind": "inspection",
+          "locator": "src/store/repair.rs:91-98",
+          "summary": "repair takes `db: &CatalogDb` and begins with `db.begin()`.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/repair.rs",
+              "lines": {
+                "start": 91,
+                "end": 98
+              },
+              "commit": "99f568081e476dc2fba17b2aa55c5c2d408f0f93"
+            }
+          },
+          "recorded_at": "2026-11-23T13:17:42.802362047Z",
+          "seal": {
+            "by": "server",
+            "mac": "d1db91dd6330c476d313b3bec6c4f3ff8a1698d12505dc5934b41df410cb3886"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both signatures and begin calls read directly.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1006",
+            "EVD-1007"
+          ],
+          "recorded_at": "2026-11-23T13:18:18.654597590Z",
+          "seal": {
+            "by": "server",
+            "mac": "477ea65249b0f20720599003ef57e37e178062f256f5c6b05e74b000f63e7da0"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:17:22.860036306Z",
+      "updated_at": "2026-11-23T13:18:18.654597590Z",
+      "seal": {
+        "by": "server",
+        "mac": "cbc76fa148b5bba92a58cd373f00fb126cb674c089bc0e7e2594d2b01ec445d3"
+      }
+    },
+    {
+      "id": "CLM-0756",
+      "statement": "Publish (store::publish), write::apply_audited (every changeset edit and revert, via write::apply), open_changeset and the discard path in mcp::changesets begin their transaction on App::main_store().",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"Publish (`store::publish`), changeset edits and revert (`write::apply`, `write::apply_audited`), `open_changeset` and the discard path (`mcp::changesets`) begin their transaction on `App::main_store()`.\"",
+      "derived_from": [
+        "CLM-0754"
+      ],
+      "artifacts": [
+        "src/store/publish.rs",
+        "src/write.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:960"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1008",
+          "kind": "inspection",
+          "locator": "src/write.rs:145-178 (apply delegates at 129); src/store/publish.rs:212; src/mcp/changesets.rs:316,644",
+          "summary": "`apply` calls `apply_audited`, whose tx is `app.main_store().begin()`; publish_locked, open_changeset and discard each use `main_store().begin()`. Reverts go through apply_audited (OpAudit).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/write.rs",
+              "lines": {
+                "start": 174,
+                "end": 180
+              },
+              "commit": "99f568081e476dc2fba17b2aa55c5c2d408f0f93"
+            }
+          },
+          "recorded_at": "2026-11-23T13:17:42.854488176Z",
+          "seal": {
+            "by": "server",
+            "mac": "18fc44ed586640bd5e39c015e34d055affbf52d96a0e81db80a3ce1fc79c2b29"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All four begin sites use main_store(); apply delegates to apply_audited.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1008"
+          ],
+          "recorded_at": "2026-11-23T13:18:18.706628678Z",
+          "seal": {
+            "by": "server",
+            "mac": "df20e046c6544086a39feb2823e64a86e9926cf250f03847c3d14255e3e9f968"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:17:22.860036306Z",
+      "updated_at": "2026-11-23T13:18:18.706628678Z",
+      "seal": {
+        "by": "server",
+        "mac": "af87ecc291e30d7ece83e05e0926336ed610004d15314f0f3283d504474c60c2"
+      }
+    },
+    {
+      "id": "CLM-0757",
+      "statement": "No write-entry transaction in the issue's scope still begins on App::pool() or a bare PgPool in non-test code.",
+      "kind": "constraint",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #960 scope: entry points of publish, import, repair, changeset open/edit/discard and revert take &CatalogDb (or begin their transaction on one)",
+      "derived_from": [
+        "CLM-0754"
+      ],
+      "artifacts": [
+        "src/write.rs",
+        "src/store/publish.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:960"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1013",
+          "kind": "analysis",
+          "locator": "git grep -E '(ctx\\.app\\(\\)|[ (]app)\\.pool\\(\\)\\.begin' in write.rs, publish.rs, mcp/changesets.rs, import.rs, repair.rs, store/changesets.rs",
+          "summary": "Zero hits for production-style `app.pool().begin()`/`ctx.app().pool().begin()`. The only `pool().begin()` hits in these files are 6 `test.app.pool().begin()` lock holders inside test modules (write.rs:572,633,673; mcp/changesets.rs:1630,2828,3136).",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "(ctx\\.app\\(\\)|[ (]app)\\.pool\\(\\)\\.begin",
+              "scope": [
+                "src/mcp/changesets.rs",
+                "src/store/changesets.rs",
+                "src/store/import.rs",
+                "src/store/publish.rs",
+                "src/store/repair.rs",
+                "src/write.rs"
+              ],
+              "hits": 0,
+              "commit": "99f568081e476dc2fba17b2aa55c5c2d408f0f93"
+            }
+          },
+          "recorded_at": "2026-11-23T13:17:51.305100318Z",
+          "seal": {
+            "by": "server",
+            "mac": "12676ed629df4a28540857a13af41b0351d816cf24ca3e8b0c2d878f975595c8"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Zero-hit search for production pool().begin() in the scope files; remaining hits are test holders.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1013"
+          ],
+          "recorded_at": "2026-11-23T13:18:18.758330765Z",
+          "seal": {
+            "by": "server",
+            "mac": "c4a11a6f1cbee5c3870e6e1a7ca8b284e595fe88866504c162d98439a6a3f640"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:17:22.860036306Z",
+      "updated_at": "2026-11-23T13:18:18.758330765Z",
+      "seal": {
+        "by": "server",
+        "mac": "47580cc8ae667f567203e2befdbf0d532c71ac68f7634c2a6bfac60dc7796d3a"
+      }
+    },
+    {
+      "id": "CLM-0758",
+      "statement": "Callers are moved: the CLI import and repair-indexes, the HTTP import route and the tests pass CatalogDb or App::main_store(); and CatalogDb::new is pub.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"Callers moved: the CLI (`import`, `repair-indexes`), the HTTP import route, and the tests.\" / \"`CatalogDb::new` is now `pub`\"",
+      "derived_from": [
+        "CLM-0754"
+      ],
+      "artifacts": [
+        "src/cli.rs",
+        "src/http/archives.rs",
+        "src/stores/mod.rs"
+      ],
+      "tags": [
+        "from-issue:960"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1009",
+          "kind": "inspection",
+          "locator": "src/cli.rs:1067,1380; src/http/archives.rs:550; src/stores/mod.rs:178",
+          "summary": "CLI import builds CatalogDb::new(StoreName::main(), pool.clone()); repair-indexes passes a CatalogDb; HTTP import route passes app.main_store(); CatalogDb::new is `pub fn`.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 175,
+                "end": 180
+              },
+              "commit": "99f568081e476dc2fba17b2aa55c5c2d408f0f93"
+            }
+          },
+          "recorded_at": "2026-11-23T13:17:42.935224990Z",
+          "seal": {
+            "by": "server",
+            "mac": "4d9226461e195d80b5177d105077c12a4ca324107809302ec79e883a6516ca1d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Callers and visibility confirmed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1009"
+          ],
+          "recorded_at": "2026-11-23T13:18:18.815868598Z",
+          "seal": {
+            "by": "server",
+            "mac": "56b00ddfe8ce2914a0d19433ba87c190a44af98bfa650418e795d2ebdd222ffb"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:17:22.860036306Z",
+      "updated_at": "2026-11-23T13:18:18.815868598Z",
+      "seal": {
+        "by": "server",
+        "mac": "e2bb6244ea7fae5176c8403dc6efc8b51a6d2c025b434390e77148bbb84c3739"
+      }
+    },
+    {
+      "id": "CLM-0759",
+      "statement": "The changelog's crosses-in-release-1 inventory is accurate and complete against the code: every statement in the typed transactions that touches account tables is listed with correct file locations.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #960: \"Every statement in those transactions that still touches account tables is listed in the changelog as the 'crosses in release 1' inventory.\"",
+      "derived_from": [
+        "CLM-0754"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T12-55-43Z-m21-task-02-catalog-writes-take-catalogdb.md"
+      ],
+      "tags": [
+        "from-issue:960"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1014",
+          "kind": "analysis",
+          "locator": "grep of account tables in non-test code of src/store/{publish,import,repair}.rs, src/write.rs, src/mcp/changesets.rs vs changelog Notes",
+          "summary": "Every account-table statement found is in the inventory: generation bump (publish.rs:283, import.rs:289, repair.rs:151), current_base read (publish.rs:393), lock_by_name/find, lock_catalog (changesets.rs:241) from publish/write/mcp open+discard, lock_people (publish.rs:369; write.rs:181; mcp/changesets.rs:647; import/repair), catalog_teams+record (publish.rs:288-302, write.rs:265-273, mcp/changesets.rs:666-678, record_catalog), invalidate, and changesets.key_id/catalog_id FKs (changesets::open INSERT, changesets.rs:307). Cited lines changesets.rs:241 and the :654 / repair.rs:281 read statements (SELECT starts at 654 and 281) exist as stated. Nothing unlisted found.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T12-55-43Z-m21-task-02-catalog-writes-take-catalogdb.md",
+              "lines": {
+                "start": 12,
+                "end": 25
+              },
+              "commit": "99f568081e476dc2fba17b2aa55c5c2d408f0f93"
+            }
+          },
+          "recorded_at": "2026-11-23T13:18:05.839780371Z",
+          "seal": {
+            "by": "server",
+            "mac": "780d9507839ddc2218cf1144ab6f154987ebb9dbecb4ab705cbd72d330915963"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Independent grep of account tables found nothing unlisted; cited locations exist.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1014"
+          ],
+          "recorded_at": "2026-11-23T13:18:18.870743939Z",
+          "seal": {
+            "by": "server",
+            "mac": "e98eb265b7d9254b4bb4128c6e0bf3db5a9800180c8a3b04c91ee82f60cfe200"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:17:22.860036306Z",
+      "updated_at": "2026-11-23T13:18:18.870743939Z",
+      "seal": {
+        "by": "server",
+        "mac": "2ef13be471722a176dfe5a14e32d64d8d70c7b4b961f91484ccda29b81b64319"
+      }
+    },
+    {
+      "id": "CLM-0760",
+      "statement": "The change has no behaviour change: every non-test hunk only retypes handles or begins the transaction on the same pool.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"No behaviour change: in release 1 `App::main_store()` and the account pool are the same pool.\"",
+      "derived_from": [
+        "CLM-0754"
+      ],
+      "artifacts": [
+        "src/store",
+        "src/write.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:960"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1015",
+          "kind": "analysis",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD -- src (non-test hunks); src/app.rs:72,349,563",
+          "summary": "Non-test hunks: import/repair signature + `db.begin()`, four `pool().begin()` -> `main_store().begin()` swaps (write.rs:178, publish.rs:212, mcp/changesets.rs:316,644), CLI/HTTP caller constructions, CatalogDb::new visibility. App comment at app.rs:72 states pool() and main_store() are the same pool. No SQL, ordering or error-path edits. All other hunks are test callers.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/app.rs",
+              "lines": {
+                "start": 70,
+                "end": 76
+              },
+              "commit": "99f568081e476dc2fba17b2aa55c5c2d408f0f93"
+            }
+          },
+          "recorded_at": "2026-11-23T13:18:05.902384555Z",
+          "seal": {
+            "by": "server",
+            "mac": "f84f24f7d7ce3960c8c672793a9157ae54b5f1d8790f00887a141de18b7e95b7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "No semantic non-test hunk beyond handle swaps; suite passes (3385).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1015"
+          ],
+          "recorded_at": "2026-11-23T13:18:18.921693373Z",
+          "seal": {
+            "by": "server",
+            "mac": "ff6182abbfcfe37e57c1a9a4fd1b0e661858cccb9c00b905032003e89ffc4a53"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:17:22.860036306Z",
+      "updated_at": "2026-11-23T13:18:18.921693373Z",
+      "seal": {
+        "by": "server",
+        "mac": "82ac35219f2c064a4acfe436d91d2d3f9a1b79cf13cb8bfa9525e19dc5191b6f"
+      }
+    },
+    {
+      "id": "CLM-0761",
+      "statement": "The test gate ran 3385 passed, 0 failed, 21 ignored, and fmt, lint, dylint and test gates all exit 0.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"`tools/agentic/gate.sh fmt`, `lint`, `dylint` and `test`: all exit 0. The test gate ran 3385 passed, 0 failed, 21 ignored\"",
+      "derived_from": [
+        "CLM-0754"
+      ],
+      "artifacts": [
+        "target/i960-logs/test.log"
+      ],
+      "tags": [
+        "from-issue:960"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1010",
+          "kind": "log",
+          "locator": "target/i960-logs/status; sum of `test result:` lines in target/i960-logs/test.log",
+          "summary": "status shows fmt 0, lint 0, dylint 0, test 0; summing the 28 `test result` lines gives 3385 passed, 0 failed, 21 ignored. The log includes the ui_e2e binary, so the edited tests/ui_e2e files compiled. Not rerun by me (told not to).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T13:17:42.983430862Z",
+          "seal": {
+            "by": "server",
+            "mac": "5d89d5be11bc73e45b8799b0a295924695ad5117e9b08b8da3788d275c154f0e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Gate logs confirm statuses and counts (recomputed from log, not rerun).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1010"
+          ],
+          "recorded_at": "2026-11-23T13:18:18.984606709Z",
+          "seal": {
+            "by": "server",
+            "mac": "0682c112b8bf8f97af79a05e4c64c98f7652fcccdbda2ddcd1af7c794e09e32c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:17:22.860036306Z",
+      "updated_at": "2026-11-23T13:18:18.984606709Z",
+      "seal": {
+        "by": "server",
+        "mac": "bb463da03343a9f127fba3eca590415255be614578b11cb08144ee5bc4449642"
+      }
+    },
+    {
+      "id": "CLM-0762",
+      "statement": "The plan has a dated correction note under Task 2 matching the shipped shapes, and no later plan task names a symbol this PR changed.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"Plan corrected with a dated note under Task 2 ... No later task names a changed symbol\"",
+      "derived_from": [
+        "CLM-0754"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:960"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1011",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:237; grep for import::import|repair::repair|CatalogDb::new|repair_catalogs|apply_audited|open_changeset in the plan",
+          "summary": "Dated correction (2026-11-23) at line 237 under Task 2 matches shipped code. Outside it and the Task 1 note (line 201), the plan names no import/repair/CatalogDb::new/repair_catalogs/open_changeset symbol in later tasks; only apply_audited appears in the pre-existing header inventory at line 62 (name unchanged, only its line number there is stale).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 237,
+                "end": 237
+              },
+              "commit": "99f568081e476dc2fba17b2aa55c5c2d408f0f93"
+            }
+          },
+          "recorded_at": "2026-11-23T13:17:43.036270304Z",
+          "seal": {
+            "by": "server",
+            "mac": "231bfdb5f8c8a23bc0d4b36afdd5a25865ff1eff124c74bb618cbc786b2e2f62"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Note present and accurate; no later task names changed symbols.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1011"
+          ],
+          "recorded_at": "2026-11-23T13:18:19.041913201Z",
+          "seal": {
+            "by": "server",
+            "mac": "c53a3d3a13ac92005b1977bfa56cd62e075aeab1539f75eaa74d9bf51438857b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:17:22.860036306Z",
+      "updated_at": "2026-11-23T13:18:19.041913201Z",
+      "seal": {
+        "by": "server",
+        "mac": "0b95f143e133956fc13a21658254b2e0cccfdabc04be2400c949200726bb4506"
+      }
+    },
+    {
+      "id": "CLM-0763",
+      "statement": "The PR adds exactly one changelog entry.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #960: a changelog entry",
+      "derived_from": [
+        "CLM-0754"
+      ],
+      "artifacts": [
+        "changelog"
+      ],
+      "tags": [
+        "from-issue:960"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1012",
+          "kind": "inspection",
+          "locator": "git diff --stat origin/milestone/958-catalog-stores..HEAD",
+          "summary": "Exactly one file under changelog/ is added: changelog/2026-11-23T12-55-43Z-m21-task-02-catalog-writes-take-catalogdb.md.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T12-55-43Z-m21-task-02-catalog-writes-take-catalogdb.md",
+              "commit": "99f568081e476dc2fba17b2aa55c5c2d408f0f93"
+            }
+          },
+          "recorded_at": "2026-11-23T13:17:43.087173478Z",
+          "seal": {
+            "by": "server",
+            "mac": "f707aac63cdeb108d36e01fc5846f7666eb4e1104f8669b38524fbe154efa440"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "One changelog file in the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1012"
+          ],
+          "recorded_at": "2026-11-23T13:18:19.100520438Z",
+          "seal": {
+            "by": "server",
+            "mac": "04e5c8871d5d4e6a4c2264c7847edab02684a69881c822bf15189ef19b784c3c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T13:17:22.860036306Z",
+      "updated_at": "2026-11-23T13:18:19.100520438Z",
+      "seal": {
+        "by": "server",
+        "mac": "c143f0c4a03f711658ab252502a917d0f66c1a6963b13d3899f028b91ddcbb4b"
       }
     }
   ]

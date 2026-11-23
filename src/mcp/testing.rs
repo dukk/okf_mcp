@@ -107,9 +107,14 @@ async fn seed(catalogs_and_files: &[(&str, &[(&str, &str)])], imported: DateTime
             audit: &AuditActor::cli(),
             now: imported,
         };
-        import(&db.pool, name, files(entries), &options)
-            .await
-            .expect("import the test files");
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            name,
+            files(entries),
+            &options,
+        )
+        .await
+        .expect("import the test files");
     }
     db
 }

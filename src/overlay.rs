@@ -673,7 +673,14 @@ mod tests {
             now: Utc::now(),
         };
         let republished = files(&[("a.md", "# A\n"), ("b.md", "# B\n")]);
-        import(pool, "pg", republished, &options).await.unwrap();
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+            "pg",
+            republished,
+            &options,
+        )
+        .await
+        .unwrap();
         state.refresh(pool, rebuilds).await.unwrap();
         let after_import = overlays
             .get(pool, rebuilds, &state, &second_row)

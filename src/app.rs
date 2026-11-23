@@ -1532,7 +1532,14 @@ mod tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
         };
-        import(pool, catalog, files, &options).await.unwrap();
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+            catalog,
+            files,
+            &options,
+        )
+        .await
+        .unwrap();
     }
 
     async fn new_key(pool: &PgPool, id: &str) -> String {

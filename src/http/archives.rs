@@ -547,7 +547,7 @@ async fn import_catalog(
             audit: &actor,
             now: app.clock().now(),
         };
-        let report = import(app.pool(), &name, files, &options)
+        let report = import(app.main_store(), &name, files, &options)
             .await
             // `store::import`'s "not empty" refusal names the CLI flag: say what
             // HTTP needs instead. Its generation refusal ("... export it again")

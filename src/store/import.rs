@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use sqlx::{PgConnection, PgPool};
+use sqlx::PgConnection;
 
 use crate::archive::Files;
 use crate::error::OkfError;
@@ -16,6 +16,7 @@ use crate::okf::workspace::{MemWorkspace, StoredFile};
 use crate::store::audit::{self, Action, AuditActor, People};
 use crate::store::catalogs::{self, CatalogEvent, CatalogGeneration};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionRecord};
+use crate::stores::CatalogDb;
 
 /// Which of a catalog's paths an import replaces.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -145,7 +146,7 @@ struct Analyzed {
 /// transaction; one that wrote nothing records nothing.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `db` - the store holding the catalog.
 /// * `catalog` - the catalog's name (it must exist: `okf-mcp catalog create`).
 /// * `files` - the files, from [`crate::archive`].
 /// * `options` - replace, scope, expected generation, actor and time.
@@ -166,14 +167,14 @@ struct Analyzed {
 /// failed audit write included.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "import.import"))]
 pub async fn import(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog: &str,
     files: Files,
     options: &ImportOptions<'_>,
 ) -> Result<ImportReport, OkfError> {
     let now = options.now;
     // Dropping `tx` without `commit()` (any `?` or early `return`) rolls back.
-    let mut tx = pool.begin().await?;
+    let mut tx = db.begin().await?;
     audit::lock_people(
         &mut tx,
         options.audit,
@@ -415,6 +416,7 @@ mod tests {
     use super::*;
     use crate::db::test_db;
     use chrono::TimeZone;
+    use sqlx::PgPool;
 
     fn at(minute: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 11, 2, 12, minute, 0).unwrap()
@@ -501,10 +503,21 @@ mod tests {
         ]);
 
         // Generation 0: no `replace` needed.
-        let report = import(&db.pool, "pg", incoming.clone(), &options(false, at(1)))
-            .await
-            .unwrap();
-        let again = import(&db.pool, "pg", incoming, &options(false, at(2))).await;
+        let report = import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            incoming.clone(),
+            &options(false, at(1)),
+        )
+        .await
+        .unwrap();
+        let again = import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            incoming,
+            &options(false, at(2)),
+        )
+        .await;
 
         assert_eq!(
             (report.added, report.updated, report.deleted),
@@ -548,9 +561,14 @@ mod tests {
             ("img/logo.png", b"\x89PNG\0\xff", false),
         ]);
 
-        let report = import(&db.pool, "pg", incoming, &options(false, at(1)))
-            .await
-            .unwrap();
+        let report = import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            incoming,
+            &options(false, at(1)),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             report.added,
@@ -623,19 +641,35 @@ mod tests {
             ("change.md", b"# Old\n", false),
             ("drop.md", b"# Drop\n", false),
         ]);
-        import(&db.pool, "pg", first.clone(), &options(false, at(1)))
-            .await
-            .unwrap();
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            first.clone(),
+            &options(false, at(1)),
+        )
+        .await
+        .unwrap();
 
-        let refused = import(&db.pool, "pg", first, &options(false, at(2))).await;
+        let refused = import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            first,
+            &options(false, at(2)),
+        )
+        .await;
         let second = files(&[
             ("keep.md", b"# Keep\n", false),
             ("change.md", b"# New\n", false),
             ("new.md", b"# New\n", false),
         ]);
-        let report = import(&db.pool, "pg", second, &options(true, at(3)))
-            .await
-            .unwrap();
+        let report = import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            second,
+            &options(true, at(3)),
+        )
+        .await
+        .unwrap();
 
         assert!(
             matches!(refused, Err(OkfError::Refused { ref reason }) if reason.contains("--replace"))
@@ -689,7 +723,7 @@ mod tests {
         let db = test_db().await;
         create_empty(&db.pool).await;
         import(
-            &db.pool,
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
             "pg",
             files(&[("a.md", b"1", false)]),
             &options(false, at(1)),
@@ -697,7 +731,7 @@ mod tests {
         .await
         .unwrap();
         import(
-            &db.pool,
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
             "pg",
             files(&[("b.md", b"b", false)]),
             &options(true, at(2)),
@@ -706,12 +740,22 @@ mod tests {
         .unwrap();
         let both = files(&[("a.md", b"3", false), ("b.md", b"b", false)]);
 
-        let recreated = import(&db.pool, "pg", both.clone(), &options(true, at(3)))
-            .await
-            .unwrap();
-        let again = import(&db.pool, "pg", both, &options(true, at(4)))
-            .await
-            .unwrap();
+        let recreated = import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            both.clone(),
+            &options(true, at(3)),
+        )
+        .await
+        .unwrap();
+        let again = import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            both,
+            &options(true, at(4)),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             (recreated.added, recreated.unchanged),
@@ -736,9 +780,14 @@ mod tests {
             ("AGENTS.md", b"# Old rules\n", false),
             ("tools/old.sh", b"old\n", true),
         ]);
-        import(&db.pool, "pg", exported.clone(), &options(false, at(1)))
-            .await
-            .unwrap();
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            exported.clone(),
+            &options(false, at(1)),
+        )
+        .await
+        .unwrap();
         // Published after the export: `b.md` is new and `a.md` changed.
         let published = files(&[
             ("a.md", b"# A, edited\nSee [b](b.md).\n", false),
@@ -746,9 +795,14 @@ mod tests {
             ("b.md", b"# B\n", false),
             ("tools/old.sh", b"old\n", true),
         ]);
-        import(&db.pool, "pg", published, &options(true, at(2)))
-            .await
-            .unwrap();
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            published,
+            &options(true, at(2)),
+        )
+        .await
+        .unwrap();
         // The export with new machinery overlaid: its `a.md` is stale and it
         // has no `b.md`.
         let mut overlaid = exported;
@@ -762,7 +816,14 @@ mod tests {
             ..options(true, at(3))
         };
 
-        let report = import(&db.pool, "pg", overlaid, &machinery).await.unwrap();
+        let report = import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            overlaid,
+            &machinery,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.added, ["tools/new.sh"]);
         assert_eq!(report.updated, ["AGENTS.md"]);
@@ -796,7 +857,7 @@ mod tests {
         let db = test_db().await;
         create_empty(&db.pool).await;
         import(
-            &db.pool,
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
             "pg",
             files(&[("a.md", b"1", false)]),
             &options(false, at(1)),
@@ -810,15 +871,20 @@ mod tests {
         };
 
         let stale = import(
-            &db.pool,
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
             "pg",
             files(&[("a.md", b"stale", false)]),
             &guarded(0),
         )
         .await;
-        let current = import(&db.pool, "pg", files(&[("a.md", b"2", false)]), &guarded(1))
-            .await
-            .unwrap();
+        let current = import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            files(&[("a.md", b"2", false)]),
+            &guarded(1),
+        )
+        .await
+        .unwrap();
 
         assert!(matches!(
             stale,
@@ -838,7 +904,7 @@ mod tests {
         let db = test_db().await;
         let catalog = create_empty(&db.pool).await;
         import(
-            &db.pool,
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
             "pg",
             files(&[("a.md", b"1", false)]),
             &options(false, at(1)),
@@ -856,7 +922,13 @@ mod tests {
                 expect_catalog_id: None,
                 ..options(true, at(3))
             };
-            import(&pool, "pg", files(&[("a.md", b"stale", false)]), &guarded).await
+            import(
+                &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+                "pg",
+                files(&[("a.md", b"stale", false)]),
+                &guarded,
+            )
+            .await
         });
         catalogs::tests::until_a_lock_is_awaited(&db.pool).await;
 
@@ -914,7 +986,7 @@ mod tests {
         let db = test_db().await;
         create_empty(&db.pool).await;
         import(
-            &db.pool,
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
             "pg",
             files(&[("run.sh", b"x", false)]),
             &options(false, at(1)),
@@ -923,7 +995,7 @@ mod tests {
         .unwrap();
 
         let report = import(
-            &db.pool,
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
             "pg",
             files(&[("run.sh", b"x", true)]),
             &options(true, at(2)),
@@ -953,9 +1025,15 @@ mod tests {
             ("c.md", b"\xc3", false),
         ]);
 
-        let binary = import(&db.pool, "pg", binary_markdown, &options(false, at(1))).await;
+        let binary = import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            binary_markdown,
+            &options(false, at(1)),
+        )
+        .await;
         let unknown = import(
-            &db.pool,
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
             "nope",
             files(&[("a.md", b"# A\n", false)]),
             &options(false, at(1)),
@@ -1000,7 +1078,7 @@ mod tests {
         // `tokio::spawn` runs the import concurrently; it blocks on the lock.
         let waiting = tokio::spawn(async move {
             import(
-                &pool,
+                &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
                 "pg",
                 files(&[("a.md", b"# A\n", false)]),
                 &options(false, at(1)),
@@ -1027,17 +1105,44 @@ mod tests {
         let first = files(&[("a.md", CONCEPT, false), ("b.md", CONCEPT, false)]);
         let second = files(&[("a.md", b"# Changed\n", false)]);
 
-        import(&db.pool, "pg", first, &options(false, at(1)))
-            .await
-            .unwrap();
-        import(&db.pool, "pg", second.clone(), &options(true, at(2)))
-            .await
-            .unwrap();
-        let same = import(&db.pool, "pg", second, &options(true, at(3)))
-            .await
-            .unwrap();
-        let refused = import(&db.pool, "pg", files(&[]), &options(false, at(4))).await;
-        let malformed = import(&db.pool, "p\0g", files(&[]), &options(true, at(5))).await;
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            first,
+            &options(false, at(1)),
+        )
+        .await
+        .unwrap();
+        import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            second.clone(),
+            &options(true, at(2)),
+        )
+        .await
+        .unwrap();
+        let same = import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            second,
+            &options(true, at(3)),
+        )
+        .await
+        .unwrap();
+        let refused = import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "pg",
+            files(&[]),
+            &options(false, at(4)),
+        )
+        .await;
+        let malformed = import(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            "p\0g",
+            files(&[]),
+            &options(true, at(5)),
+        )
+        .await;
 
         assert_eq!(same.unchanged, 1);
         assert!(matches!(refused, Err(OkfError::Refused { .. })));
@@ -1069,7 +1174,7 @@ mod tests {
             .await;
 
         let refused = import(
-            &db.pool,
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
             "pg",
             files(&[("a.md", CONCEPT, false)]),
             &options(false, at(1)),

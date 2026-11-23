@@ -1281,7 +1281,7 @@ async fn import_private_index(test: &TestApp) {
         now: Utc::now(),
     };
     let files = crate::archive::read_tarball(archive.as_slice(), 1 << 20).unwrap();
-    crate::store::import::import(test.app.pool(), "main", files, &options)
+    crate::store::import::import(test.app.main_store(), "main", files, &options)
         .await
         .unwrap();
 }

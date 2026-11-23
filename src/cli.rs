@@ -38,6 +38,7 @@ use crate::store::repair;
 use crate::store::settings::SettingKey;
 use crate::store::teams::Role;
 use crate::store::unlocks::Category;
+use crate::stores::{CatalogDb, StoreName};
 use crate::telemetry::metrics::Metrics;
 use crate::telemetry::subscriber::split_event;
 use crate::telemetry::{self, StartUp, Telemetry};
@@ -1063,7 +1064,13 @@ async fn dispatch(
                 audit: &AuditActor::cli(),
                 now: clock.now(),
             };
-            let report = import::import(&pool, &catalog, files, &options).await?;
+            let report = import::import(
+                &CatalogDb::new(StoreName::main(), pool.clone()),
+                &catalog,
+                files,
+                &options,
+            )
+            .await?;
             changed.extend(report.changed);
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
@@ -1370,9 +1377,11 @@ async fn run_catalog(
                 audit: &audit,
                 now: clock.now(),
             };
+            // Release 1: the only store is `main`, in the account database.
+            let store = CatalogDb::new(StoreName::main(), pool.clone());
             print!(
                 "{}",
-                repair_catalogs(pool, &targets, &options, changed).await?
+                repair_catalogs(&store, &targets, &options, changed).await?
             );
         }
     }
@@ -1420,7 +1429,7 @@ async fn repair_targets(
 /// describes each result.
 ///
 /// # Arguments
-/// * `pool` - the migrated database.
+/// * `db` - the store holding the catalogs.
 /// * `targets` - the catalogs.
 /// * `options` - dry run, actor and time.
 /// * `changed` - gets the generation of each catalog a repair wrote.
@@ -1434,7 +1443,7 @@ async fn repair_targets(
 /// the whole report, then each failed catalog and why.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn repair_catalogs(
-    pool: &PgPool,
+    db: &CatalogDb,
     targets: &[String],
     options: &repair::RepairOptions<'_>,
     changed: &mut Vec<CatalogGeneration>,
@@ -1448,7 +1457,7 @@ async fn repair_catalogs(
         ""
     };
     for name in targets {
-        match repair::repair(pool, name, options).await {
+        match repair::repair(db, name, options).await {
             Ok(report) => {
                 if !report.written.is_empty() {
                     repaired += 1;
@@ -2863,17 +2872,27 @@ mod tests {
         let named = vec!["fresh".into(), "old".into(), "typo".into()];
         let (filtered, skipped) = repair_targets(&db.pool, named, true).await.unwrap();
         let mut changed = Vec::new();
-        let dry = repair_catalogs(&db.pool, &targets, &options(true), &mut changed)
-            .await
-            .unwrap();
+        let dry = repair_catalogs(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &targets,
+            &options(true),
+            &mut changed,
+        )
+        .await
+        .unwrap();
         let still_missing = repair_targets(&db.pool, Vec::new(), true).await.unwrap().0;
         // A failing catalog in the middle of a batch stops neither neighbour.
         let batch = ["old".to_string(), "nope".to_string(), "other".to_string()];
         let dry_changed = std::mem::take(&mut changed);
-        let mixed = repair_catalogs(&db.pool, &batch, &options(false), &mut changed)
-            .await
-            .unwrap_err()
-            .to_string();
+        let mixed = repair_catalogs(
+            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &batch,
+            &options(false),
+            &mut changed,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         let after = repair_targets(&db.pool, Vec::new(), true).await.unwrap().0;
 
         assert!(unnamed.to_string().contains("--missing-only"), "{unnamed}");

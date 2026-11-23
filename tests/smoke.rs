@@ -169,7 +169,14 @@ async fn storage_round_trip_on_a_real_catalog() {
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),
     };
-    let report = import(&db.pool, "pg", files, &options).await.unwrap();
+    let report = import(
+        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), db.pool.clone()),
+        "pg",
+        files,
+        &options,
+    )
+    .await
+    .unwrap();
     eprintln!(
         "import: {} added, lint {} errors / {} warnings in {:?}",
         report.added.len(),

@@ -110,7 +110,14 @@ async fn seed(pool: &PgPool, name: &str, count: usize) {
         audit: &AuditActor::cli(),
         now: Utc::now(),
     };
-    import(pool, name, files, &options).await.unwrap();
+    import(
+        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), pool.clone()),
+        name,
+        files,
+        &options,
+    )
+    .await
+    .unwrap();
 }
 
 /// Creates catalog `name` holding `count` empty documents at paths shaped
@@ -146,7 +153,14 @@ async fn seed_empty(pool: &PgPool, name: &str, count: usize) {
         audit: &AuditActor::cli(),
         now: Utc::now(),
     };
-    import(pool, name, files, &options).await.unwrap();
+    import(
+        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), pool.clone()),
+        name,
+        files,
+        &options,
+    )
+    .await
+    .unwrap();
 }
 
 /// Loads catalog `name` and returns `(resident bytes, stored bytes)`.

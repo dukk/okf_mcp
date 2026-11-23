@@ -1805,9 +1805,14 @@ async fn publish(
         now: Utc::now(),
     };
     crate::support::server::applied(app, async {
-        import(pool, catalog, entries, &options)
-            .await
-            .expect("import");
+        import(
+            &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), pool.clone()),
+            catalog,
+            entries,
+            &options,
+        )
+        .await
+        .expect("import");
     })
     .await;
 }
@@ -2563,9 +2568,17 @@ async fn publish_as(server: &TestServer, actor: &str, entries: okf_mcp::archive:
         now: Utc::now(),
     };
     crate::support::server::applied(&server.app, async {
-        import(&server.db.pool, "notes", entries, &options)
-            .await
-            .expect("import");
+        import(
+            &okf_mcp::stores::CatalogDb::new(
+                okf_mcp::stores::StoreName::main(),
+                server.db.pool.clone(),
+            ),
+            "notes",
+            entries,
+            &options,
+        )
+        .await
+        .expect("import");
     })
     .await;
 }

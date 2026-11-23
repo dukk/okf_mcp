@@ -869,7 +869,7 @@ mod tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
         };
-        import(test.app.pool(), "main", files(&entries), &options)
+        import(test.app.main_store(), "main", files(&entries), &options)
             .await
             .expect("import the edit");
 
@@ -1150,7 +1150,7 @@ mod tests {
             now: Utc::now(),
         };
         crate::invalidate::testing::applied(&test.app, async {
-            import(test.app.pool(), catalog, files(entries), &options)
+            import(test.app.main_store(), catalog, files(entries), &options)
                 .await
                 .expect("import");
         })
