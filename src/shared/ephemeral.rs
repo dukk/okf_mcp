@@ -26,7 +26,10 @@ use crate::oauth::expiring::ExpiringMap;
 use crate::telemetry::metrics::RedisOp;
 
 /// Writes `ARGV[2]` over `KEYS[1]` only if it still holds `ARGV[1]`, keeping
-/// its remaining TTL. 1 written, 0 changed meanwhile, -1 gone (it ran: see
+/// its remaining TTL, or `ARGV[3]` milliseconds when that is longer (0 keeps
+/// the TTL as is; see [`Ephemeral::update_with_ttl_floor`]). The floor is
+/// applied in the same script as the write, so it never reaches an entry the
+/// write did not land on. 1 written, 0 changed meanwhile, -1 gone (it ran: see
 /// the plan's verified facts). Its one key is named in `KEYS`, so a cluster
 /// routes it to that key's slot.
 const COMPARE_AND_SET: &str = "local cur = redis.call('GET', KEYS[1])\n\
@@ -34,6 +37,8 @@ const COMPARE_AND_SET: &str = "local cur = redis.call('GET', KEYS[1])\n\
     if cur ~= ARGV[1] then return 0 end\n\
     local ttl = redis.call('PTTL', KEYS[1])\n\
     if ttl <= 0 then return -1 end\n\
+    local floor = tonumber(ARGV[3])\n\
+    if floor > ttl then ttl = floor end\n\
     redis.call('SET', KEYS[1], ARGV[2], 'PX', ttl)\n\
     return 1";
 
@@ -353,10 +358,52 @@ where
         now: Instant,
         change: impl FnMut(&mut V) -> R,
     ) -> Result<Option<R>, OkfError> {
+        self.update_with_ttl_floor(key, now, Duration::ZERO, change)
+            .await
+    }
+
+    /// [`Self::update`], and in Redis the entry then lives at least `floor`
+    /// longer from the write, in the same atomic script as the write.
+    ///
+    /// For a change that leaves the entry in a terminal state a later reader
+    /// must still find (a used authorization code, which is how a replay is
+    /// told from an expired code). It never shortens an entry, and applies
+    /// only when this write lands, so never call it for a change that keeps
+    /// an entry usable. The memory arm judges liveness by `now`, so a floor
+    /// changes nothing there.
+    ///
+    /// # Arguments
+    /// * `key` - its key.
+    /// * `now` - the current instant (memory only).
+    /// * `floor` - the least remaining lifetime after the write
+    ///   ([`Duration::ZERO`] keeps the remaining lifetime).
+    /// * `change` - as for [`Self::update`].
+    ///
+    /// # Returns
+    /// As [`Self::update`].
+    ///
+    /// # Errors
+    /// As [`Self::update`].
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "dispatch to the arm: each arm's own call is the span"
+        )
+    )]
+    pub async fn update_with_ttl_floor<R>(
+        &self,
+        key: &str,
+        now: Instant,
+        floor: Duration,
+        change: impl FnMut(&mut V) -> R,
+    ) -> Result<Option<R>, OkfError> {
         match self {
             // An `FnMut` closure is also an `FnOnce`, which the map takes.
             Self::Memory(map) => Ok(map.update(key, now, change)),
-            Self::Redis { redis, space, .. } => redis_update(redis, *space, key, change).await,
+            Self::Redis { redis, space, .. } => {
+                redis_update(redis, *space, key, floor, change).await
+            }
         }
     }
 
@@ -501,11 +548,13 @@ async fn redis_update<V, R>(
     redis: &Redis,
     space: Keyspace,
     key: &str,
+    floor: Duration,
     mut change: impl FnMut(&mut V) -> R,
 ) -> Result<Option<R>, OkfError>
 where
     V: Serialize + DeserializeOwned,
 {
+    let floor_millis = if floor.is_zero() { 0 } else { millis(floor) };
     let key = redis.key(space.name(), &hashed(key));
     let mut connection = redis.connection();
     for _ in 0..UPDATE_ATTEMPTS {
@@ -526,6 +575,7 @@ where
             .key(&key)
             .arg(old)
             .arg(new)
+            .arg(floor_millis)
             .invoke_async(&mut connection)
             .await
             .map_err(|error| redis.failed(RedisOp::Update, &error))?;
@@ -803,6 +853,49 @@ mod tests {
         assert!(left > 0 && left <= 1000, "remaining {left} ms");
         tokio::time::sleep(Duration::from_millis(1200)).await;
         assert_eq!(store.take("k", Instant::now()).await.unwrap(), None);
+    }
+
+    /// A floor lengthens a written entry's life and never shortens it; no
+    /// floor leaves the remaining life; a lost entry stays lost.
+    async fn a_ttl_floor_only_lengthens_the_entry_it_writes(server: TestRedis) {
+        let redis = testing::connect(&server).await;
+        let store = Ephemeral::<Sample>::new(Some(&redis), Keyspace::OauthCode, TTL, 10);
+        let now = Instant::now();
+        let key = redis.key(Keyspace::OauthCode.name(), &hashed("k"));
+        store
+            .insert("k", Sample { n: 0, used: false }, now)
+            .await
+            .unwrap();
+        let _: bool = raw(&redis, redis::cmd("PEXPIRE").arg(&key).arg(5_000)).await;
+
+        store.update("k", now, |s| s.n += 1).await.unwrap();
+        let unchanged: i64 = raw(&redis, redis::cmd("PTTL").arg(&key)).await;
+        store
+            .update_with_ttl_floor("k", now, Duration::from_secs(1), |s| s.n += 1)
+            .await
+            .unwrap();
+        let not_shortened: i64 = raw(&redis, redis::cmd("PTTL").arg(&key)).await;
+        store
+            .update_with_ttl_floor("k", now, Duration::from_secs(30), |s| s.n += 1)
+            .await
+            .unwrap();
+        let lengthened: i64 = raw(&redis, redis::cmd("PTTL").arg(&key)).await;
+        let _: bool = raw(&redis, redis::cmd("PEXPIRE").arg(&key).arg(1)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let gone = store
+            .update_with_ttl_floor("k", now, Duration::from_secs(30), |s| s.n)
+            .await
+            .unwrap();
+
+        assert!(unchanged <= 5_000, "no floor: {unchanged}");
+        assert!(
+            not_shortened > 1_000 && not_shortened <= 5_000,
+            "{not_shortened}"
+        );
+        assert!(lengthened > 25_000 && lengthened <= 30_000, "{lengthened}");
+        assert_eq!(gone, None, "an expired entry is not revived");
+        let exists: i64 = raw(&redis, redis::cmd("EXISTS").arg(&key)).await;
+        assert_eq!(exists, 0);
     }
 
     async fn a_value_of_another_version_or_shape_is_absent_and_counted(server: TestRedis) {
@@ -1120,6 +1213,7 @@ mod tests {
         two_takes_racing_get_one_value,
         concurrent_updates_all_apply_once,
         update_keeps_the_fixed_lifetime_and_an_expired_entry_is_gone,
+        a_ttl_floor_only_lengthens_the_entry_it_writes,
         a_value_of_another_version_or_shape_is_absent_and_counted,
         redis_keys_never_hold_the_presented_id,
         an_index_swaps_atomically_and_returns_the_entry_it_replaced,

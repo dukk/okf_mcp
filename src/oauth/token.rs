@@ -6,7 +6,7 @@
 //! family (RFC 6749 section 4.1.2; OAuth 2.1 refresh token rotation).
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::extract::rejection::FormRejection;
 use axum::extract::State;
@@ -20,6 +20,7 @@ use sqlx::PgConnection;
 
 use crate::app::App;
 use crate::error::OkfError;
+use crate::http::REQUEST_TIMEOUT;
 use crate::keys;
 use crate::oauth::error::OAuthError;
 use crate::oauth::state::{code_key, AuthorizationCode};
@@ -343,6 +344,16 @@ async fn issue_token(
     }
 }
 
+/// How long a code stays in the store at least after an exchange marked it
+/// used. The OAuth routes are cut off at [`REQUEST_TIMEOUT`], so an exchange
+/// cannot reach its replay check later than that after the mark; the floor is
+/// that deadline plus a margin, so the check always finds the spent code even
+/// if the code's own 60 s lifetime ended meanwhile. A code gone then would be
+/// indistinguishable from a replayed one and would revoke a legitimate
+/// exchange's tokens (issue #590). Derived from the deadline so the two
+/// cannot drift apart.
+const USED_CODE_FLOOR: Duration = Duration::from_secs(REQUEST_TIMEOUT.as_secs() + 30);
+
 /// `grant_type=authorization_code`.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn exchange_code(
@@ -369,9 +380,14 @@ async fn exchange_code(
     // `stored`, so a rerun on a fresh copy answers the same (`lessons.md`).
     // A Redis failure (`?`) answers 503 and never falls back to memory
     // (spec Decision 16): the code is neither spent nor exchanged.
+    //
+    // The same script that marks the code used also keeps it at least
+    // `USED_CODE_FLOOR` longer, so the check after the commit finds it even
+    // when the code's own lifetime ran out meanwhile (a code is only ever
+    // extended once it is spent, never while it could still be exchanged).
     let taken = oauth
         .codes
-        .update(&key, started, |stored| {
+        .update_with_ttl_floor(&key, started, USED_CODE_FLOOR, |stored| {
             if stored.used {
                 stored.replayed = true;
                 Err(stored.family_id.clone())
@@ -445,7 +461,7 @@ async fn exchange_code(
     // commit and caught these tokens. The read is an `update` that changes
     // nothing, so it sees the latest stored copy. Only a stored code with
     // `replayed` unset keeps the tokens. A code gone from the store
-    // (expired, or Redis lost it) cannot vouch for itself, and neither can
+    // (Redis lost it, or it outlived `USED_CODE_FLOOR`) cannot vouch for itself, and neither can
     // a Redis failure: an exchange that cannot prove it was not replayed
     // must not keep its tokens, so both revoke (spec Decision 16). The
     // failure is still answered as what it is, a 503 to retry, not a replay.
@@ -1278,6 +1294,11 @@ mod tests {
     }
 
     #[test]
+    fn the_used_code_floor_outlasts_the_request_deadline() {
+        assert!(super::USED_CODE_FLOOR > crate::http::REQUEST_TIMEOUT);
+    }
+
+    #[test]
     fn debug_never_prints_codes_verifiers_or_tokens() {
         let secret = "okfac_do-not-print";
         let request = TokenForm {
@@ -1304,7 +1325,7 @@ mod tests {
     /// body runs on standalone Redis and on a one-node cluster.
     mod replicas {
         use std::sync::Arc;
-        use std::time::Duration;
+        use std::time::{Duration, Instant};
 
         use axum::http::StatusCode;
 
@@ -1460,6 +1481,102 @@ mod tests {
             }
         }
 
+        /// Issue #590: a code whose own lifetime runs out while its exchange
+        /// is minting is still a legitimate exchange, not a replay.
+        async fn a_code_expiring_mid_exchange_keeps_its_tokens(server: TestRedis) {
+            let (a, _b, server) = oauth_replica_pair_on(server).await;
+            let code = authorization_code(&a).await;
+            let family = stored_on(&a.app, &code)
+                .await
+                .expect("A stored the code")
+                .family_id;
+            let handle = crate::shared::testing::connect(&server).await;
+            let key = handle.key(Keyspace::OauthCode.name(), &hashed(&code_key(&code)));
+            // The code has this long left when the exchange starts.
+            const LEFT: Duration = Duration::from_millis(2_000);
+            let shortened = Instant::now();
+            let expiring: bool = redis::cmd("PEXPIRE")
+                .arg(&key)
+                .arg(LEFT.as_millis() as u64)
+                .query_async(&mut handle.connection())
+                .await
+                .expect("PEXPIRE");
+            assert!(expiring, "the code is stored under that key");
+            // Hold the family's lock, so the exchange stops after it marked
+            // the code used and before its post-commit replay check.
+            let mut holder = a.app.pool().begin().await.expect("a transaction");
+            crate::store::oauth::tokens::lock_family(&mut holder, &family)
+                .await
+                .expect("hold the family's lock");
+            let exchanging = {
+                let app = Arc::clone(&a.app);
+                let code = code.clone();
+                tokio::spawn(async move { exchange_on(&app, &code).await })
+            };
+            crate::http::api::testing::wait_for_lock_waiters(a.app.pool(), 1).await;
+            let marked = stored_on(&a.app, &code).await.expect("still stored");
+            assert!(marked.used, "the exchange marked the code used");
+            // The marking write kept the code longer than it had left.
+            let left: i64 = redis::cmd("PTTL")
+                .arg(&key)
+                .query_async(&mut handle.connection())
+                .await
+                .expect("PTTL");
+            assert!(
+                left > i64::try_from(LEFT.as_millis()).expect("fits"),
+                "the used code outlives its old lifetime: {left} ms left"
+            );
+            // And it outlives the longest an exchange may take (the OAuth
+            // routes are cut off at `REQUEST_TIMEOUT`), so a stall of any
+            // allowed length still finds it; a stall that long is not slept.
+            assert!(
+                left > i64::try_from(crate::http::REQUEST_TIMEOUT.as_millis()).expect("fits"),
+                "the used code outlives the request deadline: {left} ms left"
+            );
+            // Let what the code had left pass, as it does for an exchange
+            // that is slow in its last moments.
+            tokio::time::sleep(
+                LEFT.saturating_sub(shortened.elapsed()) + Duration::from_millis(250),
+            )
+            .await;
+            assert!(
+                stored_on(&a.app, &code).await.is_some(),
+                "the used code is still there for the check"
+            );
+
+            holder.rollback().await.expect("release the family's lock");
+            let (status, body) = tokio::time::timeout(BOUND, exchanging)
+                .await
+                .expect("the exchange finished after the lock was released")
+                .expect("the exchange task did not panic");
+
+            assert_eq!(status, StatusCode::OK, "{body}");
+            let access = text(&body, "access_token");
+            assert!(works_on(&a.app, &access).await, "the tokens stay live");
+        }
+
+        /// A genuine replay on the other replica still answers `invalid_grant`
+        /// and revokes the family, as before the floor.
+        async fn a_replay_of_a_used_code_still_revokes_on_redis(server: TestRedis) {
+            let (a, b, _server) = oauth_replica_pair_on(server).await;
+            let code = authorization_code(&a).await;
+            let (first, first_body) = exchange_on(&a.app, &code).await;
+            let access = text(&first_body, "access_token");
+            let (second, second_body) = exchange_on(&b, &code).await;
+
+            assert_eq!(first, StatusCode::OK, "{first_body}");
+            assert_eq!(second, StatusCode::BAD_REQUEST, "{second_body}");
+            assert_eq!(second_body["error"], "invalid_grant");
+            assert_eq!(
+                second_body["error_description"],
+                "the code was already used"
+            );
+            assert!(
+                !works_on(&a.app, &access).await,
+                "the replay revoked the family"
+            );
+        }
+
         async fn a_redis_outage_fails_closed(server: TestRedis) {
             let (a, b, server) = oauth_replica_pair_on(server).await;
             let code = authorization_code(&a).await;
@@ -1571,6 +1688,8 @@ mod tests {
             a_redis_failure_after_the_commit_revokes_and_answers_503,
             two_replicas_racing_one_code_leave_no_usable_token,
             an_expired_code_is_refused_on_either_replica,
+            a_code_expiring_mid_exchange_keeps_its_tokens,
+            a_replay_of_a_used_code_still_revokes_on_redis,
             a_redis_outage_fails_closed,
         );
     }

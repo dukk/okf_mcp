@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 546,
+  "next_claim_seq": 559,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "a1789f1ec82b1ce950a1ce813a3d1d64e7f6709fcef0ad4abab6e10d19654ad7"
+    "mac": "43e9131605ea9457f77c1243f7fb10cd7cc1d919d738686e2326e13b154369d5"
   },
-  "next_evidence_seq": 695,
+  "next_evidence_seq": 711,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "fc04c0607931312ff0532220204ded6a912dc01d77d7b4c5648ebdff4caafdc5"
+    "mac": "ea9b95d6ebbe2a3cc27da34b1489a3baf75d3c1f240858240d695300cb7a511e"
   },
   "claims": [
     {
@@ -22243,6 +22243,28 @@
             "by": "server",
             "mac": "4f9c05db5b6a9ec397ccfe2d48e3fe47f30f29d789b3cb42cc2e085de7a64296"
           }
+        },
+        {
+          "id": "EVD-0708",
+          "kind": "inspection",
+          "locator": "src/shared/ephemeral.rs:52,560-592 at c2c03cf",
+          "summary": "redis_update still loops UPDATE_ATTEMPTS (8) times, retrying on a script result of 0, and returns OkfError::Busy after the loop. The diff only added the floor parameter and argument; the retry logic is intact.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/ephemeral.rs",
+              "lines": {
+                "start": 558,
+                "end": 592
+              },
+              "commit": "c2c03cff1e9117413f4c801fea20c18fe8f20628"
+            }
+          },
+          "recorded_at": "2026-11-23T01:00:42.053490953Z",
+          "seal": {
+            "by": "server",
+            "mac": "75e9154caca0cd000032ffe7e18ce83ae95753eb860430b37820c826f8a53a95"
+          }
         }
       ],
       "verdicts": [
@@ -22258,13 +22280,26 @@
             "by": "server",
             "mac": "51ed5b461626e02d5d4783489cc8f7cfbc586e2bec2431784f0c199b5ba67b34"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head after its anchor changed: the 8-attempt retry and Busy error are intact.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0708"
+          ],
+          "recorded_at": "2026-11-23T01:00:45.261897778Z",
+          "seal": {
+            "by": "server",
+            "mac": "6b56be15550e7e6ece75f19bffb31c34748f49171d917627b28bbcfa209b65b6"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:50.360239770Z",
-      "updated_at": "2026-11-21T19:12:15.392480694Z",
+      "updated_at": "2026-11-23T01:00:45.261897778Z",
       "seal": {
         "by": "server",
-        "mac": "08ff6b28ae9190986e8c6dc9c80094e495fc92eb40e12280bcc770a973b66ec2"
+        "mac": "1e0bb8b47515f276bf1bebccb20c3cabaabebf34aac7d9386842b687864992e4"
       }
     },
     {
@@ -43335,6 +43370,903 @@
       "seal": {
         "by": "server",
         "mac": "01d836e628b8ab70d5d40ac4807a5c0a05907a367b2190599339dcf4599c869a"
+      }
+    },
+    {
+      "id": "CLM-0546",
+      "statement": "Issue #590 is resolved: an authorization code whose 60 s TTL expires between the exchange's mark-used CAS and its post-commit replay check no longer revokes the exchange's tokens or reports a replay, while a real replay still revokes the family and answers invalid_grant as before.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/590",
+      "derived_from": [],
+      "artifacts": [
+        "src/oauth/token.rs",
+        "src/shared/ephemeral.rs"
+      ],
+      "tags": [
+        "from-issue:590"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0707",
+          "kind": "analysis",
+          "locator": "children of CLM-0546",
+          "summary": "The behavioural children (window test, atomic script, floor only lengthens, single caller, unchanged replay logic, replay test, memory unchanged, expired-before-mark) are supported. The one undecided child, the full gate run, concerns the description's validation statement and not the issue's fix.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T01:00:09.139301328Z",
+          "seal": {
+            "by": "server",
+            "mac": "1ad118c0cf5658fc5536f647fafeab5e537bafc694d1b9d530429c0bcbfe628e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Children cover the window fix, atomicity, no extension of unused codes, unchanged replay and memory behaviour, with tests passing.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0707"
+          ],
+          "recorded_at": "2026-11-23T01:00:29.024393443Z",
+          "seal": {
+            "by": "server",
+            "mac": "0bdcb3603549a86fd578af20ab09413dd8b8c73f4226958c6da0926faf316087"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:59:34.754310735Z",
+      "updated_at": "2026-11-23T01:00:29.024393443Z",
+      "seal": {
+        "by": "server",
+        "mac": "b31f2d48feb871da43c4a2470c24d3a48d77c003d59da5faa1745b295c7dc708"
+      }
+    },
+    {
+      "id": "CLM-0547",
+      "statement": "On Redis (standalone and cluster), an exchange whose code's original lifetime runs out after the code was marked used and before the replay check still answers 200 and its access token stays live.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "issue #590 requirement: a deterministic test reproducing the window, asserting the legitimate exchange succeeds with live tokens",
+      "derived_from": [
+        "CLM-0546"
+      ],
+      "artifacts": [
+        "src/oauth/token.rs"
+      ],
+      "tags": [
+        "from-issue:590"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0695",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_code_expiring_mid_exchange (2 passed: standalone, cluster)",
+          "summary": "Test shortens the code's PTTL to 2 s, holds the family lock so the exchange stalls after the mark, asserts PTTL after the mark exceeds 2 s, sleeps past the old life, asserts the code is still stored, releases the lock, then asserts 200 and works_on(access token). Both modes pass at head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/token.rs",
+              "lines": {
+                "start": 1475,
+                "end": 1531
+              },
+              "commit": "c2c03cff1e9117413f4c801fea20c18fe8f20628"
+            }
+          },
+          "recorded_at": "2026-11-23T01:00:04.507932512Z",
+          "seal": {
+            "by": "server",
+            "mac": "a062c88ffff3a5a1c7ec5495aab215c77ad6ec833a33101f507bc33b040651df"
+          }
+        },
+        {
+          "id": "EVD-0709",
+          "kind": "test",
+          "locator": "src/oauth/token.rs a_code_expiring_mid_exchange_keeps_its_tokens (standalone and cluster)",
+          "summary": "At head 127bb35 the test also asserts the post-mark PTTL exceeds REQUEST_TIMEOUT (floor = 120 s + 30 s); gate test run passed 2834, 0 failed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/token.rs",
+              "lines": {
+                "start": 1490,
+                "end": 1560
+              },
+              "commit": "127bb35cac141049bcac7fb9303a6b9352cd9c3e"
+            }
+          },
+          "recorded_at": "2026-11-23T01:18:17.306412316Z",
+          "seal": {
+            "by": "server",
+            "mac": "5c7faf9235536cd60933177760cb2440d04f74929bad62ba0c150faccd9f2af6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test deterministically stalls the exchange between mark and check, outlives the old TTL, and asserts 200 and live tokens; passes in both modes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0695"
+          ],
+          "recorded_at": "2026-11-23T01:00:28.605343921Z",
+          "seal": {
+            "by": "server",
+            "mac": "514f2af8587946a1ed9c930d1d7f50ad6256ce57c35ce1da9c5f78472523c3df"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited after the test changed in review round 1.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0709"
+          ],
+          "recorded_at": "2026-11-23T01:18:22.123608228Z",
+          "seal": {
+            "by": "server",
+            "mac": "048b3b127c8bd0653fe56f6d5665040ec180b2276153bb7f2892d82d1d270a4b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:59:34.754310735Z",
+      "updated_at": "2026-11-23T01:18:22.123608228Z",
+      "seal": {
+        "by": "server",
+        "mac": "37d5f1e247f18c4b53e50ec5ec2d6ee11447e414750b61c6102f278573750b6e"
+      }
+    },
+    {
+      "id": "CLM-0548",
+      "statement": "The Redis compare-and-set script applies the TTL floor (ARGV[3]) in the same script as the write, so the extension cannot happen without the mark landing.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "issue #590 requirement: any extension must be atomic in the same script as the mark; PR: \"The floor is applied in the same script as the write, only when the write lands, and only lengthens.\"",
+      "derived_from": [
+        "CLM-0546"
+      ],
+      "artifacts": [
+        "src/shared/ephemeral.rs"
+      ],
+      "tags": [
+        "from-issue:590"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0696",
+          "kind": "inspection",
+          "locator": "src/shared/ephemeral.rs:35-43",
+          "summary": "The floor lines (tonumber(ARGV[3]); if floor > ttl then ttl = floor) sit inside COMPARE_AND_SET, after the GET-compare and PTTL<=0 early returns and before the SET ... PX ttl. Redis runs a script atomically, so the extension is applied only by the write that lands.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/ephemeral.rs",
+              "lines": {
+                "start": 35,
+                "end": 43
+              },
+              "commit": "c2c03cff1e9117413f4c801fea20c18fe8f20628"
+            }
+          },
+          "recorded_at": "2026-11-23T01:00:04.545544943Z",
+          "seal": {
+            "by": "server",
+            "mac": "36a359b8bb3617cd2b39fa3cd2d4115d4e43fa84da627287c64bbded58fcfe51"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The floor is computed inside the one Lua script after the compare and liveness checks and before the SET, so it is atomic with the write (script text, ephemeral.rs:35-43).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0696"
+          ],
+          "recorded_at": "2026-11-23T01:00:28.648392506Z",
+          "seal": {
+            "by": "server",
+            "mac": "650b3fc11438a753f175639dfcd9e7629e00c0d03b6b8f2df1ed9c2c2d40089f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:59:34.754310735Z",
+      "updated_at": "2026-11-23T01:00:28.648392506Z",
+      "seal": {
+        "by": "server",
+        "mac": "6b182b0a0d66d3ef065f72841bd7af18e7830e6d14f64f3118d7f03fb8c8f0e3"
+      }
+    },
+    {
+      "id": "CLM-0549",
+      "statement": "A TTL floor only lengthens an entry's remaining life, never shortens it, and never revives an entry that is already gone.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "PR: \"only when the write lands, and only lengthens\"; issue requirement: an unused code's life must never be extended",
+      "derived_from": [
+        "CLM-0546"
+      ],
+      "artifacts": [
+        "src/shared/ephemeral.rs"
+      ],
+      "tags": [
+        "from-issue:590"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0697",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_ttl_floor_only_lengthens (2 passed: standalone, cluster)",
+          "summary": "With PTTL 5 s: no floor leaves <=5000 ms; 1 s floor leaves >1000 and <=5000 (not shortened); 30 s floor gives >25000 and <=30000; after PEXPIRE 1 and 50 ms sleep a 30 s floor update returns None and EXISTS is 0 (not revived). Passes at head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/ephemeral.rs",
+              "lines": {
+                "start": 860,
+                "end": 899
+              },
+              "commit": "c2c03cff1e9117413f4c801fea20c18fe8f20628"
+            }
+          },
+          "recorded_at": "2026-11-23T01:00:04.583726646Z",
+          "seal": {
+            "by": "server",
+            "mac": "b971d565313d93581a24f13a6e3aa89b47742a578a4bbb116db8e78b63dbccaa"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test asserts no-floor, smaller-floor, larger-floor and expired-entry outcomes; all hold.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0697"
+          ],
+          "recorded_at": "2026-11-23T01:00:28.684644440Z",
+          "seal": {
+            "by": "server",
+            "mac": "e2565cd71aa30e8e5657e7ae4d4b6c0825e1460f94455cbf5870d6491e27641f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:59:34.754310735Z",
+      "updated_at": "2026-11-23T01:00:28.684644440Z",
+      "seal": {
+        "by": "server",
+        "mac": "7bb4259eb3fbb9c7da8931bfd33d03229da1113a24b2da3788b5ed25a881d631"
+      }
+    },
+    {
+      "id": "CLM-0550",
+      "statement": "The only caller that passes a non-zero TTL floor is the authorization-code exchange's mark-used update, so a code that has not been marked used is never extended; plain `update` passes a zero floor.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "PR: \"`update` calls it with zero\"; \"An unused code is never extended\"; issue requirement: an unused code's life must never be extended",
+      "derived_from": [
+        "CLM-0546"
+      ],
+      "artifacts": [
+        "src/oauth/token.rs",
+        "src/shared/ephemeral.rs"
+      ],
+      "tags": [
+        "from-issue:590"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0698",
+          "kind": "analysis",
+          "locator": "git grep -n update_with_ttl_floor src",
+          "summary": "Production callers: src/oauth/token.rs:384 (mark-used, USED_CODE_FLOOR) and src/shared/ephemeral.rs:361 (update, Duration::ZERO, mapped to 0 in redis_update). The rest are tests. The mark-used closure sets used=true; an unused code is thus extended only by the write that marks it used, and a code gone (-1) is not revived.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/token.rs",
+              "lines": {
+                "start": 384,
+                "end": 392
+              },
+              "commit": "c2c03cff1e9117413f4c801fea20c18fe8f20628"
+            }
+          },
+          "recorded_at": "2026-11-23T01:00:04.622500782Z",
+          "seal": {
+            "by": "server",
+            "mac": "12af6d9c35bd2eff8e680addf723509cb455cb57f197a5977a73da5edd9b6e5b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "A repo-wide grep shows one production caller with a non-zero floor, whose closure marks the code used; the only other caller passes zero.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0698"
+          ],
+          "recorded_at": "2026-11-23T01:00:28.718669575Z",
+          "seal": {
+            "by": "server",
+            "mac": "cfc42e8562e66abbc44588bd0eb557a1a4381adea87baa2920df3e394668a5e6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:59:34.754310735Z",
+      "updated_at": "2026-11-23T01:00:28.718669575Z",
+      "seal": {
+        "by": "server",
+        "mac": "d6195280ca0d7731cbf1bd6bf7c4f06b9c77602130f963f3a39c393b41cbaead"
+      }
+    },
+    {
+      "id": "CLM-0551",
+      "statement": "A code gone before the mark still answers invalid_grant \"unknown or expired code\" with nothing minted.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR: \"a code gone before the mark still answers \\\"unknown or expired code\\\" with nothing minted\"",
+      "derived_from": [
+        "CLM-0546"
+      ],
+      "artifacts": [
+        "src/oauth/token.rs"
+      ],
+      "tags": [
+        "from-issue:590"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0699",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- oauth::token (48 passed, includes an_expired_code_is_refused_on_either_replica)",
+          "summary": "The existing test an_expired_code_is_refused_on_either_replica (not modified by the diff) expires the code with PEXPIRE 1, then asserts 400 invalid_grant \"unknown or expired code\" on both replicas; the None arm at token.rs:394-398 returns before any mint. Passes at head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/token.rs",
+              "lines": {
+                "start": 1448,
+                "end": 1470
+              },
+              "commit": "c2c03cff1e9117413f4c801fea20c18fe8f20628"
+            }
+          },
+          "recorded_at": "2026-11-23T01:00:04.657927753Z",
+          "seal": {
+            "by": "server",
+            "mac": "88a640c78e7ee19efa877d82b7abb0d6d668747850579cb6bd94f11d2daf7ff4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The unchanged test asserts exactly this and passes at head; the None arm returns before minting.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0699"
+          ],
+          "recorded_at": "2026-11-23T01:00:28.753163472Z",
+          "seal": {
+            "by": "server",
+            "mac": "ba08f8d965a434d16913c438f4fe1c6a90cb4521d29cbf6bbdf65eec9bc2caac"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:59:34.754310735Z",
+      "updated_at": "2026-11-23T01:00:28.753163472Z",
+      "seal": {
+        "by": "server",
+        "mac": "fbac339d6ff62afccc45262a8033e19b252fa917bec0c8ca4ecf3f25ef76a818"
+      }
+    },
+    {
+      "id": "CLM-0552",
+      "statement": "A genuine replay (a second presentation of a used code on another replica) still answers 400 invalid_grant \"the code was already used\" and revokes the family so the first exchange's access token stops working.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "issue requirement: a real replay must still revoke the family and answer invalid_grant exactly as before; PR: \"a second presentation finds `used`, sets `replayed`, revokes the family, answers invalid_grant \\\"the code was already used\\\"\"",
+      "derived_from": [
+        "CLM-0546"
+      ],
+      "artifacts": [
+        "src/oauth/token.rs"
+      ],
+      "tags": [
+        "from-issue:590"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0700",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_replay_of_a_used_code_still_revokes (2 passed: standalone, cluster)",
+          "summary": "Exchange on replica A returns 200; the same code on replica B returns 400, error invalid_grant, error_description \"the code was already used\"; the first access token no longer works. Passes at head on both Redis modes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/token.rs",
+              "lines": {
+                "start": 1542,
+                "end": 1560
+              },
+              "commit": "c2c03cff1e9117413f4c801fea20c18fe8f20628"
+            }
+          },
+          "recorded_at": "2026-11-23T01:00:04.691932797Z",
+          "seal": {
+            "by": "server",
+            "mac": "fe1ea3dc8a334a289d6338a2ab5d111b60aa0154b03ab322f49bc7cec5e45430"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test asserts the status, error code, exact description and revocation of the first token; passes on both modes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0700"
+          ],
+          "recorded_at": "2026-11-23T01:00:28.786786704Z",
+          "seal": {
+            "by": "server",
+            "mac": "5da01b3d56a559eb699656ebc354def99dcf4b4cd11a0ef8984ee58b80e92848"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:59:34.754310735Z",
+      "updated_at": "2026-11-23T01:00:28.786786704Z",
+      "seal": {
+        "by": "server",
+        "mac": "4f1e186df43da4dd0486f1c1f97298bc16eb4a67db9ace1f9e0c7b64f40c0ec0"
+      }
+    },
+    {
+      "id": "CLM-0553",
+      "statement": "The replay-detection logic is unchanged: the mark-used closure and the post-commit check (a missing code, a replayed flag or a Redis error still revokes the family) are not modified by the diff.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR: \"Replay detection is unchanged\"; \"A missing code cannot vouch for itself (Redis could have lost it), so it must keep revoking\"",
+      "derived_from": [
+        "CLM-0546"
+      ],
+      "artifacts": [
+        "src/oauth/token.rs"
+      ],
+      "tags": [
+        "from-issue:590"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0701",
+          "kind": "analysis",
+          "locator": "git diff origin/main..HEAD -U0 -- src/oauth/token.rs (hunks at 371-374, 448)",
+          "summary": "The only non-comment change in exchange_code is update -> update_with_ttl_floor with the extra argument at line 384. The closure (used/replayed/Err(family_id)) and the post-commit match (Some(false) keeps; Some(true)|None and Err revoke) are textually unchanged; the hunk at 448 edits a comment only.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/token.rs",
+              "lines": {
+                "start": 380,
+                "end": 475
+              },
+              "commit": "c2c03cff1e9117413f4c801fea20c18fe8f20628"
+            }
+          },
+          "recorded_at": "2026-11-23T01:00:04.728702344Z",
+          "seal": {
+            "by": "server",
+            "mac": "1becb52efd422a683df6b29158ac9d2c17ae84332b280d0fbdde647dbc6a4061"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The diff touches only the call and a comment in the replay logic.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0701"
+          ],
+          "recorded_at": "2026-11-23T01:00:28.821320811Z",
+          "seal": {
+            "by": "server",
+            "mac": "e19af5fc6f5a1c545fc458c82992bd8d1083f423632d6cf0b3be03e907a342f1"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:59:34.754310735Z",
+      "updated_at": "2026-11-23T01:00:28.821320811Z",
+      "seal": {
+        "by": "server",
+        "mac": "1c764435616f2e9726e47863b1c068e2632e6880b283dfc476d0b025566657e6"
+      }
+    },
+    {
+      "id": "CLM-0554",
+      "statement": "The memory backend's behavior is unchanged: the memory arm of update_with_ttl_floor ignores the floor and calls the same map update as before.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR: \"The memory backend is unchanged (it judges liveness by the exchange's start instant, so it has no such window).\"; issue requirement: memory backend behaviour unchanged",
+      "derived_from": [
+        "CLM-0546"
+      ],
+      "artifacts": [
+        "src/shared/ephemeral.rs",
+        "src/oauth/expiring.rs"
+      ],
+      "tags": [
+        "from-issue:590"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0702",
+          "kind": "inspection",
+          "locator": "src/shared/ephemeral.rs:394-408; src/oauth/expiring.rs:222-238",
+          "summary": "The Memory arm is still map.update(key, now, change) with floor unused; ExpiringMap::update is not in the diff and judges liveness by entry.expires > now. Only the Redis arm receives the floor.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/ephemeral.rs",
+              "lines": {
+                "start": 394,
+                "end": 408
+              },
+              "commit": "c2c03cff1e9117413f4c801fea20c18fe8f20628"
+            }
+          },
+          "recorded_at": "2026-11-23T01:00:04.766130784Z",
+          "seal": {
+            "by": "server",
+            "mac": "4ce7e75b597a1fef0f11cbfa58f8b4854bdf30bfa4ef5d7b3e0d8bffc009ef60"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The memory arm still calls the unchanged map update and ignores the floor.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0702"
+          ],
+          "recorded_at": "2026-11-23T01:00:28.856130569Z",
+          "seal": {
+            "by": "server",
+            "mac": "6d449aa7d46d6d6b398bc3495ba7795eba613a54571fa90d334133496ef2a6ba"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:59:34.754310735Z",
+      "updated_at": "2026-11-23T01:00:28.856130569Z",
+      "seal": {
+        "by": "server",
+        "mac": "2f7d56dc9b9f3e078b6f96d0c14288ba976fd5a35f0e4c91b950cfac8296a6d4"
+      }
+    },
+    {
+      "id": "CLM-0555",
+      "statement": "With the floor set to zero the new exchange test fails on both Redis modes with \"the used code outlives its old lifetime\".",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"Revert check: with the floor set to zero the new exchange test fails on both Redis modes (\\\"the used code outlives its old lifetime\\\").\"",
+      "derived_from": [
+        "CLM-0546"
+      ],
+      "artifacts": [
+        "src/oauth/token.rs"
+      ],
+      "tags": [
+        "from-issue:590"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0703",
+          "kind": "demonstration",
+          "locator": "sed USED_CODE_FLOOR to Duration::from_secs(0) in the working tree, then gate.sh narrow --lib -- a_code_expiring_mid_exchange (file restored with git checkout afterwards)",
+          "summary": "Both standalone and cluster failed, panicking at src/oauth/token.rs:1514 with \"the used code outlives its old lifetime: 1945 ms left\"; result 0 passed, 2 failed.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T01:00:04.796865964Z",
+          "seal": {
+            "by": "server",
+            "mac": "3e040c4d760f576d267e6ccfaf7288e43f5d750d3471a8aad8a063dcfeb33deb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "I reproduced the revert: both modes failed with the quoted message.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0703"
+          ],
+          "recorded_at": "2026-11-23T01:00:28.889725772Z",
+          "seal": {
+            "by": "server",
+            "mac": "35e226e78fd0648924369b6759904772ff2e8133a2eb04781d1eb690916a215f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:59:34.754310735Z",
+      "updated_at": "2026-11-23T01:00:28.889725772Z",
+      "seal": {
+        "by": "server",
+        "mac": "4a56a637d0744d7f114d4c02acd1807a7f2bc3d2d288cfeeb5c5ceaa9ce6f1d9"
+      }
+    },
+    {
+      "id": "CLM-0556",
+      "statement": "The PR adds tests a_code_expiring_mid_exchange_keeps_its_tokens, a_replay_of_a_used_code_still_revokes_on_redis and a_ttl_floor_only_lengthens_the_entry_it_writes, each run on standalone and cluster Redis, and they pass.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"New tests, standalone and cluster Redis: ...\"",
+      "derived_from": [
+        "CLM-0546"
+      ],
+      "artifacts": [
+        "src/oauth/token.rs",
+        "src/shared/ephemeral.rs"
+      ],
+      "tags": [
+        "from-issue:590"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0704",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib -- a_code_expiring_mid_exchange / a_replay_of_a_used_code_still_revokes / a_ttl_floor_only_lengthens (each: 2 passed, 0 failed)",
+          "summary": "Each of the three tests is registered in its replicas/standalone-and-cluster macro list (token.rs:1673-1674, ephemeral.rs:1216) and ran as a standalone and a cluster instance; all 6 passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oauth/token.rs",
+              "lines": {
+                "start": 1668,
+                "end": 1678
+              },
+              "commit": "c2c03cff1e9117413f4c801fea20c18fe8f20628"
+            }
+          },
+          "recorded_at": "2026-11-23T01:00:04.834977197Z",
+          "seal": {
+            "by": "server",
+            "mac": "9b7bbf5ef234dc51c2b1006f9b3cd04317f0345a4523127d0b7b815b8423ff3e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All three named tests exist, run in both modes and pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0704"
+          ],
+          "recorded_at": "2026-11-23T01:00:28.922835482Z",
+          "seal": {
+            "by": "server",
+            "mac": "ccb2ad4f94e78ca37c76cff5906802f20bbf819c1bd9ef4497f281f254f9dc3a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:59:34.754310735Z",
+      "updated_at": "2026-11-23T01:00:28.922835482Z",
+      "seal": {
+        "by": "server",
+        "mac": "dce8e79e759ed53b2387811a679a1d2e5956dc826c518ffce320213b1b174d72"
+      }
+    },
+    {
+      "id": "CLM-0557",
+      "statement": "`gate.sh fmt`, `lint`, `dylint` and `test` all pass at head, with 2833 lib tests and 0 failed.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"`gate.sh fmt`, `lint`, `dylint`, `test` all pass (2833 lib tests, 0 failed).\"",
+      "derived_from": [
+        "CLM-0546"
+      ],
+      "artifacts": [
+        "src/oauth/token.rs",
+        "src/shared/ephemeral.rs"
+      ],
+      "tags": [
+        "from-issue:590"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0705",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib -- --list (2835 tests; --list --ignored: 2); narrow oauth::token (48 passed), shared::ephemeral (26 passed)",
+          "summary": "Head lists 2835 lib tests of which 2 are ignored, consistent with 2833 run. The two modules the diff touches pass in full. I was told not to run the full gates, so fmt, lint, dylint and the full test run are not reproduced.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T01:00:04.864862622Z",
+          "seal": {
+            "by": "server",
+            "mac": "ab5c800332cd8cbefacc577f5afba6898f6599f23c8562117f5f5db052431f39"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The 2833 count is consistent with 2835 listed minus 2 ignored and the touched modules pass, but the full fmt, lint, dylint and test gates were not rerun. Fix: rerun gate.sh fmt, lint, dylint and test on head and compare the printed counts (2833 passed, 0 failed) with the description.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0705"
+          ],
+          "recorded_at": "2026-11-23T01:00:28.957045397Z",
+          "seal": {
+            "by": "server",
+            "mac": "13d63925b4ede69e71984bbb32c294f9e9bc52b1ba3bd97d27a75aae8b716325"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:59:34.754310735Z",
+      "updated_at": "2026-11-23T01:00:28.957045397Z",
+      "seal": {
+        "by": "server",
+        "mac": "f0f7cbfef42da63f3590ea01e2845c6f46206dfc12f9d4f4e00538be7df3feb8"
+      }
+    },
+    {
+      "id": "CLM-0558",
+      "statement": "The PR adds a changelog entry for issue 590 under changelog/.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR: \"Changelog entry.\"",
+      "derived_from": [
+        "CLM-0546"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T00-39-31Z-issue-590-code-expiry-mid-exchange.md"
+      ],
+      "tags": [
+        "from-issue:590"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0706",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T00-39-31Z-issue-590-code-expiry-mid-exchange.md",
+          "summary": "File added in the diff, 28 lines, titled for issue #590, with Added, Changed and Notes sections describing the change.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T00-39-31Z-issue-590-code-expiry-mid-exchange.md",
+              "lines": {
+                "start": 1,
+                "end": 28
+              },
+              "commit": "c2c03cff1e9117413f4c801fea20c18fe8f20628"
+            }
+          },
+          "recorded_at": "2026-11-23T01:00:04.897828812Z",
+          "seal": {
+            "by": "server",
+            "mac": "fad1d4b609bb9ffdf943ee020e9602530040f0c0cf92f22d4c7e3e11f7079612"
+          }
+        },
+        {
+          "id": "EVD-0710",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T00-39-31Z-issue-590-code-expiry-mid-exchange.md",
+          "summary": "The changelog entry exists and now describes the floor as the request timeout plus 30 s.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T00-39-31Z-issue-590-code-expiry-mid-exchange.md",
+              "commit": "127bb35cac141049bcac7fb9303a6b9352cd9c3e"
+            }
+          },
+          "recorded_at": "2026-11-23T01:18:17.363095970Z",
+          "seal": {
+            "by": "server",
+            "mac": "f3f5e8b0c564c0a203109d66627b0af37fc7f391eb0d2c7c21b4551b91ec56e2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The changelog file is in the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0706"
+          ],
+          "recorded_at": "2026-11-23T01:00:28.990490489Z",
+          "seal": {
+            "by": "server",
+            "mac": "2c066755c2ab0de7c7bb5124c46d724d4b7afdd00a411a6425a95a93ae0656eb"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited after the changelog changed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0710"
+          ],
+          "recorded_at": "2026-11-23T01:18:22.158043292Z",
+          "seal": {
+            "by": "server",
+            "mac": "e057cb14bc1485e7d13b61ea4ef65c4ece8fa2dca9e9d380e172f7c13a4e0dd2"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:59:34.754310735Z",
+      "updated_at": "2026-11-23T01:18:22.158043292Z",
+      "seal": {
+        "by": "server",
+        "mac": "4c881a580d9e3a426c6015901c5490603c1d070da6e275ff40005550a82f59cb"
       }
     }
   ]
