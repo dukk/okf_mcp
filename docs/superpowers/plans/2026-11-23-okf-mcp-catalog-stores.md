@@ -88,9 +88,13 @@ The spec already carries these: P1 is its Decision 5, P2 Decision 7, P3 Decision
   - So a stalled create either finishes first, and recovery sees its data, or waits behind recovery, then finds its row gone and writes nothing. There's no time threshold to get wrong.
 - **P10 (from review of PR #956): release 3 deploys in a maintenance window, not as a rolling upgrade.** Release-2 replicas query tables in `public` and read `catalogs.generation`, and migrations 0037-0038 remove both. Procedure: snapshot the database; scale `serve` to zero; run `okf-mcp migrate` (account migrations, then adoption); start the new release. Task 19 writes it into `docs/operations.md`, and Task 20's smoke test follows it.
 
+- **P11 (from review of PR #956): release 2 is compatible with release-1 replicas.** Migration 0036 gives `catalogs.store` the default `main` and `provisioned_at` the default `now()`, so a release-1 create still works and lands provisioned. Hiding unprovisioned rows ships in Task 8, and two-step creation (Task 10b) ships later as release 2b, so no replica that would show a half-created catalog is still running when the first one is written.
+- **P12 (from review of PR #956): deleting a catalog holds the store's row lock across the account commit.** A store transaction holding `catalog_state` `FOR UPDATE` wraps the account transaction, and `catalog_state.deleted_at` tells writers that waited behind it that the catalog is gone. Without force, a delete never discards work written during it (Task 13).
+- **P13 (from review of PR #956): store cleanup is owed in the transaction that causes it.** `store_cleanups`, in the account database, gets its rows in the deleting transaction itself, keeping the ids the cleanup needs. A crash after commit can't lose a cleanup (Task 13).
+
 ## Scope
 
-In: Decisions 1-18 of the spec, P1-P10, releases 1-3 of the spec's migration, the tests of its Testing section, and its Docs section.
+In: Decisions 1-18 of the spec, P1-P13, releases 1-3 of the spec's migration, the tests of its Testing section, and its Docs section.
 
 Out (spec non-goals): moving a catalog between stores; revision storage changes (#954); dedicated cells; per-store connection budgets; store states.
 
@@ -196,12 +200,13 @@ Config keys (`src/config.rs`): `store_max_connections` (u32, default 8, must be 
 
 ```
 Release 1:  1 -> 2 -> 3 -> 4 -> 5 -> 6
-Release 2:  6 -> 7 -> 8 -> 9, 10 (parallel) -> 10b
+Release 2:  6 -> 7 -> 8 -> 9, 10 (parallel)
+Release 2b: 10 -> 10b
 Release 3:  10b -> 11 -> 12 -> 13 -> 14 -> 15 -> 17
 Then:       17 -> 16, 18 (parallel) -> 19 -> 20 (lifts P8)
 ```
 
-Each release ends deployable: after Task 6 (types only, rolling), after Task 10b (registry and placement, rolling), after Task 17 (the split, in a maintenance window: P10). Separate stores become usable only after Task 20 (P8).
+Each release ends deployable: after Task 6 (types only, rolling), after Task 10 (registry and placement, rolling), after Task 10b (two-step create, rolling, once release 2 is on every replica: P11), after Task 17 (the split, in a maintenance window: P10). Separate stores become usable only after Task 20 (P8).
 
 ---
 
@@ -295,17 +300,20 @@ INSERT INTO server_settings (key, value, updated_at, updated_by)
 ALTER TABLE teams ADD COLUMN store text REFERENCES stores (name) ON DELETE RESTRICT;
 
 -- The registry's placement and provisioning (spec Decisions 6, 11).
+-- Both defaults keep release-1 replicas working during the rollout (P11):
+-- their creates name neither column, and land on main, provisioned.
+-- New code always passes both explicitly.
 ALTER TABLE catalogs
-    ADD COLUMN store text REFERENCES stores (name) ON DELETE RESTRICT,
-    ADD COLUMN provisioned_at timestamptz;
-UPDATE catalogs SET store = 'main', provisioned_at = created_at;
-ALTER TABLE catalogs ALTER COLUMN store SET NOT NULL;
+    ADD COLUMN store text NOT NULL DEFAULT 'main'
+        REFERENCES stores (name) ON DELETE RESTRICT,
+    ADD COLUMN provisioned_at timestamptz DEFAULT now();
+UPDATE catalogs SET provisioned_at = created_at;
 -- The provisioning job finds half-created catalogs by this.
 CREATE INDEX catalogs_unprovisioned ON catalogs (created_at) WHERE provisioned_at IS NULL;
 ```
 
 - [ ] The same migration widens `audit_entries.target_kind` to include `store` and adds a `WHEN 'store'` arm to `audit_entries_target_shape` (`target_name IS NOT NULL`, the other target columns NULL), for Task 10's actions. Copy the constraint's current text from the latest migration that redefines it, so nothing else changes.
-- [ ] Tests: `migration_0036_puts_every_catalog_on_main_provisioned`; `stores_refuses_a_host_row_without_a_credential_reference`; `stores_refuses_an_account_database_row_with_a_host`.
+- [ ] Tests: `a_release_one_create_after_0036_lands_on_main_provisioned` (an insert naming only today's columns); `migration_0036_puts_every_catalog_on_main_provisioned`; `stores_refuses_a_host_row_without_a_credential_reference`; `stores_refuses_an_account_database_row_with_a_host`.
 
 ### Task 8: `Stores`, the registry in code
 
@@ -317,6 +325,7 @@ CREATE INDEX catalogs_unprovisioned ON catalogs (created_at) WHERE provisioned_a
 
   In both cases the pool sets `search_path` at connect through `after_connect`, uses `store_max_connections`, sets `min_connections = 0` and `idle_timeout = store_idle_timeout`, and gives up after `store_connect_timeout` with `StoreUnavailable`. Concurrent first calls for one store share one open, as `try_get_with` does in the caches.
 - [ ] Until Task 11, the store pool's `search_path` is `public`, because the catalog tables are still there. Task 11 switches it to `catalog`. Write the value in one constant so that switch is one line.
+- [ ] Directory lookups and listings hide a registry row whose `provisioned_at` is NULL. Nothing writes one yet (Task 10b does); shipping the reader first is what makes 10b safe to roll out (P11). Test: `an_unprovisioned_row_is_hidden_from_lookups_and_listings`.
 - [ ] `App::catalog_db(row)` replaces `App::main_store()`; every caller from Tasks 2-6 moves to it.
 - [ ] Changing a `stores` row sends an invalidation, and each replica drops that store's pool (`Stores::forget`).
 - [ ] Tests: `account_database_store_opens_its_own_pool`; `concurrent_first_use_opens_one_pool`; `an_unreachable_store_is_store_unavailable_within_the_timeout` (a `host` row pointing at a closed port on `127.0.0.1`); `changing_a_store_row_reopens_its_pool_on_every_replica` (two-replica harness).
@@ -348,12 +357,13 @@ CREATE INDEX catalogs_unprovisioned ON catalogs (created_at) WHERE provisioned_a
 
 **Files:** `src/store/catalogs.rs` (create), `src/housekeeping.rs` (new task `ProvisionCatalogs`).
 
+- [ ] Task 8 already makes every lookup and listing hide a row whose `provisioned_at` is NULL; this task is the first to write one. It ships as its own deploy (release 2b) after release 2 is on every replica, so no replica that shows unprovisioned rows is still running (P11).
 - [ ] Create inserts the registry row with `store` from placement and `provisioned_at` NULL, and commits. Then it runs the store transaction under P9's protocol: take the catalog's lock on the store, check the registry row on the account database, write the store side, commit. Then it sets `provisioned_at`. Directory lookups and listings treat a row with `provisioned_at` NULL as absent.
 - [ ] **What "the store side" is depends on the release.** In release 2 it is the starter files (`documents` and `revisions` rows), since `catalog_state` doesn't exist yet and the only store is `main` (P8). From Task 11 on, it also includes the `catalog.catalog_state` row; Task 11 updates create and recovery to write and check it. Write the existence check as one function, `store_side_exists(catalog_db, id)`, so Task 11 changes one place.
 - [ ] `ProvisionCatalogs` runs every minute over unprovisioned rows older than one minute (an efficiency filter only; safety comes from P9's lock, not the age). For each row it follows P9's recovery half, and records a failed create in the audit details when it removes a row.
 - [ ] Tests: `a_half_created_catalog_is_not_visible`; `provisioning_job_finishes_a_catalog_whose_store_side_exists`; `provisioning_job_removes_a_catalog_whose_store_side_never_happened`; `a_create_stalled_past_the_interval_is_not_removed_while_it_holds_the_lock` (hold a create's store transaction open with a barrier, run recovery concurrently, release, and assert one consistent outcome); `a_create_that_waited_behind_recovery_writes_nothing` (recovery deletes the row first, and the create then aborts with no store rows).
 
-Release 2 is deployable here (a rolling upgrade is fine): every catalog is still on `main`, and separate stores are refused (P8).
+Release 2b is deployable here (rolling, after release 2 is on every replica): every catalog is still on `main`, and separate stores are refused (P8).
 
 ## Release 3: the split
 
@@ -370,7 +380,10 @@ CREATE SCHEMA catalog;
 -- lock to hold off deletion (replaces the catalogs row in those roles).
 CREATE TABLE catalog.catalog_state (
     id         bigint PRIMARY KEY,
-    generation bigint NOT NULL DEFAULT 0
+    generation bigint NOT NULL DEFAULT 0,
+    -- Set by a delete under the row lock (P12); every writer refuses a
+    -- catalog_state row that has it.
+    deleted_at timestamptz
 );
 INSERT INTO catalog.catalog_state (id, generation)
     SELECT id, generation FROM catalogs;
@@ -411,6 +424,19 @@ DROP FUNCTION audit_maintenance_run();
 ALTER TABLE catalogs DROP COLUMN generation;
 -- Deleted but not yet cleaned up (P6).
 ALTER TABLE catalogs ADD COLUMN deleted_at timestamptz;
+
+-- Cleanup owed on stores after an account-side deletion (P13), written in
+-- the deleting transaction. One row per subject per store; the ids are
+-- kept here because the key or user they name is gone.
+CREATE TABLE store_cleanups (
+    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    store      text NOT NULL REFERENCES stores (name) ON DELETE RESTRICT,
+    kind       text NOT NULL CHECK (kind IN ('key', 'catalog')),
+    subject    text NOT NULL,
+    created_at timestamptz NOT NULL,
+    attempts   integer NOT NULL DEFAULT 0,
+    UNIQUE (store, kind, subject)
+);
 ```
 
 - [ ] A test asserts no foreign key from schema `catalog` references schema `public`, and the reverse: `no_foreign_key_crosses_between_schemas`. It reads `pg_constraint`, so a missed constraint fails it.
@@ -484,19 +510,23 @@ CREATE TRIGGER audit_entries_no_truncate BEFORE TRUNCATE ON catalog.audit_entrie
 
   Entries written before the split are not moved (P7). The view reads both tables, so they still appear, exactly once.
 - [ ] Write path: before a catalog transaction begins, the caller resolves the actor's `audit_people`, `audit_credentials` and `audit_teams` ids on the account database (today's `audit::lock_people` / `audit_person()` work, in its own account transaction). It passes them in; the catalog transaction inserts into `catalog.audit_entries`. `audit::record` gains a sibling `audit::record_catalog(conn, &ResolvedActor, &CatalogEntry, now)`. The P4 write sites switch to it, including Task 11's maintenance-run write, which now runs in the store transaction that ends the run.
-- [ ] Read path: the owner and admin views query the account database and each store holding the viewer's catalogs, concurrently, each with the same filter and limit. They merge by `(at, store, id)` descending. The cursor encodes `(at, store, id)`, with the account database as store `""`, and stays signed and opaque as today. Retention pruning covers both tables (Task 16).
-- [ ] Tests: `a_publish_writes_its_audit_entry_on_the_store`; `a_failed_publish_writes_no_audit_entry`; `entries_from_before_the_split_appear_once_in_the_view`; `store_audit_refuses_update_and_recent_delete`; `store_audit_prune_honours_the_passed_retention_and_its_floor`; `audit_view_pages_across_two_stores_and_accounts_without_gaps_or_repeats`; `forgetting_a_person_clears_their_name_in_store_entries_too` (the view resolves names through the account database).
+- [ ] Read path: the owner and admin views query the account database and every store in `Stores::all()`, concurrently, with the same `teams` filter visibility uses today (`src/store/audit.rs:1856`), so entries stay visible after their catalog is deleted or transferred, each with the same filter and limit. They merge by `(at, store, id)` descending. The cursor encodes `(at, store, id)`, with the account database as store `""`, and stays signed and opaque as today. Retention pruning covers both tables (Task 16).
+- [ ] Tests: `a_publish_writes_its_audit_entry_on_the_store`; `a_failed_publish_writes_no_audit_entry`; `entries_from_before_the_split_appear_once_in_the_view`; `store_audit_refuses_update_and_recent_delete`; `store_audit_prune_honours_the_passed_retention_and_its_floor`; `audit_view_pages_across_two_stores_and_accounts_without_gaps_or_repeats`; `audit_view_keeps_entries_after_the_last_catalog_on_a_store_is_deleted`; `audit_view_keeps_entries_after_a_catalog_is_transferred`; `forgetting_a_person_clears_their_name_in_store_entries_too` (the view resolves names through the account database).
 
 ### Task 13: deletion in two steps, and cleanup on every store
 
-**Files:** `src/store/catalogs.rs` (delete), `src/store/users.rs`, `src/store/keys.rs`, `src/store/teams.rs`, `src/housekeeping.rs` (new task `CleanupStores`), `src/cache/directory.rs`.
+**Files:** `src/store/catalogs.rs` (delete), `src/store/changesets.rs` (`lock_catalog` checks `deleted_at`), `src/store/users.rs`, `src/store/keys.rs`, `src/store/teams.rs`, `src/housekeeping.rs` (new task `CleanupStores`), `src/cache/directory.rs`.
 
-- [ ] Catalog delete:
-  - the account transaction checks for unpublished changes on the store first (as `force` does today), sets `deleted_at`, records `catalog.deleted` and commits; the catalog is gone from lookups at once;
-  - `CleanupStores` then, for each row with `deleted_at`, deletes the store side by deleting the `catalog_state` row (cascading to the catalog's data, but not `catalog.audit_entries`, per P5);
-  - it then deletes the registry row. The name is reusable only after that (P6).
-- [ ] Key, user and team deletion: the account side commits as today, then queues cleanup on every store. The split statements from Task 5 become a fan-out over `Stores::all()`. A store that can't be reached is retried by the job, and the deletion itself never waits on it. Open changesets of a deleted key are discarded on every store.
-- [ ] Tests: `a_deleted_catalog_disappears_before_its_store_data_is_gone`; `cleanup_removes_the_store_data_then_the_registry_row`; `a_deleted_catalogs_name_is_reserved_until_cleanup`; `catalog_audit_survives_catalog_deletion`; `deleting_a_key_discards_its_changesets_on_every_store`; `cleanup_retries_an_unreachable_store_without_blocking_others`.
+- [ ] Catalog delete (P12). One store transaction stays open around the account transaction:
+  1. On the store: take the catalog's advisory lock and `catalog_state` `FOR UPDATE`. Changeset writers take `FOR KEY SHARE` on that row, so new ones wait and in-flight ones have finished.
+  2. Still on the store: unless `force`, refuse if there are open changesets with entries, as today; with `force`, discard them in this transaction. Set `catalog_state.deleted_at`.
+  3. On the account database, in its own transaction: set `catalogs.deleted_at`, record `catalog.deleted`, write the `store_cleanups` row (P13), commit. The catalog is gone from lookups.
+  4. Commit the store transaction. If step 3 failed, roll it back instead, and nothing changed.
+
+  A crash between 3 and 4 leaves the store side unmarked, but the registry row is deleted and cleanup removes the data anyway. A writer that waited in step 1 gets the row after commit, sees `deleted_at`, and fails with `NotFound`. Every write path checks `catalog_state.deleted_at` after taking its lock (one helper, `changesets::lock_catalog`).
+- [ ] `CleanupStores` drains `store_cleanups` per store. For a catalog it deletes the `catalog_state` row, cascading to the catalog's data but not `catalog.audit_entries` (P5), then the registry row. The name is reusable only after that (P6). It also rescans `catalogs.deleted_at` rows with no pending cleanup, as a backstop.
+- [ ] Key, user and team deletion (P13): the deleting account transaction writes one `store_cleanups` row per affected key per store in `Stores::all()`, in the same transaction, so a crash after commit can't lose the cleanup. A user's or team's deletion writes rows for each of its keys, read before they are deleted. `CleanupStores` discards those keys' open changesets on each store. A store that can't be reached is retried (`attempts` counts tries; a row past 20 attempts is logged at error level each run and kept), and the deletion itself never waits on it.
+- [ ] Tests: `a_deleted_catalog_disappears_before_its_store_data_is_gone`; `cleanup_removes_the_store_data_then_the_registry_row`; `a_deleted_catalogs_name_is_reserved_until_cleanup`; `catalog_audit_survives_catalog_deletion`; `deleting_a_key_discards_its_changesets_on_every_store`; `cleanup_retries_an_unreachable_store_without_blocking_others`; `an_edit_racing_a_delete_either_lands_first_and_blocks_it_or_fails_after` (barrier between delete's steps 1 and 3, an edit started meanwhile); `a_delete_without_force_never_discards_work_written_during_it`; `a_key_deletion_crashing_after_commit_still_cleans_up_its_changesets` (drop the connection after commit, before the job runs, then run `CleanupStores`).
 
 ### Task 14: two migrators, the catalog baseline, adoption, `migrate-stores`
 
@@ -588,7 +618,7 @@ Release 3 is not deployable yet: Task 17 (listeners per store) completes it.
   - Decision 14: Tasks 10b, 13 and 16.
   - Decision 15: Tasks 11 and 14.
   - P5 (spec 17): Tasks 12-13. P6 (spec 18): Task 13.
-  - P7: Task 12. P8: Tasks 10 and 20. P9: Task 10b. P10: Tasks 17, 19 and 20.
+  - P7: Task 12. P8: Tasks 10 and 20. P9: Task 10b. P10: Tasks 17, 19 and 20. P11: Tasks 7, 8 and 10b. P12-P13: Tasks 11 and 13.
   - Spec testing section: Tasks 10, 10b, 12-18 and 20. Docs: Task 19.
 - **Placeholders:** the plan leaves three choices to task start, each with the decision to record: the database user's place on the row (Task 9), the IAM token refresh mechanism (Task 9), and the constraint names (Task 11). No step says "handle errors" without naming them.
 - **Names:** `AccountDb`, `CatalogDb`, `StoreName`, `Stores::{get, all, forget}`, `App::{accounts, stores, catalog_db}`, `OkfError::StoreUnavailable`, `audit::record_catalog`, and the housekeeping tasks `ProvisionCatalogs` and `CleanupStores` are used with the same spelling throughout. `App::main_store()` exists only between Tasks 1 and 8.

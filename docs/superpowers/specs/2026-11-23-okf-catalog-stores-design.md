@@ -115,10 +115,14 @@ a second store.
       found. Create and the job that recovers a half-finished create hold
       the catalog's lock on the store, so a stalled create and the
       recovery cannot both act on one catalog.
-    - Delete: the registry row is marked deleted (the catalog disappears at
-      once); a job deletes its store data, then the row.
-    - Deleting a key, user or team queues cleanup on each store holding
-      rows for it (for example its open changesets).
+    - Delete: under the store's lock on the catalog, unpublished work is
+      checked and the store marked; the registry row is then marked
+      deleted (the catalog disappears at once) and the store transaction
+      commits. Writers that waited on the lock see the mark and stop. A
+      job deletes the store data, then the row.
+    - Deleting a key, user or team records the cleanup each store owes
+      (for example its open changesets) in the same account transaction,
+      so a crash can't lose it; a job carries it out.
 12. **Catalog ids come from the registry.** Store-local ids (changeset row
     ids, catalog audit entry ids) may repeat across stores and are always
     paired with a catalog or a store. Changeset handles are already random
@@ -220,8 +224,10 @@ cache it covered) applies per store.
 
 ### Audit views
 
-The owner and admin audit views read the account database and every store
-holding the viewer's catalogs, and merge by time. The paging cursor
+The owner and admin audit views read the account database and every store,
+filtered by the teams each entry belongs to (not by which catalogs the
+viewer holds now, so entries outlive deletion and transfer), and merge by
+time. The paging cursor
 becomes (time, store, id), with the account database as its own store
 value, so a page continues exactly where the last one stopped.
 
