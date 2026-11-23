@@ -292,9 +292,12 @@ enum SnapshotChange {
     Grants,
 }
 
-/// Returns once a backend waits in `lock_people` on `holder_pid`'s lock.
-/// Seeing it blocked there proves the credential snapshot has been read; no
-/// scheduling sleep decides when a competing change may run.
+/// How long [`blocked_in_lock_people`] waits. Shorter than the 10 s outer
+/// deadlines of its callers, so its diagnostic fires before they cancel it.
+const LOCK_PEOPLE_WAIT: Duration = Duration::from_secs(5);
+
+/// Waits up to `limit` until a backend waits in `lock_people` for a row lock
+/// on `table` that `holder_pid` holds.
 ///
 /// `lock_people` takes its users' rows `FOR KEY SHARE`, so the wait is for a
 /// row lock on `users` (see [`crate::test_locks::wait_row_lock_waiter`]); the
@@ -303,18 +306,87 @@ enum SnapshotChange {
 /// (issue #639).
 ///
 /// # Errors
+/// A message naming what was waited for, when `limit` passes first.
+async fn lock_people_wait(
+    pool: &PgPool,
+    holder_pid: i32,
+    table: &str,
+    limit: Duration,
+) -> Result<(), String> {
+    crate::test_locks::wait_row_lock_waiter(pool, holder_pid, table, limit)
+        .await
+        .map(|_| ())
+        .ok_or_else(|| {
+            format!(
+                "no backend waited in lock_people for a {table} row held by backend {holder_pid}"
+            )
+        })
+}
+
+/// Returns once a backend waits in `lock_people` on `holder_pid`'s lock.
+/// Seeing it blocked there proves the credential snapshot has been read; no
+/// scheduling sleep decides when a competing change may run.
+///
+/// # Errors
 /// Never; the result keeps the callers' `?` unchanged.
 ///
 /// # Panics
-/// When no such wait appears within 10 s; the message names what it waited
-/// for.
+/// When no such wait appears within [`LOCK_PEOPLE_WAIT`]; the message names
+/// what it waited for.
 async fn blocked_in_lock_people(pool: &PgPool, holder_pid: i32) -> Result<(), OkfError> {
-    crate::test_locks::wait_row_lock_waiter(pool, holder_pid, "users", Duration::from_secs(10))
+    lock_people_wait(pool, holder_pid, "users", LOCK_PEOPLE_WAIT)
         .await
-        .unwrap_or_else(|| {
-            panic!("no backend waited in lock_people for a users row held by backend {holder_pid}")
-        });
+        .unwrap_or_else(|message| panic!("{message}"));
     Ok(())
+}
+
+/// The wait is matched by the table of the row lock: a revoke queued in
+/// `lock_people` behind a held user row is found on `users`, and a wait on
+/// another table reports the diagnostic instead of matching.
+#[tokio::test(flavor = "multi_thread")]
+async fn lock_people_wait_matches_users_and_names_a_missing_wait() {
+    let db = test_db().await;
+    let alice = seed_user(&db.pool, "alice", None).await;
+    let actor = AuditActor::system("waiting-credential-change");
+    let created = create_with_id(
+        &db.pool,
+        &key("lock-people-wait", Grants::All),
+        &actor,
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let mut waiting_actor = AuditActor::system("waiting-credential-change");
+    waiting_actor.user_id = Some(alice.id.clone());
+    let mut holder = db.pool.begin().await.unwrap();
+    let holder_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(&alice.id)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let pool = db.pool.clone();
+    let id = created.id.clone();
+    let revoking =
+        tokio::spawn(async move { revoke_by_id(&pool, &id, &waiting_actor, Utc::now()).await });
+    let found = lock_people_wait(&db.pool, holder_pid, "users", Duration::from_secs(10)).await;
+    let missing = lock_people_wait(&db.pool, holder_pid, "teams", Duration::from_millis(300)).await;
+    holder.rollback().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), revoking)
+        .await
+        .expect("the revoke must finish once the holder is released")
+        .unwrap()
+        .unwrap();
+    assert_eq!(found, Ok(()));
+    assert_eq!(
+        missing,
+        Err(format!(
+            "no backend waited in lock_people for a teams row held by backend {holder_pid}"
+        ))
+    );
 }
 
 /// Pauses a revoke after its snapshot, commits a competing change using an

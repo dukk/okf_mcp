@@ -8,8 +8,11 @@
   (`keys/audit_tests.rs`) no longer match `pg_stat_activity.query`, which
   shows the previous statement of a backend that was idle at snapshot time.
   They look for the row-lock wait itself.
-- `blocked_in_lock_people` has its own 10 s timeout; it panics with a message
-  naming the `users` row it waited for and the holder.
+- `blocked_in_lock_people` has its own 5 s timeout (`LOCK_PEOPLE_WAIT`),
+  shorter than its callers' 10 s outer deadlines so its diagnostic fires
+  first (review of PR #937); it panics with a message naming the `users` row
+  it waited for and the holder. The wait is `lock_people_wait`, which takes
+  the table and limit.
 
 ## Lock identity
 Postgres reports a backend waiting for a row lock as two `pg_locks` rows
@@ -27,6 +30,10 @@ requires both, the waiter blocked by the holder's pid.
 - Checked the helpers can fail: pointing `wait_for_source_lock` at `catalogs`
   and `blocked_in_lock_people` at `teams` made all 7 tests that use them
   time out with their messages (then reverted).
+
+- `lock_people_wait_matches_users_and_names_a_missing_wait`: a revoke queued
+  in `lock_people` behind a held user row is found on `users`; a wait on
+  `teams` returns the diagnostic (300 ms limit).
 
 ## Notes
 - The table is the whole identity of a row wait. It does not tell the lock
