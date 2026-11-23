@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 718,
+  "next_claim_seq": 721,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "cdb753ffd06d3fafbc252b087e7e64188adc74a092c8ad2e45ed783540603ad6"
+    "mac": "24130cf5f6ae52315c5f7af558f25d94f3be333c12a969ad84262249455862bf"
   },
-  "next_evidence_seq": 943,
+  "next_evidence_seq": 956,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "593ad0ac1343728c1af2b71db2c7a9c97df075ccdff0704515ed9c994b3494f1"
+    "mac": "e2ec4a5814ba1df462b99191cd5c6b43dfc6f67951cda3dc240b1d043ab80bf4"
   },
   "claims": [
     {
@@ -55922,6 +55922,40 @@
             "by": "server",
             "mac": "47eca82c03fe67d26f2be8707f922926e01ff7bcf2e8985c8eaa5eb297f3eeb1"
           }
+        },
+        {
+          "id": "EVD-0949",
+          "kind": "inspection",
+          "locator": "migrations/0033_feedback_finished_index.sql:9-10; migrations/0034_feedback_drop_sent_index.sql:6",
+          "summary": "At 91690b0 0033 creates feedback_finished (finished_at, status IN sent/failed) and the new 0034 drops feedback_sent_finished, so the net effect of the pair is the replacement. 0033 alone no longer drops the old index; the PR text should say 0033/0034 for exactness. The old 0033_feedback_failed_prune_index.sql is gone, so the EVD-0922 anchor is stale.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/0033_feedback_finished_index.sql",
+              "lines": {
+                "start": 9,
+                "end": 10
+              },
+              "commit": "91690b0f7de02ad6819bc6bf58af1b3baec2ed23"
+            }
+          },
+          "recorded_at": "2026-11-23T11:02:44.962560874Z",
+          "seal": {
+            "by": "server",
+            "mac": "a7f9b6820b08469584bebe00613d59d00a2f6bea4b14db9cd44f1a69453bbbd3"
+          }
+        },
+        {
+          "id": "EVD-0954",
+          "kind": "analysis",
+          "locator": "children of CLM-0711",
+          "summary": "The one child (the migration pair is concurrent, CLM-0720) is supported; it covers the build and drop mechanics behind the replacement.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:02:54.246801098Z",
+          "seal": {
+            "by": "server",
+            "mac": "8f4d4f6b5fd875e888de309945e9b4971431933eda20977381aac7a22dea287c"
+          }
         }
       ],
       "verdicts": [
@@ -55937,13 +55971,27 @@
             "by": "server",
             "mac": "6101239d6d7c6d977c865e61793a93d490bb5b2e8260c034650e48b9ab804758"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 91690b0: the pair 0033 (create) and 0034 (drop old) replaces the index; wording \"0033 alone\" is now loose.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0949",
+            "EVD-0954"
+          ],
+          "recorded_at": "2026-11-23T11:03:06.420093940Z",
+          "seal": {
+            "by": "server",
+            "mac": "5e634725f9958c54d157cbfc2d6db38081d9b7d52268b19c663dd4737c6e8a57"
+          }
         }
       ],
       "created_at": "2026-11-23T10:45:51.402016283Z",
-      "updated_at": "2026-11-23T10:47:09.360636770Z",
+      "updated_at": "2026-11-23T11:03:06.420093940Z",
       "seal": {
         "by": "server",
-        "mac": "252983c12420ca7946bdfd9b1d5855a219435909509ea801bd8db23e2be1d9e2"
+        "mac": "5caa9e542298505524c87b59e7f5f0492ae1244d60e3617114b861c1622e4dab"
       }
     },
     {
@@ -56034,6 +56082,30 @@
             "by": "server",
             "mac": "6f2b87f61064e80d5f16a87336c807d113ea682e5799431b00101da08cb63dbf"
           }
+        },
+        {
+          "id": "EVD-0950",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "Re-run on HEAD 91690b0: 39 passed, 0 failed; deleting_a_user_removes_its_undelivered_feedback_only still passes alongside the two new race tests. The DELETE in delete_checked is unchanged in the diff.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:02:45.011265751Z",
+          "seal": {
+            "by": "server",
+            "mac": "37770cad6ca5f2b80f283d47d47fc4d5f8583ed8039a1d67b5e987e0870b690c"
+          }
+        },
+        {
+          "id": "EVD-0953",
+          "kind": "analysis",
+          "locator": "children of CLM-0712",
+          "summary": "Children now are delete_own coverage, sent and other rows left, orphan job skipped, the submit-versus-delete serialization (CLM-0718) and both entry points setting registered (CLM-0719); all supported, so deletion removes undelivered feedback and none can be stored after it.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:02:54.203739790Z",
+          "seal": {
+            "by": "server",
+            "mac": "20e381cadb5bd8314c05b3751d2aca7f270324847a55e5c6c0e7f06ee1f7cf2b"
+          }
         }
       ],
       "verdicts": [
@@ -56067,13 +56139,28 @@
             "by": "server",
             "mac": "2d472b3f2d6eec8a8c9cd19e739bdb17715b4f70ecd796ede71547ab3635f7a2"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 91690b0: delete unchanged and passing, plus the new race children supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0923",
+            "EVD-0950",
+            "EVD-0953"
+          ],
+          "recorded_at": "2026-11-23T11:03:06.626367363Z",
+          "seal": {
+            "by": "server",
+            "mac": "77012e412eb22af70270b89756e07551cdadc34470e1f60f7f5ff44fbf2a8aca"
+          }
         }
       ],
       "created_at": "2026-11-23T10:45:51.402016283Z",
-      "updated_at": "2026-11-23T10:47:37.345877229Z",
+      "updated_at": "2026-11-23T11:03:06.626367363Z",
       "seal": {
         "by": "server",
-        "mac": "82e169d3f0ee67b4d30b8227cfeb5e6b998723eb743297bd7fba9c39fc35223b"
+        "mac": "0f41752d7dbdd09552f41d571e69fb74296bf0139db5f028c1ddaa697e61a45d"
       }
     },
     {
@@ -56118,6 +56205,18 @@
             "by": "server",
             "mac": "c514a4d076d66826e7a9d9a8ef4dda1d5180b65846d15a835904df98e5b377fc"
           }
+        },
+        {
+          "id": "EVD-0951",
+          "kind": "analysis",
+          "locator": "src/store/users.rs delete_own/delete -> delete_checked at HEAD 91690b0",
+          "summary": "The 91690b0 diff does not touch delete_own, delete or delete_checked; both still go through delete_checked with the feedback DELETE. Still code reading only, no delete_own feedback test.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:02:54.103005063Z",
+          "seal": {
+            "by": "server",
+            "mac": "85fb3e6706d39ec208dcab8ac6bf090241b6daacbd16e27dfe27cbef0c90858a"
+          }
         }
       ],
       "verdicts": [
@@ -56133,13 +56232,26 @@
             "by": "server",
             "mac": "21882b15acd983f9299db44212930e0f11cbdff0e2cc9b9e0ef95eb90b66b7a1"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited: unchanged path through delete_checked.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0951"
+          ],
+          "recorded_at": "2026-11-23T11:03:06.521716950Z",
+          "seal": {
+            "by": "server",
+            "mac": "df684c7b8c52b32d6002d37398a75ff5e3d70fe3d42130e413d7e4a464a805d0"
+          }
         }
       ],
       "created_at": "2026-11-23T10:45:51.402016283Z",
-      "updated_at": "2026-11-23T10:47:09.404833049Z",
+      "updated_at": "2026-11-23T11:03:06.521716950Z",
       "seal": {
         "by": "server",
-        "mac": "8ca986cfa6c96161394f75e4bc92d6eb2d8ce4e90fd71b961dfa1b1895046649"
+        "mac": "f9c670e08eed741c47c3957fbee43b1ae7bbed16e78418bb1a7691e22f066a84"
       }
     },
     {
@@ -56196,6 +56308,18 @@
             "by": "server",
             "mac": "da748d1b81ebe5d8418f0acab854cff8f77fcf83cdc767a75bc3883fa95c14fa"
           }
+        },
+        {
+          "id": "EVD-0952",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "On HEAD 91690b0: 39 passed, 0 failed, including deleting_a_user_removes_its_undelivered_feedback_only (survivors f-other, f-sent); the test and the DELETE are unchanged.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:02:54.160960803Z",
+          "seal": {
+            "by": "server",
+            "mac": "1b52784560622bdebaba8d71978e654b1eaa2f8ba10aafe81a83d3b52fbd95ce"
+          }
         }
       ],
       "verdicts": [
@@ -56212,13 +56336,26 @@
             "by": "server",
             "mac": "dc732f1bfcaad5c5ab36cd0ecba37871ca9fbd5c17e39dc45a67af1895924956"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited: test still passes on 91690b0.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0952"
+          ],
+          "recorded_at": "2026-11-23T11:03:06.572664866Z",
+          "seal": {
+            "by": "server",
+            "mac": "cbcd2c5658bc5a7b43609f2eb830b72f9ae8d3441fb09a2b6b52210006674954"
+          }
         }
       ],
       "created_at": "2026-11-23T10:45:51.402016283Z",
-      "updated_at": "2026-11-23T10:47:09.445916715Z",
+      "updated_at": "2026-11-23T11:03:06.572664866Z",
       "seal": {
         "by": "server",
-        "mac": "25b94ea040a051f8fdfcb621c31c21925b777469a54043cdf68ac674e6578473"
+        "mac": "226413f56a9dc1cd183319c3ed4e9b8869cb75d1f859797a3c57af1a1b64e580"
       }
     },
     {
@@ -56395,6 +56532,28 @@
             "by": "server",
             "mac": "814f8819b8d7591a76c22b0a5d4170f7ec0a4cae8ac21f58a20d6bb88d6df157"
           }
+        },
+        {
+          "id": "EVD-0955",
+          "kind": "inspection",
+          "locator": "docs/operations.md:2742, 2783-2802",
+          "summary": "At 91690b0 the sample-config comment now reads \"how long sent and failed feedback is kept\"; the Feedback section keeps list/retry, the failed-row prune and user deletion, and adds the race sentence (lands before and goes with the user, or refused). No statement that failed feedback is kept indefinitely remains.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2783,
+                "end": 2802
+              },
+              "commit": "91690b0f7de02ad6819bc6bf58af1b3baec2ed23"
+            }
+          },
+          "recorded_at": "2026-11-23T11:03:16.983533222Z",
+          "seal": {
+            "by": "server",
+            "mac": "363dacd6830467f4280c46a9c110d390dc436ba656484f60c0102e6e5d165049"
+          }
         }
       ],
       "verdicts": [
@@ -56410,13 +56569,288 @@
             "by": "server",
             "mac": "bff97c8e88c6a43111c422a2b6b206f8a85e7a4c620c152a9bd0ca90d47388e0"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 91690b0 after the doc edits.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0955"
+          ],
+          "recorded_at": "2026-11-23T11:03:20.030273852Z",
+          "seal": {
+            "by": "server",
+            "mac": "67128b7bfe4813bb75740ad9c70b35e0ce95b30c421c4b12d85eb2129cc9fd77"
+          }
         }
       ],
       "created_at": "2026-11-23T10:45:51.402016283Z",
-      "updated_at": "2026-11-23T10:47:09.569355994Z",
+      "updated_at": "2026-11-23T11:03:20.030273852Z",
       "seal": {
         "by": "server",
-        "mac": "2e6a546c7fcb7ca907d2af2215c6f86c828c96e09d5947567ec13f504d106fe2"
+        "mac": "49ae82f5293c0d01a95726bda4f57a3e5e2e7b28df76a0b4dd71f624c4704314"
+      }
+    },
+    {
+      "id": "CLM-0718",
+      "statement": "feedback::submit with `registered` set locks the sender's users row FOR KEY SHARE before storing, returns Unauthenticated when that user is gone, and so a submission cannot be stored after the user's deletion commits: it is stored before (and deleted with the user) or refused.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Review follow-up on #698 req 2 (user deletion must not leave or admit pending feedback); commit 91690b0",
+      "derived_from": [
+        "CLM-0712"
+      ],
+      "artifacts": [
+        "src/mail/feedback.rs",
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0943",
+          "kind": "inspection",
+          "locator": "src/mail/feedback.rs:293-309 (submit)",
+          "summary": "When registered, submit runs SELECT id FROM users WHERE name=$1 FOR KEY SHARE on its tx first; None returns OkfError::Unauthenticated. FOR KEY SHARE conflicts with the deletion's FOR UPDATE on the user row, which delete_checked holds while deleting pending feedback, so the two serialize.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mail/feedback.rs",
+              "lines": {
+                "start": 293,
+                "end": 309
+              },
+              "commit": "91690b0f7de02ad6819bc6bf58af1b3baec2ed23"
+            }
+          },
+          "recorded_at": "2026-11-23T11:02:44.687049586Z",
+          "seal": {
+            "by": "server",
+            "mac": "2747c6b958a8e7aa8476bef906e0ca8c44b78a8c777ebe069148f24f5401db78"
+          }
+        },
+        {
+          "id": "EVD-0944",
+          "kind": "test",
+          "locator": "src/store/users.rs tests::a_feedback_submit_that_waited_on_the_users_deletion_is_refused",
+          "summary": "A deletion holds the user FOR UPDATE, a submit is spawned and observed waiting, the deletion commits; the submit returns Unauthenticated and the feedback table is empty. Real lock interleaving, not mocked.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 2549,
+                "end": 2592
+              },
+              "commit": "91690b0f7de02ad6819bc6bf58af1b3baec2ed23"
+            }
+          },
+          "recorded_at": "2026-11-23T11:02:44.733144264Z",
+          "seal": {
+            "by": "server",
+            "mac": "a41fc5b7ef8fe203a7fa9cbc948ffdd186e9785b78378fc2a6aaec995e7e1b8a"
+          }
+        },
+        {
+          "id": "EVD-0945",
+          "kind": "test",
+          "locator": "src/store/users.rs tests::a_feedback_submit_in_flight_is_deleted_with_the_user",
+          "summary": "A submit tx holds the user row, delete() is spawned and observed waiting; the submit inserts its row and commits; delete completes and the feedback table is empty (the committed row was deleted with the user).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 2595,
+                "end": 2636
+              },
+              "commit": "91690b0f7de02ad6819bc6bf58af1b3baec2ed23"
+            }
+          },
+          "recorded_at": "2026-11-23T11:02:44.782065723Z",
+          "seal": {
+            "by": "server",
+            "mac": "a584ceeb2054c7dbd18f96d71fd818acc42f536d430484a9eccda2f07cfc7d81"
+          }
+        },
+        {
+          "id": "EVD-0946",
+          "kind": "log",
+          "locator": "tools/agentic/gate.sh narrow --lib -- feedback",
+          "summary": "39 passed, 0 failed (2834 filtered) on HEAD 91690b0, including both new interleaving tests.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T11:02:44.824319278Z",
+          "seal": {
+            "by": "server",
+            "mac": "453863cfa95a8f358e545d623d54204e4115875d17f72dda984b7fd4bafeca89"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The lock conflict is in code, and two tests drive both interleavings with real transactions and assert the refusal and the deletion; the tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0943",
+            "EVD-0944",
+            "EVD-0945",
+            "EVD-0946"
+          ],
+          "recorded_at": "2026-11-23T11:03:06.178685144Z",
+          "seal": {
+            "by": "server",
+            "mac": "8d73cd86ba50c9af703699a2f00d5e03a2a9eb0458f5e633b5ed5ad084df3239"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:02:24.530532595Z",
+      "updated_at": "2026-11-23T11:03:06.178685144Z",
+      "seal": {
+        "by": "server",
+        "mac": "528857644ca91bddb892b9ef724426c1ceaa181422cfa34042c0fdc01afbc42c"
+      }
+    },
+    {
+      "id": "CLM-0719",
+      "statement": "Both entry points pass through feedback::submit with `registered` set correctly: the console POST /api/v1/feedback always sets it true (session user), and the send_feedback tool sets it to whether the principal has a user, so a key with no user is not registered.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Commit 91690b0: Sender.registered in src/http/api/feedback.rs and src/mcp/feedback.rs",
+      "derived_from": [
+        "CLM-0712"
+      ],
+      "artifacts": [
+        "src/http/api/feedback.rs",
+        "src/mcp/feedback.rs",
+        "src/mail/feedback.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0947",
+          "kind": "analysis",
+          "locator": "src/http/api/feedback.rs:132-152; src/mcp/feedback.rs:157-172; src/mail/feedback.rs:486,548-552",
+          "summary": "Console send matches only a Session principal with Some(user) (others get Forbidden) and builds Sender{registered:true}. The tool builds Sender{registered: principal.user.is_some(), user_slug falls back to UNASSIGNED_USER}, so a no-user key is unregistered. Both call check_and_submit, which copies sender.registered into NewFeedback for submit. git grep shows no other Sender or NewFeedback construction outside tests. Test a_read_key_and_an_oauth_grant... still sends as an unassigned key without seeding that user.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/feedback.rs",
+              "lines": {
+                "start": 157,
+                "end": 172
+              },
+              "commit": "91690b0f7de02ad6819bc6bf58af1b3baec2ed23"
+            }
+          },
+          "recorded_at": "2026-11-23T11:02:44.870482677Z",
+          "seal": {
+            "by": "server",
+            "mac": "a03b604f0546d3683ca68a9e1878b2ac9b7ffda4c544c3532b24763c6ff2c5fc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both Sender constructions set registered as claimed and both go through check_and_submit; no other constructors exist.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0947"
+          ],
+          "recorded_at": "2026-11-23T11:03:06.251439058Z",
+          "seal": {
+            "by": "server",
+            "mac": "ab82b59695e7f4d5fd0ff84b4f4214555bc22c51b3a57a6854032a62c9252e4c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:02:24.530532595Z",
+      "updated_at": "2026-11-23T11:03:06.251439058Z",
+      "seal": {
+        "by": "server",
+        "mac": "6d38a3880f9013adf771b5dbd38bd97ce721a864937f024df0400aaac90919a3"
+      }
+    },
+    {
+      "id": "CLM-0720",
+      "statement": "The feedback prune index migration is concurrent: 0033 is a no-transaction CREATE INDEX CONCURRENTLY IF NOT EXISTS feedback_finished, 0034 drops feedback_sent_finished with DROP INDEX CONCURRENTLY, and feedback_finished is in db::CONCURRENT_INDEXES so an INVALID leftover is dropped before a retry.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Commit 91690b0 message and migrations 0033/0034",
+      "derived_from": [
+        "CLM-0711"
+      ],
+      "artifacts": [
+        "migrations/0033_feedback_finished_index.sql",
+        "migrations/0034_feedback_drop_sent_index.sql",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:698"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0948",
+          "kind": "inspection",
+          "locator": "migrations/0033_feedback_finished_index.sql:1-10; migrations/0034_feedback_drop_sent_index.sql:1-6; src/db.rs:49-54",
+          "summary": "Both migrations start with \"-- no-transaction\" and hold one statement each: CREATE INDEX CONCURRENTLY IF NOT EXISTS feedback_finished ON feedback(finished_at) WHERE status IN ('sent','failed'), and DROP INDEX CONCURRENTLY IF EXISTS feedback_sent_finished. CONCURRENT_INDEXES now lists feedback_finished. Same header as 0025-0027. No test exercises a failed-build retry of this index.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/0033_feedback_finished_index.sql",
+              "lines": {
+                "start": 1,
+                "end": 10
+              },
+              "commit": "91690b0f7de02ad6819bc6bf58af1b3baec2ed23"
+            }
+          },
+          "recorded_at": "2026-11-23T11:02:44.916142214Z",
+          "seal": {
+            "by": "server",
+            "mac": "95de8eb98dae680fe31011b361b3b60dd7b14712615df70d046ba8ca975a5e5e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both files are one-statement no-transaction migrations with CONCURRENTLY, and the index is in the INVALID-cleanup list. The retry cleanup itself is untested for this index; it reuses existing machinery.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0948"
+          ],
+          "recorded_at": "2026-11-23T11:03:06.303601219Z",
+          "seal": {
+            "by": "server",
+            "mac": "0a52d21930b8b499108a60879adf70924f62ef271cb5f3d75109b4bda47d89ff"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T11:02:24.530532595Z",
+      "updated_at": "2026-11-23T11:03:06.303601219Z",
+      "seal": {
+        "by": "server",
+        "mac": "657705a19033aa6a6eadc93e592152547e9906ea377592885ec22edf660d07e2"
       }
     }
   ]
