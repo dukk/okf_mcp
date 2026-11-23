@@ -13,7 +13,6 @@ use crate::db::{test_db, TEST_TEAM, TEST_USER};
 use crate::labels::DisplayName;
 use crate::store::audit::testing::entries;
 use crate::store::audit::AuditActor;
-use crate::store::ceiling;
 
 fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 11, 23, 12, 0, 0).unwrap()

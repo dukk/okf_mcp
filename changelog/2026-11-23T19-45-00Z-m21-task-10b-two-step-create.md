@@ -4,11 +4,11 @@
 - `catalogs::create` is now three steps (plan decision P9): `register` inserts the registry row with `provisioned_at` NULL (store from `placement::choose`, in the same transaction) and records `catalog.created`; `provision_store_side` takes the catalog's lock on the store, checks that the registry row still exists and is unprovisioned, and writes the starter files; `mark_provisioned` sets `provisioned_at` and sends the invalidations.
 - `catalogs::{pending, recover, Pending, Recovery}` and `store_side_exists`, the one function that says whether a catalog's store side is there (Task 11 adds `catalog_state` to it).
 - Housekeeping task `provision_catalogs` (every minute): for each unprovisioned row older than a minute it takes the catalog's lock, then finishes the catalog if its store side exists, or records `catalog.deleted` with `failed_create: true` in the details and removes the row. Metrics and spans follow the other tasks (`okf_housekeeping_runs_total{task="provision_catalogs"}`).
-- Tests for the five named cases, a one-connection pool, and the hidden readers below. The two concurrency tests use `Notify` and wait on `pg_locks`, never a sleep.
+- Tests for the five named cases, a one-connection pool; `a_half_created_catalog_is_not_visible` checks a row made by `register`. The two concurrency tests use `Notify` and wait on `pg_locks`, never a sleep.
 - Docs: "Half-created catalogs" in `docs/operations.md`.
 
 ## Changed
-- A half-created row is hidden from every account-side reader that could show or act on it: `catalogs::find` and `list` (so every by-name change, delete and lock), the ceiling's named, highest, page and entitlement reads and its by-name writes, a team's catalog list, a key's catalog names, and `repair::missing_root_index`. Readers by id (unlocks, sign-in codes, key and changeset joins, audit rendering, labels) are reached only through ids handed out for provisioned catalogs, so they are unchanged.
+- Every account-side reader already hides a half-created row: the filters shipped first, in release 2, as Task 10b part 1 (PR #1000, decision P11); see `changelog/2026-11-23T20-20-27Z-m21-task-10b-part-1-hide-unprovisioned-readers.md`. This change only starts writing such a row.
 
 ## Notes
 - No migration: 0040 has the unprovisioned index.
