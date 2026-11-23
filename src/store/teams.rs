@@ -16,7 +16,9 @@ use crate::labels::DisplayName;
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock, Target};
 use crate::store::catalogs::is_valid_name;
 use crate::store::decode_column;
+use crate::store::stores;
 use crate::store::users;
+use crate::stores::StoreName;
 
 /// A member's role in a team.
 // `clap::ValueEnum` parses `--role owner|member`; `serde::Deserialize` with
@@ -729,6 +731,93 @@ pub async fn set_display_name(
     invalidate(&mut tx, &[Invalidation::team(&team_id)]).await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// Pins a team to a store (`Some`), or removes its pin (`None`): catalogs
+/// the team owns from then on are created there, instead of on the default
+/// store. Catalogs that exist stay where they are. Records
+/// `team.store_pinned` or `team.store_unpinned` (details: the store it
+/// was on and the one now, `null` when unpinned) and sends the team's invalidation, in one
+/// transaction. Pinning to the store it is on, or unpinning an unpinned
+/// team, is no change: nothing is written or recorded.
+///
+/// Lock order (`tools/agentic/lessons.md`): the users the entry resolves
+/// ([`audit::lock_people`]), the team row (`FOR NO KEY UPDATE`), the
+/// store's row (`FOR SHARE`), then `server_state`.
+///
+/// # Arguments
+/// * `pool` - the account database.
+/// * `team` - the team's name.
+/// * `store` - the store to pin to, or `None` to unpin.
+/// * `actor` - who, for the audit log.
+/// * `now` - the server clock.
+///
+/// # Returns
+/// `true` if the pin changed.
+///
+/// # Errors
+/// [`OkfError::UnknownName`] for an unknown team (a malformed name
+/// included) or store; [`OkfError::Database`], a failed audit write
+/// included.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.set_store"))]
+pub async fn set_store(
+    pool: &PgPool,
+    team: &str,
+    store: Option<&StoreName>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<bool, OkfError> {
+    if !is_valid_name(team) {
+        return Err(unknown(team));
+    }
+    let mut tx = pool.begin().await?;
+    audit::lock_people(
+        &mut tx,
+        actor,
+        &People {
+            teams: &[team],
+            ..People::default()
+        },
+    )
+    .await?;
+    let (team_id, previous) = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT id, store FROM teams WHERE name = $1 FOR NO KEY UPDATE",
+    )
+    .bind(team)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| unknown(team))?;
+    if previous.as_deref() == store.map(StoreName::as_str) {
+        return Ok(false);
+    }
+    if let Some(store) = store {
+        stores::lock_store(&mut tx, store).await?;
+    }
+    sqlx::query("UPDATE teams SET store = $2 WHERE id = $1")
+        .bind(&team_id)
+        .bind(store.map(StoreName::as_str))
+        .execute(&mut *tx)
+        .await?;
+    let action = if store.is_some() {
+        Action::TeamStorePinned
+    } else {
+        Action::TeamStoreUnpinned
+    };
+    record_team(
+        &mut tx,
+        actor,
+        TeamEvent {
+            action,
+            team,
+            person: None,
+            details: serde_json::json!({"from": previous, "to": store.map(StoreName::as_str)}),
+        },
+        now,
+    )
+    .await?;
+    invalidate(&mut tx, &[Invalidation::team(&team_id)]).await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// Deletes a shared team that owns no catalog (its memberships cascade),

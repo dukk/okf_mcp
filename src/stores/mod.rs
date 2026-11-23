@@ -12,6 +12,7 @@
 use sqlx::postgres::PgPool;
 use sqlx::{Postgres, Transaction};
 
+pub mod placement;
 mod registry;
 
 pub use registry::{PoolSettings, Stores, STORE_SEARCH_PATH};

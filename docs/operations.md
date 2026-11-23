@@ -2147,6 +2147,10 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | **Settings** | | |
 | `setting.changed` | `settings set` or `PUT /api/v1/settings/{key}` changes a setting ([Settings](#settings)). Setting the value already stored records nothing | `from` (the stored value before, `null` without an override) and `to`; for `support_contact` only `set` (whether a contact is set now), never the address |
 | `setting.cleared` | `settings reset` or `DELETE /api/v1/settings/{key}` removes an override (with none, nothing is recorded) | `from`; nothing for `support_contact` |
+| **Catalog stores** | | |
+| `store.added` | `stores add` or `POST /api/v1/stores` adds a store (target kind `store`, named by the store). Refused additions record nothing | `location` (`host`) and `credential_kind`; never the host, port or credential reference |
+| `setting.default_store_changed` | `stores set-default` or `PUT /api/v1/settings/default_store` changes the default store (target: the setting `default_store`). The same store again records nothing | `from`, `to` (store names) |
+| `team.store_pinned`, `team.store_unpinned` | `stores pin` / `stores unpin` or `PUT` / `DELETE /api/v1/teams/{team}/store` changes a team's pin. An unchanged pin records nothing | `from`, `to` (store names, `null` for no pin) |
 | **Catalog writes** | | |
 | `catalog.published` | A publish (the `publish` tool, `POST /api/v1/changesets/{handle}/publish`, the console's Publish) writes at least one revision (one that changes nothing writes none and records nothing). Moves, splits and concept deletes are publishes and are recorded as such | `changeset` (the handle; the diff stays in the catalog's history), `files` (revisions written), `generation_from`, `generation_to` |
 | `catalog.reverted` | A `revert` succeeds: a document's old revision (or its deletion) goes into a changeset. A refused revert records nothing | `path`, `revision`, `changeset` |
@@ -3820,6 +3824,30 @@ reaches every catalog.
 | `GET /api/v1/mail/queue` | admin | `{mail}`: every mail not yet sent, oldest due first: `id`, `to`, `template`, `status` (`pending`, `sending`, `retrying` or `failed`), `attempts`, `last_error`, `run_at`. Never a body |
 | `POST /api/v1/mail/queue/{id}/retry` | admin, every catalog | Sends failed mail again now, with a new 24-hour retry window; 204. 404 for an unknown id, 409 for mail that has not failed |
 | `DELETE /api/v1/mail/queue/{id}` | admin, every catalog | Deletes mail that is not being sent right now; 204. 404 for an unknown id, 409 while a worker is sending it |
+
+### Catalog stores API
+
+The routes behind `okf-mcp stores ...`. Reading needs any admin key; every
+change needs an admin key that reaches every catalog (403 for any other key,
+a provisioner key included). A change is recorded in the [audit
+log](#audit-log) in its own transaction and sent to every replica, which
+drops its pool for the changed store. None of these moves a catalog: a
+catalog's store is chosen when it is created (its owner team's pin, else the
+default store) and never changes.
+
+| Method and path | Key | Does |
+|---|---|---|
+| `GET /api/v1/stores` | admin | `{stores}` in name order: `name`, `location` (`account-database` or `host`), `host`, `port`, `database`, `credential_kind`, `credential_ref` (a variable name, secret ARN or IAM identity, never the credential; all `null` for `main`), `created_at`, `is_default`, `pinned_teams` (a count) |
+| `POST /api/v1/stores` | admin, every catalog | Body `{name, host, port, database, credential_kind, credential_ref}` (`credential_kind` is `env`, `secrets-manager` or `iam`). Opens a connection to the new store first and answers 201 with the store only if that works. 409 when it cannot be reached (the reply names no host, port or credential; the cause is in the server log), when a name or a host, port and database is already used, or while separate stores are not enabled (every `host` store, until the milestone's last task); 422 for a malformed body |
+| `PUT /api/v1/settings/default_store` | admin, every catalog | Body `{value}`, a store's name. Answers `{key, value}`. 404 for an unknown store |
+| `PUT /api/v1/teams/{team}/store` | admin, every catalog | Body `{store}`. Pins the team: catalogs it owns are created there from now on. Answers `{team, store, changed}`. 404 for an unknown team or store |
+| `DELETE /api/v1/teams/{team}/store` | admin, every catalog | Removes the pin; answers `{team, store: null, changed}`. 404 for an unknown team |
+
+The command line has the same operations: `stores list`, `stores add NAME
+--host H [--port 5432] --database D --credential-kind env --credential-ref
+VAR`, `stores set-default STORE`, `stores pin TEAM STORE` and `stores unpin
+TEAM`. They have no console control yet, so `stores` is not in the parity
+table above. There is no command or route to remove a store.
 
 ### Audit API
 

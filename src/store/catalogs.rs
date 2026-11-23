@@ -16,7 +16,7 @@ use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
 use crate::store::ceiling::MemberAccess;
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::store::teams;
-use crate::stores::StoreName;
+use crate::stores::{placement, StoreName};
 
 /// The `revisions.message` of a new catalog's [`starter_files`].
 pub const STARTER_MESSAGE: &str = "create catalog";
@@ -150,12 +150,19 @@ pub async fn create(
     )
     .await?;
     let team_id = teams::id_of(&mut tx, owner_team).await?;
+    // Where the catalog lives is decided once, here, and recorded on its
+    // row: a later change of the default or of a pin moves no catalog. Until
+    // Task 10b writes the store side through the registry, the starter files
+    // below go into this transaction's database, which is right while `main`
+    // is the only store (separate stores are refused until Task 20, P8).
+    let store = placement::choose(&mut tx, owner_team).await?;
     // `RETURNING` cannot run the owner subquery of `select_catalogs!` on the
     // new row, but the owner's name is the one just resolved: hand it back
     // as `$5`.
     let inserted = sqlx::query_as::<_, Catalog>(
-        "INSERT INTO catalogs (name, description, created_at, owner_team_id, display_name) \
-         VALUES ($1, $2, $3, $4, $6) \
+        "INSERT INTO catalogs (name, description, created_at, owner_team_id, display_name, \
+                               store, provisioned_at) \
+         VALUES ($1, $2, $3, $4, $6, $7, $3) \
          RETURNING id, name, display_name, description, generation, created_at, \
                    $5::text AS owner_team",
     )
@@ -165,6 +172,7 @@ pub async fn create(
     .bind(&team_id)
     .bind(owner_team)
     .bind(display_name.as_str())
+    .bind(store.as_str())
     // `&mut *tx` borrows the transaction's connection: the query runs inside it.
     .fetch_one(&mut *tx)
     .await;

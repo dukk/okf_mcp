@@ -36,6 +36,7 @@ use crate::store::keys::{self, Access, Grants, KeyKind, NewKey};
 use crate::store::oauth::codes::{self, NewSignInCode, SignInCodeRecord};
 use crate::store::repair;
 use crate::store::settings::SettingKey;
+use crate::store::stores::CredentialKind;
 use crate::store::teams::Role;
 use crate::store::unlocks::Category;
 use crate::stores::{AccountDb, CatalogDb, PoolSettings, StoreName, Stores};
@@ -50,6 +51,8 @@ mod audit;
 mod feedback;
 // `src/cli/people.rs`: the user, team, assignment and `unassigned` handlers.
 mod people;
+// `src/cli/stores.rs`: the `stores` handlers.
+mod stores;
 // `src/cli/unlock.rs`: the `unlock` handlers.
 mod unlock;
 
@@ -102,6 +105,10 @@ pub enum Command {
     /// limits, session and link lifetimes).
     #[command(subcommand)]
     Settings(SettingsCommand),
+    /// List the catalog stores, add one, choose the default, and pin a team
+    /// to one.
+    #[command(subcommand)]
+    Stores(StoresCommand),
     /// Send a test email, and list, retry or delete queued mail.
     #[command(subcommand)]
     Mail(MailCommand),
@@ -524,6 +531,82 @@ pub enum SettingsCommand {
         #[arg(value_enum)]
         key: SettingKey,
     },
+}
+
+/// `okf-mcp stores ...`: where new catalogs are created (catalog stores
+/// design, "Placement and the admin surface"). A catalog's store is chosen
+/// when it is created and never changes: none of these moves a catalog.
+#[derive(Debug, Subcommand)]
+pub enum StoresCommand {
+    /// List every store, marking the default.
+    List,
+    /// Add a store in a database of its own, after checking that it can be
+    /// reached. Separate stores are refused until they are enabled.
+    Add {
+        /// Its name (`[a-z0-9-]+`, at most 63 characters).
+        #[arg(value_parser = parse_store_name)]
+        name: StoreName,
+        /// The database server's host.
+        #[arg(long)]
+        host: String,
+        /// Its port.
+        #[arg(long, default_value_t = 5432)]
+        port: u16,
+        /// The database's name.
+        #[arg(long)]
+        database: String,
+        /// How the password is found: `env`, `secrets-manager` or `iam`.
+        #[arg(long, value_parser = parse_credential_kind)]
+        credential_kind: CredentialKind,
+        /// What names it: a variable, a secret ARN or an IAM identity.
+        /// Never the password itself.
+        #[arg(long)]
+        credential_ref: String,
+    },
+    /// Make a store the one new catalogs go on, unless their team is pinned.
+    SetDefault {
+        /// The store.
+        #[arg(value_parser = parse_store_name)]
+        store: StoreName,
+    },
+    /// Pin a team to a store: catalogs it owns are created there from now on.
+    Pin {
+        /// The team.
+        team: String,
+        /// The store.
+        #[arg(value_parser = parse_store_name)]
+        store: StoreName,
+    },
+    /// Remove a team's pin, so the default store applies again.
+    Unpin {
+        /// The team.
+        team: String,
+    },
+}
+
+/// Reads a store name argument.
+///
+/// # Errors
+/// The rule the name breaks.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "a pure parse of an argument, no I/O")
+)]
+fn parse_store_name(text: &str) -> Result<StoreName, String> {
+    StoreName::parse(text).map_err(|error| error.to_string())
+}
+
+/// Reads a `--credential-kind` value as the `stores` table spells it.
+///
+/// # Errors
+/// The accepted spellings, for a value that is none of them.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "a pure parse of an argument, no I/O")
+)]
+fn parse_credential_kind(text: &str) -> Result<CredentialKind, String> {
+    CredentialKind::parse(text)
+        .ok_or_else(|| format!("{text:?} is not one of env, secrets-manager, iam"))
 }
 
 /// `okf-mcp unlock ...`: operator access to a customer catalog's contents
@@ -1002,6 +1085,14 @@ async fn dispatch(
             print!(
                 "{}",
                 admin::settings(&pool, &config.auth, command, clock.now()).await?
+            );
+        }
+        Command::Stores(command) => {
+            let pool = connect(cli.database_url.as_deref(), &config).await?;
+            let stores = Stores::new(pool.clone(), PoolSettings::from_config(&config));
+            print!(
+                "{}",
+                stores::stores(&pool, &stores, command, clock.now()).await?
             );
         }
         Command::Mail(command) => {

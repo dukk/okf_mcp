@@ -851,7 +851,7 @@ pub async fn load(
         reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
     )
 )]
-fn updated_by(actor: &AuditActor) -> String {
+pub(crate) fn updated_by(actor: &AuditActor) -> String {
     match actor.via {
         Via::Cli | Via::System => actor.stored_label(),
         Via::Session | Via::Key | Via::Grant => actor.label.clone(),
