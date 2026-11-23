@@ -11,7 +11,7 @@ use std::future::Future;
 use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
-use sqlx::{PgConnection, PgExecutor, PgPool, Postgres, Transaction};
+use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::error::OkfError;
 use crate::keyed_lock::KeyedLocks;
@@ -254,7 +254,9 @@ impl CatalogState {
     /// per change: a refresh that waited for another's rebuild returns `false`
     /// if that rebuild already reached the generation it saw. Rebuilds of one
     /// catalog run one at a time under its key in `rebuilds`, which every
-    /// state of the catalog shares.
+    /// state of the catalog shares. The lock is taken before the build's
+    /// pooled connection, so a caller already holding a connection (a
+    /// publish) must not wait for it: see [`CatalogState::refresh_locked`].
     ///
     /// # Arguments
     /// * `pool` - the database.
@@ -269,21 +271,10 @@ impl CatalogState {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn refresh(&self, pool: &PgPool, rebuilds: &KeyedLocks) -> Result<bool, OkfError> {
         let generation = self.generation_in(pool).await?;
-        // Boxed: this future is embedded in the request handlers' futures, and
-        // one more inline layer pushes the `scale` test past the compiler's
-        // layout query depth limit.
-        Box::pin(self.refresh_at(pool, rebuilds, generation)).await
+        self.refresh_at(pool, rebuilds, generation).await
     }
 
     /// [`CatalogState::refresh`] once the database's generation is known.
-    ///
-    /// The lock order of the whole catalog refresh is: a pooled connection
-    /// first, then the rebuild lock (issue #671). A publish already holds its
-    /// transaction's connection when it reaches [`CatalogState::refresh_locked`],
-    /// so a refresher that held the rebuild lock while it waited for a
-    /// connection could stall against it (and every other waiter) until the
-    /// pool's acquire timeout. This takes the connection before the lock, so
-    /// the lock's holder never waits for the pool.
     ///
     /// # Arguments
     /// * `pool` - the database.
@@ -302,14 +293,7 @@ impl CatalogState {
         rebuilds: &KeyedLocks,
         generation: i64,
     ) -> Result<bool, OkfError> {
-        // Generations only grow: nothing to build, so no connection to take.
-        if generation <= self.current().generation {
-            return Ok(false);
-        }
-        // Before the rebuild lock. Dropped unused (rolled back) if the wait
-        // for the lock shows another refresh already got there.
-        let tx = begin_read(pool).await?;
-        self.refresh_to(rebuilds, generation, || build_in(tx, self.id, &self.name))
+        self.refresh_to(rebuilds, generation, || build(pool, self.id, &self.name))
             .await
     }
 
@@ -363,9 +347,16 @@ impl CatalogState {
     /// this reads it: a publish refreshing a stale snapshot needs no second
     /// pooled connection.
     ///
+    /// It never takes the rebuild lock (issue #671). Its caller holds a
+    /// pooled connection, and a refresh that holds the rebuild lock waits for
+    /// a connection of its own (`build`), so waiting for the lock here could
+    /// stall both until the pool's acquire timeout. The caller's own write is
+    /// still visible when this returns: it builds the generation it read on
+    /// its connection and swaps it in unless a newer one is already there
+    /// ([`CatalogState::swap_if_newer`]).
+    ///
     /// # Arguments
     /// * `conn` - the lock holder's transaction (`&mut tx`).
-    /// * `rebuilds` - the rebuild locks, by catalog id (`App::rebuild_locks`).
     ///
     /// # Returns
     /// Whether a new snapshot was swapped in.
@@ -373,18 +364,38 @@ impl CatalogState {
     /// # Errors
     /// As [`CatalogState::refresh`].
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn refresh_locked(
-        &self,
-        conn: &mut PgConnection,
-        rebuilds: &KeyedLocks,
-    ) -> Result<bool, OkfError> {
+    pub(crate) async fn refresh_locked(&self, conn: &mut PgConnection) -> Result<bool, OkfError> {
         let generation = self.generation_in(&mut *conn).await?;
-        let id = self.id;
-        self.refresh_to(rebuilds, generation, || async move {
-            let rows = documents::published(&mut *conn, id).await?;
-            assemble(generation, rows).await
-        })
-        .await
+        if generation <= self.current().generation {
+            return Ok(false);
+        }
+        let rows = documents::published(&mut *conn, self.id).await?;
+        let loaded = assemble(generation, rows).await?;
+        Ok(self.swap_if_newer(loaded))
+    }
+
+    /// Swaps `loaded` in unless the current snapshot is already as new.
+    /// Generations only grow, so a snapshot never moves back, whichever
+    /// builder finishes first.
+    ///
+    /// # Returns
+    /// Whether `loaded` was swapped in.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    fn swap_if_newer(&self, loaded: Loaded) -> bool {
+        // A statement-long write lock with no `.await` inside: the `std`
+        // lock is never held across one.
+        let mut current = self.current.write().expect("catalog state lock poisoned");
+        if loaded.generation <= current.generation {
+            return false;
+        }
+        *current = Arc::new(loaded);
+        true
     }
 
     /// The catalog's generation in the database.
@@ -411,10 +422,10 @@ impl CatalogState {
     /// * `rebuilds` - the rebuild locks; this catalog's id is held for the
     ///   rebuild.
     /// * `generation` - the database's generation, as just read.
-    /// * `load` - builds the snapshot; called at most once. It must not wait
-    ///   for a pooled connection: the caller already holds the one it reads
-    ///   on, since the rebuild lock is taken after a connection, never
-    ///   before (issue #671).
+    /// * `load` - builds the snapshot; called at most once. It may wait for
+    ///   a pooled connection while the lock is held, which is why a caller
+    ///   already holding a connection must not take the lock
+    ///   ([`CatalogState::refresh_locked`], issue #671).
     ///
     /// # Returns
     /// Whether a new snapshot was swapped in.
@@ -447,13 +458,10 @@ impl CatalogState {
         if generation <= self.current().generation {
             return Ok(false);
         }
-        // Swaps happen only under the rebuild lock, so this build, which read a
-        // generation at least as new as `generation`, is newer than `current`.
+        // A publish's `refresh_locked` swaps without this lock, so a newer
+        // snapshot may land during the build: `swap_if_newer` keeps it.
         let loaded = load().await?;
-        // A statement-long write lock, taken after the last `.await`: the
-        // `std` lock is never held across one.
-        *self.current.write().expect("catalog state lock poisoned") = Arc::new(loaded);
-        Ok(true)
+        Ok(self.swap_if_newer(loaded))
     }
 }
 
@@ -465,34 +473,12 @@ impl CatalogState {
 /// [`OkfError::Database`]; a workspace or snapshot error.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn build(pool: &PgPool, catalog_id: i64, name: &str) -> Result<Loaded, OkfError> {
-    build_in(begin_read(pool).await?, catalog_id, name).await
-}
-
-/// Starts the transaction a snapshot is built in. A repeatable-read
-/// transaction sees one moment of the database, so the generation and the
-/// rows agree even if an import commits meanwhile.
-///
-/// # Errors
-/// [`OkfError::Database`], including a pool acquire timeout.
-#[tracing::instrument(level = "debug", skip_all)]
-async fn begin_read(pool: &PgPool) -> Result<Transaction<'static, Postgres>, OkfError> {
+    // A repeatable-read transaction sees one moment of the database, so the
+    // generation and the rows agree even if an import commits meanwhile.
     // `begin_with` sets the isolation level in the `BEGIN` itself.
-    Ok(pool
+    let mut tx = pool
         .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .await?)
-}
-
-/// [`build`] on a transaction from [`begin_read`], taken earlier so the
-/// caller can hold its connection before the rebuild lock.
-///
-/// # Errors
-/// As [`build`].
-#[tracing::instrument(level = "debug", skip_all)]
-async fn build_in(
-    mut tx: Transaction<'static, Postgres>,
-    catalog_id: i64,
-    name: &str,
-) -> Result<Loaded, OkfError> {
+        .await?;
     // `&mut *tx` reborrows the transaction as a connection for one query.
     let generation: Option<i64> = sqlx::query_scalar(GENERATION)
         .bind(catalog_id)
@@ -612,8 +598,8 @@ mod tests {
     /// A refresh and a publish's refresh (`refresh_locked`) racing on a full
     /// pool must both finish at once (issue #671). The publish holds one
     /// connection, the test holds the other, and the refresh (the poll's or
-    /// an announcement's) is queued for a connection. The refresh used to
-    /// take the rebuild lock first, so the publish waited for a lock whose
+    /// an announcement's) holds the rebuild lock and is queued for a
+    /// connection. The publish's refresh used to wait for that lock, whose
     /// holder waited for the publish's connection, until the acquire timeout.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_refresh_waiting_for_a_connection_does_not_hold_up_a_publish_refresh() {
@@ -655,9 +641,9 @@ mod tests {
         let other = small.acquire().await.unwrap();
         let generation = behind + 1;
 
-        // Act: the refresh queues for a connection (`refresh_at` skips only
-        // the generation read, which would also need one), then the publish
-        // refreshes on the connection it holds.
+        // Act: the refresh takes the lock and queues for a connection
+        // (`refresh_at` skips only the generation read, which would also need
+        // one), then the publish refreshes on the connection it holds.
         let refresher = {
             let (state, small, rebuilds) =
                 (Arc::clone(&state), small.clone(), Arc::clone(&rebuilds));
@@ -668,7 +654,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
         let published = tokio::time::timeout(
             Duration::from_secs(4),
-            state.refresh_locked(&mut publish_conn, &rebuilds),
+            state.refresh_locked(&mut publish_conn),
         )
         .await;
         drop(publish_conn);
@@ -689,6 +675,40 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(state.current().generation(), generation);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_swap_never_moves_the_snapshot_back() {
+        // Arrange: a state at generation 2, and a build of generation 1.
+        let db = test_db().await;
+        catalogs::create(
+            &db.pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
+        let older = build(&db.pool, state.id(), "pg").await.unwrap();
+        import_into(&db.pool, &[("a.md", b"# A\n")], false).await;
+        let mut conn = db.pool.acquire().await.unwrap();
+        assert!(state.refresh_locked(&mut conn).await.unwrap());
+        let newer = state.current().generation();
+
+        // Act: an older build finishes after the newer one was swapped in.
+        let swapped = state.swap_if_newer(older);
+
+        // Assert
+        assert!(!swapped);
+        assert_eq!(state.current().generation(), newer);
     }
 
     #[tokio::test(flavor = "multi_thread")]

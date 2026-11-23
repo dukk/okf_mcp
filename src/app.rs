@@ -93,8 +93,8 @@ pub struct App {
     // every state of one catalog shares it (M18 Decision 4).
     publish_locks: KeyedLocks,
     // Each catalog's rebuild lock (`CatalogState::refresh`), by catalog id,
-    // for the same reason. Always taken after a pooled connection, never
-    // while waiting for one (issue #671).
+    // for the same reason. Its holder may wait for a pooled connection, so
+    // nothing holding a connection waits for it (issue #671).
     rebuild_locks: KeyedLocks,
     // Catalog rows by name with their access facts (M18 Decision 6): what
     // "does this catalog exist" and every snapshot's freshness are read from.

@@ -26,7 +26,6 @@ use crate::app::App;
 use crate::catalog::{CatalogState, Loaded};
 use crate::error::{ConflictFile, OkfError};
 use crate::invalidate::{invalidate, Invalidation};
-use crate::keyed_lock::KeyedLocks;
 use crate::mcp::blocking;
 use crate::okf::analysis::lint::LintReport;
 use crate::okf::analysis::Finding;
@@ -242,7 +241,7 @@ async fn publish_locked(
         "okf.changeset.entries",
         i64::try_from(entries.len()).unwrap_or(i64::MAX),
     );
-    let base = current_base(state, app.rebuild_locks(), &mut tx).await?;
+    let base = current_base(state, &mut tx).await?;
 
     // Step 3: base revisions against the documents as stored now.
     let paths: Vec<String> = entries.iter().map(|entry| entry.path.clone()).collect();
@@ -388,7 +387,6 @@ pub(crate) async fn lock_people(
 #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "publish.current_base"))]
 async fn current_base(
     state: &CatalogState,
-    rebuilds: &KeyedLocks,
     conn: &mut PgConnection,
 ) -> Result<Arc<Loaded>, OkfError> {
     let generation: i64 = sqlx::query_scalar("SELECT generation FROM catalogs WHERE id = $1")
@@ -399,7 +397,7 @@ async fn current_base(
     // refresh builds exactly this generation, and it reads on this
     // transaction's connection: a publish never holds a second one.
     if state.current().generation() < generation {
-        state.refresh_locked(conn, rebuilds).await?;
+        state.refresh_locked(conn).await?;
     }
     let base = state.current();
     if base.generation() == generation {
