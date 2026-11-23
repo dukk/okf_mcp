@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 922,
+  "next_claim_seq": 923,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "dea57d93b28ac8214a122904b78f1099afdc44b11a6796352c79066699e53d37"
+    "mac": "5b29a0f75af97718ed46baf36e7d7714aca577f00bfc412f0bf5963b03a28ada"
   },
-  "next_evidence_seq": 1287,
+  "next_evidence_seq": 1293,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "3bf186c8b287964eab4a926a87e33db8ad0a23a919a3d052a8ee062331081df1"
+    "mac": "8401269261198b76a564e6848503bb56ee50c7a6b1ce034d457b8421d8669efd"
   },
   "claims": [
     {
@@ -72520,6 +72520,18 @@
             "by": "server",
             "mac": "e9c25fe726e8fc036bb85f1183faeda1cba9fa23a29b8ac8e9bc2f44c4576e77"
           }
+        },
+        {
+          "id": "EVD-1292",
+          "kind": "analysis",
+          "locator": "children of CLM-0905",
+          "summary": "At d3acf99 all active children are supported, now including CLM-0922 (begin maps pool-acquire failures to StoreUnavailable) and re-recorded CLM-0910, 0917 and 0920.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T17:53:41.489362666Z",
+          "seal": {
+            "by": "server",
+            "mac": "f0782995969f529d43a7a5436b996a444d1ace900c465f0429307aab63fe763d"
+          }
         }
       ],
       "verdicts": [
@@ -72535,13 +72547,26 @@
             "by": "server",
             "mac": "6472cacc5ff66741ec579ae1a6d686549accc5ad87a7d06c1dab879506a1ca2e"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Every active child is supported at d3acf99, including the new CLM-0922.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1292"
+          ],
+          "recorded_at": "2026-11-23T17:53:44.583911707Z",
+          "seal": {
+            "by": "server",
+            "mac": "0b362fa26cf7b8091bbe23de384d2efeec9cd863df8c2c1589c9d3d5ca818d93"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:42:56.991137740Z",
+      "updated_at": "2026-11-23T17:53:44.583911707Z",
       "seal": {
         "by": "server",
-        "mac": "b72963afaddd185389075b4c4fda7e872fb9a1ed62843c2ee314961c3e271cd4"
+        "mac": "7aa9edab3ccf37666ba75a421d0b76d357d0b2c8b5b50fadb62adda9c4fdbe6a"
       }
     },
     {
@@ -72874,6 +72899,28 @@
             "by": "server",
             "mac": "00d8a239a251ab82ffc8ef669bd42712bb15192adc67fea84215768ec0f844ab"
           }
+        },
+        {
+          "id": "EVD-1291",
+          "kind": "test",
+          "locator": "stores::registry::tests::an_unreachable_store_is_store_unavailable_within_the_timeout (passed at d3acf99)",
+          "summary": "Recheck reports the anchor moved, unchanged (now registry.rs:524-573). The open path (registry.rs open) is untouched by the review commit; the full r1-test.log run passes this test. The new begin/classify path adds the in-pool case (CLM-0922) without changing this one.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 524,
+                "end": 573
+              },
+              "commit": "d3acf999f342a8cc9d85f601d6c4ef342a5c16ad"
+            }
+          },
+          "recorded_at": "2026-11-23T17:53:33.211544480Z",
+          "seal": {
+            "by": "server",
+            "mac": "b29ac4ea54470d8469ed07bfc38eb973d1fca9517f8aac1e33ffc787e64462e8"
+          }
         }
       ],
       "verdicts": [
@@ -72889,13 +72936,26 @@
             "by": "server",
             "mac": "5e0f5c4d494144223bca6aefdef968626f276942bdc10bccbd8b6a482144a62a"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Anchor only moved; the open path and test are unchanged and pass in the full run.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1291"
+          ],
+          "recorded_at": "2026-11-23T17:53:38.821603642Z",
+          "seal": {
+            "by": "server",
+            "mac": "f71fea5ce2933a887943354cb57f547f64b6c2748cc95894ec11aa0c38edb20e"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:40:13.156304Z",
+      "updated_at": "2026-11-23T17:53:38.821603642Z",
       "seal": {
         "by": "server",
-        "mac": "d2457c6fb04e3d677da5db7a33c7e1d45ad7b23a847d0af28e1e585354349b5e"
+        "mac": "9fc3d6c33e47b3f9f5da70fa496a997d869c7cd30307cf5eefaa1f6c422c20ab"
       }
     },
     {
@@ -73457,6 +73517,28 @@
             "by": "server",
             "mac": "7b8b47be8b30239051ba1fbc8798085c3acd710422f9cc2f01052cf813f0a9d2"
           }
+        },
+        {
+          "id": "EVD-1289",
+          "kind": "inspection",
+          "locator": "docs/operations.md:122-124; src/config.rs:1062-1069",
+          "summary": "At d3acf99 the three store_* rows are still present with defaults 8, 10m and 5s, and the store_connect_timeout row now reads \"opening a store's pool, or waiting for a connection to begin a transaction on it\", matching CatalogDb::begin's StoreUnavailable mapping; the zero-refusal list at line 179 still names all three; the config.rs doc comment carries the same wording. config tests (incl. values_that_would_break_the_server_are_refused) pass in audit-r1-narrow.log.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 122,
+                "end": 124
+              },
+              "commit": "d3acf999f342a8cc9d85f601d6c4ef342a5c16ad"
+            }
+          },
+          "recorded_at": "2026-11-23T17:53:33.089959574Z",
+          "seal": {
+            "by": "server",
+            "mac": "97a8c95383277a2d18de3f2037e83e4c17e9baeddfe1351d14abbf4500b4f3de"
+          }
         }
       ],
       "verdicts": [
@@ -73472,13 +73554,26 @@
             "by": "server",
             "mac": "c98eee825520926c4673a4f806ad6620c9a4d2bf4634f6307925e7e0f0613adc"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Rows, defaults, zero-refusal and the reworded connect-timeout text all hold at d3acf99 and agree with the code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1289"
+          ],
+          "recorded_at": "2026-11-23T17:53:38.641031371Z",
+          "seal": {
+            "by": "server",
+            "mac": "824bfda7eb62b1a369002dd84efdec15f81fe61ae67b02de8e331479f9d42f64"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:40:13.727937850Z",
+      "updated_at": "2026-11-23T17:53:38.641031371Z",
       "seal": {
         "by": "server",
-        "mac": "921dfe036cdfb1afda3fb5562483754b786bea647d199a83ecd0949e705e9112"
+        "mac": "65e1560123510ccccb33a678b337ab492e5c8b95791259a42e0fcee8435553d5"
       }
     },
     {
@@ -73680,6 +73775,18 @@
             "by": "server",
             "mac": "9cc9b64c776d495d6fe473382d1d33659f397a210f3e15370e0f95874d40dd8e"
           }
+        },
+        {
+          "id": "EVD-1290",
+          "kind": "log",
+          "locator": "target/i966-logs/r1-test.log, r1-lint.log, r1-dylint.log, r1-fmt.log; my cargo fmt --all --check on d3acf99",
+          "summary": "Review-round gates: r1-test.log lib line \"2916 passed; 0 failed; 2 ignored\", other binaries ok, zero FAILED or panicked lines, ends exit 0; r1-lint.log (clippy and doc) and r1-dylint.log end Finished with no warning or error lines; r1-fmt.log clean, and my own cargo fmt --all --check on d3acf99 exits 0. Caveat: the logs were written at 12:47-12:51, a minute or so before the 12:52:01 commit of d3acf99; my narrow rerun of the new tests and config tests on the committed head (60 passed) matches them.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T17:53:33.148389476Z",
+          "seal": {
+            "by": "server",
+            "mac": "51644646c1da1f32f30bd6e1c8fe60076e0f623ce831bab3be19bad135e0a328"
+          }
         }
       ],
       "verdicts": [
@@ -73708,13 +73815,26 @@
             "by": "server",
             "mac": "0b9e7107da7688040c2424c888b74e13198018b5d00bc3fbf00fd1b0573a9cd0"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Full test (2916 lib passed, exit 0), lint, dylint and fmt are clean for the review-round source; logs predate the commit by minutes but my narrow rerun on the committed head agrees.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1290"
+          ],
+          "recorded_at": "2026-11-23T17:53:38.732982064Z",
+          "seal": {
+            "by": "server",
+            "mac": "def398fb8738d359c6f090c0faaaf6cedf733e8509c0e1bded6a3b9301b8b5dc"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:42:26.221540102Z",
+      "updated_at": "2026-11-23T17:53:38.732982064Z",
       "seal": {
         "by": "server",
-        "mac": "4762afc751b23f67aa52b3cc23fd5138d339bac9f38415c65b89105e9ad6988d"
+        "mac": "ba68d0d4183b447ea791d4b0159ffbd9ccc264132b08c5fe34cf8e09529dfd1f"
       }
     },
     {
@@ -73781,6 +73901,104 @@
       "seal": {
         "by": "server",
         "mac": "78b1ceb1502ab39d320ded5ba2c99ab57fbed588980e5bc784c3f7e0f71b8234"
+      }
+    },
+    {
+      "id": "CLM-0922",
+      "statement": "CatalogDb::begin on an open store pool maps pool-acquire failures (timeout, closed, io, tls, worker crash) to OkfError::StoreUnavailable, and the client reply does not name the store.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/966",
+      "source_anchor": {
+        "path": "src/stores/mod.rs",
+        "lines": {
+          "start": 207,
+          "end": 243
+        },
+        "commit": "d3acf999f342a8cc9d85f601d6c4ef342a5c16ad"
+      },
+      "derived_from": [
+        "CLM-0905"
+      ],
+      "artifacts": [
+        "src/stores/mod.rs",
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:966"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1287",
+          "kind": "inspection",
+          "locator": "src/stores/mod.rs:215-243",
+          "summary": "begin maps every error through classify; classify turns PoolTimedOut, PoolClosed, Io, Tls and WorkerCrashed into OkfError::store_unavailable (store name only in the local half of split_event!), and everything else through OkfError::from.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 215,
+                "end": 243
+              },
+              "commit": "d3acf999f342a8cc9d85f601d6c4ef342a5c16ad"
+            }
+          },
+          "recorded_at": "2026-11-23T17:53:09.077762823Z",
+          "seal": {
+            "by": "server",
+            "mac": "1a6a3ca76b317c0ed1726e3d39ee45f89580401a5bd92c88f4de58bfaf2351fe"
+          }
+        },
+        {
+          "id": "EVD-1288",
+          "kind": "test",
+          "locator": "stores::registry::tests::an_exhausted_open_pool_is_store_unavailable_without_naming_the_store; stores::tests::classify_turns_connection_failures_into_store_unavailable",
+          "summary": "Ran both through gate.sh narrow (target/i966-logs/audit-r1-narrow.log): both ok. The first holds both connections of a 2-connection pool, a third begin fails with StoreUnavailable in under 10s, the JSON reply lacks \"main\", and pools_opened stays 1. The second covers each failure kind plus RowNotFound staying Database. The full run r1-test.log: 2916 passed, 0 failed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 474,
+                "end": 502
+              },
+              "commit": "d3acf999f342a8cc9d85f601d6c4ef342a5c16ad"
+            }
+          },
+          "recorded_at": "2026-11-23T17:53:09.190508564Z",
+          "seal": {
+            "by": "server",
+            "mac": "8b96311afbbcc070e261c4877c0262c492b2dcce3058712bc40c932a3a8d9759"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "begin routes through classify, which maps the pool-acquire failures to StoreUnavailable; both new tests pass in my narrow run and the full run is green; the reply omits the store name.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1287",
+            "EVD-1288"
+          ],
+          "recorded_at": "2026-11-23T17:53:15.176970916Z",
+          "seal": {
+            "by": "server",
+            "mac": "26fc909a032274def35ad6187ccddf349c02cc781482d5c948f0ba29759d1e78"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T17:53:03.495851253Z",
+      "updated_at": "2026-11-23T17:53:15.176970916Z",
+      "seal": {
+        "by": "server",
+        "mac": "4c40df8d0da4d581831dafa9ac02e88818b3f13bf3829687f0d599c37bef6425"
       }
     }
   ]
