@@ -16,7 +16,7 @@ pub(crate) use pg_support as pg;
 #[path = "../tests/support/redis.rs"]
 pub(crate) mod redis_support;
 
-/// The schema migrations in `migrations/`, embedded at compile time.
+/// The account schema migrations in `migrations/accounts/`, embedded at compile time.
 // `migrate!` reads the directory while compiling (`build.rs` makes cargo
 // notice new files), so the binary needs no SQL files at runtime.
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/accounts");
