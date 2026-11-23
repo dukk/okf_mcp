@@ -457,6 +457,71 @@ async fn an_audited_revert_and_its_users_deletion_share_one_store_connection() {
     deleted.expect("the deletion");
 }
 
+/// Issue #970, Brooke's review of #1001 (the `catalogs.rs` comment): a forced
+/// catalog deletion locks the open changesets on its store transaction and
+/// then clears the default of the keys that name the catalog on its account
+/// transaction; a user deletion locks its key and then waits for its
+/// changeset. Taken in that order the two wait on each other across the two
+/// databases. The catalog deletion now locks those keys before its store
+/// transaction. Forced order: a holder keeps the changeset, the catalog
+/// deletion queues first, the user deletion second, the holder lets go.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_forced_catalog_deletion_and_a_users_deletion_never_wait_on_each_other() {
+    // Arrange
+    let config = Config {
+        store_max_connections: 3,
+        ..Config::default()
+    };
+    let test = app_with(&[("pg", &[("a.md", NOTE)])], config).await;
+    let bob = Arc::new(user_context(&test, "bob", Access::Write, false).await);
+    let handle = open(&bob).await;
+    body(&bob, &handle, "# A\n\nBob.\n").await;
+    let changeset_id = changeset_row(&test, &handle).await.id;
+    let store = test.app.main_db().await;
+    let mut holder = store.begin().await.expect("begin the holder");
+    sqlx::query("SELECT id FROM changesets WHERE id = $1 FOR UPDATE")
+        .bind(changeset_id)
+        .execute(&mut *holder)
+        .await
+        .expect("hold the changeset");
+    let catalog_store = store.clone();
+    let dropping = tokio::spawn(async move {
+        crate::store::catalogs::delete_on(
+            &catalog_store,
+            "pg",
+            true,
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+    });
+    lock_waiters(&test, 1).await;
+    let pool = test.app.accounts().executor().clone();
+    let user_store = store.clone();
+    let deleting = tokio::spawn(async move {
+        users::delete_on(
+            &pool,
+            &user_store,
+            "bob",
+            users::DeleteOptions::default(),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+    });
+    lock_waiters(&test, 2).await;
+
+    // Act
+    holder.rollback().await.expect("release the changeset");
+
+    // Assert: both finish, and neither is the victim of a deadlock.
+    finish(dropping, "the catalog deletion")
+        .await
+        .expect("the catalog deletion");
+    let deleted = finish(deleting, "the user deletion").await;
+    deleted.expect("the user deletion");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_publish_racing_its_users_deletion_never_deadlocks() {
     // The issue's race, unforced and repeated: one side wins cleanly every

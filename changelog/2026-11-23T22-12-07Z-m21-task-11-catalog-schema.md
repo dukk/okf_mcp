@@ -70,6 +70,20 @@ and the registry opens one store pool). The test-only forms are
 `catalogs::{create, delete}` and `users::{delete, delete_own}`; the
 integration tests use `tests/support/stores.rs`.
 
+## Acquisition order (review of PR #1001, round 2)
+
+Every path that holds an account transaction and a store transaction takes
+the account connection, then the account row locks (`lock_people`), then the
+store connection. `write.rs` revert, the recorded discard in
+`mcp/changesets.rs`, `import`, `repair` and `catalogs::recover_holding`
+began the store transaction first; they now begin it after `lock_people`.
+Without this, with one store connection, an audited change holding it while
+waiting for a user row and a user deletion holding that row while waiting for
+the store connection formed a cycle PostgreSQL cannot see. Regression test:
+`an_audited_revert_and_its_users_deletion_share_one_store_connection`
+(one store connection, a larger account pool, one registry; without the
+fix the deletion fails `StoreUnavailable` after `store_connect_timeout`).
+
 ## Evidence
 
 Gates on this change (`tools/agentic/gate.sh`: fmt, lint, dylint, test) ran

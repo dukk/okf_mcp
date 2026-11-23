@@ -1859,6 +1859,17 @@ pub async fn delete_on(
     )
     .await?;
     let catalog = find(&mut *account_tx, name).await?;
+    // The keys whose default this catalog is, which the delete below clears
+    // (`ON DELETE SET NULL`), locked in id order BEFORE the store's
+    // connection and the changesets' locks. A user deletion holds its key
+    // and then waits for a changeset the catalog's store transaction holds;
+    // if this delete took the changesets first and the key afterwards, the
+    // two would wait on each other across the databases, unseen by
+    // PostgreSQL (acquisition order, issue #970).
+    sqlx::query("SELECT id FROM api_keys WHERE default_catalog_id = $1 ORDER BY id FOR UPDATE")
+        .bind(catalog.id)
+        .execute(&mut *account_tx)
+        .await?;
     let mut tx = db.begin().await?;
     lock(&mut tx, catalog.id).await?;
     // A delete that waited on the lock may find the row already gone.

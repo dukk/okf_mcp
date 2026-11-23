@@ -231,6 +231,16 @@ impl CatalogDb {
 
     /// Begins a transaction on the store's database.
     ///
+    /// # Acquisition order
+    /// A change that also holds an account transaction takes the account
+    /// side first: the account connection, then every account row lock
+    /// (`lock_people`, the user and key rows), and only then this. A
+    /// transaction that holds the store's connection must never wait for an
+    /// account row, because a user deletion holds those rows and then needs
+    /// a store connection: with one store connection that is a cycle
+    /// PostgreSQL cannot detect (one edge is a pool wait). The store
+    /// commits first, then the account transaction (issue #970).
+    ///
     /// # Returns
     /// The transaction, which owns its connection (`'static`).
     ///
