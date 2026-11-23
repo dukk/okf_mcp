@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 559,
+  "next_claim_seq": 566,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "43e9131605ea9457f77c1243f7fb10cd7cc1d919d738686e2326e13b154369d5"
+    "mac": "28d84af9d01fab8567f7bbe714e74d25a2bd2bf6314605cbd74cdf6cc9529d34"
   },
-  "next_evidence_seq": 711,
+  "next_evidence_seq": 721,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "ea9b95d6ebbe2a3cc27da34b1489a3baf75d3c1f240858240d695300cb7a511e"
+    "mac": "7bc977ba47a14ec9d66a9492bb80c22c1ef0528db4279900ad025468fefa6f62"
   },
   "claims": [
     {
@@ -44267,6 +44267,506 @@
       "seal": {
         "by": "server",
         "mac": "4c881a580d9e3a426c6015901c5490603c1d070da6e275ff40005550a82f59cb"
+      }
+    },
+    {
+      "id": "CLM-0559",
+      "statement": "Issue #591 is investigated: the hypothesis is confirmed or refuted in code and the PR fixes it if confirmed.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/591",
+      "derived_from": [],
+      "artifacts": [
+        "src/shared/announce.rs",
+        "src/shared/announce/catalog_tests.rs"
+      ],
+      "tags": [
+        "from-issue:591"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0720",
+          "kind": "analysis",
+          "locator": "children of CLM-0559",
+          "summary": "The children show the hypothesis does not hold for current code (catch-up on every Subscribed, poll loop gone), the deterministic test passes and fails without the catch-up, a failed CLI announce is visible, and no production or info-logging change was made. So no fix was required.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T01:43:56.941483141Z",
+          "seal": {
+            "by": "server",
+            "mac": "575bd8eb89f417bf4ff3690a218a8ed4a29b368d3a8ea844e2b4da6e72eb3c3a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All six children are supported; together they cover the investigation, the refutation of the hypothesis, the test and its revert check, and the failed-announce check.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0720"
+          ],
+          "recorded_at": "2026-11-23T01:44:00.591006996Z",
+          "seal": {
+            "by": "server",
+            "mac": "e15fe08bf759e962b09b03c1ef0208f5fac1da28156466cbe8870eb89cf24a6a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T01:42:34.725422747Z",
+      "updated_at": "2026-11-23T01:44:00.591006996Z",
+      "seal": {
+        "by": "server",
+        "mac": "e8ef251cc83e32ded332e97648239d1721afc507486c0a9c49d5cd4965ea3631"
+      }
+    },
+    {
+      "id": "CLM-0560",
+      "statement": "For the current code, a catalog announcement published while a subscriber has no live subscription is applied once the subscriber returns, because run() calls the handler's subscribed() on every Subscribed event, including the one from its own fresh subscribe after the grace.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #591 requirements: 'an announcement published while the subscriber is down, subscriber returns, change seen without waiting for the poll'; PR body: 'Both subscribers run through `run` ... calls the handler's `subscribed` (a catch-up) on every `Subscribed` event.'",
+      "source_anchor": {
+        "path": "src/shared/announce.rs",
+        "lines": {
+          "start": 441,
+          "end": 445
+        },
+        "commit": "dc31f75472758b4623675bc7a2e4e948485a4e1a"
+      },
+      "derived_from": [
+        "CLM-0559"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs"
+      ],
+      "tags": [
+        "from-issue:591"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0711",
+          "kind": "inspection",
+          "locator": "src/shared/announce.rs:441-445",
+          "summary": "run() calls handler.subscribed().await on every SubscriptionEvent::Subscribed; a Disconnected longer than grace drops the subscription, backs off, and subscribes afresh, whose Subscribed event takes the same path. Both Snapshots and AdminChanges implement subscribed() as a catch-up (catch_up_catalogs / apply_m16_announcement).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 409,
+                "end": 476
+              },
+              "commit": "dc31f75472758b4623675bc7a2e4e948485a4e1a"
+            }
+          },
+          "recorded_at": "2026-11-23T01:42:46.391194536Z",
+          "seal": {
+            "by": "server",
+            "mac": "6950bd9b1a25b0023b67dd77142264d2422e7a738862dd9915b1b9cd12cca030"
+          }
+        },
+        {
+          "id": "EVD-0717",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow a_publish_during_a_resubscribe_window",
+          "summary": "The deterministic test drives run() with a Disconnected-then-fresh-subscribe source around a publish on another replica and passes at head (1 passed, 0 failed): the publish is read after the return with no further announcement and a 1 h TTL.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T01:42:56.287818774Z",
+          "seal": {
+            "by": "server",
+            "mac": "66eec9acec27acebff35f1f4a73be6ac5a277fce37bc25ecb17b5c4b1c9d2f49"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "run() catches up on every Subscribed, including the fresh subscribe after the grace; the deterministic test exercising exactly that passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0711",
+            "EVD-0717"
+          ],
+          "recorded_at": "2026-11-23T01:43:56.729339538Z",
+          "seal": {
+            "by": "server",
+            "mac": "534213abc89dc9dbd1dd53a21635c17be7a93b5548dfa50351ceb5334722a536"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T01:42:34.725422747Z",
+      "updated_at": "2026-11-23T01:43:56.729339538Z",
+      "seal": {
+        "by": "server",
+        "mac": "30693c0c4b7f27962e993b14a2717fdf4404d7ac4f59c736ef483385a1d56386"
+      }
+    },
+    {
+      "id": "CLM-0561",
+      "statement": "The new test a_publish_during_a_resubscribe_window_is_seen_once_the_subscriber_returns passes, exercises a publish committed while no subscription is live, and asserts the change is read after the subscriber returns with no further announcement, using a one-hour catalog_ttl and a 100 ms injected grace (no sleep over 1 s).",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: 'New test ... catalog_ttl is one hour so the TTL backstop cannot mask a missing catch-up' and 'No sleeps over 1 s in the test; the grace is injected as 100 ms.'",
+      "derived_from": [
+        "CLM-0559"
+      ],
+      "artifacts": [
+        "src/shared/announce/catalog_tests.rs"
+      ],
+      "tags": [
+        "from-issue:591"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0715",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow a_publish_during_a_resubscribe_window",
+          "summary": "Reran at head dc31f75: shared::announce::catalog_tests::a_publish_during_a_resubscribe_window_is_seen_once_the_subscriber_returns ... ok; 1 passed, 0 failed, 3.22s.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T01:42:56.212255979Z",
+          "seal": {
+            "by": "server",
+            "mac": "f3236fd00809730f3f6c7d69d005ef3e5149aa23ac69f00ddb9d90bf99eaf502"
+          }
+        },
+        {
+          "id": "EVD-0716",
+          "kind": "inspection",
+          "locator": "src/shared/announce/catalog_tests.rs:280-342",
+          "summary": "Read the assertions: attempt 0 yields Disconnected; driver waits for attempts>=2 (grace of 100 ms replaced it; second subscribe parked on Notify); published_edit on A commits; asserts B's read lacks the edit; then notify_one releases Subscribed; until_read asserts B sees the edit. catalog_ttl is 3600 s. Only sleeps are 20 ms polls; the overall timeout is 30 s.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce/catalog_tests.rs",
+              "lines": {
+                "start": 280,
+                "end": 342
+              },
+              "commit": "dc31f75472758b4623675bc7a2e4e948485a4e1a"
+            }
+          },
+          "recorded_at": "2026-11-23T01:42:56.254827978Z",
+          "seal": {
+            "by": "server",
+            "mac": "5e5be76f4d5bdaf4e22f5a0433f76a32793b0f4cfc0b562def453f3d16b42063"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reran: passes. Assertions read: publish while subscription parked, B stale before release, B fresh after, TTL 1 h, no long sleeps.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0715",
+            "EVD-0716"
+          ],
+          "recorded_at": "2026-11-23T01:43:56.775320224Z",
+          "seal": {
+            "by": "server",
+            "mac": "877c0aac70eff58138ff39d3dbfbdc2758f465dfbcddea994ee91714317dce47"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T01:42:34.725422747Z",
+      "updated_at": "2026-11-23T01:43:56.775320224Z",
+      "seal": {
+        "by": "server",
+        "mac": "2a33877a198d68b350a3f82b1fbe65adfcb9c21ef2c07ceae9b4dd342082d642"
+      }
+    },
+    {
+      "id": "CLM-0562",
+      "statement": "With the handler.subscribed().await call removed from run in src/shared/announce.rs, the new resubscribe-window test fails.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: 'Revert check: with the `handler.subscribed().await` call removed from `run`, the new test fails; restored, it passes.'",
+      "derived_from": [
+        "CLM-0559"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs",
+        "src/shared/announce/catalog_tests.rs"
+      ],
+      "tags": [
+        "from-issue:591"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0718",
+          "kind": "test",
+          "locator": "throwaway detached worktree of dc31f75 with src/shared/announce.rs:444 handler.subscribed().await replaced by a no-op; tools/agentic/gate.sh narrow a_publish_during_a_resubscribe_window",
+          "summary": "The test FAILED (panicked at catalog_tests.rs:341, the caught_up assertion; 0 passed, 1 failed, 14.67s). The worktree was removed afterwards; the audited checkout is unmodified.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T01:43:44.738355017Z",
+          "seal": {
+            "by": "server",
+            "mac": "d5fe9e704675e0d6792fad4eff6387d9dc0f217732830a4d6108328ff28f4cd7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Independently reproduced in a throwaway worktree: with the catch-up call removed the test fails at its caught_up assertion.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0718"
+          ],
+          "recorded_at": "2026-11-23T01:43:56.808512305Z",
+          "seal": {
+            "by": "server",
+            "mac": "4b90b235c248c68efccaf454f9b93765c1f888ce58845365e996337a09c533be"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T01:42:34.725422747Z",
+      "updated_at": "2026-11-23T01:43:56.808512305Z",
+      "seal": {
+        "by": "server",
+        "mac": "267e1b8945c8875302486b89bb452ac0d2f0180d1e0d7a783e7c97950f53f263"
+      }
+    },
+    {
+      "id": "CLM-0563",
+      "statement": "A failed publish from the CLI is counted and logged by Redis::failed, and a failed Redis connect in announce_from_cli logs a warning.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #591 brief: 'check that a failed CLI announce is visible'; PR body: 'A failed publish from the CLI is counted and logged by `Redis::failed`; a failed connect logs a warning.'",
+      "derived_from": [
+        "CLM-0559"
+      ],
+      "artifacts": [
+        "src/shared/announce.rs",
+        "src/shared/mod.rs"
+      ],
+      "tags": [
+        "from-issue:591"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0712",
+          "kind": "inspection",
+          "locator": "src/shared/announce.rs:99-107; src/shared/mod.rs:377-390",
+          "summary": "publish_catalog calls redis.failed(RedisOp::Publish, ..) on error; Redis::failed counts okf.redis.errors via metrics.redis_error and emits split_event!(error, ...), an error-level exported event plus a local detail event.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/mod.rs",
+              "lines": {
+                "start": 377,
+                "end": 390
+              },
+              "commit": "dc31f75472758b4623675bc7a2e4e948485a4e1a"
+            }
+          },
+          "recorded_at": "2026-11-23T01:42:46.474891798Z",
+          "seal": {
+            "by": "server",
+            "mac": "8b63adba91556309a21be080f1179f3857911c015daa7e500e78712450b2daf9"
+          }
+        },
+        {
+          "id": "EVD-0713",
+          "kind": "inspection",
+          "locator": "src/shared/announce.rs:169-185",
+          "summary": "announce_from_cli on Redis::connect Err emits tracing::warn!(\"announcement skipped; ...\") with the error kind. No test in this PR exercises either failure path (inspection only).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/announce.rs",
+              "lines": {
+                "start": 169,
+                "end": 185
+              },
+              "commit": "dc31f75472758b4623675bc7a2e4e948485a4e1a"
+            }
+          },
+          "recorded_at": "2026-11-23T01:42:46.547258919Z",
+          "seal": {
+            "by": "server",
+            "mac": "2176bce75748a67cabb83af489157a0c73ac940aecd1707961e64e40f25c786f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code path read: publish failure goes to Redis::failed (metric plus error-level event); connect failure logs a warn. Inspection only, no test covers it, acceptable at level 2.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0712",
+            "EVD-0713"
+          ],
+          "recorded_at": "2026-11-23T01:43:56.841591466Z",
+          "seal": {
+            "by": "server",
+            "mac": "632d21450823c26af0e56cfa15572a1f0bff2feeefb0f3f7c93ad41b95cc974c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T01:42:34.725422747Z",
+      "updated_at": "2026-11-23T01:43:56.841591466Z",
+      "seal": {
+        "by": "server",
+        "mac": "49adb060954b4708d7532a7c4d4e6e7768ad78653191f9dfa24cebe91ec86959"
+      }
+    },
+    {
+      "id": "CLM-0564",
+      "statement": "The poll loop is gone since M18: poll_interval is parsed, warned about and ignored in src/config.rs.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'Since M18 the poll loop is gone: `poll_interval` is parsed, warned about and ignored (`src/config.rs`).'",
+      "derived_from": [
+        "CLM-0559"
+      ],
+      "artifacts": [
+        "src/config.rs"
+      ],
+      "tags": [
+        "from-issue:591"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0719",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow poll_interval_parses_with_a_warning",
+          "summary": "config::tests::poll_interval_parses_with_a_warning_and_is_ignored ok (1 passed, 0 failed); config.rs:1225-1226 warns \"poll_interval is deprecated and ignored\". grep of app.rs and invalidate.rs finds no poll loop (invalidate.rs:605 says milestone 18 removed it).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/config.rs",
+              "lines": {
+                "start": 1225,
+                "end": 1227
+              },
+              "commit": "dc31f75472758b4623675bc7a2e4e948485a4e1a"
+            }
+          },
+          "recorded_at": "2026-11-23T01:43:44.775739206Z",
+          "seal": {
+            "by": "server",
+            "mac": "16caffb2adea131074add5ab3c98c2237b570b98b509ca8bbea4657d8ff52ece"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Config test passes and warning code is present; no poll loop remains in app/invalidate.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0719"
+          ],
+          "recorded_at": "2026-11-23T01:43:56.874225335Z",
+          "seal": {
+            "by": "server",
+            "mac": "f338dc437eb5f32b1b9a9f7b8fc7d1095be6a9eed2abf0e4bc9a4e9f40de9862"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T01:42:34.725422747Z",
+      "updated_at": "2026-11-23T01:43:56.874225335Z",
+      "seal": {
+        "by": "server",
+        "mac": "0563fb16c9a1fa7c3240558cba665af09a435a85414c03ba78332c33795f03f9"
+      }
+    },
+    {
+      "id": "CLM-0565",
+      "statement": "The PR changes no production code and adds no info-level subscriber logging (issue #592).",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: 'no production code changes'; brief: 'do not add info logging (that is #592)'",
+      "derived_from": [
+        "CLM-0559"
+      ],
+      "artifacts": [
+        "src/shared/announce/catalog_tests.rs"
+      ],
+      "tags": [
+        "from-issue:591"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0714",
+          "kind": "inspection",
+          "locator": "git diff --name-only origin/main..HEAD",
+          "summary": "Diff touches only changelog/2026-11-23T01-30-04Z-issue-591-resubscribe-window.md and src/shared/announce/catalog_tests.rs (a #[cfg(test)] module); src/shared/announce.rs and all other production files are unchanged. Test file adds no tracing calls.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "tracing::(info|warn)|info!",
+              "scope": [
+                "src/shared/announce/catalog_tests.rs"
+              ],
+              "hits": 0,
+              "commit": "dc31f75472758b4623675bc7a2e4e948485a4e1a"
+            }
+          },
+          "recorded_at": "2026-11-23T01:42:46.637088448Z",
+          "seal": {
+            "by": "server",
+            "mac": "20c310a48d5a947c66d9a1f0cf11ebdbe120dfefa8b68c1f22daa49138f7eee8"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Only a changelog and a test module changed; no tracing info/warn added.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0714"
+          ],
+          "recorded_at": "2026-11-23T01:43:56.907887778Z",
+          "seal": {
+            "by": "server",
+            "mac": "73139ac31462c8fc4292c3a87cd324144217898b381b4fc998bfdcff26e24b76"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T01:42:34.725422747Z",
+      "updated_at": "2026-11-23T01:43:56.907887778Z",
+      "seal": {
+        "by": "server",
+        "mac": "484dab1d3d593866a3f11ab5f5df4407bfd253449f9542aba03d5de1771d0f6c"
       }
     }
   ]
