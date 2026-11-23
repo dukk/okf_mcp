@@ -1016,23 +1016,34 @@ mod tests {
         .unwrap();
     }
 
+    /// `name` as a quoted SQL identifier (a `"` inside doubles).
+    fn quoted(name: &str) -> String {
+        format!("\"{}\"", name.replace('"', "\"\""))
+    }
+
     /// A login role of its own (roles belong to the whole server, so the
     /// name carries the test database's).
     async fn make_role(pool: &PgPool, password: &str) -> String {
         let (_, _, database) = server_of(pool);
-        let role = format!("r_{database}");
+        make_named_role(pool, &format!("r_{database}"), password).await
+    }
+
+    /// A login role called `role`, which may contain a quotation mark.
+    async fn make_named_role(pool: &PgPool, role: &str, password: &str) -> String {
         sqlx::query(AssertSqlSafe(format!(
-            "CREATE ROLE \"{role}\" LOGIN PASSWORD '{password}'"
+            "CREATE ROLE {} LOGIN PASSWORD '{password}'",
+            quoted(role)
         )))
         .execute(pool)
         .await
         .unwrap();
-        role
+        role.to_string()
     }
 
     async fn set_password(pool: &PgPool, role: &str, password: &str) {
         sqlx::query(AssertSqlSafe(format!(
-            "ALTER ROLE \"{role}\" PASSWORD '{password}'"
+            "ALTER ROLE {} PASSWORD '{password}'",
+            quoted(role)
         )))
         .execute(pool)
         .await
@@ -1040,7 +1051,7 @@ mod tests {
     }
 
     async fn drop_role(pool: &PgPool, role: &str) {
-        sqlx::query(AssertSqlSafe(format!("DROP ROLE \"{role}\"")))
+        sqlx::query(AssertSqlSafe(format!("DROP ROLE {}", quoted(role))))
             .execute(pool)
             .await
             .unwrap();
@@ -1299,12 +1310,21 @@ mod tests {
         drop_role(&db.pool, &role).await;
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_plain_read_refused_after_a_rotation_refreshes_the_login_and_the_next_read_works() {
+    /// A rotated secret, then a plain read on the open pool: the read is
+    /// refused, the credential task refreshes, and the next read works.
+    /// `quoted_role` gives the role a `"` in its name.
+    async fn a_plain_read_after_a_rotation_refreshes(quoted_role: bool) {
         let db = crate::db::test_db().await;
-        let role = make_role(&db.pool, "pw-1").await;
-        let secrets =
-            MockSecrets::holding(&format!(r#"{{"username":"{role}","password":"pw-1"}}"#));
+        let role = if quoted_role {
+            let (_, _, database) = server_of(&db.pool);
+            make_named_role(&db.pool, &format!("app\"{database}"), "pw-1").await
+        } else {
+            make_role(&db.pool, "pw-1").await
+        };
+        let secret = |password: &str| {
+            serde_json::json!({ "username": role, "password": password }).to_string()
+        };
+        let secrets = MockSecrets::holding(&secret("pw-1"));
         let stores = Stores::with_providers(
             db.pool.clone(),
             settings(),
@@ -1322,7 +1342,7 @@ mod tests {
         let mut refreshes = stores.credential_task(&name).await.unwrap();
 
         set_password(&db.pool, &role, "pw-2").await;
-        secrets.set(Ok(format!(r#"{{"username":"{role}","password":"pw-2"}}"#)));
+        secrets.set(Ok(secret("pw-2")));
         // A read that goes straight to the pool and propagates with `?`,
         // never through `CatalogDb::classify` (the shape of the store
         // layer's functions).
@@ -1340,6 +1360,16 @@ mod tests {
 
         stores.forget_all().await;
         drop_role(&db.pool, &role).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_plain_read_refused_after_a_rotation_refreshes_the_login_and_the_next_read_works() {
+        a_plain_read_after_a_rotation_refreshes(false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_role_with_a_quotation_mark_still_refreshes_after_a_rotation() {
+        a_plain_read_after_a_rotation_refreshes(true).await;
     }
 
     /// Opens an IAM store, forgets it (one store, or all), and checks that
