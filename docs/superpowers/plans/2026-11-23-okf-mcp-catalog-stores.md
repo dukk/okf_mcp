@@ -208,7 +208,7 @@ Config keys (`src/config.rs`): `store_max_connections` (u32, default 8, must be 
 Release 1:  1 -> 2 -> 3 -> 4 -> 5 -> 6
 Release 2:  6 -> 7 -> 8 -> 9, 10 (parallel) -> 10b part 1 (hide unprovisioned rows from every by-name reader)
 Release 2b: 10b part 1 -> 10b part 2 (the two-step create and ProvisionCatalogs)
-Release 3:  10b -> 11 -> 12 -> 13 -> 14 -> 15 -> 17
+Release 3:  10b part 2 -> 11 -> 12 -> 13 -> 14 -> 15 -> 17
 Then:       17 -> 16, 18 (parallel) -> 19 -> 20 (lifts P8)
 ```
 
