@@ -194,8 +194,7 @@ the release notes.
 today, which for a `Reach::All` key would be every catalog in the system.
 It now searches at most `search_fanout_max` catalogs (default 25). A
 request that would exceed it is refused with a 400 asking the caller to
-name the catalogs. The cap applies to every key. MCP `search` is already
-bounded by catalog selection and does not change.
+name the catalogs. The cap applies to every key.
 
 > **Corrected (issue #745, 2026-11-19).** The cap applies only when the
 > request names no catalogs (issue #725). An explicit list is not capped:
