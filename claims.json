@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 743,
+  "next_claim_seq": 756,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "a3104be1c0f3239cbc2e6734aa9bdc549b07ada2f632a789db221b2ce3ead07f"
+    "mac": "1ae8a1b489ec2f95abce762e34aec881494ba1f4950ddeb99281ba7bbabbe8d6"
   },
-  "next_evidence_seq": 994,
+  "next_evidence_seq": 1018,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "fd20b6222a1148c7aac64b1dc28020f617cb040b1d5231f5646b6c94a0b12092"
+    "mac": "93d6a056d1f5c7c7c8bfda472a79ff2c55dffa925918b52181cd5d0d4182b6e0"
   },
   "claims": [
     {
@@ -18137,7 +18137,9 @@
         "area:readme-b"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by issue #725: the cap now also applies to an explicit catalog list",
+        "retired_at": "2026-11-23T12:37:39.333760192Z"
       },
       "evidence": [
         {
@@ -18161,6 +18163,28 @@
             "by": "server",
             "mac": "cf7a0724249119d01621684fbe16b7741498807c6cf648feab56046dec000f91"
           }
+        },
+        {
+          "id": "EVD-1008",
+          "kind": "inspection",
+          "locator": "src/mcp/search.rs:130-133,198-225 at 8d6927b",
+          "summary": "run_with now calls check_fanout, so a search naming more than search_fanout_max distinct catalogs is refused too. The claim's \"applies only to a search naming no catalogs\" no longer holds (the README line it was drawn from, 457-458, was rewritten by this PR).",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/search.rs",
+              "lines": {
+                "start": 128,
+                "end": 135
+              },
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:36:09.236086513Z",
+          "seal": {
+            "by": "server",
+            "mac": "55516a959eff3becce26b666b2916a2845a75b587dba0d481412f27f6080d2c9"
+          }
         }
       ],
       "verdicts": [
@@ -18176,13 +18200,26 @@
             "by": "server",
             "mac": "1046e10e11cee9c1eff26d570cf5d1c051b22582858ed66d21ad62b52fb4de78"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "This PR intentionally makes the cap apply to explicit lists, so the older claim is now false (ours: an existing claim this diff broke). Fix: retire CLM-0220 with a reason (superseded by issue #725) and rely on the new claims for the cap, instead of changing code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1008"
+          ],
+          "recorded_at": "2026-11-23T12:36:36.420639152Z",
+          "seal": {
+            "by": "server",
+            "mac": "d2a183d17d1dbb179293d59acc7273753cfcd985f8576eab4905708ecb6437c6"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:17.608189865Z",
-      "updated_at": "2026-11-21T19:10:10.760167242Z",
+      "updated_at": "2026-11-23T12:37:39.333760192Z",
       "seal": {
         "by": "server",
-        "mac": "2ec2a16dd63d03121ec4f75dfbdd18ce38d9be6c1c602de4913da73dc86111d0"
+        "mac": "e73c82abc6a5c3cb4c1b8321fa994b1d518b1b7fd8158282528d7b2ddd566a8a"
       }
     },
     {
@@ -20128,6 +20165,28 @@
             "by": "server",
             "mac": "284205d7c6673f5b406506ddf4e45f157bdde7cb618ef49aec262e30ebd39d93"
           }
+        },
+        {
+          "id": "EVD-1009",
+          "kind": "inspection",
+          "locator": "docs/operations.md:149; src/config.rs:1290-1295; src/http/api/search.rs:126-141",
+          "summary": "At 8d6927b the line 149 row still states the 1-999 range and the 400 for an unnamed search past the cap; config validation and every_reachable are unchanged by the diff.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 149,
+                "end": 149
+              },
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:36:09.296400470Z",
+          "seal": {
+            "by": "server",
+            "mac": "81f6f7615cf9ec7059f4bdb6aa9d64c2a155702f4ffe03d04395d33c60fac89b"
+          }
         }
       ],
       "verdicts": [
@@ -20143,13 +20202,26 @@
             "by": "server",
             "mac": "32a347c3e1bd4828133f7c9f520b5fc55272b391e906b9b8515da832af405165"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head after its docs anchor changed: both halves still hold; the PR only added text to the same row.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1009"
+          ],
+          "recorded_at": "2026-11-23T12:36:36.474819954Z",
+          "seal": {
+            "by": "server",
+            "mac": "f22cd82f25e7a528a8ab13b41e8f2894b61002130b803bc367c987f34117f45d"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:50.360239770Z",
-      "updated_at": "2026-11-21T19:09:00.199927949Z",
+      "updated_at": "2026-11-23T12:36:36.474819954Z",
       "seal": {
         "by": "server",
-        "mac": "289be99b219014955606eb0573317bc685c577d2e1739d95e39e4279c98784ea"
+        "mac": "e1aaf8112516c1a7add313500df312e422e48173426bf2e8794afff580321b71"
       }
     },
     {
@@ -58753,6 +58825,1105 @@
       "seal": {
         "by": "server",
         "mac": "e4ff6f895fdbff95d4ff7e91152f637e81d0e21708412f038d16b48a14400cb1"
+      }
+    },
+    {
+      "id": "CLM-0743",
+      "statement": "Issue #725 is resolved: one search may name at most search_fanout_max distinct catalogs, over HTTP and MCP, and the console no longer names every reachable catalog.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/725",
+      "derived_from": [],
+      "artifacts": [
+        "src/mcp/search.rs",
+        "src/http/ui/js/pages/search.js"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1010",
+          "kind": "analysis",
+          "locator": "children of CLM-0743",
+          "summary": "Refuted children: CLM-0751 (the within-cap console journey cannot catch a regression to naming every catalog) and CLM-0755 (the MCP search tool reference is not updated). Core behavior children are supported; CLM-0754 is not_enough_info.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-23T12:36:36.533932148Z",
+          "seal": {
+            "by": "server",
+            "mac": "6ea6b8fd0e059feab99a01a74a80d35b7d46dc53cd8f8a3cac8022e3bc0d09db"
+          }
+        },
+        {
+          "id": "EVD-1013",
+          "kind": "inspection",
+          "locator": "children CLM-0744..0753, CLM-0751 and CLM-0755 fixed in d85eda9",
+          "summary": "Every child claim is now supported except CLM-0754 (not_enough_info: gate counts, which the PR body reports from the author's log).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T12:37:59.676857484Z",
+          "seal": {
+            "by": "server",
+            "mac": "9b1fb11dc8ab4b8478578a95f0fcf533814e5b696c4ea56f8b612643ccc73268"
+          }
+        },
+        {
+          "id": "EVD-1016",
+          "kind": "inspection",
+          "locator": "gh issue view 725; src/http/api/search.rs:128; src/mcp/search.rs:130,214; src/http/ui/js/pages/search.js:91",
+          "summary": "Issue asks: cap named catalogs (same search_fanout_max, same refusal) and change the console to a chosen subset, with tests for over-long list and a picker journey. At HEAD the HTTP path reads search_fanout_max (search.rs:128), MCP calls check_fanout (mcp/search.rs:130), and the console names catalogs only when choosing a subset (search.js:91, chooser at :28). Tests exist for within-cap and past-cap console journeys (browse.rs). The issue is still OPEN, as expected before the PR merges.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/search.js",
+              "lines": {
+                "start": 86,
+                "end": 96
+              },
+              "commit": "4599d8485e6839f6dc34f9220661cd8f0422ba40"
+            }
+          },
+          "recorded_at": "2026-11-23T12:48:54.192134840Z",
+          "seal": {
+            "by": "server",
+            "mac": "a8fc061bd04123e7cb48ca73571b63640efd3f6f166d5a6f76a2450387a434d6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The behavior is delivered, but two children are refuted (test cannot catch the console naming all catalogs within cap; MCP tool reference undocumented). Fix: resolve CLM-0751 and CLM-0755 then re-audit.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1010"
+          ],
+          "recorded_at": "2026-11-23T12:36:40.296178644Z",
+          "seal": {
+            "by": "server",
+            "mac": "9644955b126125c16f25b657781e5b6037f0a572db167cc20a3d194c9ce1b6c6"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The two refuted children were fixed; the rest are supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1013"
+          ],
+          "recorded_at": "2026-11-23T12:38:06.781610180Z",
+          "seal": {
+            "by": "server",
+            "mac": "245eba4ae16166443ddd90d405b3ff0ba3ccd188bbc450f4f878698779ef86c8"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "At HEAD the cap is enforced in HTTP (src/http/api/search.rs:128) and MCP (src/mcp/search.rs:130,214), and the console names catalogs only for a chosen subset past the cap (search.js:91). Children CLM-0751 and CLM-0755 re-audited as supported. The issue is still OPEN only because the PR has not merged.",
+          "auditor": "claude-sonnet-5-5-reaudit",
+          "evidence_ids": [
+            "EVD-1016"
+          ],
+          "recorded_at": "2026-11-23T12:48:57.610550881Z",
+          "seal": {
+            "by": "server",
+            "mac": "b1963cefedf8436fed5d7345df220892e9fa8de2f6825d3098467d4dddb9d233"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:35:04.533848494Z",
+      "updated_at": "2026-11-23T12:48:57.610550881Z",
+      "seal": {
+        "by": "server",
+        "mac": "1fd17bb42640e0da43c2c4d6156d82771abf27556942e3d5a63704759a9a2d43"
+      }
+    },
+    {
+      "id": "CLM-0744",
+      "statement": "check_fanout returns OkfError::InvalidPath with path \"catalogs\" when a search names more than search_fanout_max distinct catalogs, using the same cap setting as the every_reachable path.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #725 requirement: cap the catalogs one search may name (same search_fanout_max, same 400/InvalidPath shape as the every_reachable path)",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/mcp/search.rs"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0994",
+          "kind": "inspection",
+          "locator": "src/mcp/search.rs:198-225",
+          "summary": "check_fanout counts distinct names and returns InvalidPath{path:\"catalogs\"} when count > most; run_with passes ctx.app().config().search_fanout_max, the same field every_reachable reads (search.rs:128). Variant matches every_reachable's InvalidPath on \"catalogs\" (HTTP 400).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/search.rs",
+              "lines": {
+                "start": 128,
+                "end": 225
+              },
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:35:42.869574754Z",
+          "seal": {
+            "by": "server",
+            "mac": "8c4111d10aeb860a4729c5404df1c56e99c0eb59eea9bd846ee531c1654dff2d"
+          }
+        },
+        {
+          "id": "EVD-0995",
+          "kind": "test",
+          "locator": "cargo test --lib -- mcp::search::tests::check_fanout mcp::search::tests::the_tool_refuses http::api::listing_tests::search_naming (3 passed, 0 failed)",
+          "summary": "check_fanout_counts_distinct_names_against_the_cap passes; its assertion matches InvalidPath with path == \"catalogs\" and message containing \"at most 2\" for 3 names against cap 2.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/search.rs",
+              "lines": {
+                "start": 317,
+                "end": 328
+              },
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:35:42.974297110Z",
+          "seal": {
+            "by": "server",
+            "mac": "51904aaf57bcae062c673c45f04a8f32060dd4eab02f7c830e44b39e83d732fb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code returns InvalidPath on \"catalogs\" from the same config field; the unit test passed on my run.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0994",
+            "EVD-0995"
+          ],
+          "recorded_at": "2026-11-23T12:36:35.648490235Z",
+          "seal": {
+            "by": "server",
+            "mac": "ee299368b0a4c14d59d260762a3ab8eb048616db8a75075b921e298afe30b4b9"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:35:04.533848494Z",
+      "updated_at": "2026-11-23T12:36:35.648490235Z",
+      "seal": {
+        "by": "server",
+        "mac": "4da636db0b80266e124beb4f26eadb1b951f95e29da840bdca1bb04d7ea26154"
+      }
+    },
+    {
+      "id": "CLM-0745",
+      "statement": "A name repeated in the catalogs list counts once toward the cap, and a list of exactly search_fanout_max distinct names is accepted.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #725 requirement: dedupe before counting; at-cap accepted. PR body: \"A name repeated counts once.\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/mcp/search.rs"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0996",
+          "kind": "test",
+          "locator": "cargo test --lib -- mcp::search::tests::check_fanout (passed)",
+          "summary": "Asserts Ok for [a,b] at cap 2 (at-cap) and Ok for [a,a,a,b] (duplicates collapse), Err for [a,b,c]. Dedupe is a HashSet before the comparison (search.rs:215-217).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/search.rs",
+              "lines": {
+                "start": 317,
+                "end": 328
+              },
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:35:43.093549678Z",
+          "seal": {
+            "by": "server",
+            "mac": "dfe770ba7f3ebe131006459b789612aa9b3f1902f3b8b283e28632f1adcdfa9a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test asserts at-cap Ok and duplicates-collapse Ok, and it passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0996"
+          ],
+          "recorded_at": "2026-11-23T12:36:35.705347480Z",
+          "seal": {
+            "by": "server",
+            "mac": "64903ba2610db42c407e8a7ec37db3a1eb45553f99bff030e8421258878406d4"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:35:04.533848494Z",
+      "updated_at": "2026-11-23T12:36:35.705347480Z",
+      "seal": {
+        "by": "server",
+        "mac": "f9f07d099ae8facfe5cf9bf7c62e642f015bc812f1eb43c5857c9851139f4a17"
+      }
+    },
+    {
+      "id": "CLM-0746",
+      "statement": "GET /api/v1/search naming more than search_fanout_max distinct catalogs answers 400 with error InvalidPath, and naming exactly the cap, or a repeated list within it, answers 200.",
+      "kind": "interface",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"so GET /api/v1/search ... share it\"; issue #725",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/http/api/search.rs",
+        "src/http/api/listing_tests.rs"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1004",
+          "kind": "test",
+          "locator": "cargo test --lib -- http::api::listing_tests::search_naming (1 passed)",
+          "summary": "Test sends catalogs=a,b,c with cap 2 and asserts 400, error InvalidPath, message contains \"at most 2\"; a,b asserts 200; a,b,a,b,a asserts 200. The handler passes the named list to run_with, which calls check_fanout.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/listing_tests.rs",
+              "lines": {
+                "start": 230,
+                "end": 277
+              },
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:35:59.610915069Z",
+          "seal": {
+            "by": "server",
+            "mac": "3b5f701f21e70966aa2a5f2293f9b12ab1c1ec91550a7593e54c92b96bbd99d0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The HTTP test asserts 400/InvalidPath over the cap and 200 at the cap and with repeats; it passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1004"
+          ],
+          "recorded_at": "2026-11-23T12:36:35.767361788Z",
+          "seal": {
+            "by": "server",
+            "mac": "588e6946fde255e37bbebbccb0831551548f4badefe3d1469a9218743576a95e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:35:04.533848494Z",
+      "updated_at": "2026-11-23T12:36:35.767361788Z",
+      "seal": {
+        "by": "server",
+        "mac": "eac91b5f1fb20b5ce4f2c56f224ed1d84a07034e9afec3475fc2e14fd69a4f26"
+      }
+    },
+    {
+      "id": "CLM-0747",
+      "statement": "The MCP search tool applies the same cap through the shared check_fanout helper called from run_with, and refuses an over-long catalogs list.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #725 requirement: apply to MCP search via a shared helper. PR body: \"`run_with` calls it\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/mcp/search.rs"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0997",
+          "kind": "test",
+          "locator": "cargo test --lib -- mcp::search::tests::the_tool_refuses (passed)",
+          "summary": "Calls the MCP run() with catalogs [a,b,c] at cap 2: asserts InvalidPath; with [a,b,a] asserts Ok with 2 hits. run_with (shared by tool and HTTP) calls check_fanout first (search.rs:130-133).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/search.rs",
+              "lines": {
+                "start": 128,
+                "end": 135
+              },
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:35:43.220863656Z",
+          "seal": {
+            "by": "server",
+            "mac": "021b5aae0d987538adf147caec844e819d72c5f624fa828b1698c9d2ed5fd593"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The MCP-level test refuses over-cap and accepts at-cap with repeats; run_with calls the shared helper.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0997"
+          ],
+          "recorded_at": "2026-11-23T12:36:35.827071075Z",
+          "seal": {
+            "by": "server",
+            "mac": "d05822c64d381df32bdcf3375810bbae128c0ff62bb1a01648ac3c558f369fb2"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:35:04.533848494Z",
+      "updated_at": "2026-11-23T12:36:35.827071075Z",
+      "seal": {
+        "by": "server",
+        "mac": "b8c13290a99e236a45edcbba2bb16e0fa03da3232c2710691774feb79d48cc64"
+      }
+    },
+    {
+      "id": "CLM-0748",
+      "statement": "GET /whoami returns search_fanout_max set from the server config.",
+      "kind": "interface",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"`GET /whoami` returns `search_fanout_max`.\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/http/api/identity.rs"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0998",
+          "kind": "test",
+          "locator": "cargo test --lib -- identity::tests::whoami_describes (1 passed); src/http/api/identity.rs:231",
+          "summary": "whoami sets search_fanout_max from app.config().search_fanout_max; test asserts body[\"search_fanout_max\"] == 25 (the default; it does not vary the config, so the config link is by reading line 231).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/identity.rs",
+              "lines": {
+                "start": 227,
+                "end": 233
+              },
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:35:43.348374465Z",
+          "seal": {
+            "by": "server",
+            "mac": "8a0bae783953e261e5d3f19eaa44042f269a4ba2b3eb200ac581ffac20782a8b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The field is serialized from the config and the test passes at the default.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0998"
+          ],
+          "recorded_at": "2026-11-23T12:36:35.891823966Z",
+          "seal": {
+            "by": "server",
+            "mac": "798e470ec7d93ed6c86e4b7d28516c4b3b72f85d8c18bc8738661e2ff0d71403"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:35:04.533848494Z",
+      "updated_at": "2026-11-23T12:36:35.891823966Z",
+      "seal": {
+        "by": "server",
+        "mac": "3428401868ccedfa63d29a03685fc2bff522d4d038876d26de1491bf9e7a5b07"
+      }
+    },
+    {
+      "id": "CLM-0749",
+      "statement": "The console search page sends no catalogs= parameter when the key reaches at most the cap read from /whoami.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"with at most the cap reachable it sends no `catalogs=`\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/http/ui/js/pages/search.js"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0999",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/search.js:59-62,89-96",
+          "summary": "cap = store.whoami.search_fanout_max; choosing = cap>0 && catalogs.length>cap; named = choosing ? '&catalogs=...' : ''. Within the cap the URL is /search?q=..&limit=50 with no catalogs=. store.whoami.catalogs is every page (shell.js api.pages('/whoami','catalogs')).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/search.js",
+              "lines": {
+                "start": 57,
+                "end": 100
+              },
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:35:43.510163812Z",
+          "seal": {
+            "by": "server",
+            "mac": "1cfa8ec5fdcd62ebff0f3c137a812af4c34fd0e744f95dd7e3a6e3f3b9852460"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "By code reading the request omits catalogs= whenever reachable count <= cap. No test pins the request URL (see the e2e claim), so the verdict rests on analysis, which the claim names.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0999"
+          ],
+          "recorded_at": "2026-11-23T12:36:35.973955047Z",
+          "seal": {
+            "by": "server",
+            "mac": "6f33099995d433999fd6f43c496566a64b02d17b1a54fc3feefe958d3603e411"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:35:04.533848494Z",
+      "updated_at": "2026-11-23T12:36:35.973955047Z",
+      "seal": {
+        "by": "server",
+        "mac": "3a28f7b07fd0133c164fc10cecb9015187f44f652c851656a85cedd672eedf92"
+      }
+    },
+    {
+      "id": "CLM-0750",
+      "statement": "When the key reaches more catalogs than the cap, the console search page shows a checkbox chooser that disables unchecked boxes once the cap is reached and sends only the chosen catalogs.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"Past the cap it shows a checkbox chooser that stops at the cap and says why.\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/http/ui/js/pages/search.js",
+        "tests/ui_e2e/browse.rs"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1000",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/search.js:26-52,91; tests/ui_e2e/browse.rs:223-250",
+          "summary": "chooser() disables every unchecked box when picked.size>=cap; initialChoice slices to cap; request names chosen only. E2E search_past_the_cap_asks_for_a_choice_and_limits_it (cap 2, 3 catalogs) asserts the chooser appears, \"2 of at most 2\", only boxes one/three enabled, then unchecking one and submitting gives \"1 hit\" from three. I did not run it (browser e2e; full-suite rule).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/browse.rs",
+              "lines": {
+                "start": 222,
+                "end": 251
+              },
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:35:43.635181499Z",
+          "seal": {
+            "by": "server",
+            "mac": "d54269d7deaafb202c9a5c9833823a513259bee1a385d70a3bfc2590ddaa36a9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code disables unchecked boxes at the cap and names only chosen catalogs; the e2e test asserts exactly that. I read the assertions but did not run the browser test, so the run itself is the author's gate claim.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1000"
+          ],
+          "recorded_at": "2026-11-23T12:36:36.036686339Z",
+          "seal": {
+            "by": "server",
+            "mac": "c5bcff3f8f195f347c3b2bf1f22267bdfa1a69cf4a825787be4ae0f5989e2581"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:35:04.533848494Z",
+      "updated_at": "2026-11-23T12:36:36.036686339Z",
+      "seal": {
+        "by": "server",
+        "mac": "42493ae886d900249b6fcb3012f0e8c0735c9f1c21b10484f79261c207b2118d"
+      }
+    },
+    {
+      "id": "CLM-0751",
+      "statement": "The console end-to-end test for a key within the cap would fail if the console went back to naming every reachable catalog in catalogs=.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #725: \"a console journey\"; PR body test for within-cap (name: search_within_the_cap_names_no_catalogs_and_shows_no_chooser)",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "tests/ui_e2e/browse.rs"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1001",
+          "kind": "analysis",
+          "locator": "tests/ui_e2e/browse.rs:185-221",
+          "summary": "Within-cap test uses cap 3 with exactly 3 reachable catalogs and asserts only \"3 hits\" and no chooser. A console that named all 3 would send 3 names, which check_fanout accepts (3 <= 3), still giving 3 hits and no chooser, so the test passes under the old behavior. No request URL is inspected.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/browse.rs",
+              "lines": {
+                "start": 185,
+                "end": 221
+              },
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:35:43.767531902Z",
+          "seal": {
+            "by": "server",
+            "mac": "b5962a15046f6550a80507f4ee77406fad63cbc584dc082ffa9962803849f91c"
+          }
+        },
+        {
+          "id": "EVD-1011",
+          "kind": "inspection",
+          "locator": "tests/ui_e2e/browse.rs:185-230 at d52f037",
+          "summary": "The within-cap journey now reads the page's resource entries and asserts exactly one /api/v1/search request that does not contain \"catalogs=\", so a console naming every catalog would fail it.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T12:37:44.550430422Z",
+          "seal": {
+            "by": "server",
+            "mac": "f15e8ceb36ba4a49c67e65b79bd38ee971890eac495914d73ef17fc1b6da52d9"
+          }
+        },
+        {
+          "id": "EVD-1014",
+          "kind": "inspection",
+          "locator": "tests/ui_e2e/browse.rs:208-230; src/http/ui/js/pages/search.js:91",
+          "summary": "At HEAD the within-cap test (cap 3, 3 catalogs) collects performance resource entries for /api/v1/search, asserts exactly one and that its URL lacks \"catalogs=\". search.js:91 adds &catalogs= only when choosing (count > cap); a console naming every catalog would put catalogs= in the URL and fail the assert.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/ui_e2e/browse.rs",
+              "lines": {
+                "start": 208,
+                "end": 230
+              },
+              "commit": "4599d8485e6839f6dc34f9220661cd8f0422ba40"
+            }
+          },
+          "recorded_at": "2026-11-23T12:48:46.434726697Z",
+          "seal": {
+            "by": "server",
+            "mac": "e5e161d28a1ed1671d5ec4393d5d4650ad9cd4324e5ab5435ad4a09e7d6c731a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The within-cap journey uses cap 3 with 3 catalogs, so naming all three is still accepted and gives the same 3 hits and no chooser; the test cannot detect a regression to naming every catalog. Fix: in tests/ui_e2e/browse.rs, make the within-cap test assert the search request carries no catalogs= (for example read performance.getEntriesByType('resource') for the /api/v1/search URL and assert it lacks \"catalogs=\"), or add a server-side test that records the request query.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1001"
+          ],
+          "recorded_at": "2026-11-23T12:36:36.105807860Z",
+          "seal": {
+            "by": "server",
+            "mac": "a6aede8e626f741cd798d0b6cf0464ce8a202163d74d5e1b5c55a70d248a8fb1"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Fixed in d85eda9: the journey now asserts the search request carries no catalogs=.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1011"
+          ],
+          "recorded_at": "2026-11-23T12:37:56.085975754Z",
+          "seal": {
+            "by": "server",
+            "mac": "9ce45e2c29c8446e632edaa59ef8a0d49a6b9bcca2d5f383d0211a06af17329a"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Independently read at HEAD: the within-cap journey asserts the single search request URL lacks catalogs=, and search.js only adds it when choosing, so a regression would fail the test.",
+          "auditor": "claude-sonnet-5-5-reaudit",
+          "evidence_ids": [
+            "EVD-1014"
+          ],
+          "recorded_at": "2026-11-23T12:48:54.254300331Z",
+          "seal": {
+            "by": "server",
+            "mac": "d8d30d703da546b1f15e8fa691c616cec5b716ac2185622bee74b8a147cb0b0e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:35:04.533848494Z",
+      "updated_at": "2026-11-23T12:48:54.254300331Z",
+      "seal": {
+        "by": "server",
+        "mac": "137c4516bb3142729e64de07824810556d8f1ad63cd1dc1553a12e248a27764d"
+      }
+    },
+    {
+      "id": "CLM-0752",
+      "statement": "README.md, docs/operations.md and the M18 spec Decision 8 state that an explicit catalogs list is capped at search_fanout_max distinct names and that the console learns the cap from /whoami.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"Spec Decision 8 (corrected note), `docs/operations.md` and README updated; changelog entry added.\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "README.md",
+        "docs/operations.md",
+        "docs/superpowers/specs/2026-11-18-okf-bounded-memory-design.md"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1002",
+          "kind": "inspection",
+          "locator": "README.md:459; docs/operations.md:149,797,4030,4760; docs/superpowers/specs/2026-11-18-okf-bounded-memory-design.md:205-210; git grep for stale text",
+          "summary": "All three updated to the new rule (cap on explicit lists, repeat counts once, console reads /whoami, whoami row lists the field). git grep for the old wording \"does not cap it|names every catalog\" in README/docs (outside changelog/plans/history notes) finds nothing stale; spec keeps old corrected notes as history.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 149,
+                "end": 149
+              },
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:35:43.902196086Z",
+          "seal": {
+            "by": "server",
+            "mac": "79fd57a5d0e935e3815d6612552df2c6fb6b92ca767dc3f41abab5a33411dc01"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The three named documents carry the new rule; no stale wording remains outside historical notes. The MCP tool reference is a separate claim.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1002"
+          ],
+          "recorded_at": "2026-11-23T12:36:36.168899903Z",
+          "seal": {
+            "by": "server",
+            "mac": "51fa6616e43881f07ae219eed7dac035bd67ee1a10e42c6d91137724ce9b9a5a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:35:04.533848494Z",
+      "updated_at": "2026-11-23T12:36:36.168899903Z",
+      "seal": {
+        "by": "server",
+        "mac": "aa66de1e1930e51e05b896b9eee6e552fdd3bc4a26b9a9f6a82b2cf63baaf40c"
+      }
+    },
+    {
+      "id": "CLM-0753",
+      "statement": "The console search page's read uses core/latest.js so a stale answer does not draw.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"The read uses `core/latest.js`.\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/http/ui/js/pages/search.js"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1003",
+          "kind": "inspection",
+          "locator": "src/http/ui/js/pages/search.js:11,59,92,100",
+          "summary": "Imports latest from ../core/latest.js, takes reads=latest(main), calls reads() before the await and returns when current() is false after it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/ui/js/pages/search.js",
+              "lines": {
+                "start": 11,
+                "end": 11
+              },
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:35:44.031326973Z",
+          "seal": {
+            "by": "server",
+            "mac": "afcaa32657c77e0dd9421594d70d3be4c3f4c2d371ad371a5eece64dec4f2ce1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The import and the reads()/current() use are present.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1003"
+          ],
+          "recorded_at": "2026-11-23T12:36:36.232044986Z",
+          "seal": {
+            "by": "server",
+            "mac": "373553a5b5ef9a44d23192dd35c16f8d63e05677fbf497282d8f38b9d3466143"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:35:04.533848494Z",
+      "updated_at": "2026-11-23T12:36:36.232044986Z",
+      "seal": {
+        "by": "server",
+        "mac": "ec83af68106fd5a37b36c169cdc48ebe2139131f3903c7f1257af2ffd7e78033"
+      }
+    },
+    {
+      "id": "CLM-0754",
+      "statement": "fmt, lint, dylint and test via tools/agentic/gate.sh are all green with 3386 tests passed and 0 failed on the head commit.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"fmt, lint, dylint, test via `tools/agentic/gate.sh`: all green (3386 tests passed, 0 failed).\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1005",
+          "kind": "other",
+          "locator": "tools/agentic/gate.sh (not rerun)",
+          "summary": "The task forbids running the full suites, so the 3386-test figure was not reproduced. Narrow: 4 of the new tests (3 + whoami) pass; the browser e2e tests were not run.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T12:35:59.693378426Z",
+          "seal": {
+            "by": "server",
+            "mac": "99574b2d6de87bc9337b1697a2bdd5e2e1785e9336f5f4eac9d863e5362426bf"
+          }
+        },
+        {
+          "id": "EVD-1017",
+          "kind": "test",
+          "locator": "target/i725-logs/test.log (gate.sh test on 4599d84)",
+          "summary": "tools/agentic/gate.sh test exited 0 on head 4599d84: 3386 passed, 0 failed, summed over the \"test result\" lines; fmt, lint and dylint also exited 0.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T12:52:10.901325339Z",
+          "seal": {
+            "by": "server",
+            "mac": "0d48d2664e53ac9551c8bbfc612ef126214672b47ef5aca5c63079e79a782c07"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Full gate not rerun by instruction; only 4 new unit tests were run and passed. Fix: the author reruns tools/agentic/gate.sh on the final head commit and cites its printed counts.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1005"
+          ],
+          "recorded_at": "2026-11-23T12:36:36.293681912Z",
+          "seal": {
+            "by": "server",
+            "mac": "7da2d8279582303ee642d13a84de19fc31e3a0571f1446ef53d4a22f109cfcd7"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The final gate log on 4599d84 shows 3386 passed, 0 failed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1017"
+          ],
+          "recorded_at": "2026-11-23T12:52:13.830584581Z",
+          "seal": {
+            "by": "server",
+            "mac": "1ba803b03c8da01d25f9996ca1726add0548fe4ef58f33cfb1ed6d1b21b01080"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:35:04.533848494Z",
+      "updated_at": "2026-11-23T12:52:13.830584581Z",
+      "seal": {
+        "by": "server",
+        "mac": "44e207eb48221d28e9e5ba1f4c30bbfe6cde63c900430beabc71cbd3ef470eb7"
+      }
+    },
+    {
+      "id": "CLM-0755",
+      "statement": "docs/reference/tools.md, the MCP search tool reference, says that the catalogs argument is limited to search_fanout_max distinct catalogs.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #725 requirement: apply to MCP search via a shared helper; docs updated",
+      "source_anchor": {
+        "path": "docs/reference/tools.md",
+        "lines": {
+          "start": 558,
+          "end": 563
+        },
+        "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+      },
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "docs/reference/tools.md"
+      ],
+      "tags": [
+        "from-issue:725"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1006",
+          "kind": "inspection",
+          "locator": "git grep -iE 'fanout|fan-out|at most [0-9a-z_`]+ catalogs' docs/reference/tools.md (0 hits)",
+          "summary": "The search tool reference has no mention of any cap; docs/reference/ untouched by the diff.",
+          "stance": "refutes",
+          "anchor": {
+            "search": {
+              "pattern": "fanout|fan-out|at most [0-9a-z_`]+ catalogs",
+              "case_insensitive": true,
+              "scope": [
+                "docs/reference/tools.md"
+              ],
+              "hits": 0,
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:36:09.112942926Z",
+          "seal": {
+            "by": "server",
+            "mac": "644372aa475d1f79dadfca1f35fff360810a140b7aaeda60bd81f30cd76cd1cf"
+          }
+        },
+        {
+          "id": "EVD-1007",
+          "kind": "inspection",
+          "locator": "docs/reference/tools.md:563",
+          "summary": "The search row's catalogs parameter reads \"The catalog ids to search (...default: this connection's selection...)\", with no limit stated.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "docs/reference/tools.md",
+              "lines": {
+                "start": 563,
+                "end": 563
+              },
+              "commit": "8d6927b326f75cb0e67ddfa93207ed0d374cf5a8"
+            }
+          },
+          "recorded_at": "2026-11-23T12:36:09.180386048Z",
+          "seal": {
+            "by": "server",
+            "mac": "6b3e9351446b8a8f3be89b081c8f585cc992cdcdcbdcf3825509d59ab8937581"
+          }
+        },
+        {
+          "id": "EVD-1012",
+          "kind": "inspection",
+          "locator": "docs/reference/tools.md:563 at d52f037",
+          "summary": "The search tool's catalogs row (and the matching doc comment on SearchParams::catalogs in src/mcp/search.rs:39) now states that at most search_fanout_max (default 25) distinct catalogs may be named, more is refused.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T12:37:44.607924360Z",
+          "seal": {
+            "by": "server",
+            "mac": "d72c19df11dbc713ace932005fef2594cdf2a55c1b5c8adaf6af928cddd521c2"
+          }
+        },
+        {
+          "id": "EVD-1015",
+          "kind": "inspection",
+          "locator": "docs/reference/tools.md:563",
+          "summary": "The search tool's catalogs row ends \"At most the server's `search_fanout_max` (default 25) distinct catalogs may be named; more is refused.\" The same sentence is in the SearchParams::catalogs doc comment, src/mcp/search.rs:39; check_fanout (src/mcp/search.rs:214) is called at :130.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/reference/tools.md",
+              "lines": {
+                "start": 563,
+                "end": 563
+              },
+              "commit": "4599d8485e6839f6dc34f9220661cd8f0422ba40"
+            }
+          },
+          "recorded_at": "2026-11-23T12:48:47.322696828Z",
+          "seal": {
+            "by": "server",
+            "mac": "4026d504df23a0ca310d5acd7800a7f5da513af15ecd16a3b59f8e874d2999ef"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The MCP search tool reference still describes catalogs with no cap, though the PR extends the cap to MCP search; zero-hit search plus the row's text show it. Fix: add to the catalogs row at docs/reference/tools.md:563 (and the tool's catalogs description) that at most search_fanout_max distinct catalogs may be named, else InvalidPath.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1006",
+            "EVD-1007"
+          ],
+          "recorded_at": "2026-11-23T12:36:36.358734324Z",
+          "seal": {
+            "by": "server",
+            "mac": "9e31dbc94c4d04eea950a601886102984904a75ee4d42d8749ce1b519042c053"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Fixed in d85eda9: docs/reference/tools.md and the tool's catalogs description state the cap.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1012"
+          ],
+          "recorded_at": "2026-11-23T12:37:56.140251496Z",
+          "seal": {
+            "by": "server",
+            "mac": "0f78dd2831a89fda07ab161daba33c3ed04d7c4e48e298110060e64a75a39c35"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "docs/reference/tools.md:563 states the search_fanout_max cap on named catalogs, matching code at src/mcp/search.rs:130,214.",
+          "auditor": "claude-sonnet-5-5-reaudit",
+          "evidence_ids": [
+            "EVD-1015"
+          ],
+          "recorded_at": "2026-11-23T12:48:54.312506165Z",
+          "seal": {
+            "by": "server",
+            "mac": "b15db4d0c404260cf7f2a88e80446832cb5deb486bef066b7c46d5e1eb66b2db"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:35:59.513183217Z",
+      "updated_at": "2026-11-23T12:48:54.312506165Z",
+      "seal": {
+        "by": "server",
+        "mac": "4827005f996f50d1341b2f335b9829011ffb02bed85d66a98f3225ec951e5370"
       }
     }
   ]
