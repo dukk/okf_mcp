@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 971,
+  "next_claim_seq": 974,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "acb2cc66db38d3801b404e6c64ee54b5bccf0ec50c7566d12263f50686923e9a"
+    "mac": "9b3de045e53ac279151666fa7a16b491600184c8568c2fd360f39f6adc2fa397"
   },
-  "next_evidence_seq": 1377,
+  "next_evidence_seq": 1384,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "f4c0f82443eda0c1fcdcced68d366e9c7ee407c652f9ee1107ee9337359d193a"
+    "mac": "dc06a77977d56424560fc0256e8c3e2f9bd972a20dbd8ed8cad454d3b32b797d"
   },
   "claims": [
     {
@@ -77479,6 +77479,28 @@
             "by": "server",
             "mac": "4abd9ecaeea49f1151b19c370ca1a0a390de296d0d6ee86adcb487e46e1cf9fe"
           }
+        },
+        {
+          "id": "EVD-1379",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:338-345",
+          "summary": "The Task 9 Corrected (issue #967, 2026-11-23) note is still present and at line 345 now records the no-retry as an accepted limitation; consistent with the shipped mechanism.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 338,
+                "end": 345
+              },
+              "commit": "2265e4be6c10dfc76061416aa46553fa09eea622"
+            }
+          },
+          "recorded_at": "2026-11-23T19:41:39.345521347Z",
+          "seal": {
+            "by": "server",
+            "mac": "4433fa748bd49b7fdd4330975163776630cb50ac4e7f8ec7822a646aafafc82e"
+          }
         }
       ],
       "verdicts": [
@@ -77507,13 +77529,26 @@
             "by": "server",
             "mac": "9ab957b0ce6063649c82b6248f543415a3050c02edc049ea8c5c5f9b6632818e"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Note present and updated; no contradiction.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1379"
+          ],
+          "recorded_at": "2026-11-23T19:41:51.530797174Z",
+          "seal": {
+            "by": "server",
+            "mac": "9d672111ef8c94678884a64365805af388df93aa8916d43defd7130c916094d4"
+          }
         }
       ],
       "created_at": "2026-11-23T18:57:17.254708565Z",
-      "updated_at": "2026-11-23T19:28:07.361272300Z",
+      "updated_at": "2026-11-23T19:41:51.530797174Z",
       "seal": {
         "by": "server",
-        "mac": "048dd5312f7e997b135af5dbdeeb6fff380629dd2d64b40656344a9adedfd5c2"
+        "mac": "fa8fecbda267c0944f86681d76c56ea08c3d6e6af09038a4f1121003ebd93889"
       }
     },
     {
@@ -77554,6 +77589,28 @@
             "by": "server",
             "mac": "c201cc4a9c8c3fd45c100e2cddc29bf89dd4b95d5646bef02b97a518dd66fca2"
           }
+        },
+        {
+          "id": "EVD-1380",
+          "kind": "inspection",
+          "locator": "git show HEAD --stat; changelog/2026-11-23T18-40-00Z-m21-task-09-store-credential-kinds.md",
+          "summary": "Round 2 edited the existing task-09 changelog entry in place (4 lines changed) and added no new file; the entry remains the single changelog file for this change and now lists the two new tests and the #998 limitation.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T18-40-00Z-m21-task-09-store-credential-kinds.md",
+              "lines": {
+                "start": 5,
+                "end": 17
+              },
+              "commit": "2265e4be6c10dfc76061416aa46553fa09eea622"
+            }
+          },
+          "recorded_at": "2026-11-23T19:41:39.412629404Z",
+          "seal": {
+            "by": "server",
+            "mac": "955c8e53e5082e2db64a60bf49ad43e64d7c91f7f7e5e8cf69867618e0d89585"
+          }
         }
       ],
       "verdicts": [
@@ -77569,13 +77626,26 @@
             "by": "server",
             "mac": "a24f9d7257b8cf917848df1c1706152c58efdefde91305cc2040f4b23d5b7d66"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Round 2 added no new changelog file; one entry for this change.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1380"
+          ],
+          "recorded_at": "2026-11-23T19:41:51.583938439Z",
+          "seal": {
+            "by": "server",
+            "mac": "77238e647afd07914cb74a6da770c34f1a7a4ac24565982f42bfde1899e57894"
+          }
         }
       ],
       "created_at": "2026-11-23T18:57:17.254708565Z",
-      "updated_at": "2026-11-23T18:59:23.697178534Z",
+      "updated_at": "2026-11-23T19:41:51.583938439Z",
       "seal": {
         "by": "server",
-        "mac": "5bc98f73caf1be87530688141adaadea150419c8bbaa93205c2f56f6c34cd837"
+        "mac": "2bbe90ba5cb9536ef678c6c90b77a0e51caa64584b4c7921f72bb35ad65cdedf"
       }
     },
     {
@@ -77908,6 +77978,28 @@
             "by": "server",
             "mac": "f92caedccad4a248f73e4f7c35fbc05d15d8666f27d95809ef25e205c628c269"
           }
+        },
+        {
+          "id": "EVD-1377",
+          "kind": "log",
+          "locator": "src/stores/credentials.rs:484-531; target/i967-logs/narrow3.log",
+          "summary": "Round 2: next_refusal wakes the task on Some(role)==login(), on None (ambiguous or no role), or on Lagged; role_in returns None when ambiguous. Statement (\"that pool's current login or none is named\") still holds. Test a_role_with_a_quotation_mark_still_refreshes_after_a_rotation ok in narrow3.log (57 passed, 0 failed).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/credentials.rs",
+              "lines": {
+                "start": 484,
+                "end": 531
+              },
+              "commit": "2265e4be6c10dfc76061416aa46553fa09eea622"
+            }
+          },
+          "recorded_at": "2026-11-23T19:41:39.223102996Z",
+          "seal": {
+            "by": "server",
+            "mac": "e40f1a1d638ec5d18d29241bf5d6af156b62ecbed49b300e1909fbde60ece1a0"
+          }
         }
       ],
       "verdicts": [
@@ -77923,13 +78015,26 @@
             "by": "server",
             "mac": "8f9cb1628cfc35a7b7cc7135f9b2183c8685df81b71d1199c64a103c0c6dc254"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-checked at HEAD 2265e4b: code and passing tests match.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1377"
+          ],
+          "recorded_at": "2026-11-23T19:41:51.399575254Z",
+          "seal": {
+            "by": "server",
+            "mac": "5c7a5027364470f0ca304f41b9dcf1f5f907f89e5a6cce715b1d23198c243041"
+          }
         }
       ],
       "created_at": "2026-11-23T19:27:30.395958746Z",
-      "updated_at": "2026-11-23T19:28:07.057837961Z",
+      "updated_at": "2026-11-23T19:41:51.399575254Z",
       "seal": {
         "by": "server",
-        "mac": "a8bea7d20222d1c51c6398afc77c5427a75a835ed90314c506754241d490b46c"
+        "mac": "91ca8d93c84e1afb0fc3b47d2b5c8c92bdd4fb017cda97255d94e4cef8271c26"
       }
     },
     {
@@ -78014,7 +78119,9 @@
         "review-round"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Count is stale: stores:: now reports 57 passed after round 2 added two tests; replaced by a corrected claim.",
+        "retired_at": "2026-11-23T19:41:51.637557027Z"
       },
       "evidence": [
         {
@@ -78046,10 +78153,10 @@
         }
       ],
       "created_at": "2026-11-23T19:27:30.497135675Z",
-      "updated_at": "2026-11-23T19:28:07.193038349Z",
+      "updated_at": "2026-11-23T19:41:51.637557027Z",
       "seal": {
         "by": "server",
-        "mac": "c0ff9ff73b9858aeae8e291490997dce110b9fd98c10eb3899b79820e860ecca"
+        "mac": "e417d161d4dbf2fe6b9cc30e27b0d061fd0dfe2648840997341b2c8b9fa25564"
       }
     },
     {
@@ -78158,6 +78265,28 @@
             "by": "server",
             "mac": "8765ad1b38d0be9feb08e4a46b122058e73186ca36e922e783ff7fa79352fa3b"
           }
+        },
+        {
+          "id": "EVD-1378",
+          "kind": "log",
+          "locator": "target/i967-logs/narrow3.log; src/stores/registry.rs:1365-1374",
+          "summary": "Test a_plain_read_refused_after_a_rotation_refreshes_the_login_and_the_next_read_works runs the shared helper with quoted=false and passes at HEAD (narrow3.log 57 passed, 0 failed; r4-test.log full suite 2960 passed).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 1365,
+                "end": 1374
+              },
+              "commit": "2265e4be6c10dfc76061416aa46553fa09eea622"
+            }
+          },
+          "recorded_at": "2026-11-23T19:41:39.288518785Z",
+          "seal": {
+            "by": "server",
+            "mac": "e80d7ef3cde9c0faf63d5a21559379f1c64e3a5c8859947ab14f78e6bdac8570"
+          }
         }
       ],
       "verdicts": [
@@ -78173,13 +78302,218 @@
             "by": "server",
             "mac": "0e560c7b7b8692371d53b66b6c6ebdebcae0da4f9ffb2831c77a451a64358048"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Test still passes after the refactor into a shared helper.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1378"
+          ],
+          "recorded_at": "2026-11-23T19:41:51.475257388Z",
+          "seal": {
+            "by": "server",
+            "mac": "1705e57a95ab5a82d5d04a6c4d76d80731083805d08bf9cc0089040d17b6e26b"
+          }
         }
       ],
       "created_at": "2026-11-23T19:27:30.603438329Z",
-      "updated_at": "2026-11-23T19:28:07.305721512Z",
+      "updated_at": "2026-11-23T19:41:51.475257388Z",
       "seal": {
         "by": "server",
-        "mac": "811d963a660bb830f843868fa1f279646f05c38c8dabb85bec7ebeee34f0b301"
+        "mac": "08aed828cbcfff6131c2ce86d5a72c2fc915c0d266ccd8ee6acec9910d10d337"
+      }
+    },
+    {
+      "id": "CLM-0971",
+      "statement": "The stores:: unit tests pass on the head commit: tools/agentic/gate.sh narrow --lib stores:: reports 57 passed, 0 failed (the filter also matches http::api::stores::tests); the full library suite reports 2960 passed, 0 failed, 2 ignored.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:967",
+        "review-round"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1381",
+          "kind": "log",
+          "locator": "target/i967-logs/narrow3.log; target/i967-logs/r4-test.log",
+          "summary": "narrow3.log ends 'test result: ok. 57 passed; 0 failed; 0 ignored; 2905 filtered out'; full library run r4-test.log was reported 2960 passed, 0 failed, 2 ignored (caller-measured; I confirmed the two new tests are ok in r4-test.log).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T19:41:58.874236111Z",
+          "seal": {
+            "by": "server",
+            "mac": "bffc1e5563782f6670e6a07ce9a31a2a196f9f6bfd4eec12169c75bed0a85a03"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Log shows 57 passed, 0 failed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1381"
+          ],
+          "recorded_at": "2026-11-23T19:42:03.781189199Z",
+          "seal": {
+            "by": "server",
+            "mac": "735747c91771689750409bbf4fa87ddeb9403c63578cf85d30c1c62fe0db0b41"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T19:41:51.690155239Z",
+      "updated_at": "2026-11-23T19:42:03.781189199Z",
+      "seal": {
+        "by": "server",
+        "mac": "a8dbe27d5bf016310f54909e2adaf1b8ca0c7def7082ddd686809388da2bea14"
+      }
+    },
+    {
+      "id": "CLM-0972",
+      "statement": "The role in a server refusal message is parsed by role_in as a quoted identifier (a doubled quotation mark is one literal quote), and an ambiguous message (stray quote, unterminated, empty, or no quoted name) names no role, so every pool's credential task refreshes; tests a_role_is_read_from_a_refusal_message_or_left_unknown and a_role_with_a_quotation_mark_still_refreshes_after_a_rotation assert it.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source_anchor": {
+        "path": "src/stores/credentials.rs",
+        "lines": {
+          "start": 484,
+          "end": 499
+        },
+        "commit": "2265e4be6c10dfc76061416aa46553fa09eea622"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:967",
+        "review-round"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1382",
+          "kind": "test",
+          "locator": "src/stores/credentials.rs:484-499,1079-1091; src/stores/registry.rs:1371; target/i967-logs/narrow3.log",
+          "summary": "role_in splits at the first quote, reads until a lone closing quote (doubled quote becomes one literal quote) and returns None if more quotes follow, the name is empty or unterminated. Unit test asserts plain, doubled-quote, stray-quote, empty, no-name and unterminated cases; next_refusal wakes on None. Registry test with a quote in the role name ok. Both ok in narrow3.log and r4-test.log.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/credentials.rs",
+              "lines": {
+                "start": 484,
+                "end": 531
+              },
+              "commit": "2265e4be6c10dfc76061416aa46553fa09eea622"
+            }
+          },
+          "recorded_at": "2026-11-23T19:41:58.999973337Z",
+          "seal": {
+            "by": "server",
+            "mac": "9e8029f4e543e6e15fd87656fec0e87dd133152b8471592a523adfadb036ee01"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and both tests match the statement.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1382"
+          ],
+          "recorded_at": "2026-11-23T19:42:03.851090018Z",
+          "seal": {
+            "by": "server",
+            "mac": "fcc0a2862ac0b0e565c3a1201ffabc81b111ca1f16a1b363e1a70a99ac5aa799"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T19:41:51.785354300Z",
+      "updated_at": "2026-11-23T19:42:03.851090018Z",
+      "seal": {
+        "by": "server",
+        "mac": "6c7b21162fd5e45de4363ac3d3ab717431023f455c62ca6b1c2ddb4aca9cee64"
+      }
+    },
+    {
+      "id": "CLM-0973",
+      "statement": "The plan's Task 9 correction note records, as an accepted limitation, that an already-open pool still fails the triggering operation (and the next request can race the refresh), with follow-up issue #998 for a bounded acquisition retry; the changelog entry says the same.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source_anchor": {
+        "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "lines": {
+          "start": 345,
+          "end": 345
+        },
+        "commit": "2265e4be6c10dfc76061416aa46553fa09eea622"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:967",
+        "review-round"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1383",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:345; changelog/2026-11-23T18-40-00Z-m21-task-09-store-credential-kinds.md:17",
+          "summary": "Plan line 345 says 'This is an accepted limitation ... an already-open pool fails the triggering operation, and even the next request can race the asynchronous refresh. Follow-up #998 covers a bounded acquisition retry'. Changelog line 17 states the same with #998.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 345,
+                "end": 345
+              },
+              "commit": "2265e4be6c10dfc76061416aa46553fa09eea622"
+            }
+          },
+          "recorded_at": "2026-11-23T19:41:59.131724030Z",
+          "seal": {
+            "by": "server",
+            "mac": "3f7a4d811584af1b1ad7ece22b9a07f70b59211fcca5497433c96308a9257c4e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both documents record the limitation and #998.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1383"
+          ],
+          "recorded_at": "2026-11-23T19:42:03.910916273Z",
+          "seal": {
+            "by": "server",
+            "mac": "31244ff0a9cc23f2beff86980b7d233b1dacb2a1c2eb3e2d3ffe183ad42ccb3d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T19:41:51.843828209Z",
+      "updated_at": "2026-11-23T19:42:03.910916273Z",
+      "seal": {
+        "by": "server",
+        "mac": "d37f5e740d1eb7ebc7558c34d289a625215415181e365f1fc05513ee3cace3b8"
       }
     }
   ]
