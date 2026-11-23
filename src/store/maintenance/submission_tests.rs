@@ -3,12 +3,13 @@ use super::{candidates, reports, runs};
 use crate::db::test_db;
 use crate::error::OkfError;
 use crate::maintenance::types::*;
-use crate::stores::CatalogDb;
+use crate::stores::{AccountDb, CatalogDb};
 use chrono::Duration;
 use sqlx::PgPool;
 
 async fn claim(pool: &PgPool, catalog: i64, key: &str, at: chrono::DateTime<chrono::Utc>) -> Lease {
     runs::claim(
+        &AccountDb::of(pool),
         &CatalogDb::main_of(pool),
         catalog,
         &actor("one"),
@@ -312,6 +313,7 @@ async fn maintenance_submit_all_evidence_controls_effective_support() {
     assert_eq!(rows[0].reported_supported, None);
     let later = t0() + Duration::days(31);
     let batch = runs::claim(
+        &AccountDb::of(&db.pool),
         &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
@@ -592,6 +594,7 @@ async fn maintenance_submit_cursors_preserve_other_completed_lanes() {
     )
     .await;
     let batch = runs::claim(
+        &AccountDb::of(&db.pool),
         &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
@@ -645,6 +648,7 @@ async fn maintenance_submit_assessment_pins_and_outdated_findings_never_certify_
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md", "b.md"]).await;
     let batch = runs::claim(
+        &AccountDb::of(&db.pool),
         &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),

@@ -38,7 +38,7 @@ use crate::store::repair;
 use crate::store::settings::SettingKey;
 use crate::store::teams::Role;
 use crate::store::unlocks::Category;
-use crate::stores::{CatalogDb, StoreName};
+use crate::stores::{AccountDb, CatalogDb, StoreName};
 use crate::telemetry::metrics::Metrics;
 use crate::telemetry::subscriber::split_event;
 use crate::telemetry::{self, StartUp, Telemetry};
@@ -1366,7 +1366,10 @@ async fn run_catalog(
             dry_run,
             actor,
         } => {
-            let (targets, skipped) = repair_targets(pool, names, missing_only).await?;
+            // Release 1: the only store is `main`, in the account database.
+            let store = CatalogDb::new(StoreName::main(), pool.clone());
+            let (targets, skipped) =
+                repair_targets(&AccountDb::new(pool.clone()), &store, names, missing_only).await?;
             for name in &skipped {
                 println!("skipped {name}: it has a root index.md, or does not exist");
             }
@@ -1377,8 +1380,6 @@ async fn run_catalog(
                 audit: &audit,
                 now: clock.now(),
             };
-            // Release 1: the only store is `main`, in the account database.
-            let store = CatalogDb::new(StoreName::main(), pool.clone());
             print!(
                 "{}",
                 repair_catalogs(&store, &targets, &options, changed).await?
@@ -1391,7 +1392,8 @@ async fn run_catalog(
 /// The catalogs `catalog repair-indexes` repairs.
 ///
 /// # Arguments
-/// * `pool` - the migrated database.
+/// * `accounts` - the account database (the catalogs).
+/// * `db` - the store holding their documents.
 /// * `names` - the catalogs named on the command line.
 /// * `missing_only` - keep only catalogs without a root `index.md` (every
 ///   such catalog when none is named).
@@ -1405,7 +1407,8 @@ async fn run_catalog(
 /// Neither a name nor `--missing-only`; a database error.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn repair_targets(
-    pool: &PgPool,
+    accounts: &AccountDb,
+    db: &CatalogDb,
     names: Vec<String>,
     missing_only: bool,
 ) -> anyhow::Result<(Vec<String>, Vec<String>)> {
@@ -1417,7 +1420,7 @@ async fn repair_targets(
         );
         return Ok((names, Vec::new()));
     }
-    let missing = repair::missing_root_index(pool).await?;
+    let missing = repair::missing_root_index(accounts, db).await?;
     if names.is_empty() {
         return Ok((missing, Vec::new()));
     }
@@ -2865,12 +2868,31 @@ mod tests {
             now: chrono::Utc::now(),
         };
 
-        let unnamed = repair_targets(&db.pool, Vec::new(), false)
-            .await
-            .unwrap_err();
-        let (targets, none_skipped) = repair_targets(&db.pool, Vec::new(), true).await.unwrap();
+        let unnamed = repair_targets(
+            &AccountDb::of(&db.pool),
+            &CatalogDb::main_of(&db.pool),
+            Vec::new(),
+            false,
+        )
+        .await
+        .unwrap_err();
+        let (targets, none_skipped) = repair_targets(
+            &AccountDb::of(&db.pool),
+            &CatalogDb::main_of(&db.pool),
+            Vec::new(),
+            true,
+        )
+        .await
+        .unwrap();
         let named = vec!["fresh".into(), "old".into(), "typo".into()];
-        let (filtered, skipped) = repair_targets(&db.pool, named, true).await.unwrap();
+        let (filtered, skipped) = repair_targets(
+            &AccountDb::of(&db.pool),
+            &CatalogDb::main_of(&db.pool),
+            named,
+            true,
+        )
+        .await
+        .unwrap();
         let mut changed = Vec::new();
         let dry = repair_catalogs(
             &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
@@ -2880,7 +2902,15 @@ mod tests {
         )
         .await
         .unwrap();
-        let still_missing = repair_targets(&db.pool, Vec::new(), true).await.unwrap().0;
+        let still_missing = repair_targets(
+            &AccountDb::of(&db.pool),
+            &CatalogDb::main_of(&db.pool),
+            Vec::new(),
+            true,
+        )
+        .await
+        .unwrap()
+        .0;
         // A failing catalog in the middle of a batch stops neither neighbour.
         let batch = ["old".to_string(), "nope".to_string(), "other".to_string()];
         let dry_changed = std::mem::take(&mut changed);
@@ -2893,7 +2923,15 @@ mod tests {
         .await
         .unwrap_err()
         .to_string();
-        let after = repair_targets(&db.pool, Vec::new(), true).await.unwrap().0;
+        let after = repair_targets(
+            &AccountDb::of(&db.pool),
+            &CatalogDb::main_of(&db.pool),
+            Vec::new(),
+            true,
+        )
+        .await
+        .unwrap()
+        .0;
 
         assert!(unnamed.to_string().contains("--missing-only"), "{unnamed}");
         assert_eq!(targets, ["old", "other"]);

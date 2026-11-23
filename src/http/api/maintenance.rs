@@ -245,6 +245,7 @@ mod tests {
             actor: "agent/reporter".into(),
         };
         let claimed = run_store::claim(
+            test.app.accounts(),
             db,
             state.id(),
             &reporter,

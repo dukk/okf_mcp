@@ -2754,9 +2754,14 @@ mod tests {
         .await
         .unwrap();
         assert_ne!(replacement.id, first.id);
-        let historical = crate::store::changesets::list_open(&db.pool, &[work_catalog.id], None)
-            .await
-            .unwrap();
+        let historical = crate::store::changesets::list_open(
+            &crate::stores::AccountDb::of(&db.pool),
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            &[work_catalog.id],
+            None,
+        )
+        .await
+        .unwrap();
         let historical = historical
             .iter()
             .find(|row| row.changeset.handle == old_changeset.handle)

@@ -4,13 +4,14 @@ use super::{reports, runs};
 use crate::db::test_db;
 use crate::error::OkfError;
 use crate::maintenance::types::*;
-use crate::stores::CatalogDb;
+use crate::stores::{AccountDb, CatalogDb};
 use chrono::Duration;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
 async fn fixture(pool: &PgPool, catalog: i64, key: &str) -> (Lease, String) {
     let lease = runs::claim(
+        &AccountDb::of(pool),
         &CatalogDb::main_of(pool),
         catalog,
         &actor("reporter"),
@@ -784,6 +785,7 @@ async fn maintenance_report_assessment_and_sibling_pins_and_dto_contracts() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md", "b.md", "c.md", "d.md"]).await;
     let lease = runs::claim(
+        &AccountDb::of(&db.pool),
         &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
@@ -930,6 +932,7 @@ async fn maintenance_report_terminal_and_running_work_without_findings() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md", "b.md"]).await;
     let batch = runs::claim(
+        &AccountDb::of(&db.pool),
         &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),

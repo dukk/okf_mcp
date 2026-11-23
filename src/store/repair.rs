@@ -14,11 +14,10 @@
 //! path this writes gets a new revision, so a later publish of such an
 //! entry replays its bookkeeping or reports a conflict, never overwrites.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use sqlx::PgPool;
 
 use crate::error::OkfError;
 use crate::invalidate::{invalidate, Invalidation};
@@ -30,7 +29,7 @@ use crate::store::audit::{self, Action, AuditActor, People};
 use crate::store::catalogs::{self, CatalogEvent, CatalogGeneration};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::store::import::{existing_rows, ExistingRow};
-use crate::stores::CatalogDb;
+use crate::stores::{AccountDb, CatalogDb};
 
 /// The `revisions.message` of a repair.
 pub const REPAIR_MESSAGE: &str = "repair indexes";
@@ -268,25 +267,50 @@ async fn write_files(
 /// The catalogs with no live root `index.md`, by name: what
 /// `repair-indexes --missing-only` repairs.
 ///
+/// Two reads, joined here by catalog id (plan decision P1: no statement
+/// names tables from both sides): the account database lists the catalogs
+/// in name order, and the store lists which of them have a live root
+/// `index.md`.
+///
 /// # Arguments
-/// * `pool` - the database.
+/// * `accounts` - the account database (the catalogs).
+/// * `db` - the store holding their documents.
 ///
 /// # Returns
-/// Their names, sorted.
+/// Their names, sorted (in the database's order, as the one joined statement
+/// gave).
 ///
 /// # Errors
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "repair.missing_root_index"))]
-pub async fn missing_root_index(pool: &PgPool) -> Result<Vec<String>, OkfError> {
-    let names = sqlx::query_scalar(
-        "SELECT c.name FROM catalogs c WHERE NOT EXISTS ( \
-             SELECT 1 FROM documents d \
-             WHERE d.catalog_id = c.id AND d.path = 'index.md' AND d.deleted_at IS NULL) \
-         ORDER BY c.name",
+pub async fn missing_root_index(
+    accounts: &AccountDb,
+    db: &CatalogDb,
+) -> Result<Vec<String>, OkfError> {
+    let catalogs: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, name FROM catalogs ORDER BY name")
+            .fetch_all(accounts.executor())
+            .await?;
+    if catalogs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<i64> = catalogs.iter().map(|(id, _)| *id).collect();
+    // `DISTINCT`: one row per catalog that has a root index, however many
+    // revisions its rows carry.
+    let with_index: HashSet<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT catalog_id FROM documents \
+         WHERE catalog_id = ANY($1) AND path = 'index.md' AND deleted_at IS NULL",
     )
-    .fetch_all(pool)
-    .await?;
-    Ok(names)
+    .bind(&ids)
+    .fetch_all(db.executor())
+    .await?
+    .into_iter()
+    .collect();
+    Ok(catalogs
+        .into_iter()
+        .filter(|(id, _)| !with_index.contains(id))
+        .map(|(_, name)| name)
+        .collect())
 }
 
 #[cfg(test)]
@@ -296,6 +320,7 @@ mod tests {
     use crate::store::audit::testing::entries;
     use crate::store::import::{import, ImportOptions, ImportScope};
     use chrono::TimeZone;
+    use sqlx::PgPool;
 
     const NOTE: &str = "---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# A\n";
 
@@ -551,7 +576,9 @@ mod tests {
             .unwrap();
         let audit = AuditActor::cli();
 
-        let before = missing_root_index(&db.pool).await.unwrap();
+        let before = missing_root_index(&AccountDb::of(&db.pool), &CatalogDb::main_of(&db.pool))
+            .await
+            .unwrap();
         repair(
             &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
             "old",
@@ -559,7 +586,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let after = missing_root_index(&db.pool).await.unwrap();
+        let after = missing_root_index(&AccountDb::of(&db.pool), &CatalogDb::main_of(&db.pool))
+            .await
+            .unwrap();
         let unknown = repair(
             &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
             "nope",
@@ -570,6 +599,46 @@ mod tests {
         assert_eq!(before, ["old"]);
         assert!(after.is_empty(), "{after:?}");
         assert!(matches!(unknown, Err(OkfError::CatalogNotSelected { .. })));
+    }
+
+    /// Issue #963 (M21 Task 5): the join of `catalogs` and `documents` is two
+    /// reads joined by id. It lists what the joined statement listed, in
+    /// name order: a catalog whose root index is soft-deleted or only nested
+    /// (`sub/index.md`) counts as missing it, a catalog with one does not.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn repair_lists_the_same_catalogs_after_the_split() {
+        let db = test_db().await;
+        // Created after `alpha` would be by id, listed by name.
+        legacy(&db.pool, "nested", "", &[("sub/index.md", NOTE)]).await;
+        legacy(&db.pool, "alpha", "", &[("a.md", NOTE)]).await;
+        for name in ["zulu", "mid"] {
+            let new = catalogs::NewCatalog {
+                name,
+                display_name: &crate::labels::DisplayName::default(),
+                description: "",
+                owner_team: TEST_TEAM,
+            };
+            catalogs::create(&db.pool, &new, &AuditActor::cli(), at(0))
+                .await
+                .unwrap();
+        }
+        let accounts = AccountDb::of(&db.pool);
+        let store = CatalogDb::main_of(&db.pool);
+        let before = missing_root_index(&accounts, &store).await.unwrap();
+        // `mid`'s root index is deleted (a tombstone row stays).
+        let deleted = sqlx::query(
+            "UPDATE documents SET deleted_at = now() WHERE path = 'index.md' AND catalog_id = \
+             (SELECT id FROM catalogs WHERE name = 'mid')",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap()
+        .rows_affected();
+        let after = missing_root_index(&accounts, &store).await.unwrap();
+
+        assert_eq!(deleted, 1);
+        assert_eq!(before, ["alpha", "nested"]);
+        assert_eq!(after, ["alpha", "mid", "nested"]);
     }
 
     #[tokio::test(flavor = "multi_thread")]

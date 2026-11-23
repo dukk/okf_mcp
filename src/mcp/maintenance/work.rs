@@ -117,6 +117,7 @@ pub(crate) async fn maintenance_claim(
     let state = ctx.one(Some(&params.catalog)).await?;
     ctx.require_maintenance_report(&state).await?;
     let mut result = runs::claim(
+        ctx.app().accounts(),
         ctx.app().main_store(),
         state.id(),
         &actor(ctx),

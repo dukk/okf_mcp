@@ -156,6 +156,18 @@ impl AccountDb {
     pub fn executor(&self) -> &PgPool {
         &self.pool
     }
+
+    /// The account database over a test pool: the one-line handle the
+    /// tests build around the pool they hold (the account side of
+    /// [`CatalogDb::main_of`]).
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line test constructor")
+    )]
+    pub(crate) fn of(pool: &PgPool) -> Self {
+        Self::new(pool.clone())
+    }
 }
 
 /// One store's database: the catalog data of the catalogs placed on it.
