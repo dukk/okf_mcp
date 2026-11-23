@@ -320,7 +320,9 @@ fn migration_tables() -> BTreeSet<String> {
     let pattern =
         regex::Regex::new(r"(?i)create\s+table\s+(?:if\s+not\s+exists\s+)?(?:\w+\.)?(\w+)")
             .expect("pattern");
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("migrations")
+        .join("accounts");
     let mut tables = BTreeSet::new();
     for entry in std::fs::read_dir(dir).expect("migrations directory") {
         let path = entry.expect("entry").path();

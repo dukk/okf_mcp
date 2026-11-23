@@ -1,4 +1,4 @@
-//! The Postgres connection pool and the schema migrations (`migrations/`).
+//! The Postgres connection pool and the account schema migrations (`migrations/accounts/`).
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
@@ -16,10 +16,10 @@ pub(crate) use pg_support as pg;
 #[path = "../tests/support/redis.rs"]
 pub(crate) mod redis_support;
 
-/// The schema migrations in `migrations/`, embedded at compile time.
+/// The account schema migrations in `migrations/accounts/`, embedded at compile time.
 // `migrate!` reads the directory while compiling (`build.rs` makes cargo
 // notice new files), so the binary needs no SQL files at runtime.
-pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/accounts");
 
 /// Connects a pool to the database.
 ///
@@ -46,12 +46,13 @@ pub async fn connect(url: &str, max_connections: u32) -> Result<PgPool, OkfError
 /// migrations). A build that fails part-way leaves the index behind,
 /// marked INVALID, and its migration unrecorded; `CREATE INDEX ... IF NOT
 /// EXISTS` on the retry would then keep the invalid index for good.
-const CONCURRENT_INDEXES: [&str; 5] = [
+const CONCURRENT_INDEXES: [&str; 6] = [
     "catalogs_member_reach",
     "catalogs_member_write",
     "catalogs_member_reach_bytes",
     "feedback_finished",
     "feedback_undelivered_user",
+    "catalogs_unprovisioned",
 ];
 
 /// The advisory lock [`migrate`] holds around the cleanup and the
@@ -276,6 +277,7 @@ mod tests {
                 "sign_in_code_catalogs",
                 "sign_in_codes",
                 "sign_in_events",
+                "stores",
                 "team_members",
                 "teams",
                 "unlocks",
@@ -399,12 +401,15 @@ mod tests {
             "SELECT (SELECT count(*) FROM user_identities) + (SELECT count(*) FROM user_passkeys) \
                   + (SELECT count(*) FROM user_sessions) + (SELECT count(*) FROM email_tokens) \
                   + (SELECT count(*) FROM sign_in_events) + (SELECT count(*) FROM user_catalogs) \
-                  + (SELECT count(*) FROM server_settings)",
+                  + (SELECT count(*) FROM server_settings WHERE key <> 'default_store')",
         )
         .fetch_one(&db.pool)
         .await
         .unwrap();
-        assert_eq!(new_rows, 0, "the migration creates no rows");
+        assert_eq!(
+            new_rows, 0,
+            "the migrations create no rows but default_store"
+        );
         assert_eq!(
             okf_history(&db.pool).await,
             i64::try_from(MIGRATOR.iter().count()).unwrap()
@@ -825,13 +830,13 @@ mod tests {
         // Arrange: the schema as of 0007, with one key, then 0008 on top.
         let db = pg_support::TestDb::start().await;
         for migration in [
-            include_str!("../migrations/0001_schema.sql"),
-            include_str!("../migrations/0002_changeset_identity.sql"),
-            include_str!("../migrations/0003_changeset_handles.sql"),
-            include_str!("../migrations/0004_drop_changeset_labels.sql"),
-            include_str!("../migrations/0005_key_names.sql"),
-            include_str!("../migrations/0006_maintenance.sql"),
-            include_str!("../migrations/0007_maintenance_assessment_evidence.sql"),
+            include_str!("../migrations/accounts/0001_schema.sql"),
+            include_str!("../migrations/accounts/0002_changeset_identity.sql"),
+            include_str!("../migrations/accounts/0003_changeset_handles.sql"),
+            include_str!("../migrations/accounts/0004_drop_changeset_labels.sql"),
+            include_str!("../migrations/accounts/0005_key_names.sql"),
+            include_str!("../migrations/accounts/0006_maintenance.sql"),
+            include_str!("../migrations/accounts/0007_maintenance_assessment_evidence.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&db.pool).await.unwrap();
         }
@@ -847,7 +852,7 @@ mod tests {
         .unwrap();
 
         // Act
-        sqlx::raw_sql(include_str!("../migrations/0008_oauth.sql"))
+        sqlx::raw_sql(include_str!("../migrations/accounts/0008_oauth.sql"))
             .execute(&db.pool)
             .await
             .unwrap();
@@ -978,14 +983,14 @@ mod tests {
         // and one sign-in code, written as the pre-0009 server wrote them.
         let db = pg_support::TestDb::start().await;
         for migration in [
-            include_str!("../migrations/0001_schema.sql"),
-            include_str!("../migrations/0002_changeset_identity.sql"),
-            include_str!("../migrations/0003_changeset_handles.sql"),
-            include_str!("../migrations/0004_drop_changeset_labels.sql"),
-            include_str!("../migrations/0005_key_names.sql"),
-            include_str!("../migrations/0006_maintenance.sql"),
-            include_str!("../migrations/0007_maintenance_assessment_evidence.sql"),
-            include_str!("../migrations/0008_oauth.sql"),
+            include_str!("../migrations/accounts/0001_schema.sql"),
+            include_str!("../migrations/accounts/0002_changeset_identity.sql"),
+            include_str!("../migrations/accounts/0003_changeset_handles.sql"),
+            include_str!("../migrations/accounts/0004_drop_changeset_labels.sql"),
+            include_str!("../migrations/accounts/0005_key_names.sql"),
+            include_str!("../migrations/accounts/0006_maintenance.sql"),
+            include_str!("../migrations/accounts/0007_maintenance_assessment_evidence.sql"),
+            include_str!("../migrations/accounts/0008_oauth.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&db.pool).await.unwrap();
         }
@@ -1006,7 +1011,7 @@ mod tests {
         .unwrap();
 
         // Act
-        sqlx::raw_sql(include_str!("../migrations/0009_users_teams.sql"))
+        sqlx::raw_sql(include_str!("../migrations/accounts/0009_users_teams.sql"))
             .execute(&db.pool)
             .await
             .unwrap();
@@ -1157,15 +1162,19 @@ mod tests {
         };
 
         // Act
-        sqlx::raw_sql(include_str!("../migrations/0023_audit_backfill.sql"))
-            .execute(&db.pool)
-            .await
-            .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../migrations/accounts/0023_audit_backfill.sql"
+        ))
+        .execute(&db.pool)
+        .await
+        .unwrap();
         let once = audit_rows(&db.pool).await;
-        sqlx::raw_sql(include_str!("../migrations/0023_audit_backfill.sql"))
-            .execute(&db.pool)
-            .await
-            .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../migrations/accounts/0023_audit_backfill.sql"
+        ))
+        .execute(&db.pool)
+        .await
+        .unwrap();
 
         // Assert: the rows the resolvers would have made, nothing for the
         // revoked key, the stale row untouched, and a rerun adds nothing.
@@ -1217,9 +1226,11 @@ mod tests {
         // owner lock, once the backfill has already finished).
         let pool = db.pool.clone();
         let backfill = tokio::spawn(async move {
-            sqlx::raw_sql(include_str!("../migrations/0023_audit_backfill.sql"))
-                .execute(&pool)
-                .await
+            sqlx::raw_sql(include_str!(
+                "../migrations/accounts/0023_audit_backfill.sql"
+            ))
+            .execute(&pool)
+            .await
         });
         let waited = tokio::time::timeout(Duration::from_secs(30), async {
             loop {
@@ -1273,11 +1284,11 @@ mod tests {
     async fn maintenance_schema_preserves_existing_rows_and_defaults_to_opt_out() {
         let db = pg_support::TestDb::start().await;
         for migration in [
-            include_str!("../migrations/0001_schema.sql"),
-            include_str!("../migrations/0002_changeset_identity.sql"),
-            include_str!("../migrations/0003_changeset_handles.sql"),
-            include_str!("../migrations/0004_drop_changeset_labels.sql"),
-            include_str!("../migrations/0005_key_names.sql"),
+            include_str!("../migrations/accounts/0001_schema.sql"),
+            include_str!("../migrations/accounts/0002_changeset_identity.sql"),
+            include_str!("../migrations/accounts/0003_changeset_handles.sql"),
+            include_str!("../migrations/accounts/0004_drop_changeset_labels.sql"),
+            include_str!("../migrations/accounts/0005_key_names.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&db.pool).await.unwrap();
         }
@@ -1338,7 +1349,7 @@ mod tests {
             .fetch_one(&db.pool)
             .await
             .unwrap();
-        sqlx::raw_sql(include_str!("../migrations/0006_maintenance.sql"))
+        sqlx::raw_sql(include_str!("../migrations/accounts/0006_maintenance.sql"))
             .execute(&db.pool)
             .await
             .unwrap();
@@ -1762,10 +1773,10 @@ mod tests {
     async fn key_name_migration_preserves_existing_credentials_and_history() {
         let db = pg_support::TestDb::start().await;
         for migration in [
-            include_str!("../migrations/0001_schema.sql"),
-            include_str!("../migrations/0002_changeset_identity.sql"),
-            include_str!("../migrations/0003_changeset_handles.sql"),
-            include_str!("../migrations/0004_drop_changeset_labels.sql"),
+            include_str!("../migrations/accounts/0001_schema.sql"),
+            include_str!("../migrations/accounts/0002_changeset_identity.sql"),
+            include_str!("../migrations/accounts/0003_changeset_handles.sql"),
+            include_str!("../migrations/accounts/0004_drop_changeset_labels.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&db.pool).await.unwrap();
         }
@@ -1799,7 +1810,7 @@ mod tests {
         .await
         .unwrap();
 
-        sqlx::raw_sql(include_str!("../migrations/0005_key_names.sql"))
+        sqlx::raw_sql(include_str!("../migrations/accounts/0005_key_names.sql"))
             .execute(&db.pool)
             .await
             .unwrap();
@@ -1967,6 +1978,459 @@ mod tests {
         assert_eq!(
             applied,
             i64::try_from(super::MIGRATOR.iter().count()).unwrap()
+        );
+    }
+
+    /// Inserts one `stores` row with the given location columns; the
+    /// credential columns are `credential` as (kind, reference).
+    async fn insert_store(
+        pool: &PgPool,
+        name: &str,
+        location: (&str, Option<(&str, i32, &str)>),
+        credential: Option<(&str, &str)>,
+    ) -> Result<(), sqlx::Error> {
+        let (kind, address) = location;
+        sqlx::query(
+            "INSERT INTO stores (name, location_kind, host, port, database, \
+                 credential_kind, credential_ref, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, now())",
+        )
+        .bind(name)
+        .bind(kind)
+        .bind(address.map(|(host, _, _)| host))
+        .bind(address.map(|(_, port, _)| port))
+        .bind(address.map(|(_, _, database)| database))
+        .bind(credential.map(|(kind, _)| kind))
+        .bind(credential.map(|(_, reference)| reference))
+        .execute(pool)
+        .await
+        .map(|_| ())
+    }
+
+    /// One `host` store row at `db.example.internal`.
+    async fn insert_host_store(
+        pool: &PgPool,
+        name: &str,
+        database: &str,
+        credential: Option<(&str, &str)>,
+    ) -> Result<(), sqlx::Error> {
+        insert_store(
+            pool,
+            name,
+            ("host", Some(("db.example.internal", 5432, database))),
+            credential,
+        )
+        .await
+    }
+
+    /// Review of the folder move (issue #965): a database migrated by the
+    /// old `migrations/` folder sees no change after the files moved to
+    /// `migrations/accounts/`. The fixture is each file's version,
+    /// description and SHA-384 checksum as taken before the move (the three
+    /// things sqlx records and compares), so the embedded history must match
+    /// it, and so must a database's own record once the new migrations ran.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn moving_the_migrations_folder_keeps_their_history() {
+        use sha2::{Digest, Sha384};
+        // Arrange: the history as it stood at 0035, from the fixture.
+        let expected: Vec<(i64, String, String)> =
+            include_str!("../tests/fixtures/migration_history_0035.txt")
+                .lines()
+                .map(|line| {
+                    let mut parts = line.split(' ');
+                    let version = parts.next().unwrap().parse().unwrap();
+                    let checksum = parts.next_back().unwrap().to_string();
+                    let description = parts.collect::<Vec<_>>().join(" ");
+                    (version, description.replace('_', " "), checksum)
+                })
+                .collect();
+        assert_eq!(expected.len(), 35);
+
+        // Act: a database migrated up to 0035, then by the server's migrate.
+        let db = pg_support::TestDb::start().await;
+        MIGRATOR.run_to(35, &db.pool).await.unwrap();
+        let recorded = |pool: PgPool| async move {
+            let rows: Vec<(i64, String, Vec<u8>)> = sqlx::query_as(
+                "SELECT version, description, checksum FROM _sqlx_migrations \
+                 WHERE version <= 35 ORDER BY version",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            rows.into_iter()
+                .map(|(version, description, checksum)| {
+                    let hex: String = checksum.iter().map(|b| format!("{b:02x}")).collect();
+                    (version, description, hex)
+                })
+                .collect::<Vec<_>>()
+        };
+        let before = recorded(db.pool.clone()).await;
+        migrate(&db.pool)
+            .await
+            .expect("no pending or unknown migration");
+        let after = recorded(db.pool.clone()).await;
+
+        // Assert: every record matches the pre-move fixture, before and after.
+        assert_eq!(before, expected);
+        assert_eq!(after, expected);
+        // And the checksum is what the file holds: SHA-384 of its text.
+        for migration in MIGRATOR.iter().filter(|m| m.version <= 35) {
+            assert_eq!(
+                migration.checksum.as_ref(),
+                Sha384::digest(migration.sql.as_str().as_bytes()).as_slice(),
+                "{}",
+                migration.description
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn migration_0036_puts_every_catalog_on_main_provisioned() {
+        // Arrange: a database at 0035 with catalogs, one team and one admin
+        // setting already in place.
+        let db = pg_support::TestDb::start().await;
+        MIGRATOR.run_to(35, &db.pool).await.unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO catalogs (name, created_at) VALUES \
+                 ('old', '2026-01-02T03:04:05Z'), ('newer', '2026-06-07T08:09:10Z');",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        // Act: 0036 creates the stores, 0037 places the catalogs (the two
+        // migrations of the registry change that existing rows see).
+        MIGRATOR.run_to(37, &db.pool).await.unwrap();
+
+        // Assert: each catalog is on main and provisioned. The column's
+        // default gives existing rows the time the migration ran, with no
+        // row rewritten.
+        let rows: Vec<(String, String, bool)> = sqlx::query_as(
+            "SELECT name, store, provisioned_at IS NOT NULL FROM catalogs ORDER BY name",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("newer".to_string(), "main".to_string(), true),
+                ("old".to_string(), "main".to_string(), true),
+            ]
+        );
+        // main is the one account-database store, and the default.
+        let stores: Vec<(String, String)> =
+            sqlx::query_as("SELECT name, location_kind FROM stores")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            stores,
+            vec![("main".to_string(), "account-database".to_string())]
+        );
+        let default: serde_json::Value =
+            sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'default_store'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(default, serde_json::json!("main"));
+        // No team is pinned.
+        let pinned: i64 = sqlx::query_scalar("SELECT count(*) FROM teams WHERE store IS NOT NULL")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(pinned, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_release_one_create_after_0036_lands_on_main_provisioned() {
+        // Arrange: a fully migrated database.
+        let db = pg_support::TestDb::start_migrated().await;
+
+        // Act: the insert a release-1 replica runs, naming only the
+        // columns that existed before 0036.
+        sqlx::query(
+            "INSERT INTO catalogs (name, description, generation, created_at) \
+             VALUES ('legacy', '', 0, now())",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        // Assert
+        let (store, provisioned): (String, bool) = sqlx::query_as(
+            "SELECT store, provisioned_at IS NOT NULL FROM catalogs WHERE name = 'legacy'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(store, "main");
+        assert!(provisioned);
+        // New code may leave a catalog unprovisioned, and the index finds it.
+        sqlx::query(
+            "INSERT INTO catalogs (name, created_at, store, provisioned_at) \
+             VALUES ('half', now(), 'main', NULL)",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let waiting: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM catalogs WHERE provisioned_at IS NULL")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(waiting, vec!["half".to_string()]);
+        // A catalog cannot name a store that does not exist.
+        let missing = sqlx::query(
+            "INSERT INTO catalogs (name, created_at, store) VALUES ('lost', now(), 'nowhere')",
+        )
+        .execute(&db.pool)
+        .await;
+        assert_eq!(broken(missing).as_deref(), Some("catalogs_store_fkey"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stores_refuses_a_host_row_without_a_credential_reference() {
+        let db = pg_support::TestDb::start_migrated().await;
+
+        let with_null_reference = sqlx::query(
+            "INSERT INTO stores (name, location_kind, host, port, database, credential_kind, \
+                 created_at) \
+             VALUES ('shared-2', 'host', 'db.example.internal', 5432, 'catalogs', 'env', now())",
+        )
+        .execute(&db.pool)
+        .await;
+        let without_kind = insert_host_store(&db.pool, "shared-3", "catalogs", None).await;
+
+        // A missing reference, or a missing kind, is refused by the table.
+        assert_eq!(
+            broken(with_null_reference).as_deref(),
+            Some("stores_check1")
+        );
+        assert_eq!(broken(without_kind).as_deref(), Some("stores_check1"));
+        let complete = insert_host_store(
+            &db.pool,
+            "shared-4",
+            "catalogs-4",
+            Some(("secrets-manager", "ref-4")),
+        )
+        .await;
+        assert!(complete.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stores_refuses_an_account_database_row_with_a_host() {
+        let db = pg_support::TestDb::start_migrated().await;
+        // main is the account-database row, so test against the shape
+        // alone by trying a host column on a row of that kind.
+        let with_host = insert_store(
+            &db.pool,
+            "second",
+            ("account-database", Some(("db.example.internal", 5432, "x"))),
+            None,
+        )
+        .await;
+        let with_credential = insert_store(
+            &db.pool,
+            "third",
+            ("account-database", None),
+            Some(("env", "X")),
+        )
+        .await;
+
+        assert_eq!(broken(with_host).as_deref(), Some("stores_check"));
+        assert_eq!(broken(with_credential).as_deref(), Some("stores_check"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_second_account_database_store_is_refused() {
+        let db = pg_support::TestDb::start_migrated().await;
+
+        let second = insert_store(&db.pool, "also-main", ("account-database", None), None).await;
+
+        assert_eq!(
+            broken(second).as_deref(),
+            Some("stores_one_account_database")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_second_row_for_the_same_host_port_and_database_is_refused() {
+        let db = pg_support::TestDb::start_migrated().await;
+        let credential = Some(("env", "SHARED_PASSWORD"));
+        insert_host_store(&db.pool, "shared-1", "catalogs", credential)
+            .await
+            .unwrap();
+
+        // The same server and database under another name, and with the
+        // host in another case, are refused; another database is not.
+        let same = insert_host_store(&db.pool, "shared-2", "catalogs", credential).await;
+        let upper_case = insert_store(
+            &db.pool,
+            "shared-3",
+            ("host", Some(("DB.Example.Internal", 5432, "catalogs"))),
+            credential,
+        )
+        .await;
+        let other_database =
+            insert_host_store(&db.pool, "shared-4", "other-catalogs", credential).await;
+
+        assert_eq!(broken(same).as_deref(), Some("stores_one_row_per_database"));
+        assert_eq!(
+            broken(upper_case).as_deref(),
+            Some("stores_one_row_per_database")
+        );
+        assert!(other_database.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_cannot_be_removed_while_a_catalog_or_team_uses_it() {
+        let db = pg_support::TestDb::start_migrated().await;
+        insert_host_store(&db.pool, "shared-1", "catalogs", Some(("env", "X")))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO catalogs (name, created_at, store, provisioned_at) \
+             VALUES ('acme', now(), 'shared-1', now())",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        let removal = sqlx::query("DELETE FROM stores WHERE name = 'shared-1'")
+            .execute(&db.pool)
+            .await;
+
+        assert_eq!(broken(removal).as_deref(), Some("catalogs_store_fkey"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_cannot_be_removed_while_only_a_team_pins_it() {
+        // Arrange: a second store, a team pinned to it, no catalog on it.
+        let db = pg_support::TestDb::start_migrated().await;
+        insert_host_store(&db.pool, "shared-1", "catalogs", Some(("env", "X")))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO teams (id, name, display_name, created_at, store) \
+             VALUES ('team-1', 'acme', '', now(), 'shared-1')",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        // Act and assert: the pin alone refuses the removal.
+        let removal = sqlx::query("DELETE FROM stores WHERE name = 'shared-1'")
+            .execute(&db.pool)
+            .await;
+        assert_eq!(broken(removal).as_deref(), Some("teams_store_fkey"));
+
+        // Clearing the pin lets the store go.
+        sqlx::query("UPDATE teams SET store = NULL WHERE id = 'team-1'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let removed = sqlx::query("DELETE FROM stores WHERE name = 'shared-1'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(removed.rows_affected(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_registry_constraints_are_validated_and_the_index_is_built_concurrently() {
+        let db = pg_support::TestDb::start_migrated().await;
+
+        let constraints: Vec<(String, bool)> = sqlx::query_as(
+            "SELECT conname, convalidated FROM pg_constraint \
+             WHERE conname IN ('teams_store_fkey', 'catalogs_store_fkey') ORDER BY 1",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        let index: Vec<(bool, bool)> = sqlx::query_as(
+            "SELECT i.indisvalid, i.indpred IS NOT NULL FROM pg_index i \
+             JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = 'catalogs_unprovisioned'",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            constraints,
+            vec![
+                ("catalogs_store_fkey".to_string(), true),
+                ("teams_store_fkey".to_string(), true),
+            ]
+        );
+        assert_eq!(index, vec![(true, true)], "valid and partial");
+    }
+
+    /// Inserts a system audit entry about `kind` with the given target
+    /// columns (a name, and a person reference).
+    async fn insert_audit(
+        pool: &PgPool,
+        kind: &str,
+        name: Option<&str>,
+        person: Option<i64>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO audit_entries (at, action, source, actor_label, actor_operator, \
+                 target_kind, target_name, target_person_id) \
+             VALUES (now(), 'store.added', 'system', 'system:test', true, $1, $2, $3)",
+        )
+        .bind(kind)
+        .bind(name)
+        .bind(person)
+        .execute(pool)
+        .await
+        .map(|_| ())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn audit_entries_accept_a_store_target_by_name_only() {
+        let db = pg_support::TestDb::start_migrated().await;
+        let person: i64 = sqlx::query_scalar(
+            "INSERT INTO audit_people (user_id, name, display_name) \
+             VALUES (NULL, 'alice', '') RETURNING id",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+
+        let by_name = insert_audit(&db.pool, "store", Some("shared-1"), None).await;
+        let nameless = insert_audit(&db.pool, "store", None, None).await;
+        let with_person = insert_audit(&db.pool, "store", Some("shared-1"), Some(person)).await;
+        let unknown_kind = insert_audit(&db.pool, "volume", Some("x"), None).await;
+
+        assert!(by_name.is_ok());
+        assert_eq!(
+            broken(nameless).as_deref(),
+            Some("audit_entries_target_shape")
+        );
+        assert_eq!(
+            broken(with_person).as_deref(),
+            Some("audit_entries_target_shape")
+        );
+        assert_eq!(
+            broken(unknown_kind).as_deref(),
+            Some("audit_entries_target_kind_check")
+        );
+        // 0038 adds the checks NOT VALID and 0039 validates them.
+        let validated: Vec<(String, bool)> = sqlx::query_as(
+            "SELECT conname, convalidated FROM pg_constraint WHERE conrelid = \
+             'audit_entries'::regclass AND conname IN \
+             ('audit_entries_target_kind_check', 'audit_entries_target_shape') ORDER BY 1",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            validated,
+            vec![
+                ("audit_entries_target_kind_check".to_string(), true),
+                ("audit_entries_target_shape".to_string(), true),
+            ]
         );
     }
 }

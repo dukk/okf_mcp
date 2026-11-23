@@ -91,7 +91,7 @@ const POOL_SIZE: u32 = 8;
 /// The schema migrations, embedded here as in `okf_mcp::db::MIGRATOR` (this
 /// file cannot name that: it is `crate::db` in the library's unit tests and
 /// `okf_mcp::db` in the integration tests).
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations/accounts");
 
 /// apalis-postgres' migrations (schema `apalis`, history in
 /// `apalis._sqlx_migrations`), which `okf_mcp::db::migrate` runs after

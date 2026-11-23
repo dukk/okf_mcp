@@ -628,7 +628,7 @@ key's actor.
   (the bookkeeping, move, split and its link
   rewriting, with the replay of their `index.md` and `log.md` edits; and
   `delete`) and the write `rules`.
-- `src/db.rs`, `migrations/` - the Postgres pool and the schema, embedded at
+- `src/db.rs`, `migrations/accounts/` - the Postgres pool and the account schema, embedded at
   compile time.
 - `src/store/` - async functions over the pool: `catalogs`, `keys`,
   `documents`, `import`, `export`, `history`, `changesets` and `publish`.

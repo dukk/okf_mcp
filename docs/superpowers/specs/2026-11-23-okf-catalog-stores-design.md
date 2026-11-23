@@ -258,8 +258,8 @@ Three releases, each deployable alone:
 2. **Registry, stores and placement.** One account migration adds
    `stores` (seeded with `main`, location `account-database`), the
    `default_store` setting (`main`), `teams.store`, and `catalogs.store` and
-   `provisioned_at` (existing catalogs: `main`, provisioned at their
-   `created_at`). Routing now goes through the registry; everything still
+   `provisioned_at` (existing catalogs: `main`, provisioned as of the
+   migration, with no backfill of every row). Routing now goes through the registry; everything still
    lands on `main`.
 3. **The split.** One account migration moves the catalog tables into
    schema `catalog` with `ALTER TABLE ... SET SCHEMA` (metadata only),

@@ -21,7 +21,7 @@ use crate::labels::user_label;
 use crate::store::keys::Access;
 
 /// How many days entries are kept with no `audit_retention_days` override
-/// (the append-only trigger in `migrations/0012_audit.sql` uses the same).
+/// (the append-only trigger in `migrations/accounts/0012_audit.sql` uses the same).
 pub const DEFAULT_RETENTION_DAYS: u32 = 400;
 
 /// The shortest retention: the setting refuses less, and the trigger
@@ -795,7 +795,7 @@ pub async fn team_ref(conn: &mut PgConnection, team: &str) -> Result<i64, OkfErr
 /// insert and after [`lock_people`] has locked the owner: the SQL resolver
 /// takes the owner `FOR KEY SHARE` again (a no-op under the stronger lock
 /// already held) and inserts a row no other transaction can see yet, so it
-/// waits on nothing (`migrations/0014_audit_row_locks.sql`).
+/// waits on nothing (`migrations/accounts/0014_audit_row_locks.sql`).
 ///
 /// # Arguments
 /// * `conn` - the creating transaction.

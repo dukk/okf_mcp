@@ -268,7 +268,7 @@ pub async fn create(
     .await?;
     // The personal team's audit row from birth, like the user's own (which
     // the entry above makes): later entries naming either only read them
-    // (`migrations/0014_audit_row_locks.sql`).
+    // (`migrations/accounts/0014_audit_row_locks.sql`).
     audit::team_ref(&mut tx, new.name).await?;
     tx.commit().await?;
     Ok(UserRecord {
