@@ -14,10 +14,16 @@ would freeze the one tool meant to catch hangs, silently.
   command in its own session with its output in a private temp file (not a
   pipe), stdin from `<file>` or `/dev/null`, polls it for
   `AGENTIC_CALL_TIMEOUT` seconds (default 60), and stores the output in a
-  variable. On timeout it sends TERM, KILL after `agentic_kill_after`
-  seconds, waits at most 2 s more, and then ABANDONS a child that is still
-  there: it never `wait`s for it or for its output to close, deletes the temp
-  file, and goes on. `agentic_bounded_call` was not enough: its timeout branch
+  variable. However the command ends (timed out, or on its own), it then
+  stops whatever is left of the command's process group with lib.sh's
+  `agentic_stop_group`, which decides by the group's liveness, not the
+  command's: TERM, KILL after `agentic_kill_after` seconds while any member
+  is left, at most 5 s more. So a member that ignores TERM after the leader
+  died on it, or a descendant a leader left behind on a normal exit (which
+  would hold the unlinked output file and pile up across passes), is gone
+  when the call returns (review of PR #947, round 4; such leftovers also
+  warn). Anything still there after that is ABANDONED: it never `wait`s for
+  it or for its output to close, deletes the temp file, and goes on. `agentic_bounded_call` was not enough: its timeout branch
   ends in an unconditional `wait` (`lib.sh:64-65`), which never returns for a
   process in an uninterruptible kernel wait, and `$(...)` also waits for the
   pipe to close. `lib.sh` is unchanged.
@@ -37,6 +43,11 @@ would freeze the one tool meant to catch hangs, silently.
   stderr, naming only the command. None is an alarm, the next pass tries
   again, and `--once` still exits 0. A failed or timed-out start-up
   `git rev-parse` exits 1 with an error.
+- Tests for the group cleanup (round 4): a stub whose leader dies on TERM
+  while a member of its own group ignores TERM (that member is gone when the
+  watchdog returns), and a stub that exits at once leaving such a member
+  holding the output (gone too, with a warning). Both fail against 69f280d's
+  `watchdog.sh`.
 - Tests: one stub per supervised call that ignores TERM and leaves a detached
   grandchild holding its output open (`ps -eo`, `ps -p` only, `tr`,
   `git worktree list`, `git reflog`, `find`): the looping watchdog warns

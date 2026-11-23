@@ -730,6 +730,60 @@ test_watchdog_abandons_a_find_it_cannot_stop() {
     watch_abandoning find
 }
 
+# group_stub <leader body>: a stub `ps` whose call first starts a member of its
+# own process group (no setsid) that ignores TERM and holds the call's output
+# open, recording its pid in $fx/members, and then runs <leader body>.
+group_stub() {
+    mkdir -p "$fx/bin" "$fx/tmp"
+    cat >"$fx/bin/ps" <<STUB
+#!/usr/bin/env bash
+(trap '' TERM; exec sleep 60) </dev/null >&1 2>/dev/null &
+echo \$! >>"$fx/members"
+$1
+STUB
+    chmod +x "$fx/bin/ps"
+}
+
+# want_members_gone: every recorded group member is gone once the watchdog has
+# returned (checked by pid, without waiting); the test's trap stops any left.
+want_members_gone() {
+    local member
+    [ -s "$fx/members" ] || die "the stub never started a group member"
+    while read -r member; do
+        [ ! -e "/proc/$member" ] || die "group member $member outlived the call"
+    done <"$fx/members"
+}
+
+test_watchdog_kills_a_group_member_that_ignores_term_after_a_timeout() {
+    # Brooke's fourth review: the leader dies on TERM, a member of its group
+    # ignores TERM. Escalating by the leader's liveness alone never sent KILL.
+    new_fixtures
+    trap '[ -s "$fx/members" ] && xargs kill -KILL <"$fx/members" 2>/dev/null' EXIT
+    group_stub 'while :; do sleep 1; done'
+    out=$(cd "$work/wt" && PATH="$fx/bin:$PATH" TMPDIR="$fx/tmp" AGENTIC_CALL_TIMEOUT=1 \
+        agentic_kill_after=1 timeout 30 "$tools/watchdog.sh" --once 2>&1)
+    rc=$?
+    want_rc 0; want_out "warning: ps call timed out"; want_no_out WATCHDOG
+    want_members_gone
+    [ -z "$(ls -A "$fx/tmp")" ] || die "a temp file was left behind"
+}
+
+test_watchdog_stops_what_a_call_leaves_behind_on_a_normal_exit() {
+    # A leader that exits at once, leaving a TERM-ignoring member of its group
+    # holding the (unlinked) output file: it must not pile up across passes.
+    new_fixtures
+    trap '[ -s "$fx/members" ] && xargs kill -KILL <"$fx/members" 2>/dev/null' EXIT
+    group_stub 'exit 0'
+    out=$(cd "$work/wt" && PATH="$fx/bin:$PATH" TMPDIR="$fx/tmp" AGENTIC_CALL_TIMEOUT=5 \
+        agentic_kill_after=1 timeout 60 "$tools/watchdog.sh" --once 2>&1)
+    rc=$?
+    want_rc 0; want_no_out WATCHDOG
+    [ "$(wc -l <"$fx/members")" -ge 3 ] || die "the three scans did not all run"
+    want_members_gone
+    want_out "warning: ps call exited leaving processes behind"
+    [ -z "$(ls -A "$fx/tmp")" ] || die "a temp file was left behind"
+}
+
 test_watchdog_exits_1_when_its_start_up_git_call_hangs() {
     new_fixtures
     abandoning_stub git '*rev-parse*'

@@ -44,9 +44,12 @@
 # memory, git or the worktrees' logs runs under bounded_capture (#675): the
 # three `ps -eo` scans, the per-process `ps -p` re-reads, the `tail`
 # command-line read, `git rev-parse`, `git worktree list`, `git reflog` and
-# `find`. Each gets AGENTIC_CALL_TIMEOUT (default 60 s), then TERM, then KILL,
-# and a child that survives even KILL (an uninterruptible kernel wait) is
-# abandoned, never waited for, so none of them can freeze the watchdog. A
+# `find`. Each gets AGENTIC_CALL_TIMEOUT (default 60 s). Then, whether it timed
+# out or exited by itself, whatever is left of its process group gets TERM,
+# then KILL (decided by the group's liveness, not the command's), so no
+# descendant outlives the call; a process that survives even KILL (an
+# uninterruptible kernel wait) is abandoned, never waited for, so none of them
+# can freeze the watchdog. A
 # timeout warns on stderr (naming the command, never its output) and is never
 # an alarm: a timed-out or failed `ps -eo` scan skips the whole pass, a
 # timed-out re-read drops that process, a timed-out `find` or `reflog` skips
@@ -132,18 +135,23 @@ newest_log_time() {
 # output in <variable>; every external command a pass needs goes through it.
 # Unlike agentic_bounded_call this supervisor can ABANDON a child: cmd writes to
 # a private temp file (not a pipe), reads <file> (default /dev/null) on stdin,
-# runs in its own session, and is polled for up to agentic_call_budget seconds.
-# On timeout it gets TERM, then KILL after $agentic_kill_after seconds, then at
-# most 2 s more; a child that is still there (one stuck in an uninterruptible
-# kernel wait, such as a ps reading a /proc entry, ignores KILL) is left behind,
-# never waited for, and its temp file is deleted. So neither the child nor a
-# grandchild holding its output open can stall the watchdog (#675). A timeout
-# warns on stderr, naming only the command (never its output or arguments), and
-# returns 124. A command that fails returns its status with its output stored;
-# it warns too unless -q is given (for calls whose failure is expected, such as
-# a recheck of a process that has gone).
+# runs in its own session and process group, and is polled for up to
+# agentic_call_budget seconds. However the leader ends (on its own or timed
+# out), its whole group is then stopped by agentic_stop_group (lib.sh), which
+# decides by the group's liveness, not the leader's: TERM, KILL after
+# $agentic_kill_after seconds while any member is left, then at most 5 s more.
+# So a descendant that ignores TERM, or that a leader left behind on a normal
+# exit, is gone when this returns. Anything still there after that (a process
+# stuck in an uninterruptible kernel wait, such as a ps reading a /proc entry,
+# ignores KILL) is left behind and never waited for, and the temp file is
+# deleted. So neither the child nor a descendant holding its output open can
+# stall the watchdog (#675). A timeout warns on stderr, naming only the command
+# (never its output or arguments), and returns 124. A command that fails returns
+# its status with its output stored; it warns too unless -q is given (for calls
+# whose failure is expected, such as a recheck of a process that has gone).
 bounded_capture() {
     local bc_quiet=0 bc_in=/dev/null bc_file bc_pid='' bc_tick bc_budget bc_status=0 bc_reason=""
+    local bc_left=""
     while :; do
         case "$1" in
             -q) bc_quiet=1; shift ;;
@@ -168,28 +176,24 @@ bounded_capture() {
         done
         if kill -0 "$bc_pid" 2>/dev/null; then
             bc_status=124; bc_reason="timed out"
-            kill -TERM -- "-$bc_pid" 2>/dev/null
-            for ((bc_tick = 0; bc_tick < agentic_kill_after * 10; bc_tick++)); do
-                kill -0 "$bc_pid" 2>/dev/null || break
-                sleep 0.1
-            done
-            if kill -0 "$bc_pid" 2>/dev/null; then
-                kill -KILL -- "-$bc_pid" 2>/dev/null
-                for ((bc_tick = 0; bc_tick < 20; bc_tick++)); do
-                    kill -0 "$bc_pid" 2>/dev/null || break
-                    sleep 0.1
-                done
-            fi
-            if kill -0 "$bc_pid" 2>/dev/null; then
-                # Unreapable: stop tracking it (bash still reaps it whenever it dies).
-                disown "$bc_pid" 2>/dev/null
-                bc_reason="timed out, child left behind"
-            fi
         else
-            # It has exited, so this returns at once.
+            # It has exited, so this returns at once. Reaping it first means a
+            # live group below is made of descendants, not of its zombie.
             wait "$bc_pid" || bc_status=$?
             bc_reason="failed"
+            kill -0 -- "-$bc_pid" 2>/dev/null && bc_left=1
         fi
+        # Every path ends here: stop whatever is left of the group, by group.
+        agentic_stop_group "$bc_pid"
+        if kill -0 "$bc_pid" 2>/dev/null; then
+            # The leader survived KILL: stop tracking it, never wait for it
+            # (bash still reaps it whenever it dies).
+            disown "$bc_pid" 2>/dev/null
+            bc_reason="$bc_reason, child left behind"
+        elif kill -0 -- "-$bc_pid" 2>/dev/null; then
+            bc_reason="$bc_reason, processes left behind"
+        fi
+        [ -z "$bc_left" ] || echo "watchdog: warning: $2 call exited leaving processes behind; stopped them" >&2
     fi
     trap - INT TERM
     if [ "$bc_status" -eq 124 ]; then
