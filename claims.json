@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 828,
+  "next_claim_seq": 838,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "6a04d505a851507e3d075164d4b597a4f38d4556a81c4dacaa42a16eabff0bc9"
+    "mac": "8471f499d4f78596e7661e11bed43b78b824fddfbcf39cd0642743281d6a99d7"
   },
-  "next_evidence_seq": 1109,
+  "next_evidence_seq": 1121,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "e1659a4924e7ef0e2de06192ef11dac8e15c58f4c7c7ddc032c0edcf115ad017"
+    "mac": "7599a857ee31dc1c1ceed81c8b5ace58c3236fa7bd715f85953df86fbb3a50c3"
   },
   "claims": [
     {
@@ -63887,6 +63887,30 @@
             "by": "server",
             "mac": "811f245d0a137cfbb984a370503a0a6a1cdf5e283cc1d1851e50b82d51587235"
           }
+        },
+        {
+          "id": "EVD-1117",
+          "kind": "analysis",
+          "locator": "children of CLM-0811",
+          "summary": "Code children are all supported at 4d5e157 (CLM-0812 to 0816, 0818, 0819, 0826, 0828, 0829, 0831) and the six tests pass. Two documentation children are refuted: CLM-0834 (plan line 276) and CLM-0835 (PR body line 7) still say claim reads the key just before its insert. CLM-0825 remains not_enough_info.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-23T15:03:46.773212261Z",
+          "seal": {
+            "by": "server",
+            "mac": "b5fac0dd3a9a4a192194dec5bb75c2211c6e74f8cfd6484fa0086c1ca443e7a5"
+          }
+        },
+        {
+          "id": "EVD-1120",
+          "kind": "analysis",
+          "locator": "children of CLM-0811",
+          "summary": "At 541bd6c every active child is supported except CLM-0825 (not_enough_info, unrepeated revert experiment). The two stale statements (plan line 276, PR body line 7) are corrected and judged by CLM-0836 and CLM-0837. Six tests pass.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T15:04:39.879529710Z",
+          "seal": {
+            "by": "server",
+            "mac": "ac6f61d95dfefefdc913e6dc41a75e2b8ad62b3255aa4e91b536de0136ee1612"
+          }
         }
       ],
       "verdicts": [
@@ -63915,13 +63939,39 @@
             "by": "server",
             "mac": "a94f3cdfe2d83f99c0b57e2c6a45d40315915a8fd53e686fcdf0ac08f81fd770"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "Roll-up only: code is correct, but plan line 276 and PR body line 7 are stale after 4d5e157 (CLM-0834, CLM-0835). Fix: update plan line 276 and PR body line 7 to say claim reads the key before it begins its store transaction, commit, then re-audit CLM-0834, CLM-0835 and this claim.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1117"
+          ],
+          "recorded_at": "2026-11-23T15:03:51.366737815Z",
+          "seal": {
+            "by": "server",
+            "mac": "d71750b4e9c00475ed943037d147f530a9e6b76e0bf40616f79d17c2b609ec40"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Code children supported, documentation fixed; CLM-0825 stays not_enough_info and does not bear on the statement.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1120"
+          ],
+          "recorded_at": "2026-11-23T15:04:46.233595335Z",
+          "seal": {
+            "by": "server",
+            "mac": "9d5e3901e69a830952c0698762655e3dc7b6c47018b4ca2fc198dd8e46bfeb7d"
+          }
         }
       ],
       "created_at": "2026-11-23T14:50:53.138363942Z",
-      "updated_at": "2026-11-23T14:53:42.690784789Z",
+      "updated_at": "2026-11-23T15:04:46.233595335Z",
       "seal": {
         "by": "server",
-        "mac": "17b3103dd0aa4e123e0b76bbcce7a434a43047ec26d4e8b11f4b95ae23113a13"
+        "mac": "17b7ea0fd08123da959d2868398e18f0c1f8bf12774f75a5fa32e6cda7a62a3d"
       }
     },
     {
@@ -64364,7 +64414,9 @@
         "from-issue:963"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Said the read is just before the insert; the read now precedes db.begin(). Replaced by CLM-0828. Its supported verdict stays in history.",
+        "retired_at": "2026-11-23T15:03:42.156269211Z"
       },
       "evidence": [
         {
@@ -64429,10 +64481,10 @@
         }
       ],
       "created_at": "2026-11-23T14:50:53.138363942Z",
-      "updated_at": "2026-11-23T14:52:24.021312757Z",
+      "updated_at": "2026-11-23T15:03:42.156269211Z",
       "seal": {
         "by": "server",
-        "mac": "076bf561567377c2d283ed94595284600a0f22132f87785c5bd6be824720891f"
+        "mac": "5d9700830d1afe2fc152bba7d8dc99bf37eb0371b3a7ab88a7ec9b2248a7a624"
       }
     },
     {
@@ -65037,6 +65089,28 @@
             "by": "server",
             "mac": "d8aba25aac4ec059a7c1a072bd5b7cc7343cd86c893aa724af5dbe3e18c8e5a4"
           }
+        },
+        {
+          "id": "EVD-1116",
+          "kind": "analysis",
+          "locator": "src/store/maintenance/runs.rs:468-520 at 4d5e157",
+          "summary": "Re-audited: the key read now happens before db.begin(), on its own connection, and the insert and idempotency receipt still share the one transaction, so a foreign-key failure on the insert still rolls both back and a retry re-reads the key (NULL). The window is now wider (it spans the lock wait, replay and selection), as the changelog and doc comment now say. The claim's statement (between the read and the insert) still holds.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/runs.rs",
+              "lines": {
+                "start": 468,
+                "end": 520
+              },
+              "commit": "4d5e157a5a31e7d20690c036ce5074d9828819c5"
+            }
+          },
+          "recorded_at": "2026-11-23T15:03:27.861220891Z",
+          "seal": {
+            "by": "server",
+            "mac": "f39a24d8e7af90bcb60bc5dc61715bfe30999c7e32e776b294f409b60fdf448e"
+          }
         }
       ],
       "verdicts": [
@@ -65052,13 +65126,27 @@
             "by": "server",
             "mac": "032b0b4318310932cb83f994e8c902404f4791e662bd776b1c82f43c5a8bd52c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 4d5e157: FK failure on insert still rolls back insert and receipt together; window now wider but statement holds. Analysis only.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1099",
+            "EVD-1116"
+          ],
+          "recorded_at": "2026-11-23T15:03:42.109358639Z",
+          "seal": {
+            "by": "server",
+            "mac": "ce4cdb1aa263fbb49936cad1d399a881b156ce3859f966fdc7d8d630f3c21f35"
+          }
         }
       ],
       "created_at": "2026-11-23T14:50:53.138363942Z",
-      "updated_at": "2026-11-23T14:52:24.435185468Z",
+      "updated_at": "2026-11-23T15:03:42.109358639Z",
       "seal": {
         "by": "server",
-        "mac": "eed6441b2b5b9d6bddfedc453b97e98170ed57c3f7da480cc5fafce0d3c71316"
+        "mac": "59b0c403d3bb7acd2f7bd46765751d7c31d7274e32fbd5bd840ee60b8914348c"
       }
     },
     {
@@ -65125,6 +65213,641 @@
       "seal": {
         "by": "server",
         "mac": "24f282645b069a6ffa6fbfbda11d9978533980190cc470df7830f1974a697ff2"
+      }
+    },
+    {
+      "id": "CLM-0828",
+      "statement": "runs::claim takes &AccountDb first and reads the key row (SELECT id FROM api_keys WHERE id=$1) on the account database before it calls db.begin(), then binds the result (NULL when the key is gone) as key_id in the INSERT in place of the subselect.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Commit 4d5e157 message and changelog Changed: \"Before it begins its store transaction ... it reads `SELECT id FROM api_keys WHERE id = $1` on the account database and binds the result as `key_id`\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "src/store/maintenance/runs.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1109",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/runs.rs:468-480, 505",
+          "summary": "claim(accounts, db, ..) reads recorded_key via accounts.executor() fetch_optional before `let mut tx = db.begin()` (line 478); the INSERT binds &recorded_key as key_id and actor.key_id as credential_id; the subselect is gone.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/runs.rs",
+              "lines": {
+                "start": 468,
+                "end": 480
+              },
+              "commit": "4d5e157a5a31e7d20690c036ce5074d9828819c5"
+            }
+          },
+          "recorded_at": "2026-11-23T15:03:27.175203540Z",
+          "seal": {
+            "by": "server",
+            "mac": "20464734d4542ecf5615cb41fc6355eddcaecb7c1770f0bfdb6906ad60e7355c"
+          }
+        },
+        {
+          "id": "EVD-1110",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib --jobs 4 -- claim_needs_only_one_connection maintenance_run_records changeset_listing user_catalogs_with deleting_a_user_discards repair_lists",
+          "summary": "On head 4d5e157: 6 passed, 0 failed. maintenance_run_records_a_missing_key_as_null still records live/gone/ghost as Some/None/None.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/tests.rs",
+              "lines": {
+                "start": 2694,
+                "end": 2745
+              },
+              "commit": "4d5e157a5a31e7d20690c036ce5074d9828819c5"
+            }
+          },
+          "recorded_at": "2026-11-23T15:03:27.272344848Z",
+          "seal": {
+            "by": "server",
+            "mac": "8b22f61dadc324fb0eea8dfe5c852d2ff94378f4e36c5295e572e9dc2a9f5e3c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code shows read before begin, plain value bound; tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1109",
+            "EVD-1110"
+          ],
+          "recorded_at": "2026-11-23T15:03:41.834971314Z",
+          "seal": {
+            "by": "server",
+            "mac": "0ffe56e159e656f39e195cc62dceb9351484f9ede92b060372e913d4bf82e7f1"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:02:56.183789868Z",
+      "updated_at": "2026-11-23T15:03:41.834971314Z",
+      "seal": {
+        "by": "server",
+        "mac": "d223532f82b7722eb853e637a695c6876d8516745546dc62997a64abbe507ad0"
+      }
+    },
+    {
+      "id": "CLM-0829",
+      "statement": "claim_needs_only_one_connection exists and passes: it runs runs::claim on a pool of one connection under a 60 s timeout and asserts one lease.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Changelog Added: \"`claim_needs_only_one_connection` ... `claim` on a pool of one connection finishes under a timeout.\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "src/store/maintenance/tests.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1111",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib --jobs 4 -- claim_needs_only_one_connection ... (6 passed)",
+          "summary": "claim_needs_only_one_connection ok. The test builds a pool with max_connections(1), acquire_timeout 5 s, runs claim for one path under tokio timeout 60 s, asserts claimed.leases.len() == 1. I did not repeat the author's revert experiment (source edits not allowed).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/tests.rs",
+              "lines": {
+                "start": 2747,
+                "end": 2780
+              },
+              "commit": "4d5e157a5a31e7d20690c036ce5074d9828819c5"
+            }
+          },
+          "recorded_at": "2026-11-23T15:03:27.364092154Z",
+          "seal": {
+            "by": "server",
+            "mac": "c6d2af5669a09f2a64f72cd6b8ca09b1251ac9187c9a42191699104c34040aa9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test exists with the stated shape and passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1111"
+          ],
+          "recorded_at": "2026-11-23T15:03:41.878249832Z",
+          "seal": {
+            "by": "server",
+            "mac": "7f6afd05fb59c1e4a90d31d02b20a34b015eccd454a5bd93c0666fe9227acf65"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:02:56.183789868Z",
+      "updated_at": "2026-11-23T15:03:41.878249832Z",
+      "seal": {
+        "by": "server",
+        "mac": "6f82f7dbb7a69811c467555884d0ec5519a284a25cebcc6f88017f34ebf411ec"
+      }
+    },
+    {
+      "id": "CLM-0830",
+      "statement": "The changelog's fixture descriptions match the tests: the listing test (pg and alpha, keys alice and bob with bob deleted, two changesets tied on updated_at, a published one not listed, alpha's newest), the users tests via split_fixture (shared/other; alice with three keys one deleted, bob with one; open changesets, one with two entries, one with a deleted key; carol and an unknown name in the first test), the maintenance test (one catalog; live, gone, ghost keys) and the repair test (four catalogs alpha, nested, mid, zulu; no keys).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Changelog Added, each test's fixture description (changelog lines 5-12)",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-33-15Z-m21-task-05-split-joined-statements.md"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1112",
+          "kind": "inspection",
+          "locator": "src/store/changesets.rs:1207-1260; src/store/users.rs:2975-3040; src/store/maintenance/tests.rs:2694-2745; src/store/repair.rs:604-642",
+          "summary": "Read each fixture against the changelog text. Listing: pg then alpha (assert alpha > pg), alice/bob with bob deleted, pg_alice_tie and pg_bob_tie both at hour(1), a Published changeset, alpha_alice at hour(0) the newest. split_fixture: shared (seed_catalog_owned_by) then other; alice-one/two/gone and bob-one keys with alice-gone deleted; first changeset has a.md and b.md; four open changesets; carol seeded and \"nobody\" queried only in user_catalogs test. Maintenance: setup makes one catalog pg; keys live, gone (deleted), ghost (never inserted). Repair: legacy nested, legacy alpha, then zulu and mid created, no keys; before [alpha,nested], after adds mid. All match.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 1207,
+                "end": 1260
+              },
+              "commit": "4d5e157a5a31e7d20690c036ce5074d9828819c5"
+            }
+          },
+          "recorded_at": "2026-11-23T15:03:27.515483274Z",
+          "seal": {
+            "by": "server",
+            "mac": "6ee9ede2f742580089ddb37b75c69ff8ae23c53cb7fbedb983344a0aa87f8280"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Each fixture description matches its test body.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1112"
+          ],
+          "recorded_at": "2026-11-23T15:03:41.925691436Z",
+          "seal": {
+            "by": "server",
+            "mac": "cc5dbe7334465cced5831d6061d334dca948c2bc97b6dc27fab7b4600d541242"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:02:56.183789868Z",
+      "updated_at": "2026-11-23T15:03:41.925691436Z",
+      "seal": {
+        "by": "server",
+        "mac": "9ccc94bd6980be39840c5a347843f08bd1869008ac18b0b0c2d0656ef1362688"
+      }
+    },
+    {
+      "id": "CLM-0831",
+      "statement": "No split statement acquires a second connection while a transaction is held: the users.rs reads run on the deletion transaction's own connection, and missing_root_index and the changeset listing hold no transaction.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Review round 1 request: check whether any other split statement acquires a second connection while a transaction is held",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "src/store/users.rs",
+        "src/store/repair.rs",
+        "src/store/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1113",
+          "kind": "analysis",
+          "locator": "grep executor() in src/store/{changesets,repair,users}.rs; src/store/repair.rs:267-315; src/store/changesets.rs:663-760; src/store/users.rs:1505-1630",
+          "summary": "listed and missing_root_index call executor() on one pool at a time with no begin() in either function (repair.rs:97's tx is in the separate repair function), so no connection is held while another is acquired. open_changeset_catalogs and discard_open_changesets take &mut PgConnection and use no executor(). The runs::claim read is now before begin (separate claim).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/repair.rs",
+              "lines": {
+                "start": 285,
+                "end": 315
+              },
+              "commit": "4d5e157a5a31e7d20690c036ce5074d9828819c5"
+            }
+          },
+          "recorded_at": "2026-11-23T15:03:27.607619482Z",
+          "seal": {
+            "by": "server",
+            "mac": "91121d3ee2fd2f8cb7c5f8aaac35e10e9f9c45a31e8b22f875b6415d4e62d0a1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "By code reading; no other split function holds a transaction while taking a second connection.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1113"
+          ],
+          "recorded_at": "2026-11-23T15:03:41.972183017Z",
+          "seal": {
+            "by": "server",
+            "mac": "dae2c33e5fdd98f024cadc318f6820695d1642c8efebc5028ea8e46dadd290de"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:02:56.183789868Z",
+      "updated_at": "2026-11-23T15:03:41.972183017Z",
+      "seal": {
+        "by": "server",
+        "mac": "c272b0b866a8e3f7046bb41d13bea1ca365521083826f7fdbbe69299ca995753"
+      }
+    },
+    {
+      "id": "CLM-0832",
+      "statement": "The plan's Corrected (issue #963) note says runs::claim checks the key row \"just before its insert ... (one place, and the shortest window)\".",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md line 276, against code at 4d5e157",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Badly phrased (states what the text says, not that it is accurate); replaced by CLM-0834.",
+        "retired_at": "2026-11-23T15:03:04.631722158Z"
+      },
+      "evidence": [],
+      "verdicts": [],
+      "created_at": "2026-11-23T15:02:56.183789868Z",
+      "updated_at": "2026-11-23T15:03:04.631722158Z",
+      "seal": {
+        "by": "server",
+        "mac": "06d7b4fc26eec05ecf9e6e1cc66535cf911b253a2a104308fb9aa10c832d5c02"
+      }
+    },
+    {
+      "id": "CLM-0833",
+      "statement": "The draft PR body says runs::claim reads the key row on the account side \"just before its insert\".",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "target/i963-logs/pr-963-body.md line 7, against code at 4d5e157",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "target/i963-logs/pr-963-body.md"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Badly phrased; replaced by CLM-0835.",
+        "retired_at": "2026-11-23T15:03:04.724750469Z"
+      },
+      "evidence": [],
+      "verdicts": [],
+      "created_at": "2026-11-23T15:02:56.183789868Z",
+      "updated_at": "2026-11-23T15:03:04.724750469Z",
+      "seal": {
+        "by": "server",
+        "mac": "5cff2bff5c9289460015ed3276b5c4b296ec1cc219f8a95920a19750231b50cf"
+      }
+    },
+    {
+      "id": "CLM-0834",
+      "statement": "The plan's Corrected (issue #963) note correctly describes where runs::claim reads the key row (it says \"just before its insert ... the shortest window\").",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md line 276",
+      "source_anchor": {
+        "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "lines": {
+          "start": 276,
+          "end": 276
+        },
+        "commit": "4d5e157a5a31e7d20690c036ce5074d9828819c5"
+      },
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "The wording it judged (\"just before its insert ... shortest window\") was replaced in 541bd6c; CLM-0836 judges the corrected text. Refuted verdict stays in history.",
+        "retired_at": "2026-11-23T15:04:32.204616356Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1114",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:276 vs src/store/maintenance/runs.rs:468-480",
+          "summary": "The note says claim reads the key \"just before its insert\" for \"the shortest window\". The code now reads it before db.begin(), before the lock, replay and selection, so the window to the insert is the longest, not the shortest, and the read is not just before the insert. Changelog and the doc comment already say \"before the store transaction begins\".",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 276,
+                "end": 276
+              },
+              "commit": "4d5e157a5a31e7d20690c036ce5074d9828819c5"
+            }
+          },
+          "recorded_at": "2026-11-23T15:03:27.690985503Z",
+          "seal": {
+            "by": "server",
+            "mac": "1d9eb4d3eede64952481f5565718e1374762b611405b178016c40b7b5b7cdff7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Plan line 276 says the read is just before the insert with the shortest window; code reads it before db.begin(), the longest window. Ours (doc, no code impact). Fix: in docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md line 276, replace \"just before its insert ... (one place, and the shortest window)\" with \"before it begins its store transaction (so no connection waits on another while the transaction holds the catalog's locks)\", and say the foreign-key window spans the transaction's lock waits and selection.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1114"
+          ],
+          "recorded_at": "2026-11-23T15:03:42.016974710Z",
+          "seal": {
+            "by": "server",
+            "mac": "c94a543ef965c1d8a0103e33a37b24eb274730efa0aa9558ff666675a779a7de"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:03:04.850111613Z",
+      "updated_at": "2026-11-23T15:04:32.204616356Z",
+      "seal": {
+        "by": "server",
+        "mac": "d86b3bb03a50a1f6da20da1de52edf254e68b79d0275f2fd4cb52575962d8460"
+      }
+    },
+    {
+      "id": "CLM-0835",
+      "statement": "The draft PR body correctly describes where runs::claim reads the key row (it says \"just before its insert\").",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "target/i963-logs/pr-963-body.md line 7: \"reads the key row on the account side just before its insert\"",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "target/i963-logs/pr-963-body.md"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "The PR body wording it judged was replaced; CLM-0837 judges the corrected text. Refuted verdict stays in history.",
+        "retired_at": "2026-11-23T15:04:32.278951598Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1115",
+          "kind": "inspection",
+          "locator": "target/i963-logs/pr-963-body.md:7 vs src/store/maintenance/runs.rs:468-480",
+          "summary": "The PR body line 7 still says \"just before its insert\"; the code reads before db.begin(). Also line 9-ish statements about the race window are not in the body, but this wording is stale.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/runs.rs",
+              "lines": {
+                "start": 468,
+                "end": 480
+              },
+              "commit": "4d5e157a5a31e7d20690c036ce5074d9828819c5"
+            }
+          },
+          "recorded_at": "2026-11-23T15:03:27.774520226Z",
+          "seal": {
+            "by": "server",
+            "mac": "c0a8f6fdcf50de87086a4abeb972574d565456c7487c912db33faacabd721777"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "PR body line 7 says \"just before its insert\"; code reads before the store transaction begins. Ours (description). Fix: in target/i963-logs/pr-963-body.md line 7 change \"just before its insert\" to \"before it begins its store transaction\".",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1115"
+          ],
+          "recorded_at": "2026-11-23T15:03:42.062327536Z",
+          "seal": {
+            "by": "server",
+            "mac": "0c64b5bd7bf9fd887b2b17bad18f61c2ad3b4b339e7d4c7b3acc4b90d8892b91"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:03:04.850111613Z",
+      "updated_at": "2026-11-23T15:04:32.278951598Z",
+      "seal": {
+        "by": "server",
+        "mac": "9430deaf2346a8184dc572370f720d74cd34d5ba447148003e2158fbbb0e4a4d"
+      }
+    },
+    {
+      "id": "CLM-0836",
+      "statement": "The plan's Corrected (issue #963) note says runs::claim checks the key row before it begins its store transaction (no connection waits on another while the transaction holds the catalog's locks), and that a key deleted between that read and the insert, a window spanning lock waits and selection, fails with a foreign-key error that a retry resolves.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md line 276 at 541bd6c",
+      "source_anchor": {
+        "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "lines": {
+          "start": 276,
+          "end": 276
+        },
+        "commit": "541bd6c3158af337f9b32827f3d10ab7b8828a1a"
+      },
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1118",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:276; src/store/maintenance/runs.rs:468-480",
+          "summary": "Line 276 now says the key is checked before the store transaction begins, with the one-connection reason, and that a delete in the window (lock waits and selection) gives a foreign-key error a retry resolves. Code reads the key before db.begin() at runs.rs:474-478; matches.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 276,
+                "end": 276
+              },
+              "commit": "541bd6c3158af337f9b32827f3d10ab7b8828a1a"
+            }
+          },
+          "recorded_at": "2026-11-23T15:04:39.718626164Z",
+          "seal": {
+            "by": "server",
+            "mac": "a0c170723d30eb8b50e7aedc681210d9a0cf35275077714dc017725e67c7097f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Plan line 276 matches the code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1118"
+          ],
+          "recorded_at": "2026-11-23T15:04:46.139714710Z",
+          "seal": {
+            "by": "server",
+            "mac": "e6a3b06609b68e558fe52f34cc2940b35073252c9294a0b0f3bc92101976d59f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:04:32.339149251Z",
+      "updated_at": "2026-11-23T15:04:46.139714710Z",
+      "seal": {
+        "by": "server",
+        "mac": "d11e00771d5679b45b991d9b7da80fad19cae8a08f38a3a2c03f2477e67eec34"
+      }
+    },
+    {
+      "id": "CLM-0837",
+      "statement": "The draft PR body says runs::claim reads the key row on the account side before it begins its store transaction, and binds the plain value (NULL when the key is gone).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "target/i963-logs/pr-963-body.md line 7",
+      "derived_from": [
+        "CLM-0811"
+      ],
+      "artifacts": [
+        "target/i963-logs/pr-963-body.md"
+      ],
+      "tags": [
+        "from-issue:963"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1119",
+          "kind": "inspection",
+          "locator": "target/i963-logs/pr-963-body.md:7; src/store/maintenance/runs.rs:468-480",
+          "summary": "PR body line 7 now reads \"reads the key row on the account side before it begins its store transaction ... and binds the plain value (NULL when the key is gone)\". The code reads before db.begin() and binds Option<String>. The body file is untracked, so there is no commit anchor; I read it directly.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/runs.rs",
+              "lines": {
+                "start": 468,
+                "end": 480
+              },
+              "commit": "541bd6c3158af337f9b32827f3d10ab7b8828a1a"
+            }
+          },
+          "recorded_at": "2026-11-23T15:04:39.791149269Z",
+          "seal": {
+            "by": "server",
+            "mac": "e4628e1ed293d6cb79cfae73a47337d167460252964908fca07952da4acb55ae"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "PR body line 7 matches the code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1119"
+          ],
+          "recorded_at": "2026-11-23T15:04:46.186763518Z",
+          "seal": {
+            "by": "server",
+            "mac": "fc00356b3c12e1ef6ccd04a1dbbff64a0669a26709a9c4d94fd67afc8688bd2b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T15:04:32.339149251Z",
+      "updated_at": "2026-11-23T15:04:46.186763518Z",
+      "seal": {
+        "by": "server",
+        "mac": "61a8feb475b9903efea36c25f3d17aa86f4dd0f2926e000e20a70b7eb777c13d"
       }
     }
   ]
