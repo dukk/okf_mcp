@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 921,
+  "next_claim_seq": 922,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "90c06f3c52884a9da1d3975f651fb4a122f0dc1cd61e71ff20cb8a3469eca85f"
+    "mac": "dea57d93b28ac8214a122904b78f1099afdc44b11a6796352c79066699e53d37"
   },
-  "next_evidence_seq": 1283,
+  "next_evidence_seq": 1287,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "772614a545be09554fc678a1da0bbb1591175087d47f8e0a15eb572c7912a529"
+    "mac": "3bf186c8b287964eab4a926a87e33db8ad0a23a919a3d052a8ee062331081df1"
   },
   "claims": [
     {
@@ -59722,7 +59722,9 @@
         "from-issue:959"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by #966",
+        "retired_at": "2026-11-23T17:42:44.668703158Z"
       },
       "evidence": [
         {
@@ -59834,10 +59836,10 @@
         }
       ],
       "created_at": "2026-11-23T12:26:36.728383559Z",
-      "updated_at": "2026-11-23T17:41:28.503376820Z",
+      "updated_at": "2026-11-23T17:42:44.668703158Z",
       "seal": {
         "by": "server",
-        "mac": "86b04e467d87c9a7040c9020b10f4bf1b80dd8f2f102b54330c8b53891e02f30"
+        "mac": "db4e8b022e9c0d13a1ec3f64d75e96e72f5c07359a0c1c581fa919854e874e9b"
       }
     },
     {
@@ -60470,7 +60472,9 @@
         "from-issue:960"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by #966",
+        "retired_at": "2026-11-23T17:42:44.859609712Z"
       },
       "evidence": [
         {
@@ -60547,10 +60551,10 @@
         }
       ],
       "created_at": "2026-11-23T13:17:22.860036306Z",
-      "updated_at": "2026-11-23T17:41:28.550989433Z",
+      "updated_at": "2026-11-23T17:42:44.859609712Z",
       "seal": {
         "by": "server",
-        "mac": "2bbb82eab925c18ed1e443898636e7d466bcda9ab312855ac798dd06b6b03974"
+        "mac": "08db9b75abb905583a899131992234d9301272b688871ffce9b38bc75629962f"
       }
     },
     {
@@ -61202,7 +61206,9 @@
         "from-issue:961"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by #966",
+        "retired_at": "2026-11-23T17:42:45.042593907Z"
       },
       "evidence": [
         {
@@ -61302,10 +61308,10 @@
         }
       ],
       "created_at": "2026-11-23T13:52:22.270219644Z",
-      "updated_at": "2026-11-23T17:41:28.603964919Z",
+      "updated_at": "2026-11-23T17:42:45.042593907Z",
       "seal": {
         "by": "server",
-        "mac": "7208587e60e0df0b26afcee9ac2aa152fd56dc05c4859be6994652cbf77ae5e4"
+        "mac": "a1326143466c7c69aebd600b305b7b1ebe43d2fd9d19f45db252dc5fc8807697"
       }
     },
     {
@@ -61423,7 +61429,9 @@
         "from-issue:961"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by #966",
+        "retired_at": "2026-11-23T17:42:45.164621910Z"
       },
       "evidence": [
         {
@@ -61513,10 +61521,10 @@
         }
       ],
       "created_at": "2026-11-23T13:52:22.270219644Z",
-      "updated_at": "2026-11-23T17:41:28.659569507Z",
+      "updated_at": "2026-11-23T17:42:45.164621910Z",
       "seal": {
         "by": "server",
-        "mac": "38e12cd54e116d5e9f30b95183f7ae6493574c43112b302fdf19654ec8c847d5"
+        "mac": "bb46e35666ac2411bb90e92a7f073798bdcab7d0cd37768fc5b245f03e8c359e"
       }
     },
     {
@@ -61537,7 +61545,9 @@
         "from-issue:961"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by #966",
+        "retired_at": "2026-11-23T17:42:45.281949830Z"
       },
       "evidence": [
         {
@@ -61614,10 +61624,10 @@
         }
       ],
       "created_at": "2026-11-23T13:52:22.270219644Z",
-      "updated_at": "2026-11-23T17:41:28.712973655Z",
+      "updated_at": "2026-11-23T17:42:45.281949830Z",
       "seal": {
         "by": "server",
-        "mac": "0e9c2208c1210a7c2c658a1fd3e7333884d0c889d256c55588dd6c7422b0df36"
+        "mac": "e129ddd098f2e182b4bb26e1ad82ef46703127b02ffb9a7277e9423cdb43b10f"
       }
     },
     {
@@ -61639,7 +61649,9 @@
         "from-issue:961"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by #966",
+        "retired_at": "2026-11-23T17:42:45.410283624Z"
       },
       "evidence": [
         {
@@ -61739,10 +61751,10 @@
         }
       ],
       "created_at": "2026-11-23T13:52:22.270219644Z",
-      "updated_at": "2026-11-23T17:41:28.764345774Z",
+      "updated_at": "2026-11-23T17:42:45.410283624Z",
       "seal": {
         "by": "server",
-        "mac": "8d48fcd6480943f58e2ac8c22b6053813c69f635f5ecbc5c322f7b7475336a9c"
+        "mac": "dd237c2d63cda6d2c15f29fcad1e7d3b624993299ace3bcfa31aaff39ee3a643"
       }
     },
     {
@@ -63269,7 +63281,9 @@
         "from-issue:962"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by #966",
+        "retired_at": "2026-11-23T17:42:45.527153172Z"
       },
       "evidence": [
         {
@@ -63346,10 +63360,10 @@
         }
       ],
       "created_at": "2026-11-23T14:19:25.478862135Z",
-      "updated_at": "2026-11-23T17:41:28.814768429Z",
+      "updated_at": "2026-11-23T17:42:45.527153172Z",
       "seal": {
         "by": "server",
-        "mac": "62e4a0a6ec8fcbfec8fd13dafbfb776c5303c94d4dcf117c3f7ccc8be05eb52d"
+        "mac": "8e8c979bf91e8afc264f20dd9020cd6e259563a267b82267ddd6ebd513750970"
       }
     },
     {
@@ -63512,7 +63526,9 @@
         "from-issue:962"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by #966",
+        "retired_at": "2026-11-23T17:42:46.045714855Z"
       },
       "evidence": [
         {
@@ -63612,10 +63628,10 @@
         }
       ],
       "created_at": "2026-11-23T14:19:25.478862135Z",
-      "updated_at": "2026-11-23T17:41:28.865736977Z",
+      "updated_at": "2026-11-23T17:42:46.045714855Z",
       "seal": {
         "by": "server",
-        "mac": "090442bb46670db5f6423256e336fcda5e61448bbc132e4decff55827278511b"
+        "mac": "3f81a38c3c3a751c5b5817f37ab6bdce4f93b9be85a61117bcf44d1d13aafc4d"
       }
     },
     {
@@ -67018,7 +67034,9 @@
         "from-issue:964"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by #966",
+        "retired_at": "2026-11-23T17:42:46.134655815Z"
       },
       "evidence": [
         {
@@ -67118,10 +67136,10 @@
         }
       ],
       "created_at": "2026-11-23T15:45:08.911321586Z",
-      "updated_at": "2026-11-23T17:41:28.916080601Z",
+      "updated_at": "2026-11-23T17:42:46.134655815Z",
       "seal": {
         "by": "server",
-        "mac": "e9648ea62d13fb12496f4b4d2c387776a69392bd6fa996b90650b2f7e137b45b"
+        "mac": "957a6fe1db3581ef306f070239e2eaf00720566ce257540b4c12c7a1d520cb26"
       }
     },
     {
@@ -67321,7 +67339,9 @@
         "from-issue:964"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by #966",
+        "retired_at": "2026-11-23T17:42:46.228981121Z"
       },
       "evidence": [
         {
@@ -67411,10 +67431,10 @@
         }
       ],
       "created_at": "2026-11-23T15:45:08.911321586Z",
-      "updated_at": "2026-11-23T17:41:28.967790622Z",
+      "updated_at": "2026-11-23T17:42:46.228981121Z",
       "seal": {
         "by": "server",
-        "mac": "b04ad78e72d9e55bbf76c89b8d4edf9f565b4ced48cda35c4f6c7a983eb909e8"
+        "mac": "02e4e67f33cb3de06a4a9c8c3bf722ee940d947c609cfbc145ffb2c9f629cceb"
       }
     },
     {
@@ -67876,7 +67896,9 @@
         "from-issue:964"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by #966",
+        "retired_at": "2026-11-23T17:42:46.358377191Z"
       },
       "evidence": [
         {
@@ -67953,10 +67975,10 @@
         }
       ],
       "created_at": "2026-11-23T15:45:08.911321586Z",
-      "updated_at": "2026-11-23T17:41:29.020480595Z",
+      "updated_at": "2026-11-23T17:42:46.358377191Z",
       "seal": {
         "by": "server",
-        "mac": "de3b281d04e293bffa90c772ea96cf29349d236ca731ba6e83a11efdd1283f0d"
+        "mac": "22b98e70625a53d4da7f4a8cbc13ed1db4fca7e51d4219cd8dd280a9fb684c5a"
       }
     },
     {
@@ -72486,14 +72508,40 @@
             "by": "server",
             "mac": "04cbf5411c11a94d84d386259a179f863f38e4ce6803b8d274970f7cb0efb814"
           }
+        },
+        {
+          "id": "EVD-1286",
+          "kind": "analysis",
+          "locator": "children of CLM-0905",
+          "summary": "All active children are now supported: the registry (0906-0911), the stores SQL (0912), invalidation (0913, 0914), the hiding of unprovisioned rows and CatalogRow.store (0915), the caller moves (0916), config and docs (0917), plan and issue notes (0918), the corrected host-store wording (0921) and the gates (0920). Together they cover the issue scope: pools on first use with own search_path and timeouts, StoreUnavailable, invalidation, catalog_db replacing main_store, unprovisioned hiding.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T17:42:51.383602241Z",
+          "seal": {
+            "by": "server",
+            "mac": "e9c25fe726e8fc036bb85f1183faeda1cba9fa23a29b8ac8e9bc2f44c4576e77"
+          }
         }
       ],
-      "verdicts": [],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every active child is supported; together they cover the issue's scope and plan Task 8's named tests all pass in the full gate (exit 0, 2914 lib tests).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1286"
+          ],
+          "recorded_at": "2026-11-23T17:42:56.991137740Z",
+          "seal": {
+            "by": "server",
+            "mac": "6472cacc5ff66741ec579ae1a6d686549accc5ad87a7d06c1dab879506a1ca2e"
+          }
+        }
+      ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:40:18.285143137Z",
+      "updated_at": "2026-11-23T17:42:56.991137740Z",
       "seal": {
         "by": "server",
-        "mac": "09d61c4107a1aaf17b3aee0ae4ffa9f1c7b2b6390554fb91071a1e74589e84e8"
+        "mac": "b72963afaddd185389075b4c4fda7e872fb9a1ed62843c2ee314961c3e271cd4"
       }
     },
     {
@@ -73518,7 +73566,9 @@
         "from-issue:966"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "The sentence it judged was removed from the changelog and PR body in 13d9ff4; replaced by CLM-0921.",
+        "retired_at": "2026-11-23T17:42:44.576103441Z"
       },
       "evidence": [
         {
@@ -73542,6 +73592,28 @@
             "by": "server",
             "mac": "d8563391932a4d2b573aabbc11f86409f3c2ca8cbd6adc4044f9b218d1a89ede"
           }
+        },
+        {
+          "id": "EVD-1283",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T17-00-55Z-m21-task-08-stores-registry.md Notes (13d9ff4); target/i966-logs/pr-966-body.md:14",
+          "summary": "The text now reads 'Nothing writes a stores row yet (Task 10 adds the admin surface and refuses host stores until Task 20, P8)', which matches the code: INSERT INTO stores occurs only in tests, and the refusal is Task 10 per plan line 348. The PR body line 14 says the same. The original sentence is gone from both.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T17-00-55Z-m21-task-08-stores-registry.md",
+              "lines": {
+                "start": 14,
+                "end": 14
+              },
+              "commit": "13d9ff4993168adf79fa680ac2c9c6a0cc365ade"
+            }
+          },
+          "recorded_at": "2026-11-23T17:42:18.575579843Z",
+          "seal": {
+            "by": "server",
+            "mac": "a4cb7e9a406d661c624e2b4c052a30ac4a9f4efda959753d9918c8c6480e1a40"
+          }
         }
       ],
       "verdicts": [
@@ -73560,10 +73632,10 @@
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:40:13.846557959Z",
+      "updated_at": "2026-11-23T17:42:44.576103441Z",
       "seal": {
         "by": "server",
-        "mac": "c9b1a43dacc60b2ca2e0f0587706b569590547c92dae4c21a99f13f357487eac"
+        "mac": "cbc19b058c6d62012b4a7b8e222b0762bb634f699bbaf9a90f095e3014ec47b4"
       }
     },
     {
@@ -73596,6 +73668,18 @@
             "by": "server",
             "mac": "41efea80f96bf62872a83105e77e228a8ecca3b040b9362b76d74b4a199808c4"
           }
+        },
+        {
+          "id": "EVD-1284",
+          "kind": "log",
+          "locator": "target/i966-logs/test.log (gate.sh test); lint.log; dylint.log; fmt via cargo fmt --all --check",
+          "summary": "test.log ends 'exit 0'; its lib line reads 'test result: ok. 2914 passed; 0 failed; 2 ignored', every other binary ok, zero FAILED or panicked lines. lint.log (clippy -D warnings, doc -D warnings) and dylint.log end 'Finished' with no warning or error lines; those two logs carry no exit code line, so their success rests on the clean Finished output. fmt passed in my own run. The head is 13d9ff4, which differs from d55bc4b only in a changelog line (and the uncommitted ledger).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T17:42:18.648586492Z",
+          "seal": {
+            "by": "server",
+            "mac": "9cc9b64c776d495d6fe473382d1d33659f397a210f3e15370e0f95874d40dd8e"
+          }
         }
       ],
       "verdicts": [
@@ -73611,13 +73695,92 @@
             "by": "server",
             "mac": "e910506176229eca068f3ff0402909e3107c0442cc723ae740e2766dcec5a9be"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Full test gate exit 0 with 2914 lib tests passed and no failures; fmt passed in my own run; lint and dylint logs finish clean (no exit-code line, so inferred from clean Finished output).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1284"
+          ],
+          "recorded_at": "2026-11-23T17:42:26.221540102Z",
+          "seal": {
+            "by": "server",
+            "mac": "0b9e7107da7688040c2424c888b74e13198018b5d00bc3fbf00fd1b0573a9cd0"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:40:13.900886212Z",
+      "updated_at": "2026-11-23T17:42:26.221540102Z",
       "seal": {
         "by": "server",
-        "mac": "621975c544646e960630f32333b1b3928c2461bfa0ab21764d11d0be465f1a4b"
+        "mac": "4762afc751b23f67aa52b3cc23fd5138d339bac9f38415c65b89105e9ad6988d"
+      }
+    },
+    {
+      "id": "CLM-0921",
+      "statement": "The changelog and PR body say nothing writes a stores row yet and that Task 10 adds the admin surface and refuses host stores until Task 20, and no non-test code inserts into stores.",
+      "kind": "documentation",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body line 14 and changelog Notes after 13d9ff4: \"Nothing writes a `stores` row yet; Task 10 adds the admin surface and refuses host stores until Task 20\"",
+      "derived_from": [
+        "CLM-0905"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T17-00-55Z-m21-task-08-stores-registry.md"
+      ],
+      "tags": [
+        "from-issue:966"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1285",
+          "kind": "analysis",
+          "locator": "grep -rni 'INSERT INTO stores' src: db.rs:1994,2197 (mod tests at 208), store/stores.rs:226 (mod tests at 203), stores/registry.rs:426 (mod tests at 397)",
+          "summary": "Every INSERT INTO stores in src is inside a #[cfg(test)] mod tests; no production code writes the table. The changelog Notes line (13d9ff4) and PR body line 14 carry the corrected sentence, and plan line 348 puts the host-store refusal in Task 10.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T17-00-55Z-m21-task-08-stores-registry.md",
+              "lines": {
+                "start": 14,
+                "end": 14
+              },
+              "commit": "13d9ff4993168adf79fa680ac2c9c6a0cc365ade"
+            }
+          },
+          "recorded_at": "2026-11-23T17:42:32.728622036Z",
+          "seal": {
+            "by": "server",
+            "mac": "4a7e4221a8c3e89c3d94001d39dc13f5974f66f4f53b11f1ce6ee703a06debbc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Corrected wording is in both texts and matches the code (stores is written only by tests).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1285"
+          ],
+          "recorded_at": "2026-11-23T17:42:44.479829615Z",
+          "seal": {
+            "by": "server",
+            "mac": "91da0063fd9d88c321e259b148fdab4ffa89adba92c2ecbee9304b880d26f0d6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T17:42:26.282714045Z",
+      "updated_at": "2026-11-23T17:42:44.479829615Z",
+      "seal": {
+        "by": "server",
+        "mac": "78b1ceb1502ab39d320ded5ba2c99ab57fbed588980e5bc784c3f7e0f71b8234"
       }
     }
   ]
