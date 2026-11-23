@@ -7,7 +7,7 @@
 - `store::import::import` and `store::repair::repair` take `&CatalogDb` instead of `&PgPool`, and begin their transaction with `CatalogDb::begin`.
 - `store::publish::publish`, `write::apply` and `write::apply_audited` (every changeset edit and the revert tool), `open_changeset` and the discard path in `mcp::changesets` begin their transaction on `App::main_store()` instead of `App::pool()`.
 - Callers: the CLI (`import`, `repair-indexes`), the HTTP import route (`App::main_store()`), and the tests.
-- `CatalogDb::new` is `pub` (it was `pub(crate)`), so integration tests that hold only a pool can build the release-1 handle with `CatalogDb::new(StoreName::main(), pool.clone())`. Production code still gets its handle from `App`.
+- `CatalogDb::new` is `pub` (it was `pub(crate)`), so integration tests that hold only a pool can build the release-1 handle with `CatalogDb::new(StoreName::main(), pool.clone())`. The server and its request paths get their handle from `App`. The CLI is the release-1 exception: `import` and `repair-indexes` (`src/cli.rs`) build their own main-store handle from the pool they connect with, since they run without an `App`. Task 8 or later work that routes by store must migrate those two constructions too.
 
 ## Notes
 - No behaviour change: in release 1 `main_store()` and the account pool are the same pool. Reads inside these functions (`state.refresh`, `changesets::entries`, `with_current_revisions`) still use `App::pool()`; Task 3 types them.
