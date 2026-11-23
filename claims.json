@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 702,
+  "next_claim_seq": 703,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "d6b7cc165cbc01843e32338b6291fae2d45b4923b632548395dfb41ab4250192"
+    "mac": "f039cf7399d88463a612cd135941ac2189d5597ef029880e310bc58c152eba96"
   },
-  "next_evidence_seq": 897,
+  "next_evidence_seq": 907,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "18741e3c51a6cfbe674fb421d98055a97b9c8578dc0497a91b8f5098dd9f4326"
+    "mac": "e43639a686c4f3123c039f5bc632e0d8c941be50e7b584ede798276d685eb80a"
   },
   "claims": [
     {
@@ -53809,7 +53809,7 @@
     },
     {
       "id": "CLM-0694",
-      "statement": "Issue #675 is resolved: watchdog.sh's ps scans are time-bounded, a hung scan is a skipped pass, and a test covers it.",
+      "statement": "Issue #675 is resolved: every watchdog.sh call that reads the process table, another process's memory, git or the logs is time-bounded and abandon-capable, a hung call never freezes or alarms the watchdog, and tests cover each call.",
       "kind": "functional",
       "level": "software",
       "integrity_level": 3,
@@ -53838,6 +53838,18 @@
             "by": "server",
             "mac": "5ae883414da00b1b0488dc0a3707f25e0d4ee0d7125d6007e923fda4a6932ffe"
           }
+        },
+        {
+          "id": "EVD-0906",
+          "kind": "analysis",
+          "locator": "children CLM-0695..CLM-0702 re-audited at 7e0a933",
+          "summary": "At 7e0a933 all eight children hold on independent re-reading: all process-table, /proc-memory (tr cmdline), git and find calls go through bounded_capture; timeouts warn and skip, never alarm; each call has a hang test with mutation checks; 89/89 three times; README and header limit list complete.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T09:35:03.899783881Z",
+          "seal": {
+            "by": "server",
+            "mac": "1a6fd6003529b47130acbc96417165705be948c075c18508080ca5869c56363f"
+          }
         }
       ],
       "verdicts": [
@@ -53853,23 +53865,36 @@
             "by": "server",
             "mac": "d0698b832a2a576cad2569a5333c1c492323727fadd25e819f2dbc81e0197088"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All children supported at 7e0a933.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0906"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.671776146Z",
+          "seal": {
+            "by": "server",
+            "mac": "f58176bffd8232c5b350255a85ff1b575500bb12523a1d138b330e85c86e31de"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T08:38:06.336893873Z",
+      "updated_at": "2026-11-23T09:35:16.671776146Z",
       "seal": {
         "by": "server",
-        "mac": "ffdf7743a195916a9da7191372e5933e887b54c8a841599d3cb53429adc336f3"
+        "mac": "4ffedc64661eed5b1d7514e464d40ead224ef63e1b68b472872f7a91bdb4e1a7"
       }
     },
     {
       "id": "CLM-0695",
-      "statement": "Each of watchdog.sh's three main ps -eo scans runs through scan_ps, which captures ps output to a private temp file, polls with a deadline (AGENTIC_CALL_TIMEOUT), escalates TERM then KILL, and abandons a child that survives without waiting for it or for its output to close; the loops read the captured variable.",
+      "statement": "Every external command a watchdog.sh pass runs that reads the process table, another process's memory, git or the logs goes through one supervisor, bounded_capture: the three ps -eo scans, both per-process ps -p re-reads, the tr read of an idle tail's /proc/<pid>/cmdline, git worktree list, git reflog, find over target/i*-logs, and the start-up git rev-parse. bounded_capture captures output to a private temp file, polls with a deadline (AGENTIC_CALL_TIMEOUT), escalates TERM then KILL, and abandons a child that survives without waiting for it or for its output to close. watchdog.sh no longer calls agentic_bounded_call, agentic_git or a $(...) around any of these commands.",
       "kind": "functional",
       "level": "component",
       "integrity_level": 3,
       "verification_method": "analysis",
-      "source": "Issue #675: run watchdog.sh's ps scan through agentic_bounded_call (capture to a variable, then loop); PR: \"runs each of its three `ps -eo ...` scans through `agentic_bounded_call`\"",
+      "source": "Issue #675 plus review of PR #947 round 3 (per-PID rechecks at watchdog.sh:236 and :263 still on agentic_bounded_call); PR: \"every external command that reads the process table, another process's memory, git or the logs runs under bounded_capture\"",
       "derived_from": [
         "CLM-0694"
       ],
@@ -53970,6 +53995,50 @@
             "by": "server",
             "mac": "b3c0a142b8a78f840843e0d77ba9939e2b1b76a7937dedab3ce0558729b8286a"
           }
+        },
+        {
+          "id": "EVD-0897",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh:120,247,266,276-278,293,313,322,78 at 7e0a933",
+          "summary": "Every named call is a bounded_capture call: find (120), git reflog (247), git worktree list (266), three ps -eo scans (276-278), ps -p rereads (293, 322), tr on /proc/pid/cmdline via -i (313), git rev-parse (78). bounded_capture (145-206) uses mktemp file, setsid child, 0.1 s kill -0 polling to agentic_call_budget (AGENTIC_CALL_TIMEOUT), TERM, KILL, then disown of a survivor with no wait. No agentic_git; remaining $(...) are sort|tail on captured text, mktemp, readlink, agentic_* helpers, getconf, dirname, none wrapping ps/git/find/tr. The old file at 6d33448 had $(agentic_bounded_call ps -o etimes= -p) at 236 and 263.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 131,
+                "end": 206
+              },
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:33:48.964235531Z",
+          "seal": {
+            "by": "server",
+            "mac": "45d6d5e5c3050dd13a4135618d4cebdc43184b5d87b889131ae69db2be53fe28"
+          }
+        },
+        {
+          "id": "EVD-0898",
+          "kind": "analysis",
+          "locator": "git grep -nE 'agentic_bounded_call|agentic_git' tools/agentic/watchdog.sh",
+          "summary": "Only one hit, the comment at line 133; no call remains.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "agentic_bounded_call|agentic_git",
+              "scope": [
+                "tools/agentic/watchdog.sh"
+              ],
+              "hits": 1,
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:33:49.009207793Z",
+          "seal": {
+            "by": "server",
+            "mac": "c93b37ab6925bc63784f6ddd1b1c75a6258165ffc90bf3e1e66c60bfd6eb41b2"
+          }
         }
       ],
       "verdicts": [
@@ -54012,18 +54081,32 @@
             "by": "server",
             "mac": "3eeb9ed45f725c0d0dc223b85863bfd538b419b2de3d30b71703d73e9cba48b0"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All listed calls run via bounded_capture; no agentic_bounded_call/agentic_git call or $(...) wraps them.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0897",
+            "EVD-0898"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.711913611Z",
+          "seal": {
+            "by": "server",
+            "mac": "533530c4b7333bec41da0174924d9361cf1bf5e4594e35fe6256d4304cfd3193"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T09:07:19.009637273Z",
+      "updated_at": "2026-11-23T09:35:16.711913611Z",
       "seal": {
         "by": "server",
-        "mac": "9e91e17b6d72c411c275ecf6f466945d2a2c3df448225f5bd48e084484ea976d"
+        "mac": "72aca4cf946bc64c71d6011c730487bcd2928552370b4404894616ab1940f63e"
       }
     },
     {
       "id": "CLM-0696",
-      "statement": "When a ps scan times out or fails, watchdog.sh prints a warning on stderr, skips that pass without an alarm (no WATCHDOG output, no exit 3) and does not exit in looping mode; with --once it exits 0.",
+      "statement": "A supervised watchdog.sh call that times out prints a warning on stderr naming only the command and never raises an alarm (no WATCHDOG output, no exit 3): a timed-out or failed ps -eo scan skips the whole pass, a timed-out ps -p re-read drops that process for the pass, a timed-out find or git reflog skips that expectation for the pass, and a timed-out git worktree list leaves only the main checkout for the pass. In looping mode the next pass runs; with --once it exits 0. A failed or timed-out start-up git rev-parse makes it exit 1 with an error.",
       "kind": "functional",
       "level": "component",
       "integrity_level": 3,
@@ -54107,6 +54190,28 @@
             "by": "server",
             "mac": "561a1ba2b6be46b8259572a34ea0445ecbfb2385ea1305dae6f87648b8c63051"
           }
+        },
+        {
+          "id": "EVD-0901",
+          "kind": "test",
+          "locator": "tools/agentic/tests/run.sh:568-770; target/i675-logs/run-c1.log, run-c2.log",
+          "summary": "Control flow at 7e0a933: bounded_capture warns with only the command name and returns 124 (195-198); a failed scan chain skips the pass, exit 0 under --once (276-282); ps -p timeouts continue (293, 322); find timeout continues (242); reflog continue (248); worktree list is -q and leaves only the main checkout (264-268); start-up failure exits 1 (78-81). Tests: skip/once scan tests (568,582), abandon tests for scan, reread, cmdline, worktree list, reflog, find (659-722), start-up exit 1 (733), third-scan tests (771,780); all in the 89-pass runs c1 and c2. Gap: no test asserts exit 0 with --once for the non-scan timeouts, and the second ps -p site (322) has no hang test.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 195,
+                "end": 198
+              },
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:34:10.683758492Z",
+          "seal": {
+            "by": "server",
+            "mac": "0fff310da75b2e546447103e0dfc757a023cd0f65d84996afa90c6caaf69de78"
+          }
         }
       ],
       "verdicts": [
@@ -54136,18 +54241,31 @@
             "by": "server",
             "mac": "0e82a1a2803029c136caba35cc9583f7f85eb252af3ef42544cafe4fe3e0221f"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Control flow and tests match each skip rule and the exit 1 at start-up; minor test gaps noted.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0901"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.749169955Z",
+          "seal": {
+            "by": "server",
+            "mac": "8e0bf79965172ddec3f82f10fee77bf13b74fe27054922c9760e661df6c8ae87"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T08:45:12.523768972Z",
+      "updated_at": "2026-11-23T09:35:16.749169955Z",
       "seal": {
         "by": "server",
-        "mac": "70d3e92160be5ebd08b8b303e282a08bcece04b2985844913a6736b169ad0783"
+        "mac": "e13ad1bc5bd420c53bb9d30244c3139e1d555b4498b685b478d5b8d0a627b0b1"
       }
     },
     {
       "id": "CLM-0697",
-      "statement": "tools/agentic/tests/run.sh has cases using a stub ps that sleeps past the bound: the looping watchdog keeps running and warns on at least two passes, and --once exits 0; both fail when the scan is unbounded.",
+      "statement": "tools/agentic/tests/run.sh has a test per supervised call (ps -eo, ps -p only, tr on cmdline, git worktree list, git reflog, find) with a stub that ignores TERM and leaves a detached grandchild holding its output open: the looping watchdog keeps running, starts the hung command again on a later pass, warns at least twice, raises no alarm and leaves no temp file; plus a start-up git rev-parse test (exit 1) and the earlier stub-ps tests (sleep past the bound; third scan only). Each per-call test fails when its call site goes back to $(agentic_bounded_call ...), $(agentic_git ...) or $(tr ...), and the ps -p test fails against watchdog.sh at 6d33448.",
       "kind": "functional",
       "level": "artifact",
       "integrity_level": 3,
@@ -54209,6 +54327,28 @@
             "by": "server",
             "mac": "5beea7ebe2443769a1e3eb101b05299b697ccae93c841cfd9651822c768be601"
           }
+        },
+        {
+          "id": "EVD-0902",
+          "kind": "test",
+          "locator": "target/i675-logs/mutations.log; tools/agentic/tests/run.sh:596-740",
+          "summary": "abandoning_stub ignores TERM and leaves a detached setsid sleep grandchild holding the output; watch_abandoning checks still running, a later pass restarts the command (2 grandchildren), >=2 warnings, no WATCHDOG, empty TMPDIR, grandchildren gone. Tests exist for scan, ps -p, tr, worktree list, reflog, find, and rev-parse (exit 1). mutations.log shows seven mutations (reread, cmdline, worktree, reflog, find, scan, revparse), each failing exactly its test with 0 passed, 1 failed, plus test_watchdog_abandons_a_ps_reread_it_cannot_stop failing against 6d33448's watchdog.sh. Caveats: one test per command kind, so only one of the three ps -eo scans and one of the two ps -p sites (293) is hang-tested; the mutations.log does not say which ps -p site was reverted; the ps -p test's stub emits 5000 s but the cmdline test's ps -p site (322) has no hang test.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/tests/run.sh",
+              "lines": {
+                "start": 596,
+                "end": 740
+              },
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:34:10.722637422Z",
+          "seal": {
+            "by": "server",
+            "mac": "e1f2d6ee4d1e7c9959fa3b49a25f27eb0145bfbe6962a1ae715eff17a7149c2d"
+          }
         }
       ],
       "verdicts": [
@@ -54237,18 +54377,31 @@
             "by": "server",
             "mac": "d014524b6d9c259548f4e42e007dd6d743f31ee66b401caf88953247c50e588d"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Per-command-kind hang tests exist; mutations.log shows each fails when its call site is reverted and the ps -p test fails on 6d33448. Caveat: one site each for ps -eo and ps -p.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0902"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.792528861Z",
+          "seal": {
+            "by": "server",
+            "mac": "bbe10823ee2642f305d4065e2d5ec033dc5ee5ef72143fc8892dcfc00df0386b"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T08:59:22.282122093Z",
+      "updated_at": "2026-11-23T09:35:16.792528861Z",
       "seal": {
         "by": "server",
-        "mac": "58ac46fca0c3edd3380ce3d8e9ff75ca1c212bac3d4213df0383b8a465935ada"
+        "mac": "2580fd4486ca5b1f311b2424aae64d0fde34d6139408324ed4e6a889a8d1b2d0"
       }
     },
     {
       "id": "CLM-0698",
-      "statement": "The watchdog never prints or logs process command lines (ps args= output), including in the new timeout warning.",
+      "statement": "The watchdog never prints or logs process command lines (ps args= output or /proc/<pid>/cmdline): bounded_capture's warnings name only the command (its first word), never its arguments or output.",
       "kind": "security",
       "level": "component",
       "integrity_level": 4,
@@ -54301,6 +54454,28 @@
             "by": "server",
             "mac": "813e53fe0de5495dc8ce762e55d1222676eb15c11a0f5e7500485bbc24024bde"
           }
+        },
+        {
+          "id": "EVD-0899",
+          "kind": "analysis",
+          "locator": "tools/agentic/watchdog.sh:197,203,298,326,330-331 at 7e0a933",
+          "summary": "Warnings (197, 203) print only $2 (the command's first word), the reason and a status. Output captured by bounded_capture goes to a variable and is never echoed; stub stderr goes to /dev/null (163). The only output paths (231, 298, 326, 330-331) carry pid, elapsed, comm (from /proc/pid/comm), cwd, name and label; $args is used only inside case/regex tests (218, 287, 314). The cmdline read at 313 is captured into args, never printed. An existing test (run.sh:1322-1324) asserts a --token=SECRETVALUE argv does not appear in an alert. Caveat: no test puts a sentinel in a timed-out call's arguments.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 195,
+                "end": 205
+              },
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:33:49.053994294Z",
+          "seal": {
+            "by": "server",
+            "mac": "ee134956ea79bc50fc0d91683af557524e2157645dcbf5ea0fe408685a972d2a"
+          }
         }
       ],
       "verdicts": [
@@ -54316,18 +54491,31 @@
             "by": "server",
             "mac": "c1f786cadf0d583b68542692838e9b5894ca8a44c29217ad5f4e3ad950164750"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "No code path prints ps args or cmdline content; warnings name only the command word.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0899"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.836083568Z",
+          "seal": {
+            "by": "server",
+            "mac": "5cd507ffe4a934030d897e3bb4824e778f5ad906b861c13acfd016dbdefb7a61"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T08:37:59.988378191Z",
+      "updated_at": "2026-11-23T09:35:16.836083568Z",
       "seal": {
         "by": "server",
-        "mac": "1ffef95c29b813999190a1ecf3408cea4a29c1de5b9dc59ecdf014bb95cbf1d5"
+        "mac": "f1ca60e526a9d9bace35513fbaa18080f97e9987e768c9150e2417d8f16fb618"
       }
     },
     {
       "id": "CLM-0699",
-      "statement": "tools/agentic/tests/run.sh passes with 83 passed, 0 failed on the head commit, three runs in a row.",
+      "statement": "tools/agentic/tests/run.sh passes with 89 passed, 0 failed on the head commit, three runs in a row.",
       "kind": "functional",
       "level": "artifact",
       "integrity_level": 2,
@@ -54369,6 +54557,18 @@
             "by": "server",
             "mac": "cd826d0bf173ab8ebc74dfa2ebd6c52f13c393fdd9e53e4c2937068f6285125f"
           }
+        },
+        {
+          "id": "EVD-0905",
+          "kind": "log",
+          "locator": "target/i675-logs/run-c1.log, run-c2.log, run-c3.log (last line of each)",
+          "summary": "Each of the three full runs on 7e0a933 ends with \"89 passed, 0 failed\" (read directly by the auditor; run-c3 had finished). I did not run the suite myself.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T09:35:00.621760073Z",
+          "seal": {
+            "by": "server",
+            "mac": "07467dbf6195a1239e0ffab394e1ed18b5304215b34966b687a80d4cf2f941e3"
+          }
         }
       ],
       "verdicts": [
@@ -54397,18 +54597,31 @@
             "by": "server",
             "mac": "ed575d2de82574b9162c437a4e2da48d574891d41bf8117c41f69b06abecca68"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Three logs each end \"89 passed, 0 failed\".",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0905"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.878994212Z",
+          "seal": {
+            "by": "server",
+            "mac": "0e8e261fb4587d0459da15e5c726da5576c876799e664be6f2ddd19368eecf6c"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T08:59:22.319559462Z",
+      "updated_at": "2026-11-23T09:35:16.878994212Z",
       "seal": {
         "by": "server",
-        "mac": "ce232a2b0032bae95bb893c4ec792fdeb8f74737af367d9017d6dcb2a96ae229"
+        "mac": "58dc12a4bd4aa59350f418c185be0584507e65890db0e31a7a348fa42e36b869"
       }
     },
     {
       "id": "CLM-0700",
-      "statement": "Among process-table commands (ps, pgrep) in tools/agentic/*.sh, apart from the watchdog's ps scans the only unbounded one is pgrep -c -g in lib.sh:56. Local reads such as readlink and getconf in watchdog.sh were not part of the survey.",
+      "statement": "Among process-table commands (ps, pgrep) in tools/agentic/*.sh, the watchdog's are all supervised by bounded_capture and the only unbounded one is pgrep -c -g in lib.sh:56.",
       "kind": "functional",
       "level": "artifact",
       "integrity_level": 2,
@@ -54471,6 +54684,28 @@
             "by": "server",
             "mac": "dbd2c68d4b5777db173349be8f799b2a92e2e55c26c9198038c9d0d658e907e7"
           }
+        },
+        {
+          "id": "EVD-0903",
+          "kind": "analysis",
+          "locator": "git grep -nE '\\bpgrep\\b|\\bps\\b' tools/agentic/*.sh at 7e0a933",
+          "summary": "Every ps in watchdog.sh is an argument to bounded_capture (276-278, 293, 322); lib.sh:56 pgrep -c -g is the process-table command outside it. See anchor for lib.sh:56.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "\\bpgrep\\b",
+              "scope": [
+                "tools/agentic"
+              ],
+              "hits": 1,
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:34:10.765730757Z",
+          "seal": {
+            "by": "server",
+            "mac": "48bf737f52154224eac83c5b3ab60870e12052e8a63f60548ebba6b093693315"
+          }
         }
       ],
       "verdicts": [
@@ -54499,18 +54734,31 @@
             "by": "server",
             "mac": "82abdfb490578848406bb46e0f371e4121f40e20f4c55e13cf679bc8c2d63624"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Only lib.sh:56 pgrep is unbounded among ps/pgrep uses.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0903"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.922925580Z",
+          "seal": {
+            "by": "server",
+            "mac": "fdc9450335167162e2d06f171d4baee1b60db58dd922a32bbbb21e020c9d1875"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T08:45:12.482326250Z",
+      "updated_at": "2026-11-23T09:35:16.922925580Z",
       "seal": {
         "by": "server",
-        "mac": "87d7846794f9a652d77da2b3c44a86a92788ef323bc7d6e7135b93625b95323f"
+        "mac": "9a9754c9f8c1368ca0ef1208302b1b030bb56dd5cf91b1b686f87c4158fe753b"
       }
     },
     {
       "id": "CLM-0701",
-      "statement": "tools/agentic/README.md documents that each watchdog ps scan is bounded by AGENTIC_CALL_TIMEOUT and a failed scan skips the pass with a warning, never an alarm.",
+      "statement": "tools/agentic/README.md documents which watchdog calls are bounded by AGENTIC_CALL_TIMEOUT (ps -eo scans, ps -p re-reads, the tail cmdline read, git rev-parse, git worktree list, git reflog, find), that a timeout warns and is never an alarm, and what is not bounded.",
       "kind": "documentation",
       "level": "artifact",
       "integrity_level": 1,
@@ -54550,6 +54798,28 @@
             "by": "server",
             "mac": "4efe608060eb82b3dde8c9d46954df5673bddda0c4e31c1d2e92b1f2d1ee018c"
           }
+        },
+        {
+          "id": "EVD-0904",
+          "kind": "inspection",
+          "locator": "tools/agentic/README.md:13 and :54 at 7e0a933",
+          "summary": "Line 13 lists the bounded calls (three ps -eo scans, ps -p re-reads, tail command-line read, git rev-parse, worktree list, reflog, find), says AGENTIC_CALL_TIMEOUT bounds them, a timeout warns and is never an alarm (per-call skip rules, --once exits 0, rev-parse exits 1), and lists what is not bounded in the same set as the watchdog header. Line 54 names supervised watchdog calls under AGENTIC_CALL_TIMEOUT.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/README.md",
+              "lines": {
+                "start": 13,
+                "end": 13
+              },
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:34:10.803867354Z",
+          "seal": {
+            "by": "server",
+            "mac": "ab069e44121ef11e94056cb808723a475d202162e8cf68dc7a026c1e8cc351ab"
+          }
         }
       ],
       "verdicts": [
@@ -54565,13 +54835,99 @@
             "by": "server",
             "mac": "85ef7a390096dab13dad9d661d47e23657adcf7baddfefd1d4ea1a1cbaac382e"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "README line 13 and 54 cover the bounded calls, warn-not-alarm and the unbounded list.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0904"
+          ],
+          "recorded_at": "2026-11-23T09:35:16.970427472Z",
+          "seal": {
+            "by": "server",
+            "mac": "597a4a7271dbaa53d610eb32dac2ae2638c5916306a11cee627d7e1127e30de6"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T08:38:00.107906865Z",
+      "updated_at": "2026-11-23T09:35:16.970427472Z",
       "seal": {
         "by": "server",
-        "mac": "56955a318f98f5af8a3916073245d4559e14b990efcb7d0aa2b1c1f1139a2853"
+        "mac": "bc8c99eb1f74fe6888dec449ff572a527666b7fe9301eb5fa1e46a4235864bbb"
+      }
+    },
+    {
+      "id": "CLM-0702",
+      "statement": "The watchdog.sh header names exactly what it leaves unsupervised, and that list is complete: every external command or /proc read in watchdog.sh not run through bounded_capture is one of bash's reads of /proc/<pid>/comm, /proc/<pid>/stat and /proc/uptime, readlink of /proc/<pid>/cwd and /proc/<pid>/fd/0, dirname and getconf at start-up, mktemp, date, sleep, rm, sed and head on expectation files, or grep, sed, awk, sort and tail on captured text.",
+      "kind": "documentation",
+      "level": "component",
+      "verification_method": "inspection",
+      "source": "Brief for the PR #947 round-3 takeover: state the exact remaining limit in the header, README and PR",
+      "source_anchor": {
+        "path": "tools/agentic/watchdog.sh",
+        "lines": {
+          "start": 56,
+          "end": 62
+        },
+        "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+      },
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/watchdog.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0900",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh whole file at 7e0a933, plus lib.sh agentic_call_budget/now/uptime/expect_field",
+          "summary": "Enumerated every external command, $(...), process substitution, pipe and /proc read. Inside bounded_capture: git (78,247,266), find (120), ps (276-278,293,322), tr (313), and its setsid launcher (163). Outside, each is in the header list (56-62): dirname (69), getconf (92), mktemp (155), date (330, and lib agentic_now), sleep (167,280,335 etc.), rm (156,196,201,230), sed|head on expectation files (lib agentic_expect_field, 225-227), sed on captured text (268), sort|tail (122), grep (221,300-301), awk (327), readlink of /proc/pid/cwd (220,284,307) and fd/0 (309), bash reads of /proc/pid/comm (297), /proc/pid/stat (318), /proc/uptime (lib agentic_uptime 270). agentic_call_budget runs only agentic_now. Builtins (kill, wait, disown, [ -d/-f ], $(<tempfile), cd) are not external commands; the filesystem-hang caveat sentence covers the stat and temp-file reads. Nothing missing, nothing extra in the list. Test-only AGENTIC_NOW_CMD hook in lib is unlisted but is not part of the watchdog's own calls. Minor: line 61 of the header is over-long (cosmetic).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 56,
+                "end": 62
+              },
+              "commit": "7e0a93390d68701a8d11fbd36ed5c8b9cca5ad14"
+            }
+          },
+          "recorded_at": "2026-11-23T09:34:10.642829094Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa75c8c37c1bdc130914f06fb38cc4831afef17a19bd6b3183611473f597cd92"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Independent enumeration found every unsupervised command and /proc read in the header list; none missing.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0900"
+          ],
+          "recorded_at": "2026-11-23T09:35:17.015409994Z",
+          "seal": {
+            "by": "server",
+            "mac": "668b97af54fe50d2bcb02ea6a29549c81522e5445e75b8af1b8079324d94ea18"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T09:32:28.536164062Z",
+      "updated_at": "2026-11-23T09:35:17.015409994Z",
+      "seal": {
+        "by": "server",
+        "mac": "d2ea93b32bd4a5b46ccc34fc97655070f44f983f5c8c41873d686b6e93fe64ec"
       }
     }
   ]
