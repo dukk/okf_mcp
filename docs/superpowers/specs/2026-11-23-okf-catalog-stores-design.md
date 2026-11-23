@@ -112,7 +112,9 @@ a second store.
     - Create: the registry row is inserted with `provisioned_at` NULL
       (allocating the id); the store's state row and starter files are
       written; `provisioned_at` is set. Until then the catalog is not
-      found.
+      found. Create and the job that recovers a half-finished create hold
+      the catalog's lock on the store, so a stalled create and the
+      recovery cannot both act on one catalog.
     - Delete: the registry row is marked deleted (the catalog disappears at
       once); a job deletes its store data, then the row.
     - Deleting a key, user or team queues cleanup on each store holding
@@ -251,15 +253,24 @@ Three releases, each deployable alone:
 3. **The split.** One account migration moves the catalog tables into
    schema `catalog` with `ALTER TABLE ... SET SCHEMA` (metadata only),
    creates `catalog.catalog_state` from `catalogs.generation`, drops the
-   foreign keys that cross the line, creates `catalog.audit_entries`, and
-   moves the existing catalog-event entries into it. The server then
+   foreign keys that cross the line, replaces the maintenance audit
+   triggers (they read account tables) with a write from Rust, and creates
+   `catalog.audit_entries` with its own append-only guard. Catalog-event
+   entries written before the split stay in the account table: the
+   append-only guard forbids deleting recent ones, and the merged view
+   shows each entry once either way. The server then
    **adopts** the moved tables: when `catalog` holds the tables but
    `catalog._sqlx_migrations` is empty, it records the baseline as applied
    (with the checksum embedded in the binary) instead of running it, once,
    under the migration lock.
 
 Releases 2 and 3 are not reversible by migration; each deploy is preceded
-by a database snapshot. Self-hosted installs take the same path on
+by a database snapshot. Releases 1 and 2 roll out replica by replica.
+Release 3 does not: older replicas query tables that it moves, so it
+deploys in a short maintenance window (snapshot, stop the servers,
+migrate, start the new release). Stores with their own host can be added
+only once all three releases have landed, so no release ships a partial
+path to a separate database. Self-hosted installs take the same path on
 upgrade.
 
 ## Privacy and security

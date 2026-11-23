@@ -11,7 +11,7 @@
 - **`App`** holds `accounts: AccountDb` and `stores: Stores` instead of `pool: PgPool`. `App::pool()` goes away at the end of release 1.
 - **Store-layer functions** take `&AccountDb` or `&CatalogDb` at their entry points (or a transaction begun on one). Internal helpers keep `&mut PgConnection`.
 - **Schemas:** account tables stay in `public`; catalog tables move to `catalog`. Every account pool runs with `search_path = public`, every store pool with `search_path = catalog`, so a query sent to the wrong database fails in tests even when both live in one database.
-- **Two migration folders:** `migrations/accounts/` (today's 0001-0032 and the new account migrations) and `migrations/catalog/` (a baseline for new stores, then catalog migrations).
+- **Two migration folders:** `migrations/accounts/` (today's 0001-0035 and the new account migrations) and `migrations/catalog/` (a baseline for new stores, then catalog migrations).
 
 **Tech Stack:** Rust 2021 with the existing axum 0.8 / sqlx 0.9 / rmcp / tokio / apalis 1.1 stack. New dependencies (Task 9): `aws-sdk-secretsmanager`, and RDS IAM token signing (`aws-sdk-rds`'s auth-token support, or `aws-sigv4` directly; verify which at task start), both on the `aws-config` already in the tree.
 
@@ -61,6 +61,9 @@
   - entries are written by `audit::record(conn, actor, entry, now)` (`src/store/audit.rs:413`) inside the caller's transaction;
   - catalog-store actions are recorded in `src/store/publish.rs:289` (published), `src/store/import.rs:301` (imported), `src/store/repair.rs:159` (repaired) and `src/write.rs:130` (`apply_audited`, reverted);
   - `audit_person()` (`migrations/0012_audit.sql`) reads `users` `FOR KEY SHARE`.
+- **Database triggers that the split touches:**
+  - `audit_entries_append_only` and `audit_entries_no_truncate` (`migrations/0012_audit.sql:163-184`) refuse any UPDATE, and any DELETE of an entry inside the retention period. The period is read from `server_settings`.
+  - `maintenance_runs_audit_end` and `maintenance_runs_audit_empty` (`migrations/0017_maintenance_audit.sql:27-63`) run `audit_maintenance_run()`. It reads `audit_credentials`, `api_keys`, `users`, `audit_teams` and `catalogs`, and writes the account `audit_entries`. `SET SCHEMA` keeps triggers attached, so this one would break as soon as the store pool's `search_path` is `catalog`.
 - **Unlock tallies** run as their own statement on the pool (`src/app.rs:424`, `src/store/unlocks.rs:845`), not in a catalog transaction.
 - **Cache signalling:** `src/invalidate.rs` listens on one channel on the one database. `CatalogDirectory` (`src/cache/directory.rs`) caches catalog rows by name; `App::catalog_row` (`src/app.rs:1067`) and `App::catalog_state` (`src/app.rs:1087`) are the entry points routes and tools use.
 - **Housekeeping tasks** (`src/housekeeping.rs:117`): `PruneChangesets`, `PruneOauth`, `PruneAudit`, `PruneWorkers`, `ClusterStats`, each scheduled once per slot with idempotency key `"<task>:<slot>"`.
@@ -77,9 +80,17 @@ The spec already carries these: P1 is its Decision 5, P2 Decision 7, P3 Decision
 - **P5: catalog audit outlives the catalog.** Deleting a catalog's store data (Task 13) leaves its `catalog.audit_entries` rows; they are pruned by `audit_retention_days`, per store, like account audit.
 - **P6: a deleted catalog's name stays reserved until its store data is gone.** `catalogs.deleted_at` marks the registry row; the cleanup job removes the row after the store side is deleted, and only then can the name be reused.
 
+- **P7 (from review of PR #956): catalog-event entries written before the split stay in the account audit table.** The append-only trigger forbids deleting recent entries, and suspending it would weaken the guarantee it exists for. The merged view reads both tables, so each entry still appears exactly once. Only entries written after the split go to `catalog.audit_entries`.
+- **P8 (from review of PR #956): separate stores stay disabled until the whole epic has landed.** Until Task 20, adding a store with location `host` is refused, so `main` (inside the account database) is the only store that can hold catalogs. Each release can therefore be deployed without a half-built path to a separate database. Task 20 lifts the restriction once the end-to-end test passes.
+- **P9 (from review of PR #956): create and recovery coordinate through the catalog's lock on the store.** Both take `pg_advisory_xact_lock(CATALOG_LOCK_NAMESPACE, id)` on the store, the publish lock that already exists.
+  - Create's store transaction, holding it, first checks on the account database that the registry row still exists and is unprovisioned. It aborts if not.
+  - Recovery, holding it, checks the store side. If present, it sets `provisioned_at`. If absent, it deletes the registry row and commits that before releasing the lock.
+  - So a stalled create either finishes first, and recovery sees its data, or waits behind recovery, then finds its row gone and writes nothing. There's no time threshold to get wrong.
+- **P10 (from review of PR #956): release 3 deploys in a maintenance window, not as a rolling upgrade.** Release-2 replicas query tables in `public` and read `catalogs.generation`, and migrations 0037-0038 remove both. Procedure: snapshot the database; scale `serve` to zero; run `okf-mcp migrate` (account migrations, then adoption); start the new release. Task 19 writes it into `docs/operations.md`, and Task 20's smoke test follows it.
+
 ## Scope
 
-In: Decisions 1-15 of the spec, P1-P6, releases 1-3 of the spec's migration, the tests of its Testing section, and its Docs section.
+In: Decisions 1-18 of the spec, P1-P10, releases 1-3 of the spec's migration, the tests of its Testing section, and its Docs section.
 
 Out (spec non-goals): moving a catalog between stores; revision storage changes (#954); dedicated cells; per-store connection budgets; store states.
 
@@ -95,8 +106,8 @@ Out (spec non-goals): moving a catalog between stores; revision storage changes 
 | `src/app.rs` | modify | `accounts` and `stores` replace `pool` |
 | `src/db.rs` | modify | two migrators, adoption, `migrate_store` |
 | `migrations/` -> `migrations/accounts/` | move | today's migrations, unchanged |
-| `migrations/accounts/0033_stores.sql` | new | Task 7 |
-| `migrations/accounts/0034_catalog_schema.sql` | new | Task 11 |
+| `migrations/accounts/0036_stores.sql` | new | Task 7 |
+| `migrations/accounts/0037_catalog_schema.sql` | new | Task 11 |
 | `migrations/catalog/0001_baseline.sql` | new | Task 14 |
 | `src/store/*.rs`, `src/store/maintenance/*.rs` | modify | entry points typed by side |
 | `src/catalog.rs`, `src/overlay.rs`, `src/write.rs` | modify | catalog side |
@@ -125,7 +136,7 @@ pub struct StoreName(String);
 impl StoreName {
     pub fn parse(name: &str) -> Result<Self, OkfError>;
     pub fn as_str(&self) -> &str;
-    /// `main`, the store every existing catalog is on after migration 0033.
+    /// `main`, the store every existing catalog is on after migration 0036.
     pub fn main() -> Self;
 }
 
@@ -186,11 +197,11 @@ Config keys (`src/config.rs`): `store_max_connections` (u32, default 8, must be 
 ```
 Release 1:  1 -> 2 -> 3 -> 4 -> 5 -> 6
 Release 2:  6 -> 7 -> 8 -> 9, 10 (parallel) -> 10b
-Release 3:  10b -> 11 -> 12 -> 13 -> 14 -> 15
-Then:       15 -> 16, 17, 18 (parallel) -> 19 -> 20
+Release 3:  10b -> 11 -> 12 -> 13 -> 14 -> 15 -> 17
+Then:       17 -> 16, 18 (parallel) -> 19 -> 20 (lifts P8)
 ```
 
-Each release ends deployable: after Task 6 (types only), after Task 10b (registry and placement), after Task 15 (the split).
+Each release ends deployable: after Task 6 (types only, rolling), after Task 10b (registry and placement, rolling), after Task 17 (the split, in a maintenance window: P10). Separate stores become usable only after Task 20 (P8).
 
 ---
 
@@ -246,10 +257,11 @@ Each release ends deployable: after Task 6 (types only), after Task 10b (registr
 
 ## Release 2: registry, stores and placement
 
-### Task 7: migration 0033 (stores, placement, registry columns) and the folder move
+### Task 7: migration 0036 (stores, placement, registry columns) and the folder move
 
-**Files:** move `migrations/*.sql` to `migrations/accounts/`; `src/db.rs` (`migrate!("./migrations/accounts")`), `build.rs` if it names the folder, `tests/support/pg.rs` (template); create `migrations/accounts/0033_stores.sql`.
+**Files:** move `migrations/*.sql` to `migrations/accounts/`; `src/db.rs` (`migrate!("./migrations/accounts")`), `build.rs` if it names the folder, `tests/support/pg.rs` (template); create `migrations/accounts/0036_stores.sql`.
 
+- [ ] `main` already holds migrations up to 0035 (the feedback indexes). Number the new ones from the next free version when the task starts (0036, 0037, 0038 below, if nothing else has landed), and correct every reference in this plan.
 - [ ] Moving the files changes nothing sqlx checks (version and checksum). Confirm with a test that a database migrated before the move reports no pending or unknown migration after it: `moving_the_migrations_folder_keeps_their_history`.
 - [ ] Migration:
 
@@ -293,7 +305,7 @@ CREATE INDEX catalogs_unprovisioned ON catalogs (created_at) WHERE provisioned_a
 ```
 
 - [ ] The same migration widens `audit_entries.target_kind` to include `store` and adds a `WHEN 'store'` arm to `audit_entries_target_shape` (`target_name IS NOT NULL`, the other target columns NULL), for Task 10's actions. Copy the constraint's current text from the latest migration that redefines it, so nothing else changes.
-- [ ] Tests: `migration_0033_puts_every_catalog_on_main_provisioned`; `stores_refuses_a_host_row_without_a_credential_reference`; `stores_refuses_an_account_database_row_with_a_host`.
+- [ ] Tests: `migration_0036_puts_every_catalog_on_main_provisioned`; `stores_refuses_a_host_row_without_a_credential_reference`; `stores_refuses_an_account_database_row_with_a_host`.
 
 ### Task 8: `Stores`, the registry in code
 
@@ -328,25 +340,26 @@ CREATE INDEX catalogs_unprovisioned ON catalogs (created_at) WHERE provisioned_a
   - `PUT /api/v1/settings/default_store`;
   - `PUT` and `DELETE /api/v1/teams/{team}/store` (pin and unpin).
 
-  The CLI has the same commands under `okf-mcp stores`. Adding a store first checks it can connect, and refuses otherwise. A store that is the default or pinned by a team cannot be removed, and no removal endpoint is built (YAGNI).
-- [ ] New audit actions: `store.added`, `setting.default_store_changed`, `team.store_pinned`, `team.store_unpinned`. `target_kind` gains `store`, with `target_name` set to the store's name; migration 0033 (Task 7) widens the checks for it.
-- [ ] Tests: `a_new_catalog_lands_on_the_default_store`; `a_team_pin_wins_over_the_default`; `changing_the_default_moves_new_catalogs_only`; `adding_an_unreachable_store_is_refused`; `store_admin_endpoints_refuse_non_admin_credentials`; `every_store_change_is_audited`.
+  The CLI has the same commands under `okf-mcp stores`. Adding a store first checks it can connect, and refuses otherwise. Until Task 20, adding a store with location `host` is also refused with a message saying separate stores aren't enabled yet (P8). The check is one function, so Task 20 can remove it in one place. A store that is the default or pinned by a team cannot be removed, and no removal endpoint is built (YAGNI).
+- [ ] New audit actions: `store.added`, `setting.default_store_changed`, `team.store_pinned`, `team.store_unpinned`. `target_kind` gains `store`, with `target_name` set to the store's name; migration 0036 (Task 7) widens the checks for it.
+- [ ] Tests: `a_new_catalog_lands_on_the_default_store`; `a_team_pin_wins_over_the_default`; `changing_the_default_moves_new_catalogs_only`; `adding_an_unreachable_store_is_refused`; `adding_a_host_store_is_refused_until_enabled`; `store_admin_endpoints_refuse_non_admin_credentials`; `every_store_change_is_audited`.
 
 ### Task 10b: creating a catalog in two steps
 
 **Files:** `src/store/catalogs.rs` (create), `src/housekeeping.rs` (new task `ProvisionCatalogs`).
 
-- [ ] Create inserts the registry row with `store` from placement and `provisioned_at` NULL, and commits. It then writes the starter files and catalog state on the store, and sets `provisioned_at`. Directory lookups and listings treat a row with `provisioned_at` NULL as absent.
-- [ ] `ProvisionCatalogs` (every minute) finds rows unprovisioned for more than 2 minutes. If the store side exists, it sets `provisioned_at`. If not, it deletes the registry row and records `catalog.created` as failed in the audit details. Two-minute grace so it never races a create in progress.
-- [ ] Tests: `a_half_created_catalog_is_not_visible`; `provisioning_job_finishes_a_catalog_whose_store_side_exists`; `provisioning_job_removes_a_catalog_whose_store_side_never_happened`; `provisioning_job_leaves_a_create_in_progress_alone`.
+- [ ] Create inserts the registry row with `store` from placement and `provisioned_at` NULL, and commits. Then it runs the store transaction under P9's protocol: take the catalog's lock on the store, check the registry row on the account database, write the store side, commit. Then it sets `provisioned_at`. Directory lookups and listings treat a row with `provisioned_at` NULL as absent.
+- [ ] **What "the store side" is depends on the release.** In release 2 it is the starter files (`documents` and `revisions` rows), since `catalog_state` doesn't exist yet and the only store is `main` (P8). From Task 11 on, it also includes the `catalog.catalog_state` row; Task 11 updates create and recovery to write and check it. Write the existence check as one function, `store_side_exists(catalog_db, id)`, so Task 11 changes one place.
+- [ ] `ProvisionCatalogs` runs every minute over unprovisioned rows older than one minute (an efficiency filter only; safety comes from P9's lock, not the age). For each row it follows P9's recovery half, and records a failed create in the audit details when it removes a row.
+- [ ] Tests: `a_half_created_catalog_is_not_visible`; `provisioning_job_finishes_a_catalog_whose_store_side_exists`; `provisioning_job_removes_a_catalog_whose_store_side_never_happened`; `a_create_stalled_past_the_interval_is_not_removed_while_it_holds_the_lock` (hold a create's store transaction open with a barrier, run recovery concurrently, release, and assert one consistent outcome); `a_create_that_waited_behind_recovery_writes_nothing` (recovery deletes the row first, and the create then aborts with no store rows).
 
-Release 2 is deployable here: every catalog is still on `main`.
+Release 2 is deployable here (a rolling upgrade is fine): every catalog is still on `main`, and separate stores are refused (P8).
 
 ## Release 3: the split
 
-### Task 11: migration 0034 (schema `catalog`, `catalog_state`, foreign keys) and the lock changes
+### Task 11: migration 0037 (schema `catalog`, `catalog_state`, foreign keys) and the lock changes
 
-**Files:** create `migrations/accounts/0034_catalog_schema.sql`; modify `src/store/publish.rs`, `src/store/repair.rs`, `src/catalog.rs`, `src/store/changesets.rs`, `src/store/catalogs.rs`, `src/stores/registry.rs` (search_path to `catalog`).
+**Files:** create `migrations/accounts/0037_catalog_schema.sql`; modify `src/store/publish.rs`, `src/store/repair.rs`, `src/catalog.rs`, `src/store/changesets.rs`, `src/store/catalogs.rs`, `src/stores/registry.rs` (search_path to `catalog`).
 
 - [ ] Migration (constraint names below are Postgres's defaults; confirm with `\d` on a migrated database at task start and correct here):
 
@@ -387,6 +400,14 @@ ALTER TABLE catalog.changesets DROP CONSTRAINT changesets_catalog_id_fkey,
 ALTER TABLE catalog.changesets DROP CONSTRAINT changesets_key_id_fkey;
 ALTER TABLE catalog.maintenance_runs DROP CONSTRAINT maintenance_runs_key_id_fkey;
 
+-- The maintenance audit triggers read and write account tables, so they
+-- cannot follow maintenance_runs into the store (review of PR #956).
+-- Task 11 replaces them with a write from Rust; Task 12 moves that write
+-- into the store transaction.
+DROP TRIGGER maintenance_runs_audit_end ON catalog.maintenance_runs;
+DROP TRIGGER maintenance_runs_audit_empty ON catalog.maintenance_runs;
+DROP FUNCTION audit_maintenance_run();
+
 ALTER TABLE catalogs DROP COLUMN generation;
 -- Deleted but not yet cleaned up (P6).
 ALTER TABLE catalogs ADD COLUMN deleted_at timestamptz;
@@ -397,14 +418,16 @@ ALTER TABLE catalogs ADD COLUMN deleted_at timestamptz;
   - `generation` is read and bumped on `catalog.catalog_state`;
   - `changesets::lock_catalog` takes `FOR KEY SHARE` on `catalog_state`;
   - publish's advisory lock is unchanged, since catalog ids are unique;
-  - the store pool's `search_path` becomes `catalog`.
+  - the store pool's `search_path` becomes `catalog`;
+  - create and `ProvisionCatalogs` write and check `catalog_state` (Task 10b's `store_side_exists`);
+  - the two maintenance audit paths the dropped triggers covered (a run reaching an end state, and a run inserted already ended with nothing to do) record `catalog.maintenance_run` from Rust. They resolve the credential and team ids on the account database first, then write the entry with the same details the trigger wrote (`findings` count, outcome). In this task the entry goes to the account `audit_entries` in its own transaction; Task 12 moves it into the store transaction. Tasks 11-17 deploy together (P10), so the interim state never reaches production.
 
   Remove every "crosses" item from Tasks 2-4 that this covers, and mark it done in the inventory.
-- [ ] Tests: `publish_bumps_generation_in_catalog_state`; `a_store_pool_cannot_see_account_tables` (a query for `users` on a store pool fails); `an_account_pool_cannot_see_catalog_tables`.
+- [ ] Tests: `maintenance_run_end_is_audited_after_the_trigger_is_gone`; `an_empty_maintenance_run_is_audited_after_the_trigger_is_gone`; `publish_bumps_generation_in_catalog_state`; `a_store_pool_cannot_see_account_tables` (a query for `users` on a store pool fails); `an_account_pool_cannot_see_catalog_tables`.
 
 ### Task 12: catalog audit on the store
 
-**Files:** create `migrations/accounts/0035_catalog_audit.sql`; modify `src/store/audit.rs`, `src/write.rs`, `src/store/publish.rs`, `src/store/import.rs`, `src/store/repair.rs`, `src/http/api/audit.rs`, `src/http/api/audit/cursor.rs`, `src/cli/audit.rs`.
+**Files:** create `migrations/accounts/0038_catalog_audit.sql`; modify `src/store/audit.rs`, `src/write.rs`, `src/store/publish.rs`, `src/store/import.rs`, `src/store/repair.rs`, `src/http/api/audit.rs`, `src/http/api/audit/cursor.rs`, `src/cli/audit.rs`.
 
 - [ ] Migration:
 
@@ -431,28 +454,38 @@ CREATE TABLE catalog.audit_entries (
 CREATE INDEX catalog_audit_entries_at ON catalog.audit_entries (at);
 CREATE INDEX catalog_audit_entries_teams ON catalog.audit_entries USING gin (teams);
 
--- Existing catalog-event entries move across (P4's actions).
-INSERT INTO catalog.audit_entries (at, catalog_id, action, source, actor_credential_ref,
-        actor_person_id, actor_label, actor_operator, client_ip, target_name, teams, details)
-    SELECT e.at, c.id, e.action, e.source, e.actor_credential_ref, e.actor_person_id,
-           e.actor_label, e.actor_operator, e.client_ip, e.target_name, e.teams, e.details
-    FROM audit_entries e JOIN catalogs c ON c.name = e.target_name
-    WHERE e.target_kind = 'catalog'
-      AND e.action IN ('catalog.published', 'catalog.imported', 'catalog.repaired',
-                       'catalog.reverted', 'catalog.changeset_discarded',
-                       'catalog.maintenance_run');
-DELETE FROM audit_entries
-    WHERE target_kind = 'catalog'
-      AND action IN ('catalog.published', 'catalog.imported', 'catalog.repaired',
-                     'catalog.reverted', 'catalog.changeset_discarded',
-                     'catalog.maintenance_run')
-      AND target_name IN (SELECT name FROM catalogs);
+-- Append-only, as the account table is. A store has no server_settings, so
+-- the prune job passes the retention period in a transaction-local setting
+-- (SET LOCAL okf.audit_retention_days); without it, 400 days. Never less
+-- than 30, whatever is passed.
+CREATE FUNCTION catalog.audit_entries_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    retention integer;
+BEGIN
+    IF TG_OP <> 'DELETE' THEN
+        RAISE EXCEPTION 'audit entries are append-only' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    retention := GREATEST(30, COALESCE(
+        NULLIF(current_setting('okf.audit_retention_days', true), '')::integer, 400));
+    IF OLD.at >= now() - make_interval(days => retention) THEN
+        RAISE EXCEPTION 'audit entry % is inside the retention period', OLD.id
+            USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN OLD;
+END
+$$;
+CREATE TRIGGER audit_entries_append_only BEFORE UPDATE OR DELETE ON catalog.audit_entries
+    FOR EACH ROW EXECUTE FUNCTION catalog.audit_entries_append_only();
+CREATE TRIGGER audit_entries_no_truncate BEFORE TRUNCATE ON catalog.audit_entries
+    FOR EACH STATEMENT EXECUTE FUNCTION catalog.audit_entries_append_only();
+
+-- Entries written before the split stay in the account table (P7).
 ```
 
-  Confirm at task start whether a catalog-event entry can have rows in `audit_access_counts` or other child tables. If one can, move or keep those too, and correct this SQL. Entries for catalogs already deleted stay in the account table; the view still shows them.
-- [ ] Write path: before a catalog transaction begins, the caller resolves the actor's `audit_people`, `audit_credentials` and `audit_teams` ids on the account database (today's `audit::lock_people` / `audit_person()` work, in its own account transaction). It passes them in; the catalog transaction inserts into `catalog.audit_entries`. `audit::record` gains a sibling `audit::record_catalog(conn, &ResolvedActor, &CatalogEntry, now)`. The P4 write sites switch to it.
+  Entries written before the split are not moved (P7). The view reads both tables, so they still appear, exactly once.
+- [ ] Write path: before a catalog transaction begins, the caller resolves the actor's `audit_people`, `audit_credentials` and `audit_teams` ids on the account database (today's `audit::lock_people` / `audit_person()` work, in its own account transaction). It passes them in; the catalog transaction inserts into `catalog.audit_entries`. `audit::record` gains a sibling `audit::record_catalog(conn, &ResolvedActor, &CatalogEntry, now)`. The P4 write sites switch to it, including Task 11's maintenance-run write, which now runs in the store transaction that ends the run.
 - [ ] Read path: the owner and admin views query the account database and each store holding the viewer's catalogs, concurrently, each with the same filter and limit. They merge by `(at, store, id)` descending. The cursor encodes `(at, store, id)`, with the account database as store `""`, and stays signed and opaque as today. Retention pruning covers both tables (Task 16).
-- [ ] Tests: `a_publish_writes_its_audit_entry_on_the_store`; `a_failed_publish_writes_no_audit_entry`; `migrated_catalog_entries_appear_once_in_the_view`; `audit_view_pages_across_two_stores_and_accounts_without_gaps_or_repeats`; `forgetting_a_person_clears_their_name_in_store_entries_too` (the view resolves names through the account database).
+- [ ] Tests: `a_publish_writes_its_audit_entry_on_the_store`; `a_failed_publish_writes_no_audit_entry`; `entries_from_before_the_split_appear_once_in_the_view`; `store_audit_refuses_update_and_recent_delete`; `store_audit_prune_honours_the_passed_retention_and_its_floor`; `audit_view_pages_across_two_stores_and_accounts_without_gaps_or_repeats`; `forgetting_a_person_clears_their_name_in_store_entries_too` (the view resolves names through the account database).
 
 ### Task 13: deletion in two steps, and cleanup on every store
 
@@ -470,7 +503,7 @@ DELETE FROM audit_entries
 **Files:** create `migrations/catalog/0001_baseline.sql`; modify `src/db.rs`, `src/stores/registry.rs`, `src/cli/stores.rs`, `tests/support/pg.rs`.
 
 - [ ] `CATALOG_MIGRATOR` is `migrate!("./migrations/catalog")` with its history table set to `catalog._sqlx_migrations` (`dangerous_set_table_name`). `db::migrate_store(conn)` runs it under the existing advisory lock, after creating schema `catalog` if absent.
-- [ ] The baseline is the `catalog` schema exactly as migrations 0034 and 0035 leave it: `catalog_state`, the moved tables with their indexes and constraints, and `audit_entries`. Generate it from a schema-only dump of a migrated database, then edit it into readable SQL.
+- [ ] The baseline is the `catalog` schema exactly as migrations 0037 and 0038 leave it: `catalog_state`, the moved tables with their indexes and constraints, and `audit_entries`. Generate it from a schema-only dump of a migrated database, then edit it into readable SQL.
 - [ ] Adoption: when `catalog.catalog_state` exists and `catalog._sqlx_migrations` has no rows, insert the baseline's history row (version, description, checksum from the embedded migration, `success = true`) instead of running it, in the same locked connection.
 - [ ] `Stores::get` migrates a store the first time its pool opens in this process. `okf-mcp stores migrate` migrates every store and reports each one's result.
 - [ ] Tests: `adopted_schema_equals_a_fresh_store_schema` (compares `pg_dump --schema-only --schema=catalog` of both, after removing the history table's rows, or compares the information_schema and `pg_indexes` contents); `adoption_runs_once_under_concurrent_starts`; `a_fresh_store_gets_the_baseline`; `migrate_stores_reports_an_unreachable_store_and_continues`.
@@ -483,7 +516,7 @@ DELETE FROM audit_entries
 - [ ] `gate.sh test` runs the suite once in each mode. If that doubles the gate's run time beyond its timeout, run the catalog-heavy test binaries in `separate` mode only, and record the choice here.
 - [ ] Tests: the existing suite in both modes; `isolation_a_catalog_on_store_b_writes_nothing_to_store_a`.
 
-Release 3 is deployable here.
+Release 3 is not deployable yet: Task 17 (listeners per store) completes it.
 
 ## After the split
 
@@ -491,15 +524,16 @@ Release 3 is deployable here.
 
 **Files:** `src/housekeeping.rs`.
 
-- [ ] `PruneChangesets`, the catalog half of `PruneAudit`, and the open-changeset count in `ClusterStats` run per store: one job per task, store and slot, keyed `"<task>:<store>:<slot>"`, scheduled for each store in `Stores::all()`. `ClusterStats` sums the per-store counts into `cluster_stats`. Payloads carry the store name only.
+- [ ] `PruneChangesets`, the catalog half of `PruneAudit`, and the open-changeset count in `ClusterStats` run per store: one job per task, store and slot, keyed `"<task>:<store>:<slot>"`, scheduled for each store in `Stores::all()`. `ClusterStats` sums the per-store counts into `cluster_stats`. The store's audit prune runs `SET LOCAL okf.audit_retention_days` with the account setting's value before its DELETE (Task 12's trigger). Payloads carry the store name only.
 - [ ] Tests: `per_store_housekeeping_runs_once_per_store_and_slot_across_replicas`; `one_store_failing_does_not_hold_up_the_others`; `cluster_stats_sums_open_changesets_across_stores`.
 
-### Task 17: cache signalling per store
+### Task 17: cache signalling per store (completes release 3)
 
 **Files:** `src/invalidate.rs`, `src/stores/registry.rs`.
 
 - [ ] Opening a store's pool also starts a listener on that store, so catalog invalidations sent by store transactions reach every replica. The listener stops when the pool is forgotten. A lost listening connection drops the caches for that store's catalogs only.
-- [ ] Tests: `a_publish_on_a_separate_store_reaches_the_other_replica` (two-replica harness, separate store mode); `a_lost_store_listener_drops_only_that_stores_catalogs`.
+- [ ] Release 3 deploys after this task, following P10's procedure.
+- [ ] Tests (a release gate for release 3): `a_publish_on_a_separate_store_reaches_the_other_replica` (two-replica harness, separate store mode); `a_lost_store_listener_drops_only_that_stores_catalogs`.
 
 ### Task 18: reads across stores, and `unavailable`
 
@@ -519,6 +553,7 @@ Release 3 is deployable here.
   - the default store and team pins;
   - `okf-mcp stores migrate`;
   - connection arithmetic: (1 account pool + stores opened) × replicas × pool size;
+  - the release-3 upgrade procedure (P10): snapshot, scale to zero, migrate, start;
   - what a separate store does and doesn't segregate (spec "Privacy and security").
 - [ ] Tools reference: `unavailable`, and the first-match behaviour.
 
@@ -533,7 +568,8 @@ Release 3 is deployable here.
   4. Run open, edit, publish, history, revert, search across both, export and maintenance.
   5. Assert each catalog's rows exist only on its own store.
   6. Stop store `acme`'s database; assert team B is unaffected and team A gets `StoreUnavailable`.
-- [ ] Smoke: deploy release 3 to a disposable environment built from a snapshot of a pre-split database. Check the adoption, the audit view and a publish, and record the result in the milestone changelog.
+- [ ] Smoke: deploy release 3 to a disposable environment built from a snapshot of a pre-split database. Follow P10's procedure. Check the adoption, the audit view (old and new entries) and a publish, and record the result in the milestone changelog.
+- [ ] Remove P8's restriction on `host` stores (Task 10's check) once the end-to-end test passes, and invert its test: `adding_a_host_store_is_refused_until_enabled` becomes `a_host_store_can_be_added`.
 - [ ] Milestone changelog summarising the epic.
 
 ## Self-review
@@ -552,6 +588,7 @@ Release 3 is deployable here.
   - Decision 14: Tasks 10b, 13 and 16.
   - Decision 15: Tasks 11 and 14.
   - P5 (spec 17): Tasks 12-13. P6 (spec 18): Task 13.
+  - P7: Task 12. P8: Tasks 10 and 20. P9: Task 10b. P10: Tasks 17, 19 and 20.
   - Spec testing section: Tasks 10, 10b, 12-18 and 20. Docs: Task 19.
 - **Placeholders:** the plan leaves three choices to task start, each with the decision to record: the database user's place on the row (Task 9), the IAM token refresh mechanism (Task 9), and the constraint names (Task 11). No step says "handle errors" without naming them.
 - **Names:** `AccountDb`, `CatalogDb`, `StoreName`, `Stores::{get, all, forget}`, `App::{accounts, stores, catalog_db}`, `OkfError::StoreUnavailable`, `audit::record_catalog`, and the housekeeping tasks `ProvisionCatalogs` and `CleanupStores` are used with the same spelling throughout. `App::main_store()` exists only between Tasks 1 and 8.
