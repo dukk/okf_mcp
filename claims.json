@@ -5,10 +5,10 @@
     "by": "server",
     "mac": "d6b7cc165cbc01843e32338b6291fae2d45b4923b632548395dfb41ab4250192"
   },
-  "next_evidence_seq": 896,
+  "next_evidence_seq": 897,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "4f3a3b6e7208b1ed8cc463d79e370f094d8b468f26a8575c5898c0f86dac6364"
+    "mac": "18741e3c51a6cfbe674fb421d98055a97b9c8578dc0497a91b8f5098dd9f4326"
   },
   "claims": [
     {
@@ -53948,6 +53948,28 @@
             "by": "server",
             "mac": "01e0d8dcf6c31abd7c6fe33a93a58d2409c5413a12802e15326cb21aa1a337ba"
           }
+        },
+        {
+          "id": "EVD-0896",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh: scan_ps at 9a939ad",
+          "summary": "Same behaviour as before; the INT and TERM traps are now installed right after mktemp (before ps starts) so a signal cannot leave the temp file. Three runs of tools/agentic/tests/run.sh on this code: 83 passed, 0 failed, and no watchdog-scan files left in a dedicated TMPDIR.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 111,
+                "end": 159
+              },
+              "commit": "9a939ad4262b88060cee6206354a624848dda0df"
+            }
+          },
+          "recorded_at": "2026-11-23T09:07:16.247759797Z",
+          "seal": {
+            "by": "server",
+            "mac": "b3c0a142b8a78f840843e0d77ba9939e2b1b76a7937dedab3ce0558729b8286a"
+          }
         }
       ],
       "verdicts": [
@@ -53977,13 +53999,26 @@
             "by": "server",
             "mac": "39e07d8b7fa0b05c157976e49b1ed25ff54b0783f109dbf2cbd05c53af471a0f"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "scan_ps still matches the claim after the trap hardening.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0896"
+          ],
+          "recorded_at": "2026-11-23T09:07:19.009637273Z",
+          "seal": {
+            "by": "server",
+            "mac": "3eeb9ed45f725c0d0dc223b85863bfd538b419b2de3d30b71703d73e9cba48b0"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T08:59:22.198349101Z",
+      "updated_at": "2026-11-23T09:07:19.009637273Z",
       "seal": {
         "by": "server",
-        "mac": "ef8e453a8045273d72d81bfba4260f51dcfe1517b8470377b85d78dbf518572b"
+        "mac": "9e91e17b6d72c411c275ecf6f466945d2a2c3df448225f5bd48e084484ea976d"
       }
     },
     {
