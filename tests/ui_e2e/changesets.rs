@@ -367,3 +367,42 @@ async fn a_failed_publish_keeps_the_message_and_the_changeset() {
         Some(&("agent".to_string(), "Faster".to_string()))
     );
 }
+
+/// Issue #665: the changesets list read after a Discard is sent at once but
+/// answers late, listing the second changeset; the read after the second
+/// Discard answers first and lists none. The older answer, released now,
+/// must not bring the discarded changeset back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_older_list_read_that_answers_late_never_redraws_the_changesets_table() {
+    let (server, agent, admin) = publish_server().await;
+    let (_first_client, first) = agent_edit(&server, &agent, "Alpha runs first.").await;
+    let (_second_client, second) = agent_edit(&server, &agent, "Alpha runs second.").await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/changesets");
+        ui.wait_text("#changesets-table", &first);
+        ui.wait_text("#changesets-table", &second);
+        click_handle(ui, &first);
+        ui.wait_text("#changeset-diff", "+Alpha runs first.");
+        // The read after discarding the first answers late: the server's
+        // answer still lists the second changeset.
+        ui.hold_answer("GET", "/api/v1/changesets?catalog=main", || {
+            ui.click("#changeset-discard");
+            ui.click("#confirm-ok");
+        });
+        // The second Discard's read answers first and lists nothing.
+        click_handle(ui, &second);
+        ui.wait_text("#changeset-diff", "+Alpha runs second.");
+        ui.click("#changeset-discard");
+        ui.click("#confirm-ok");
+        ui.wait_text("#changesets-table", "No open changesets");
+        // The older answer must not replace the newer table.
+        ui.release_held();
+        let table = ui.text("#changesets-table");
+        assert!(
+            table.contains("No open changesets") && !table.contains(&second),
+            "the older read redrew the changesets table: {table}"
+        );
+    })
+    .await;
+}

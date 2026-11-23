@@ -10,6 +10,7 @@ import { catalogLabel, named } from '../core/labels.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
 import { guard, once, recheck } from '../core/pending.js';
+import { latest } from '../core/latest.js';
 import { ago, when, count } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
@@ -45,10 +46,14 @@ export async function render(main) {
         result,
         table);
 
+    // Numbers the list's reads: a slower older read never draws over a
+    // newer one, and none draws once the page was left (core/latest.js).
+    const reads = latest(main);
     async function load() {
+        const current = reads();
         try {
             const listed = await api.get(`/changesets?catalog=${enc(catalog ?? '')}`);
-            table.redraw(listed.changesets);
+            if (current()) table.redraw(listed.changesets);
         } catch { /* toasted */ }
     }
     await load();

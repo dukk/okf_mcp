@@ -13,6 +13,7 @@ import { api, enc } from '../core/api.js';
 import { catalogLabel } from '../core/labels.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
+import { latest } from '../core/latest.js';
 import { count, when } from '../core/format.js';
 import { freshAccount, requireSession } from '../core/shell.js';
 import { listTable } from '../components/list-table.js';
@@ -80,7 +81,11 @@ export async function render(main) {
     let account = null;
     create.addEventListener('click', () => newKey(main, account, load));
 
+    // Numbers the list's reads: a slower older read never draws over a
+    // newer one, and none draws once the page was left (core/latest.js).
+    const reads = latest(main);
     async function load() {
+        const current = reads();
         let keys;
         let ceiling;
         try {
@@ -89,7 +94,7 @@ export async function render(main) {
             // whether the ceiling reaches anything.
             [account, { keys, ceiling }] = await Promise.all([freshAccount(), api.get('/me/keys')]);
         } catch { return; /* toasted */ }
-        if (!main.isConnected) return;
+        if (!current()) return;
         keysCeiling = ceiling ?? {};
         table.redraw(keys);
         // What `max_keys_per_user` counts: live self-issued keys.

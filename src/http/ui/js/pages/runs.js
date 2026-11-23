@@ -7,6 +7,7 @@ import { catalogLabel } from '../core/labels.js';
 import { openDrawer, closeDrawer } from '../core/drawer.js';
 import { ago, when } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
+import { latest } from '../core/latest.js';
 import { maintenancePath, refreshFindingsBadge } from './findings.js';
 import { browseHash } from '../core/router.js';
 
@@ -94,6 +95,12 @@ export async function render(main, rest) {
     let rows = [];
     let next = null;
     let loading = false;
+    // `loading` already keeps reads from overlapping (a newer read never
+    // starts while one is pending, and Load older appends to the rows drawn,
+    // so a later page must not cancel an earlier one), so no read is ever
+    // outdated by another. `latest` is used for its other half: a page that
+    // answers after the user left draws and commits nothing.
+    const reads = latest(main);
     const older = h('button', { type: 'button', id: 'runs-older', class: 'secondary', hidden: true, onclick: () => load() }, 'Load older');
     main.append(table, older);
     // Loads the first page, or the one after the committed cursor. A pending
@@ -104,8 +111,10 @@ export async function render(main, rest) {
         if (!first && !next) return;
         loading = true;
         older.hidden = true;
+        const current = reads();
         try {
             const page = await runsPage(catalog, next);
+            if (!current()) return;
             rows = rows.concat(page.items);
             next = page.next_after ?? null;
             table.redraw(rows);
