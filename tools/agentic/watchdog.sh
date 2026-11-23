@@ -40,10 +40,26 @@
 # It reports each process's pid, elapsed time, comm (the executable's name)
 # and directory, never its command line: command lines can carry credentials.
 # (Matching still reads the command line internally.)
-# Every `ps` scan is bounded like the tools' gh and git calls (AGENTIC_CALL_TIMEOUT,
-# default 60 s, #675). A scan that times out or fails skips that pass with a
-# warning on stderr (never the scan's output) and the next pass tries again; it
-# is not an alarm, and with --once it still exits 0.
+# Every external command that reads the process table, another process's
+# memory, git or the worktrees' logs runs under bounded_capture (#675): the
+# three `ps -eo` scans, the per-process `ps -p` re-reads, the `tail`
+# command-line read, `git rev-parse`, `git worktree list`, `git reflog` and
+# `find`. Each gets AGENTIC_CALL_TIMEOUT (default 60 s), then TERM, then KILL,
+# and a child that survives even KILL (an uninterruptible kernel wait) is
+# abandoned, never waited for, so none of them can freeze the watchdog. A
+# timeout warns on stderr (naming the command, never its output) and is never
+# an alarm: a timed-out or failed `ps -eo` scan skips the whole pass, a
+# timed-out re-read drops that process, a timed-out `find` or `reflog` skips
+# that expectation, and a timed-out `worktree list` leaves only the main
+# checkout for that pass; the next pass tries again, and with --once it still
+# exits 0. When the start-up `git rev-parse` fails or times out, it exits 1.
+# Remaining limit: the rest is not supervised. Those are bash's own reads of
+# /proc/<pid>/comm, /proc/<pid>/stat and /proc/uptime, `readlink` of
+# /proc/<pid>/cwd and /proc/<pid>/fd/0 (none of them reads the process's
+# memory, which is what stalls ps), `dirname` and `getconf` at start-up,
+# `mktemp`, `date`, `sleep`, `rm`, `sed` and `head` on expectation files, and
+# `grep`, `sed`, `awk`, `sort` and `tail` on text already captured. A filesystem that hangs every access (the
+# one holding $TMPDIR or git's common directory) can still block those.
 # After handling an alert, start it again. With --once it checks a single time
 # and exits 0 when nothing is over its limit.
 #
@@ -54,7 +70,16 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 source "$here/lib.sh"
 
-root=$(agentic_main_checkout)
+# The main checkout is the parent of git's common dir, which also holds the
+# expectation ledger (lib.sh: agentic_main_checkout, agentic_expect_dir). Read
+# once, through the supervisor below; without it the watchdog can't work.
+git_common=""
+start_up() {
+    bounded_capture git_common git rev-parse --path-format=absolute --git-common-dir \
+        && [ -n "$git_common" ] && return 0
+    echo "watchdog: error: could not find this repository's git directory" >&2
+    exit 1
+}
 once=0
 [ "${1:-}" = --once ] && once=1
 test_limit=${AGENTIC_WATCHDOG_TEST:-1200}
@@ -82,86 +107,107 @@ plausible() {
     [ -z "${uptime:-}" ] || [ "$1" -le "$uptime" ]
 }
 
-# Prints the newest mtime (whole seconds) of everything under $1's
-# target/i*-logs directories, or nothing when there are none.
+# Sets log_time to the newest mtime (whole seconds) of everything under $1's
+# target/i*-logs directories, or to nothing when there are none. Returns 124
+# when a find timed out, so the activity is unknown.
 newest_log_time() {
-    local dir newest=0 time
+    local dir newest=0 time times
+    log_time=""
     for dir in "$1"/target/i*-logs; do
         [ -d "$dir" ] || continue
-        time=$(agentic_bounded_call find "$dir" -printf '%T@\n' 2>/dev/null \
-            | sort -n | tail -n 1)
+        times=""
+        # A partly failed find (a file deleted meanwhile) still counts.
+        bounded_capture -q times find "$dir" -printf '%T@\n'
+        [ "$?" = 124 ] && return 124
+        time=$(sort -n <<<"$times" | tail -n 1)
         time=${time%%.*}
         case "$time" in '' | *[!0-9]*) continue ;; esac
         [ "$time" -gt "$newest" ] && newest=$time
     done
-    [ "$newest" -gt 0 ] && printf '%s\n' "$newest"
+    [ "$newest" -gt 0 ] && log_time=$newest
     return 0
 }
 
-# scan_ps <variable> <ps args...>: runs `ps` and stores its output in <variable>.
-# Unlike agentic_bounded_call this supervisor can ABANDON a child: `ps` writes to
-# a private temp file (not a pipe), runs in its own session, and is polled for
-# up to agentic_call_budget seconds. On timeout it gets TERM, then KILL after
-# $agentic_kill_after seconds, then at most 2 s more; a child that is still
-# there (a ps stuck in an uninterruptible /proc read ignores KILL) is left
-# behind, never waited for, and its temp file is deleted. So neither the child
-# nor a grandchild holding its output open can stall the watchdog (#675). A
-# `ps` that times out or fails is a skipped scan, not an alarm: it warns,
-# without any output of the scan, and returns 1.
-scan_ps() {
-    local file pid='' tick budget status=0 reason=""
-    budget=$(agentic_call_budget)
-    file=$(mktemp "${TMPDIR:-/tmp}/watchdog-scan.XXXXXX") || return 1
-    # Installed before ps starts, so a signal can't leave the temp file behind.
-    trap '[ -z "$pid" ] || kill -KILL -- "-$pid" 2>/dev/null; rm -f "$file"; trap - INT; kill -INT "$BASHPID"' INT
-    trap '[ -z "$pid" ] || kill -KILL -- "-$pid" 2>/dev/null; rm -f "$file"; trap - TERM; kill -TERM "$BASHPID"' TERM
-    if [ "$budget" -le 0 ]; then
-        reason="no time left"; status=124
+# bounded_capture [-q] [-i <file>] <variable> <cmd...>: runs cmd and stores its
+# output in <variable>; every external command a pass needs goes through it.
+# Unlike agentic_bounded_call this supervisor can ABANDON a child: cmd writes to
+# a private temp file (not a pipe), reads <file> (default /dev/null) on stdin,
+# runs in its own session, and is polled for up to agentic_call_budget seconds.
+# On timeout it gets TERM, then KILL after $agentic_kill_after seconds, then at
+# most 2 s more; a child that is still there (one stuck in an uninterruptible
+# kernel wait, such as a ps reading a /proc entry, ignores KILL) is left behind,
+# never waited for, and its temp file is deleted. So neither the child nor a
+# grandchild holding its output open can stall the watchdog (#675). A timeout
+# warns on stderr, naming only the command (never its output or arguments), and
+# returns 124. A command that fails returns its status with its output stored;
+# it warns too unless -q is given (for calls whose failure is expected, such as
+# a recheck of a process that has gone).
+bounded_capture() {
+    local bc_quiet=0 bc_in=/dev/null bc_file bc_pid='' bc_tick bc_budget bc_status=0 bc_reason=""
+    while :; do
+        case "$1" in
+            -q) bc_quiet=1; shift ;;
+            -i) bc_in=$2; shift 2 ;;
+            *) break ;;
+        esac
+    done
+    bc_budget=$(agentic_call_budget)
+    bc_file=$(mktemp "${TMPDIR:-/tmp}/watchdog-call.XXXXXX") || return 1
+    # Installed before cmd starts, so a signal can't leave the temp file behind.
+    trap '[ -z "$bc_pid" ] || kill -KILL -- "-$bc_pid" 2>/dev/null; rm -f "$bc_file"; trap - INT; kill -INT "$BASHPID"' INT
+    trap '[ -z "$bc_pid" ] || kill -KILL -- "-$bc_pid" 2>/dev/null; rm -f "$bc_file"; trap - TERM; kill -TERM "$BASHPID"' TERM
+    if [ "$bc_budget" -le 0 ]; then
+        bc_reason="had no time left"; bc_status=124
     else
-        setsid ps "${@:2}" >"$file" 2>/dev/null </dev/null &
-        pid=$!
-        for ((tick = 0; tick < budget * 10; tick++)); do
-            kill -0 "$pid" 2>/dev/null || break
+        # stderr first, so a failed <file> redirect prints nothing.
+        setsid "${@:2}" >"$bc_file" 2>/dev/null <"$bc_in" &
+        bc_pid=$!
+        for ((bc_tick = 0; bc_tick < bc_budget * 10; bc_tick++)); do
+            kill -0 "$bc_pid" 2>/dev/null || break
             sleep 0.1
         done
-        if kill -0 "$pid" 2>/dev/null; then
-            status=124; reason="timed out"
-            kill -TERM -- "-$pid" 2>/dev/null
-            for ((tick = 0; tick < agentic_kill_after * 10; tick++)); do
-                kill -0 "$pid" 2>/dev/null || break
+        if kill -0 "$bc_pid" 2>/dev/null; then
+            bc_status=124; bc_reason="timed out"
+            kill -TERM -- "-$bc_pid" 2>/dev/null
+            for ((bc_tick = 0; bc_tick < agentic_kill_after * 10; bc_tick++)); do
+                kill -0 "$bc_pid" 2>/dev/null || break
                 sleep 0.1
             done
-            if kill -0 "$pid" 2>/dev/null; then
-                kill -KILL -- "-$pid" 2>/dev/null
-                for ((tick = 0; tick < 20; tick++)); do
-                    kill -0 "$pid" 2>/dev/null || break
+            if kill -0 "$bc_pid" 2>/dev/null; then
+                kill -KILL -- "-$bc_pid" 2>/dev/null
+                for ((bc_tick = 0; bc_tick < 20; bc_tick++)); do
+                    kill -0 "$bc_pid" 2>/dev/null || break
                     sleep 0.1
                 done
             fi
-            if kill -0 "$pid" 2>/dev/null; then
+            if kill -0 "$bc_pid" 2>/dev/null; then
                 # Unreapable: stop tracking it (bash still reaps it whenever it dies).
-                disown "$pid" 2>/dev/null
-                reason="timed out, child left behind"
+                disown "$bc_pid" 2>/dev/null
+                bc_reason="timed out, child left behind"
             fi
         else
-            wait "$pid" || status=$?
-            [ "$status" -eq 0 ] || reason="failed"
+            # It has exited, so this returns at once.
+            wait "$bc_pid" || bc_status=$?
+            bc_reason="failed"
         fi
     fi
     trap - INT TERM
-    if [ "$status" -ne 0 ]; then
-        rm -f "$file"
-        echo "watchdog: warning: ps scan $reason (status $status); skipping it" >&2
-        return 1
+    if [ "$bc_status" -eq 124 ]; then
+        rm -f "$bc_file"
+        echo "watchdog: warning: $2 call $bc_reason (status 124); skipping it" >&2
+        return 124
     fi
-    printf -v "$1" '%s' "$(<"$file")"
-    rm -f "$file"
+    printf -v "$1" '%s' "$(<"$bc_file")"
+    rm -f "$bc_file"
+    if [ "$bc_status" -ne 0 ] && [ "$bc_quiet" = 0 ]; then
+        echo "watchdog: warning: $2 call $bc_reason (status $bc_status); skipping it" >&2
+    fi
+    return "$bc_status"
 }
 
 # Checks every pending expectation (expect.sh), appends alerts to $found.
 check_expectations() {
-    local dir file started label wt name now newest time idle busy cwd
-    dir=$(agentic_expect_dir) || return 0
+    local dir="$git_common/agentic-expect" file started label wt name now newest time idle busy cwd
     [ -d "$dir" ] || return 0
     # Working processes: the cwd of each cargo, rustc, just or flock, of a
     # gate.sh (a bash, so by its argument) and of a test binary.
@@ -179,7 +225,7 @@ check_expectations() {
         wt=$(agentic_expect_field "$file" path)
         label=$(agentic_expect_field "$file" label)
         started=$(agentic_expect_field "$file" start)
-        name=$(basename "$file")
+        name=${file##*/}
         if [ ! -d "$wt" ]; then
             rm -f "$file"
             echo "watchdog: dropped the expectation for $name: its worktree is gone"
@@ -192,11 +238,14 @@ check_expectations() {
         done
         [ "$busy" = 0 ] || continue
         newest=$started
-        time=$(newest_log_time "$wt")
-        [ -n "$time" ] && [ "$time" -gt "$newest" ] && newest=$time
+        # A call that timed out leaves the activity unknown: no alert this pass.
+        newest_log_time "$wt" || continue
+        [ -n "$log_time" ] && [ "$log_time" -gt "$newest" ] && newest=$log_time
         # The reflog event time (HEAD@{<epoch>}), not the commit's own date: a
         # checkout or reset to an old commit is fresh activity.
-        time=$(agentic_git -C "$wt" reflog -1 --date=unix --format=%gd HEAD 2>/dev/null)
+        time=""
+        bounded_capture -q time git -C "$wt" reflog -1 --date=unix --format=%gd HEAD
+        [ "$?" = 124 ] && continue
         time=${time#HEAD@\{}
         time=${time%\}}
         case "$time" in '' | *[!0-9]*) ;; *) [ "$time" -gt "$newest" ] && newest=$time ;; esac
@@ -206,21 +255,27 @@ check_expectations() {
     done
 }
 
+start_up
+root=${git_common%/*}
 while :; do
     # Re-read every round: worktrees come and go during an epic. The call is
-    # bounded (lib.sh: agentic_git), so a stuck git can't stall the watchdog.
+    # bounded (bounded_capture), so a stuck git can't stall the watchdog; when
+    # it fails or times out, this pass covers the main checkout only.
     checkouts=("$root")
-    while read -r path; do checkouts+=("$path"); done \
-        < <(agentic_git -C "$root" worktree list --porcelain | sed -n 's/^worktree //p')
+    worktrees=""
+    bounded_capture -q worktrees git -C "$root" worktree list --porcelain
+    while read -r path; do [ -n "$path" ] && checkouts+=("$path"); done \
+        < <(sed -n 's/^worktree //p' <<<"$worktrees")
     found=""
     uptime=$(agentic_uptime)
     # Every scan is taken before any alert is raised, and each is bounded. When
-    # one times out the whole pass is skipped (with a warning from scan_ps,
-    # never an alarm, even if an earlier scan found something); the next pass
-    # tries again. busy_procs feeds check_expectations.
-    if ! { scan_ps all_procs -eo pid=,etimes=,args= \
-        && scan_ps readers -eo pid=,etimes=,comm= \
-        && scan_ps busy_procs -eo pid=,comm=,args=; }; then
+    # one times out or fails the whole pass is skipped (with a warning from
+    # bounded_capture, never an alarm, even if an earlier scan found something);
+    # the next pass tries again. busy_procs feeds check_expectations.
+    all_procs="" readers="" busy_procs=""
+    if ! { bounded_capture all_procs ps -eo pid=,etimes=,args= \
+        && bounded_capture readers ps -eo pid=,etimes=,comm= \
+        && bounded_capture busy_procs ps -eo pid=,comm=,args=; }; then
         [ "$once" = 1 ] && exit 0
         sleep "$interval"
         continue
@@ -232,8 +287,10 @@ while :; do
         case "$args" in */debug/deps/* | */debug/build/*/out/*) limit=$test_limit ;; esac
         if [ "$elapsed" -gt "$limit" ]; then
             plausible "$elapsed" || continue
-            # Re-read: the first reading may belong to a process that has gone.
-            again=$(agentic_bounded_call ps -o etimes= -p "$pid" 2>/dev/null) || continue
+            # Re-read: the first reading may belong to a process that has gone
+            # (ps then fails, quietly). A timed-out re-read drops the process
+            # for this pass, with a warning; the next pass checks it again.
+            bounded_capture -q again ps -o etimes= -p "$pid" || continue
             again=${again//[[:space:]]/}
             case "$again" in '' | *[!0-9]*) continue ;; esac
             [ "$again" -gt "$limit" ] && plausible "$again" || continue
@@ -251,7 +308,9 @@ while :; do
         in_checkout "$cwd" || continue
         case "$(readlink "/proc/$pid/fd/0" 2>/dev/null)" in pipe:* | socket:*) ;; *) continue ;; esac
         if [ "$comm" = tail ]; then
-            args=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null) || continue
+            # Reading another process's cmdline reads its memory, which can
+            # block like ps does, so it is supervised too.
+            bounded_capture -q -i "/proc/$pid/cmdline" args tr '\0' ' ' || continue
             [[ " $args" =~ [[:space:]](-[A-Za-z0-9]*[fF][A-Za-z0-9]*|--follow(=[a-z]+)?)[[:space:]] ]] && continue
         fi
         # utime and stime are fields 14 and 15; the fields after ") " start at
@@ -260,7 +319,7 @@ while :; do
         # shellcheck disable=SC2086 # split on purpose
         set -- ${stat##*) }
         [ $((${12:-0} + ${13:-0})) -le "$idle_cpu_ticks" ] || continue
-        again=$(agentic_bounded_call ps -o etimes= -p "$pid" 2>/dev/null) || continue
+        bounded_capture -q again ps -o etimes= -p "$pid" || continue
         again=${again//[[:space:]]/}
         case "$again" in '' | *[!0-9]*) continue ;; esac
         [ "$again" -gt "$idle_limit" ] && plausible "$again" || continue

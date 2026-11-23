@@ -538,23 +538,29 @@ hanging_ps() {
     chmod +x "$fx/bin/ps"
 }
 
-# watch_until_warnings <count> [env...]: runs the looping watchdog from $work/wt
-# in the background, polls (up to 30 s) until its output holds <count> warnings,
-# then stops it explicitly. Sets still_running (1 when it had to be stopped, so
-# it was running until then) and out.
+# watch_until_warnings <pattern> <count> [env...]: runs the looping watchdog from
+# $work/wt in the background, polls (up to 30 s) until its output holds <count>
+# lines matching <pattern>, then stops it explicitly. Sets still_running (1 when
+# it had to be stopped, so it was running until then) and out.
 watch_until_warnings() {
-    local count=$1 tick; shift
+    local pattern=$1 count=$2 tick; shift 2
     cd "$work/wt" || return 1
     env "$@" "$tools/watchdog.sh" >"$fx/watchdog.out" 2>&1 &
     wd_pid=$!
-    trap 'kill "$wd_pid" 2>/dev/null' EXIT
+    trap 'kill "$wd_pid" ${fake_pids[@]+"${fake_pids[@]}"} 2>/dev/null' EXIT
     for ((tick = 0; tick < 300; tick++)); do
-        [ "$(grep -c "warning: ps scan " "$fx/watchdog.out")" -ge "$count" ] && break
+        [ "$(grep -c "$pattern" "$fx/watchdog.out")" -ge "$count" ] && break
         kill -0 "$wd_pid" 2>/dev/null || break
         sleep 0.1
     done
     still_running=0
     if kill -0 "$wd_pid" 2>/dev/null; then still_running=1; kill -TERM "$wd_pid"; fi
+    # A frozen watchdog (one blocked in a $(...)) defers TERM: KILL it after 10 s.
+    for ((tick = 0; tick < 100; tick++)); do
+        kill -0 "$wd_pid" 2>/dev/null || break
+        sleep 0.1
+    done
+    kill -KILL "$wd_pid" 2>/dev/null
     wait "$wd_pid" 2>/dev/null
     out=$(<"$fx/watchdog.out")
 }
@@ -565,9 +571,10 @@ test_watchdog_skips_a_pass_when_the_ps_scan_hangs() {
     # pass runs: wait for the second warning, then the watchdog must still be
     # running (it is stopped by the test, not by itself).
     hanging_ps
-    watch_until_warnings 2 PATH="$fx/bin:$PATH" AGENTIC_CALL_TIMEOUT=1 AGENTIC_WATCHDOG_INTERVAL=0
+    watch_until_warnings "warning: ps call " 2 PATH="$fx/bin:$PATH" AGENTIC_CALL_TIMEOUT=1 \
+        AGENTIC_WATCHDOG_INTERVAL=0
     [ "$still_running" = 1 ] || die "the watchdog exited by itself"
-    [ "$(grep -c "warning: ps scan " <<<"$out")" -ge 2 ] \
+    [ "$(grep -c "warning: ps call " <<<"$out")" -ge 2 ] \
         || die "the watchdog did not run a second pass"
     want_no_out WATCHDOG
 }
@@ -577,7 +584,76 @@ test_watchdog_once_exits_0_when_the_ps_scan_hangs() {
     out=$(cd "$work/wt" && PATH="$fx/bin:$PATH" AGENTIC_CALL_TIMEOUT=1 \
         timeout 10 "$tools/watchdog.sh" --once 2>&1)
     rc=$?
-    want_rc 0; want_out "warning: ps scan "; want_no_out WATCHDOG
+    want_rc 0; want_out "warning: ps call "; want_no_out WATCHDOG
+}
+
+# abandoning_stub <command> <glob> [body]: a stub <command> first on PATH
+# ($fx/bin). When its arguments match <glob> it ignores TERM (only KILL stops
+# it), leaves a detached grandchild (in its own session, out of reach of the
+# watchdog's group kill) holding its stdout open, records that grandchild's pid
+# in $fx/grandchildren and never answers. Otherwise it runs <body>, by default
+# the real <command>. A process stuck in an uninterruptible kernel wait can't be
+# made in a test; this one defeats everything else a supervisor can wait on: a
+# TERM, the child and the output closing.
+abandoning_stub() {
+    local real body
+    real=$(command -v "$1")
+    if [ $# -ge 3 ]; then body=$3; else body="exec \"$real\" \"\$@\""; fi
+    mkdir -p "$fx/bin" "$fx/tmp"
+    cat >"$fx/bin/$1" <<STUB
+#!/usr/bin/env bash
+case "\$*" in
+    $2)
+        trap '' TERM
+        setsid sleep 60 </dev/null >&1 2>/dev/null &
+        echo \$! >>"$fx/grandchildren"
+        while :; do sleep 1; done ;;
+esac
+$body
+STUB
+    chmod +x "$fx/bin/$1"
+}
+
+# quiet_ps: a stub `ps` that finds nothing, so a pass runs every later check.
+quiet_ps() {
+    mkdir -p "$fx/bin"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$fx/bin/ps"
+    chmod +x "$fx/bin/ps"
+}
+
+# reap_grandchildren: KILLs every grandchild an abandoning stub started and sets
+# gone=1 once none of their pids is left (checked by pid).
+reap_grandchildren() {
+    local gc tick
+    gone=1
+    [ -s "$fx/grandchildren" ] || return 0
+    while read -r gc; do kill -KILL "$gc" 2>/dev/null; done <"$fx/grandchildren"
+    for ((tick = 0; tick < 30; tick++)); do
+        gone=1
+        while read -r gc; do [ -e "/proc/$gc" ] && gone=0; done <"$fx/grandchildren"
+        [ "$gone" = 1 ] && break
+        sleep 0.1
+    done
+}
+
+# watch_abandoning <command>: runs the looping watchdog with 1 s calls until it
+# has warned twice about <command>, then checks that it never froze: it was
+# still running, the hung <command> was started again by a later pass (two
+# grandchildren), nothing alarmed, no temp file is left and every stub
+# grandchild is gone. The caller sets up the stubs and fixtures first.
+watch_abandoning() {
+    watch_until_warnings "warning: $1 call " 2 PATH="$fx/bin:$PATH" TMPDIR="$fx/tmp" \
+        AGENTIC_UPTIME_FILE="$fx/uptime" AGENTIC_CALL_TIMEOUT=1 agentic_kill_after=1 \
+        AGENTIC_WATCHDOG_INTERVAL=0
+    local started
+    started=$(wc -l <"$fx/grandchildren" 2>/dev/null || echo 0)
+    reap_grandchildren
+    [ "$still_running" = 1 ] || die "the watchdog exited by itself"
+    [ "$started" -ge 2 ] || die "no later pass started $1 again (the watchdog froze)"
+    [ "$(grep -c "warning: $1 call " <<<"$out")" -ge 2 ] || die "fewer than two warnings about $1"
+    want_no_out WATCHDOG
+    [ -z "$(ls -A "$fx/tmp")" ] || die "a temp file was left behind"
+    [ "$gone" = 1 ] || die "a stub grandchild is still running"
 }
 
 test_watchdog_abandons_a_ps_scan_it_cannot_stop() {
@@ -587,33 +663,82 @@ test_watchdog_abandons_a_ps_scan_it_cannot_stop() {
     # for the output to close would hang forever on a ps stuck in an
     # uninterruptible /proc read; the old pipe capture hangs here the same way
     # (the grandchild holds the pipe).
-    new_fixtures
-    mkdir -p "$fx/bin" "$fx/tmp"
+    new_fixtures; printf '%s\n' "693000.50 1.00" >"$fx/uptime"
+    abandoning_stub ps '*'
+    watch_abandoning ps
+}
+
+test_watchdog_abandons_a_ps_reread_it_cannot_stop() {
+    # #675, Brooke's third review: the per-process `ps -p` re-read goes through
+    # the same supervisor. Only the re-read hangs; the scans list one test
+    # process far over its limit (a real sleep, so /proc/<pid>/cwd resolves).
+    new_fixtures; fake_pids=()
+    trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    (cd "$work/wt" && exec -a "$work/wt/target/debug/deps/fake_test" sleep 30) >/dev/null 2>&1 &
+    fake_pids+=("$!")
+    printf '%s\n' "693000.50 1.00" >"$fx/uptime"
+    abandoning_stub ps '*"-p "*' \
+        "case \"\$*\" in *pid=,etimes=,args=*) echo \"${fake_pids[0]} 5000 $work/wt/target/debug/deps/fake_test\" ;; esac"
+    watch_abandoning ps
+}
+
+test_watchdog_abandons_a_cmdline_read_it_cannot_stop() {
+    # Reading an idle `tail`'s command line (to tell `tail -f` apart) reads its
+    # memory, which can block like ps; it is supervised too (`tr` reads it).
+    new_fixtures; fake_pids=()
+    trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    idle_reader tail
+    printf '%s\n' "693000.50 1.00" >"$fx/uptime"
+    mkdir -p "$fx/bin"
     cat >"$fx/bin/ps" <<STUB
 #!/usr/bin/env bash
-trap '' TERM
-setsid sleep 30 </dev/null >&1 2>/dev/null &
-echo \$! >>"$fx/grandchildren"
-while :; do sleep 1; done
+case "\$*" in
+    *"-p "*) echo "  5000" ;;
+    *pid=,etimes=,comm=*) echo "$reader_pid 5000 tail" ;;
+esac
 STUB
     chmod +x "$fx/bin/ps"
-    watch_until_warnings 2 PATH="$fx/bin:$PATH" TMPDIR="$fx/tmp" AGENTIC_CALL_TIMEOUT=1 \
-        agentic_kill_after=1 AGENTIC_WATCHDOG_INTERVAL=0
-    local gc gone=1 tick
-    # Stop every grandchild this test started, then confirm by pid.
-    if [ -s "$fx/grandchildren" ]; then
-        while read -r gc; do kill -KILL "$gc" 2>/dev/null; done <"$fx/grandchildren"
-        for ((tick = 0; tick < 30; tick++)); do
-            gone=1
-            while read -r gc; do [ -e "/proc/$gc" ] && gone=0; done <"$fx/grandchildren"
-            [ "$gone" = 1 ] && break
-            sleep 0.1
-        done
-    fi
-    [ "$still_running" = 1 ] || die "the watchdog exited by itself"
-    [ "$(grep -c "warning: ps scan " <<<"$out")" -ge 2 ] || die "no second pass after the abandoned scan"
-    want_no_out WATCHDOG
-    [ -z "$(ls -A "$fx/tmp")" ] || die "a scan temp file was left behind"
+    abandoning_stub tr '*'
+    watch_abandoning tr
+}
+
+test_watchdog_abandons_a_git_worktree_list_it_cannot_stop() {
+    new_fixtures; printf '%s\n' "693000.50 1.00" >"$fx/uptime"
+    quiet_ps
+    abandoning_stub git '*"worktree list"*'
+    watch_abandoning git
+}
+
+test_watchdog_abandons_a_git_reflog_it_cannot_stop() {
+    # A pending expectation for an idle worktree makes the pass read its reflog.
+    new_fixtures; expect_wt ex-reflog
+    expect_start "$work/ex-reflog" "task 9"
+    printf '%s\n' "693000.50 1.00" >"$fx/uptime"
+    quiet_ps
+    abandoning_stub git '*reflog*'
+    watch_abandoning git
+}
+
+test_watchdog_abandons_a_find_it_cannot_stop() {
+    # ...and the mtimes under its target/i*-logs.
+    new_fixtures; expect_wt ex-find
+    expect_start "$work/ex-find" "task 9"
+    mkdir -p "$work/ex-find/target/i9-logs"
+    printf '%s\n' "693000.50 1.00" >"$fx/uptime"
+    quiet_ps
+    abandoning_stub find '*'
+    watch_abandoning find
+}
+
+test_watchdog_exits_1_when_its_start_up_git_call_hangs() {
+    new_fixtures
+    abandoning_stub git '*rev-parse*'
+    out=$(cd "$work/wt" && PATH="$fx/bin:$PATH" TMPDIR="$fx/tmp" AGENTIC_CALL_TIMEOUT=1 \
+        agentic_kill_after=1 timeout 15 "$tools/watchdog.sh" --once 2>&1)
+    rc=$?
+    reap_grandchildren
+    want_rc 1; want_out "warning: git call timed out"; want_out "could not find"
+    [ -z "$(ls -A "$fx/tmp")" ] || die "a temp file was left behind"
     [ "$gone" = 1 ] || die "a stub grandchild is still running"
 }
 
@@ -649,13 +774,13 @@ test_watchdog_skips_the_pass_when_only_the_third_scan_fails() {
     out=$(cd "$work/wt" && PATH="$fx/bin:$PATH" AGENTIC_UPTIME_FILE="$fx/uptime" \
         AGENTIC_CALL_TIMEOUT=1 timeout 15 "$tools/watchdog.sh" --once 2>&1)
     rc=$?
-    want_rc 0; want_out "warning: ps scan "; want_no_out WATCHDOG
+    want_rc 0; want_out "warning: ps call "; want_no_out WATCHDOG
 }
 
 test_watchdog_loop_skips_the_pass_when_only_the_third_scan_fails() {
     third_scan_fails_ps ex-third-loop
-    watch_until_warnings 2 PATH="$fx/bin:$PATH" AGENTIC_UPTIME_FILE="$fx/uptime" \
-        AGENTIC_CALL_TIMEOUT=1 AGENTIC_WATCHDOG_INTERVAL=0
+    watch_until_warnings "warning: ps call " 2 PATH="$fx/bin:$PATH" \
+        AGENTIC_UPTIME_FILE="$fx/uptime" AGENTIC_CALL_TIMEOUT=1 AGENTIC_WATCHDOG_INTERVAL=0
     [ "$still_running" = 1 ] || die "the watchdog exited by itself"
     want_no_out WATCHDOG
 }
