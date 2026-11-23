@@ -42,10 +42,15 @@ use crate::okf::pystr::py_unquote;
 use crate::okf::pystr::{is_py_word, py_rstrip, py_strip};
 use crate::okf::workspace::Workspace;
 
-/// A markdown link `[text](target "title")`, not an image (`![...]`).
+/// A markdown link `[text](target "title")` or `[text](<target> "title")`,
+/// not an image (`![...]`). Group 3 is a plain destination (no whitespace, no
+/// `)`); group 4 is an angle-bracket destination (CommonMark): anything
+/// between `<` and `>` except a line break, `<`, `>` or the `\x1c-\x1f`
+/// control bytes, so it may hold spaces and `)`. The two are plain
+/// alternatives of the linear-time `regex` crate.
 static LINK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?:\A|[^!])(\[((?:[^\]\\]|\\.)*)\]\(([^)\s\x1c-\x1f]+)(?:[\s\x1c-\x1f]+"[^"]*")?\))"#,
+        r#"(?:\A|[^!])(\[((?:[^\]\\]|\\.)*)\]\((?:<([^<>\n\r\x1c-\x1f]+)>|([^)\s\x1c-\x1f]+))(?:[\s\x1c-\x1f]+"[^"]*")?\))"#,
     )
     .expect("LINK regex is valid")
 });
@@ -81,11 +86,13 @@ static SLUG_PUNCTUATION: LazyLock<Regex> =
 pub struct LinkMatch {
     /// The link text between the brackets.
     pub text: String,
-    /// The raw target between the parentheses.
+    /// The raw target between the parentheses, without the `<` `>` of an
+    /// angle-bracket destination.
     pub target: String,
     /// Byte range of the whole `[text](target)` in the line.
     pub range: std::ops::Range<usize>,
-    /// Byte range of the target within the line.
+    /// Byte range of the target within the line (inside the `<` `>` of an
+    /// angle-bracket destination, so replacing it keeps the brackets).
     pub target_range: std::ops::Range<usize>,
 }
 
@@ -114,9 +121,13 @@ pub fn find_links(text: &str) -> Vec<LinkMatch> {
     // `captures_at` searches from `pos` but still sees the text before it, so
     // `\A` matches only at the true start of `text`.
     while let Some(caps) = LINK.captures_at(text, pos) {
-        let (Some(whole), Some(label), Some(target)) = (caps.get(1), caps.get(2), caps.get(3))
-        else {
-            break; // unreachable: groups 1-3 are mandatory
+        // Exactly one of group 3 (plain) and 4 (angle-bracket) matched.
+        let (Some(whole), Some(label), Some(target)) = (
+            caps.get(1),
+            caps.get(2),
+            caps.get(3).or_else(|| caps.get(4)),
+        ) else {
+            break; // unreachable: groups 1, 2 and one of 3, 4 are mandatory
         };
         links.push(LinkMatch {
             text: label.as_str().to_string(),
@@ -618,6 +629,65 @@ mod tests {
         let link = &find_links(line)[0];
         assert_eq!(&line[link.range.clone()], "[t](/a.md)");
         assert_eq!(&line[link.target_range.clone()], "/a.md");
+    }
+
+    #[test]
+    fn find_links_reads_angle_bracket_destinations() {
+        let line = "a [x](<a b.md>) b [y](<a b.md> \"title\") c [z](<a(1).md>) d [w](<q)r.md#h>)";
+        let links = find_links(line);
+        let targets: Vec<_> = links.iter().map(|l| l.target.as_str()).collect();
+        assert_eq!(targets, ["a b.md", "a b.md", "a(1).md", "q)r.md#h"]);
+        // The target range sits inside the brackets; the whole link spans them.
+        assert_eq!(&line[links[0].target_range.clone()], "a b.md");
+        assert_eq!(&line[links[0].range.clone()], "[x](<a b.md>)");
+        assert_eq!(&line[links[1].range.clone()], "[y](<a b.md> \"title\")");
+    }
+
+    #[test]
+    fn find_links_rejects_malformed_angle_bracket_destinations() {
+        for line in [
+            "![img](<a b.md>)",
+            "[x](<>)",
+            "[x](<a b.md)",
+            "[x](<a<b>.md>)",
+            "[x](<a\nb.md>)",
+            "[x](<a\u{1c}b.md>)",
+            "[x](<a b.md>junk)",
+        ] {
+            assert!(
+                find_links(line).iter().all(|l| l.target != "a b.md"
+                    && l.target != "a<b>.md"
+                    && l.target != "a\nb.md"
+                    && l.target != "a\u{1c}b.md"
+                    && !l.target.is_empty()),
+                "{line:?}"
+            );
+        }
+        // `[x](<a)` is still the plain destination `<a`, as before.
+        assert_eq!(find_links("[x](<a)")[0].target, "<a");
+    }
+
+    #[test]
+    fn find_links_stays_linear_on_unclosed_angle_brackets() {
+        let line = format!("[x](<{}", "a ".repeat(200_000));
+        assert!(find_links(&line).is_empty());
+    }
+
+    #[test]
+    fn an_angle_bracket_destination_resolves_like_its_plain_form() {
+        let ws = MemWorkspace::from_files([("infra/a b.md", ""), ("infra/x(1).md", "")]);
+        let resolve = |text: &str| {
+            let link = find_links(text).into_iter().next().expect("a link");
+            resolve_link(&ws, &link.target, "infra/index.md").map(|r| r.path)
+        };
+        assert_eq!(resolve("[x](<a b.md>)"), Some("infra/a b.md".into()));
+        assert_eq!(
+            resolve("[x](<a b.md> \"title\")"),
+            Some("infra/a b.md".into())
+        );
+        assert_eq!(resolve("[x](<a%20b.md>)"), Some("infra/a b.md".into()));
+        assert_eq!(resolve("[x](<x(1).md#h>)"), Some("infra/x(1).md".into()));
+        assert_eq!(resolve("[x](<https://example.com/a b>)"), None);
     }
 
     #[test]

@@ -506,6 +506,24 @@ mod tests {
     }
 
     #[test]
+    fn an_angle_bracket_link_to_the_moved_file_is_redirected_and_keeps_its_brackets() {
+        let workspace = MemWorkspace::from_files([
+            ("moves/a b.md", "# Spaced\n"),
+            (
+                "moves/beta.md",
+                "[x](<a b.md#h> \"t\") [y](</moves/a b.md>)\n",
+            ),
+        ]);
+
+        rewrite_links(&workspace, &redirect("moves/a b.md", "moves/c d.md"), None).unwrap();
+
+        assert_eq!(
+            text(&workspace, "moves/beta.md"),
+            "[x](<c%20d.md#h> \"t\") [y](</moves/c%20d.md>)\n"
+        );
+    }
+
+    #[test]
     fn a_split_redirect_moves_only_the_named_anchors() {
         let workspace = MemWorkspace::from_files([
             (
