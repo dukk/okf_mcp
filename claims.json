@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 788,
+  "next_claim_seq": 811,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "96ccfcfc2e2654aa6d29d752a842d1c068532b5a62a1fd06f080088348d9278e"
+    "mac": "686b34efce18803e299d638a26ded685e669bd226a0d6d3ed6e7255ec8401d34"
   },
-  "next_evidence_seq": 1056,
+  "next_evidence_seq": 1084,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "b07f65ff46f2c7600a17cf73e7ca91d0a62b5485e0d84de328b079e36609839a"
+    "mac": "41976790dae7badad658d7afb6940f4414409d930cef9763ecb386a254cb3cb0"
   },
   "claims": [
     {
@@ -23810,6 +23810,28 @@
             "by": "server",
             "mac": "5922c7a8123957b35c0d445089f5ba8438008ba613fa757ff135ce2e9e9514fd"
           }
+        },
+        {
+          "id": "EVD-1078",
+          "kind": "inspection",
+          "locator": "src/mcp/maintenance/reports.rs:143-155; src/store/maintenance/runs.rs:117-127",
+          "summary": "Recheck after the PR touched reports.rs 145-153: the only change there is ctx.app().pool() to ctx.app().main_store(); the order argument is still params.order.unwrap_or_default() and RunOrder still derives Default with #[default] Asc (runs.rs:119-124). Claim still holds.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/maintenance/reports.rs",
+              "lines": {
+                "start": 143,
+                "end": 155
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:21:26.077571455Z",
+          "seal": {
+            "by": "server",
+            "mac": "8c665e9f335c092935ebc6084444e260c2092cf1a372175580ebf21d60ecc9d9"
+          }
         }
       ],
       "verdicts": [
@@ -23825,13 +23847,26 @@
             "by": "server",
             "mac": "76972e3e570ee4ca5e995e811f17d5467022bf5f4ee4090c00c06309bbc3abe2"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited after the PR touched the anchored lines: only the handle argument changed; the default is still Asc.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1078"
+          ],
+          "recorded_at": "2026-11-23T14:22:05.059212804Z",
+          "seal": {
+            "by": "server",
+            "mac": "3d465b688e718291c004d524f98ed4b9bf2dd6d641061adb55d7a8ee6e26a623"
+          }
         }
       ],
       "created_at": "2026-11-21T19:08:08.066114433Z",
-      "updated_at": "2026-11-21T19:10:02.190455546Z",
+      "updated_at": "2026-11-23T14:22:05.059212804Z",
       "seal": {
         "by": "server",
-        "mac": "9582f192296a00247f141e9ef9f3b5a47c076fd7be31866bf9b2d72009b6d74c"
+        "mac": "409dac0c0f573b736bb7775128dff7eeb74703b433d6a701ddbc5e0b539fe245"
       }
     },
     {
@@ -61831,7 +61866,9 @@
         "from-issue:961"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "The maintenance modules named in this claim moved to &CatalogDb in Task 4 (#962); replaced by a claim without them.",
+        "retired_at": "2026-11-23T14:23:08.205519158Z"
       },
       "evidence": [
         {
@@ -61855,6 +61892,28 @@
             "by": "server",
             "mac": "a51413df717acc573ec77ae699d5147ccad4fad20c8d4548c2b763e694c9e1f6"
           }
+        },
+        {
+          "id": "EVD-1079",
+          "kind": "analysis",
+          "locator": "src/mcp/maintenance/work.rs:120,143,175,188,227,238; src/mcp/maintenance/reports.rs:148,169,212,236,261,273; src/store/maintenance/runs.rs:244",
+          "summary": "At HEAD src/store/maintenance/* entry points take &CatalogDb and src/mcp/maintenance/* pass ctx.app().main_store(), not App::pool(). The statement 'src/store/maintenance/* and src/mcp/maintenance/* are still on the account pool' was true at the task-3 commit and is false for those two paths at HEAD (the rest of its list, changesets, repair, users, resolve_changeset, is unchanged by this PR). The PR broke the claim's maintenance part.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/maintenance/work.rs",
+              "lines": {
+                "start": 116,
+                "end": 124
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:21:26.150633181Z",
+          "seal": {
+            "by": "server",
+            "mac": "a0ec3e091382ccc663dfee0249a03be6b28218f489149357a730206cf89e34c9"
+          }
         }
       ],
       "verdicts": [
@@ -61870,13 +61929,26 @@
             "by": "server",
             "mac": "3b801c98e105357d0c8b0fd0b1531564a0d94c1c47f535bc4ad7c3ccd415381b"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "This PR moved src/store/maintenance/* and src/mcp/maintenance/* onto CatalogDb/main_store(), so the statement that they are 'still on the account pool' no longer holds at HEAD. The rest of the list (changesets, repair, users, resolve_changeset) is unaffected. Fix: add a dated note to changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md saying the maintenance modules moved in Task 4 (#962), then retire CLM-0782 and register a replacement worded 'as of 22c07f7' or without the maintenance modules.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1079"
+          ],
+          "recorded_at": "2026-11-23T14:22:05.139256631Z",
+          "seal": {
+            "by": "server",
+            "mac": "59f24ea91881059250f6fb2c773ab7b8a531e9ae9db4cf1a4eea399fac59e634"
+          }
         }
       ],
       "created_at": "2026-11-23T13:52:22.270219644Z",
-      "updated_at": "2026-11-23T13:54:32.036112998Z",
+      "updated_at": "2026-11-23T14:23:08.205519158Z",
       "seal": {
         "by": "server",
-        "mac": "006c0e7143e340e643e8b8f100bc5cc6e78438db2834119a12ba4f0dbe09ef2a"
+        "mac": "9f0fbc1006c21dfd3aff18c5c88f9b07a0458c143c7a4ef38502f1a5c91915d9"
       }
     },
     {
@@ -62171,6 +62243,1603 @@
       "seal": {
         "by": "server",
         "mac": "09a5256138ef3bac7e46ca3569de8372d39cf21b08dee666c45500fd77a1d346"
+      }
+    },
+    {
+      "id": "CLM-0788",
+      "statement": "Issue #962 (M21.04) is delivered: maintenance runs, work, findings, evidence and candidates take &CatalogDb, their crossings are in the inventory, behaviour is unchanged, the suite passes, and the changelog and plan are updated.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #962 hypotheosis/okf_mcp M21.04: maintenance takes CatalogDb",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1080",
+          "kind": "analysis",
+          "locator": "children of CLM-0788",
+          "summary": "Twenty-one of the twenty-two children are supported and together cover the retyping, call sites, no-behaviour-change, gates, plan note and the inventory. CLM-0805 is refuted: the changelog attributes the Rust-side maintenance_run record to Task 12 where the plan assigns it to Task 11 (Task 12 only moves it). The changelog deliverable therefore has one wrong sentence.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-23T14:22:10.025102997Z",
+          "seal": {
+            "by": "server",
+            "mac": "4f4a7cbd67b2abbe62887af6eb942d4d91d4f281e9141a0a2dad756c0c693a55"
+          }
+        },
+        {
+          "id": "EVD-1083",
+          "kind": "analysis",
+          "locator": "children of CLM-0788",
+          "summary": "All 21 children CLM-0789 to CLM-0809 are now supported (CLM-0805 after the changelog line 27 correction). They cover the retyping, call sites, no behaviour change, gates, plan note and the inventory.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T14:23:19.071998644Z",
+          "seal": {
+            "by": "server",
+            "mac": "43d5da6d39339b836d779d55510f42dcf13c30042d57fa6f000659a4fd0039c1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "20 of the 21 children are supported (EVD-1080 miscounts as 21 of 22); CLM-0805 is refuted, so the changelog deliverable contains one wrong sentence (Task 12 vs Task 11). Fix: correct changelog line 27 to say Task 11 replaces the trigger with a Rust-side catalog.maintenance_run write and Task 12 moves that write into the store transaction, then re-audit CLM-0805.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1080"
+          ],
+          "recorded_at": "2026-11-23T14:22:14.959550299Z",
+          "seal": {
+            "by": "server",
+            "mac": "7d5d9edd46ff5e763be04d95bed1435d435b0ccd2d0c2428bad82adb23bb1d62"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All children are supported after the changelog fix.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1083"
+          ],
+          "recorded_at": "2026-11-23T14:23:22.937266469Z",
+          "seal": {
+            "by": "server",
+            "mac": "ac1825039f820b40a35a11be90436584c59d786c2ecc71d675c057c237cf08d1"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:23:22.937266469Z",
+      "seal": {
+        "by": "server",
+        "mac": "7df80dc948cb6a834bc136b0a16e064adf3ebb7d3781cf70409c01b8df25cb54"
+      }
+    },
+    {
+      "id": "CLM-0789",
+      "statement": "runs::{list_runs, get_run, claim, renew, close} and the crate-private runs::snapshot take &CatalogDb, and the transactions in claim, renew, close and snapshot begin with CatalogDb::begin.",
+      "kind": "interface",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "PR body: \"`runs::{list_runs, get_run, claim, renew, close}`, `runs::snapshot`, ... take `&CatalogDb` ... and begin their transactions with `CatalogDb::begin`.\"",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "src/store/maintenance/runs.rs"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1056",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/runs.rs:106-110,244-250,273-275,437-456,536-551,661-679",
+          "summary": "snapshot, list_runs, get_run, claim, renew and close all have `db: &CatalogDb` as first parameter; snapshot, claim, renew and close call `db.begin().await?`; list_runs and get_run go through snapshot(db).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/runs.rs",
+              "lines": {
+                "start": 104,
+                "end": 112
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:19:47.514578198Z",
+          "seal": {
+            "by": "server",
+            "mac": "b3e50dbb53d1e30db1fd476eb0afa64c6fe37d06f3389803312b5fcff0e721b1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Signatures and db.begin() calls read directly in runs.rs.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1056"
+          ],
+          "recorded_at": "2026-11-23T14:22:03.457145577Z",
+          "seal": {
+            "by": "server",
+            "mac": "37fffd8c48ee748d90df2b0c6be41783cf24d2856483714b45ded32d79c98d6c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:03.457145577Z",
+      "seal": {
+        "by": "server",
+        "mac": "744d5fccbe562a10ec276b192df40b1a44d3597d787843ad1febab59fac18be2"
+      }
+    },
+    {
+      "id": "CLM-0790",
+      "statement": "reports::{get_finding, list_findings, list_findings_with, count_findings, dispose, submit} and evidence::read take &CatalogDb; dispose and submit begin with CatalogDb::begin, count_findings runs on db.executor(), evidence::read acquires from db.executor().",
+      "kind": "interface",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "PR body: \"`reports::{get_finding, list_findings, list_findings_with, count_findings, dispose, submit}` and `evidence::read` take `&CatalogDb`\"; changelog lines 9-10",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "src/store/maintenance/reports.rs",
+        "src/store/maintenance/evidence.rs"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1057",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/reports.rs:138-145,159-165,186-193,238-249,279-295,407-445; src/store/maintenance/evidence.rs:82-89",
+          "summary": "get_finding, list_findings, list_findings_with, count_findings, dispose, submit and evidence::read take `db: &CatalogDb`. dispose (line 294) and submit (line 441) use `db.begin()`; get_finding and list_findings_with use runs::snapshot(db); count_findings uses `fetch_all(db.executor())` (248); evidence::read uses `db.executor().acquire()` (88).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/reports.rs",
+              "lines": {
+                "start": 236,
+                "end": 250
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:19:47.577586715Z",
+          "seal": {
+            "by": "server",
+            "mac": "861dd5b4ae915476a7fa48d8f3f665e15a3dadafe34263e24ebc6f039b74d2e9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Signatures, begin() and executor() uses read directly in reports.rs and evidence.rs.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1057"
+          ],
+          "recorded_at": "2026-11-23T14:22:03.558481388Z",
+          "seal": {
+            "by": "server",
+            "mac": "9c7d93dc3ed3ad0f544135bc5177003c020676e3f3aba2cb6eacc3c638777a63"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:03.558481388Z",
+      "seal": {
+        "by": "server",
+        "mac": "3817cc8473594ba8e7e5788bdcee75be89bfa8b7c51f6914e367c1adc6243198"
+      }
+    },
+    {
+      "id": "CLM-0791",
+      "statement": "No non-test file under src/store/maintenance/ names PgPool any more; the helpers lock, replay, receipt, recover, candidates::load and cursors, evidence::validate, runs::page_ids, complete_if_terminal, expire_submission and reports::load_evidence still take &mut PgConnection.",
+      "kind": "constraint",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"Helpers that take `&mut PgConnection` (`lock`, `replay`, `receipt`, `recover`, `candidates::*`, `evidence::validate`) are unchanged (P2); `candidates` is therefore not retyped.\"; changelog line 11",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "src/store/maintenance/mod.rs",
+        "src/store/maintenance/candidates.rs"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1058",
+          "kind": "analysis",
+          "locator": "git grep -n PgPool -- src/store/maintenance, minus tests.rs/*_tests.rs files",
+          "summary": "Zero PgPool matches in the non-test files mod.rs, runs.rs, reports.rs, evidence.rs, candidates.rs (matches remain only in tests files). The helpers named take `conn: &mut PgConnection`: mod.rs:80,99,123,140; evidence.rs:109; reports.rs:58,80,376; candidates.rs:64,187.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "PgPool",
+              "scope": [
+                "src/store/maintenance/candidates.rs",
+                "src/store/maintenance/evidence.rs",
+                "src/store/maintenance/mod.rs",
+                "src/store/maintenance/reports.rs",
+                "src/store/maintenance/runs.rs"
+              ],
+              "hits": 0,
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:19:47.643862246Z",
+          "seal": {
+            "by": "server",
+            "mac": "924eb4c860fa59f77b746ccaec4b3b3b89a26bd514545bca12eed58e3b60a316"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Zero-hit search for PgPool in the five non-test files; helper signatures take &mut PgConnection.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1058"
+          ],
+          "recorded_at": "2026-11-23T14:22:03.629471394Z",
+          "seal": {
+            "by": "server",
+            "mac": "37d810d0d7a3319d5e2eecc413978331f0f50480defb97a258b83ed56bbb7487"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:03.629471394Z",
+      "seal": {
+        "by": "server",
+        "mac": "9beb2e0cde3011181874146c8e48c6a76746efdf4f0914e4bf758490faa22235"
+      }
+    },
+    {
+      "id": "CLM-0792",
+      "statement": "src/mcp/maintenance/{reports,work}.rs pass App::main_store() to every changed store function, and the owner lookup in work.rs (SELECT credential_id FROM maintenance_runs) uses main_store().executor().",
+      "kind": "interface",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "PR body: \"`src/mcp/maintenance/{reports,work}.rs` pass `App::main_store()`.\"; changelog line 12",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "src/mcp/maintenance/reports.rs",
+        "src/mcp/maintenance/work.rs"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1059",
+          "kind": "inspection",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD -- src/mcp/maintenance; src/mcp/maintenance/work.rs:220-228",
+          "summary": "Every call of runs::*, reports::*, evidence::read in reports.rs (list_runs, get_run, list_findings_with, get_finding, count_findings, dispose) and work.rs (claim, renew, read, submit, close) passes ctx.app().main_store(); the owner lookup in maintenance_close does fetch_optional(ctx.app().main_store().executor()). A grep for pool() in src/mcp/maintenance leaves only a test at work.rs:416.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/maintenance/work.rs",
+              "lines": {
+                "start": 216,
+                "end": 230
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:19:47.704992483Z",
+          "seal": {
+            "by": "server",
+            "mac": "cd4ce591aa4c570beca68cd4184b9535fe444f31a710066f745a576e5bb34809"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Diff and file read show every call passes main_store(); the owner lookup uses main_store().executor().",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1059"
+          ],
+          "recorded_at": "2026-11-23T14:22:03.693009247Z",
+          "seal": {
+            "by": "server",
+            "mac": "b60c6c05c959ad49c9ea735d67e8da0868b5b9de6f0f08ae6199340486ac9450"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:03.693009247Z",
+      "seal": {
+        "by": "server",
+        "mac": "f0a374bb15ba1faeb5a230acdb622b7dfefc3c667738ccd854f70e7d0120c83e"
+      }
+    },
+    {
+      "id": "CLM-0793",
+      "statement": "src/maintenance/ and src/mcp/maintenance/mod.rs contain no database call.",
+      "kind": "constraint",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"`src/maintenance/` has no database call and is unchanged.\"; changelog line 12",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "src/maintenance",
+        "src/mcp/maintenance/mod.rs"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1060",
+          "kind": "analysis",
+          "locator": "git grep -n -E \"sqlx|PgPool|\\.pool\\(\\)|\\.executor\\(\\)|main_store\" -- src/maintenance src/mcp/maintenance/mod.rs",
+          "summary": "No sqlx, pool, executor or main_store reference in src/maintenance/ (one 'query' hit is a URL string in a validate.rs test) or in src/mcp/maintenance/mod.rs; mod.rs imports the store modules only for types and calls none that touch a database.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "sqlx|PgPool|\\.pool\\(\\)|\\.executor\\(\\)|main_store",
+              "scope": [
+                "src/maintenance",
+                "src/mcp/maintenance/mod.rs"
+              ],
+              "hits": 0,
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:19:47.763404309Z",
+          "seal": {
+            "by": "server",
+            "mac": "5696ad259c6db73c7e52d6e59deabc12094a6fe3c0f1d0305a004a9e158239a6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Zero-hit search for database vocabulary in the two scopes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1060"
+          ],
+          "recorded_at": "2026-11-23T14:22:03.761730002Z",
+          "seal": {
+            "by": "server",
+            "mac": "40bb50c1117728c6bc45653eb5609232847e8062401a9fb0479424efb32e151c"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:03.761730002Z",
+      "seal": {
+        "by": "server",
+        "mac": "689f5d9fd54cf1ab17b3594eaff1ca0ba2acc54953c3f7dd8200ed7b4ad87f63"
+      }
+    },
+    {
+      "id": "CLM-0794",
+      "statement": "The only non-test callers of the changed store::maintenance functions are the maintenance tools in src/mcp/maintenance/; the HTTP routes call those tool functions, and the CLI and background workers do not call the store functions.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"The only production callers are the maintenance tools (and the HTTP routes that call them), which get their handle from `App`. The CLI and background workers do not call these functions.\"",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "src/http/api/maintenance.rs",
+        "src/mcp/maintenance"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1061",
+          "kind": "analysis",
+          "locator": "git grep -n \"store::maintenance\" -- src tests (excluding src/store/maintenance/)",
+          "summary": "Importers of store::maintenance: src/mcp/maintenance/{mod,work,reports}.rs (tools); src/http/api/maintenance.rs:24-25 imports only the DTO types Page, RunOrder, RunReport, RunSummary, FindingCounts, FindingRecord, and line 225 is inside its tests module; no hit under src/bin, src/investigator or tests/. The CLI and workers do not import it.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "store::maintenance",
+              "scope": [
+                "src/bin",
+                "src/cli",
+                "src/http",
+                "src/investigator",
+                "src/mcp",
+                "tests"
+              ],
+              "hits": 6,
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:19:47.835227505Z",
+          "seal": {
+            "by": "server",
+            "mac": "fc192b9a6a04f334900fab696e924867dcc858521e8e7552a79a92fb7c7d2756"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Importers of store::maintenance are the tools plus type-only imports (and a test module) in the HTTP routes, which call tools::maintenance_* functions (http/api/maintenance.rs:109-210). No import from bin, investigator or tests.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1061"
+          ],
+          "recorded_at": "2026-11-23T14:22:03.846861871Z",
+          "seal": {
+            "by": "server",
+            "mac": "32ffc5b62d2a99329f63e9a631720f624b64563b06a210aaaae122d37de1edff"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:03.846861871Z",
+      "seal": {
+        "by": "server",
+        "mac": "a2dd7abe479752324395222fdc3cdf2367f83636f429431d668ba482ba037a90"
+      }
+    },
+    {
+      "id": "CLM-0795",
+      "statement": "No behaviour change: every non-test hunk only retypes the pool argument to a CatalogDb handle, and main_store() is the same pool as pool() in release 1.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"No behaviour change: in release 1 `App::main_store()` and the account pool are one pool.\"; Issue #962: no behaviour change",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "src/store/maintenance",
+        "src/mcp/maintenance",
+        "src/app.rs"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1062",
+          "kind": "inspection",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD -- src/store/maintenance/{runs,reports,evidence}.rs src/mcp/maintenance src/http/api/maintenance.rs (non-test hunks)",
+          "summary": "Read every non-test hunk in 6 files (51 insertions, 47 deletions): each replaces `pool: &PgPool` with `db: &CatalogDb`, `pool.begin()` with `db.begin()`, `fetch_all(pool)`/`pool.acquire()` with `db.executor()`, `ctx.app().pool()` with `ctx.app().main_store()`, adds the CatalogDb import, or edits doc comments. No SQL string, bound value, lock order, error mapping or control flow changed. Test hunks only change handle types.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/runs.rs",
+              "lines": {
+                "start": 104,
+                "end": 112
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:20:08.193324048Z",
+          "seal": {
+            "by": "server",
+            "mac": "0f47bb418fdd22b8990e5f00379eeecf080c6b43fc823c80e01f646a0f9f9331"
+          }
+        },
+        {
+          "id": "EVD-1063",
+          "kind": "inspection",
+          "locator": "src/app.rs:72-75,341,543-566",
+          "summary": "main_store is built as CatalogDb::new(StoreName::main(), pool.clone()) from the same pool that accounts wraps; pool() returns accounts.executor() and main_store() returns &self.main_store, whose begin() and executor() use that pool (src/stores/mod.rs:146,156). One pool in release 1.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/app.rs",
+              "lines": {
+                "start": 339,
+                "end": 343
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:20:08.258081660Z",
+          "seal": {
+            "by": "server",
+            "mac": "0fd8059acd159ee36902ffb3bf61feb55f63e8ffd62206a28af74cb99119491e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every non-test hunk was read and is a handle retype; main_store and pool share one PgPool.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1062",
+            "EVD-1063"
+          ],
+          "recorded_at": "2026-11-23T14:22:03.922455167Z",
+          "seal": {
+            "by": "server",
+            "mac": "d87b493d595bc2fc70e477fef8158e71ff337207452fc402080a9a46d2581070"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:03.922455167Z",
+      "seal": {
+        "by": "server",
+        "mac": "07752a18ee4ecb515ac2c2044724268ed5365583a4bc8237112360c67363220a"
+      }
+    },
+    {
+      "id": "CLM-0796",
+      "statement": "The existing suite passes at HEAD: tools/agentic/gate.sh test reports 3385 passed, 0 failed, 21 ignored.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"`tools/agentic/gate.sh test`: pass, 3385 passed, 0 failed, 21 ignored.\"",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1076",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh test (rc=0) at 15863564; sum of the 28 'test result' lines",
+          "summary": "Rerun on HEAD 15863564 with a clean tree: gate exited 0; summed 'test result' lines give 3385 passed, 0 failed, 21 ignored, matching the PR body.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T14:21:25.927862068Z",
+          "seal": {
+            "by": "server",
+            "mac": "efe805cfa9b3846f6ce4af515d461fdf103e6c6e8202b395e4a8f6a95e86d6d4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reran the gate on HEAD: rc 0, 3385 passed, 0 failed, 21 ignored.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1076"
+          ],
+          "recorded_at": "2026-11-23T14:22:04.003914010Z",
+          "seal": {
+            "by": "server",
+            "mac": "c95e272d7e8c19ab0a98892de9a7d0eea60bd8fcd094376328ae068d537e2116"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:04.003914010Z",
+      "seal": {
+        "by": "server",
+        "mac": "03f52ce8e2a0e03e8e0acdb806c2b65b495b2d61098b5e06d598fffda7817f8c"
+      }
+    },
+    {
+      "id": "CLM-0797",
+      "statement": "tools/agentic/gate.sh fmt, lint and dylint pass at HEAD.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"`tools/agentic/gate.sh fmt`: pass. ... lint: pass ... dylint: pass.\"",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1077",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh fmt; gate.sh lint; gate.sh dylint at 15863564",
+          "summary": "All three gates rerun on HEAD 15863564, each exiting 0.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T14:21:26.002806672Z",
+          "seal": {
+            "by": "server",
+            "mac": "32e68e867ddef26766b2d280adf1459751fa72cc8215a60d38e7467551b2e065"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reran the three gates on HEAD: all rc 0.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1077"
+          ],
+          "recorded_at": "2026-11-23T14:22:04.081701186Z",
+          "seal": {
+            "by": "server",
+            "mac": "cd9533429a5b55db5585e1b5834e479e89f3177e290e54e93fd06820d4bb4723"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:04.081701186Z",
+      "seal": {
+        "by": "server",
+        "mac": "12ea9e499b6a0f08853cb3dba7ae87d730f53797d6605ad3da8ecc03e77b047b"
+      }
+    },
+    {
+      "id": "CLM-0798",
+      "statement": "The plan has a dated '> **Corrected (issue #962, 2026-11-23).**' note under Task 4, and Task 5's runs.rs reference reads runs.rs:482 (line 481 at 22c07f7).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"Plan corrected: a dated `> **Corrected (issue #962).**` note under Task 4, and Task 5's `runs.rs:481` reference updated to `runs.rs:482`.\"",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1064",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:260,268",
+          "summary": "Line 260 is a blockquote starting '> **Corrected (issue #962, 2026-11-23).**' directly after Task 4's checklist; line 268 reads 'runs.rs:482 (in claim; line 481 at 22c07f7)'. git show 22c07f7:runs.rs has the api_keys subselect at line 481, HEAD at 482. Line 52 (Verified facts, describing the base) still says runs.rs:481; the PR claims only Task 5 was updated.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 258,
+                "end": 262
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:20:08.316416173Z",
+          "seal": {
+            "by": "server",
+            "mac": "9662779ebd1015b28a71534a3b5fde8eb687a455e909685b8126d4c5e749a860"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The dated note and the Task 5 line update are in the plan at the cited lines.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1064"
+          ],
+          "recorded_at": "2026-11-23T14:22:04.145985512Z",
+          "seal": {
+            "by": "server",
+            "mac": "5710d8cb05775c0c830fe2de8107806b376f3f2961d07610543df5c4423872c7"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:04.145985512Z",
+      "seal": {
+        "by": "server",
+        "mac": "4aaaeb1d8919c21b561943831324cf914455a650b6cc61a4901fa261a1ab2513"
+      }
+    },
+    {
+      "id": "CLM-0799",
+      "statement": "No later task in the plan uses a symbol this PR changed (the plan names no maintenance store function or signature outside Task 4, other than the runs.rs api_keys statement in Task 5 and the maintenance_runs triggers and tables in Task 11).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "PR body: \"No later task uses a symbol this PR changed.\"",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1065",
+          "kind": "analysis",
+          "locator": "git grep -n -E \"list_runs|get_run|runs::|reports::|evidence::|count_findings|snapshot|candidates\" -- docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+          "summary": "Plan mentions of the changed functions are only in Task 4 itself (257, 260) and Task 5's runs.rs:482 'caller checks the key id first' (268); Task 11 names tables, FK and triggers (420-447), not Rust symbols; Task 12 line 537 mentions the maintenance-run write but no changed symbol. Plan line 52 and 66 cite SQL locations, not retyped symbols.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 266,
+                "end": 272
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:20:08.367313812Z",
+          "seal": {
+            "by": "server",
+            "mac": "b0e6ed44936a5ff6642651204ffc06e057021d79198038717009b110fdf62a9b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Plan text outside Task 4 names no retyped Rust symbol; Task 5 and Task 11 reference only SQL and tables.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1065"
+          ],
+          "recorded_at": "2026-11-23T14:22:04.218442674Z",
+          "seal": {
+            "by": "server",
+            "mac": "fdda0a76bd3faffe43bac92d1e0898afd6d69a02372495ce9f7a84240b21cb02"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:04.218442674Z",
+      "seal": {
+        "by": "server",
+        "mac": "aadcb002bda64efccd970938a4c88e2bcc154819790ded7552b2efe795e96ead"
+      }
+    },
+    {
+      "id": "CLM-0800",
+      "statement": "Changelog: maintenance::lock (src/store/maintenance/mod.rs) is called first in runs::claim (runs.rs:457), renew (:552), close (:680), reports::dispose (reports.rs:295) and submit (:444); it calls catalogs::lock then changesets::lock_catalog (SELECT id FROM catalogs WHERE id = $1 FOR KEY SHARE, Refused(CATALOG_GONE) when gone), then inserts into and locks maintenance_state.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "changelog line 19 (Registry lock at the start of every maintenance write)",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md",
+        "src/store/maintenance/mod.rs",
+        "src/store/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1066",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/mod.rs:78-95; src/store/changesets.rs:239-251; call sites runs.rs:457,552,680; reports.rs:295,444",
+          "summary": "lock() calls catalogs::lock, then changesets::lock_catalog, then INSERT INTO maintenance_state ... ON CONFLICT DO NOTHING and SELECT ... FOR UPDATE. lock_catalog runs `SELECT id FROM catalogs WHERE id = $1 FOR KEY SHARE` and returns Refused(CATALOG_GONE) on None. Calls to lock(&mut tx, ...) are at exactly runs.rs:457, 552, 680 and reports.rs:295, 444, each the first statement after db.begin(). Note: the changelog's parenthetical that catalogs::lock 'touches no table' (pg_advisory_xact_lock) was not opened by this audit.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/mod.rs",
+              "lines": {
+                "start": 78,
+                "end": 95
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:20:08.418789774Z",
+          "seal": {
+            "by": "server",
+            "mac": "48430a048f50d08312ac88a56bd20087429b858bc1165abb86f8cea62af258ba"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Lock helper body and all five call-site lines match the changelog.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1066"
+          ],
+          "recorded_at": "2026-11-23T14:22:04.285368902Z",
+          "seal": {
+            "by": "server",
+            "mac": "c4c6934441d1d797fde7256500116015cb7397c24159a8aef4dbb07f1af4a5e5"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:04.285368902Z",
+      "seal": {
+        "by": "server",
+        "mac": "2ccfde8e85690046ace639d51e386a095cf6171d1e30496c4e49b30afe81a2a2"
+      }
+    },
+    {
+      "id": "CLM-0801",
+      "statement": "Changelog: runs::claim inserts into maintenance_runs with key_id = (SELECT id FROM api_keys WHERE id = $3) at runs.rs:482 (runs.rs:481 at 22c07f7), which reads api_keys and stores NULL when the key is gone.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "changelog line 20 (The api_keys subselect)",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md",
+        "src/store/maintenance/runs.rs"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1067",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/runs.rs:482; git show 22c07f7:src/store/maintenance/runs.rs line 481; migrations/0006_maintenance.sql:17",
+          "summary": "Line 482 is `INSERT INTO maintenance_runs (...key_id,...) VALUES ($1,$2,(SELECT id FROM api_keys WHERE id=$3),$3,...)` inside claim; at 22c07f7 the same statement is on line 481. A scalar subselect yields NULL when no row matches, and key_id is nullable (0006:17).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/runs.rs",
+              "lines": {
+                "start": 482,
+                "end": 482
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:20:32.683681112Z",
+          "seal": {
+            "by": "server",
+            "mac": "b83020a5ac42c21b26236e84694b4b9114e059cf08c3bf9b57fdb2f8e0f7f20f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Line 482 holds the subselect; 22c07f7 line 481 confirmed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1067"
+          ],
+          "recorded_at": "2026-11-23T14:22:04.362254614Z",
+          "seal": {
+            "by": "server",
+            "mac": "c1da4a298050cbd3d4470e11fa0e32d282b249e4412672876ba6968e7c05ee5d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:04.362254614Z",
+      "seal": {
+        "by": "server",
+        "mac": "9476bb74a7df2c7d3d9c3ed5e3f39726730bd1f512a144b5d50eee43ac76bd53"
+      }
+    },
+    {
+      "id": "CLM-0802",
+      "statement": "Changelog: all seven maintenance_* tables have catalog_id REFERENCES catalogs (id) ON DELETE CASCADE and maintenance_runs.key_id REFERENCES api_keys (id) ON DELETE SET NULL (migrations/0006_maintenance.sql), and deleting a user's keys (migrations/0013_user_deletion.sql) nulls maintenance_runs.key_id.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "changelog line 21 (Foreign keys to the account tables)",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md",
+        "migrations/0006_maintenance.sql",
+        "migrations/0013_user_deletion.sql"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1068",
+          "kind": "inspection",
+          "locator": "migrations/0006_maintenance.sql:5,16,17,34,66,86,106,118; migrations/0013_user_deletion.sql:10-12,13-16",
+          "summary": "catalog_id REFERENCES catalogs (id) ON DELETE CASCADE appears for all seven tables at lines 5 (state), 16 (runs), 34 (work), 66 (findings), 86 (evidence), 106 (dispositions), 118 (requests); line 17 is key_id text REFERENCES api_keys (id) ON DELETE SET NULL. 0013 makes api_keys.user_id ON DELETE CASCADE and its header comment says deleting a key sets maintenance_runs.key_id to NULL.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/0006_maintenance.sql",
+              "lines": {
+                "start": 14,
+                "end": 18
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:20:32.734950133Z",
+          "seal": {
+            "by": "server",
+            "mac": "591c72e4d39a7a217e547d5e9c2ee1ef39e3e855e5e8c7386883ef892407e165"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All seven catalog_id FKs and the key_id FK read in 0006; 0013 comment confirms the SET NULL on key deletion.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1068"
+          ],
+          "recorded_at": "2026-11-23T14:22:04.437514239Z",
+          "seal": {
+            "by": "server",
+            "mac": "2469440422142fe75133f37fcc8c04eb7828cb16ad9b0b81ede709b5fcd7f0ff"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:04.437514239Z",
+      "seal": {
+        "by": "server",
+        "mac": "3bf6f0ab86165166a6126e7210d4120f9f38d0b7efad9ad79d9771ff58cecd5a"
+      }
+    },
+    {
+      "id": "CLM-0803",
+      "statement": "Changelog: triggers maintenance_runs_audit_end and maintenance_runs_audit_empty run audit_maintenance_run (migrations/0017_maintenance_audit.sql) when a run leaves running or is inserted already ended; the function reads audit_credentials, api_keys, users (through api_keys), audit_teams and catalogs, counts maintenance_findings, and inserts into audit_entries; they are defined only in 0017.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "changelog line 22 (The audit triggers on maintenance_runs) and line 30",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md",
+        "migrations/0017_maintenance_audit.sql"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1069",
+          "kind": "inspection",
+          "locator": "migrations/0017_maintenance_audit.sql:26-63; git grep -n \"ON maintenance_\" -- migrations",
+          "summary": "audit_maintenance_run reads audit_credentials (FOR KEY SHARE SKIP LOCKED), api_keys LEFT JOIN users, audit_teams, catalogs, counts maintenance_findings, and INSERTs INTO audit_entries. maintenance_runs_audit_end is AFTER UPDATE OF state WHEN OLD.state='running' AND NEW.state<>'running'; maintenance_runs_audit_empty is AFTER INSERT WHEN NEW.state<>'running'. Triggers on maintenance_ tables exist only in 0017 (grep of 'ON maintenance_' also finds only CREATE INDEX lines in 0006/0007).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/0017_maintenance_audit.sql",
+              "lines": {
+                "start": 26,
+                "end": 63
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:20:32.794724152Z",
+          "seal": {
+            "by": "server",
+            "mac": "9f0ffadb38ffc6d99114c4d019d9f31f9e67f2943e474d702f78286616241d23"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Function body and both trigger definitions in 0017 match the list of tables read and written; no other migration defines a trigger on a maintenance table.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1069"
+          ],
+          "recorded_at": "2026-11-23T14:22:04.513872338Z",
+          "seal": {
+            "by": "server",
+            "mac": "6904cacb320f9917379669b894d858aab9b28a588fafa71b0408bc4b612ef6cd"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:04.513872338Z",
+      "seal": {
+        "by": "server",
+        "mac": "c031834bbe157d86b8eb2c0d214804563c6ab3d01d5f77b55fc2f43456185ec3"
+      }
+    },
+    {
+      "id": "CLM-0804",
+      "statement": "Changelog: the statements that fire the audit triggers are runs::claim's INSERT (runs.rs:482, completed when the selection is empty), recover's UPDATEs (mod.rs:150 failed, mod.rs:168 completed; called at runs.rs:470, :576, :706), complete_if_terminal (runs.rs:346) and expire_submission (runs.rs:363) called from reports.rs:481 and :559, renew's UPDATE (runs.rs:604) and close's UPDATE (runs.rs:731).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "changelog lines 23-26",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md",
+        "src/store/maintenance/runs.rs",
+        "src/store/maintenance/mod.rs",
+        "src/store/maintenance/reports.rs"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1070",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/runs.rs:346,363,470,482,576,604,706,731; src/store/maintenance/mod.rs:150,168; src/store/maintenance/reports.rs:481,559",
+          "summary": "Each cited line holds what the changelog says: INSERT at 482 (state 'completed' when selection empty, 'running' otherwise); UPDATE state='failed' at mod.rs:150 and 'completed' at mod.rs:168; recover(...) at runs.rs:470, 576, 706; complete_if_terminal UPDATE at 346 and expire_submission UPDATE state='failed' at 363, called from reports.rs:481 and 559; renew UPDATE state='completed' at 604; close UPDATE SET state=$3 at 731. git grep for 'UPDATE maintenance_runs' in non-test src finds exactly these and no other.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "UPDATE maintenance_runs",
+              "scope": [
+                "src/mcp",
+                "src/store/maintenance/candidates.rs",
+                "src/store/maintenance/evidence.rs",
+                "src/store/maintenance/mod.rs",
+                "src/store/maintenance/reports.rs",
+                "src/store/maintenance/runs.rs"
+              ],
+              "hits": 6,
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:20:32.853595007Z",
+          "seal": {
+            "by": "server",
+            "mac": "708185758f78820e356c57eebf7faed9f4863af467c716070a86a55241daf78c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every cited line holds the stated statement or call, and the search shows no other UPDATE of maintenance_runs outside tests.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1070"
+          ],
+          "recorded_at": "2026-11-23T14:22:04.592305167Z",
+          "seal": {
+            "by": "server",
+            "mac": "12dbefbcc0ec913792e5c5131a34c4eb89c04db77a80e0afa16c0dbcc42be8cd"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:04.592305167Z",
+      "seal": {
+        "by": "server",
+        "mac": "eedd2a8ea9cec74647b3f7667699fcb8d98ec61655845ad7b421d5ed1050edc0"
+      }
+    },
+    {
+      "id": "CLM-0805",
+      "statement": "Changelog: Task 12 replaces the audit trigger with a Rust-side catalog.maintenance_run record.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "changelog line 27",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1071",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:442-447,474,537",
+          "summary": "The plan's Task 11 migration comment says 'Task 11 replaces them with a write from Rust; Task 12 moves that write into the store transaction', Task 11's checklist (line 474) says the maintenance audit paths 'record catalog.maintenance_run from Rust', and Task 12 (line 537) switches the 'Task 11's maintenance-run write' into the store transaction. So Task 11, not Task 12, replaces the trigger; Task 12 only relocates the write.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 442,
+                "end": 447
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:20:32.903858543Z",
+          "seal": {
+            "by": "server",
+            "mac": "804a9afc7147972d2547b48505c33f527d093da574ba4e02bf8051e9fc033a52"
+          }
+        },
+        {
+          "id": "EVD-1081",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md:27 vs plan:443-447,474,537",
+          "summary": "Changelog line 27 now reads 'Task 11 replaces the trigger with a Rust-side catalog.maintenance_run record, and Task 12 moves that write into the store transaction', matching the plan's Task 11 (lines 443, 474) and Task 12 (line 537). Recorded on an uncommitted working-tree edit.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T14:23:08.317764537Z",
+          "seal": {
+            "by": "server",
+            "mac": "41737bb2fb9ab3e652ce3827e0e8d270826e664cc4b1ce0b3bc0cb9097b943f6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The plan assigns the Rust-side catalog.maintenance_run record that replaces the triggers to Task 11 (migration comment line 443 and checklist line 474); Task 12 only moves that write into the store transaction (line 537). The changelog attributes the replacement to Task 12. Fix: in changelog line 27, change 'Task 12 replaces the trigger with a Rust-side catalog.maintenance_run record' to 'Task 11 replaces the trigger with a Rust-side catalog.maintenance_run record, and Task 12 moves that write into the store transaction'.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1071"
+          ],
+          "recorded_at": "2026-11-23T14:22:04.661621626Z",
+          "seal": {
+            "by": "server",
+            "mac": "c27fb1085558c7dfd6d5ca2cf5b6a9ed5994c25f8e1dd41ae0414423c75ec889"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The corrected sentence matches the plan: Task 11 writes catalog.maintenance_run from Rust, Task 12 moves it into the store transaction.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1081"
+          ],
+          "recorded_at": "2026-11-23T14:23:14.203815709Z",
+          "seal": {
+            "by": "server",
+            "mac": "f5fa3304724124178651d9d8ba84a9646cae35f87f7928ebce37ab952752a8b1"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:23:14.203815709Z",
+      "seal": {
+        "by": "server",
+        "mac": "58b2fd259deb063edfc2c72e19f91054284fd7fe0b553d31d46d635c5b650070"
+      }
+    },
+    {
+      "id": "CLM-0806",
+      "statement": "Changelog: src/store/maintenance/ never calls audit::record, audit::lock_people or the SQL functions audit_person, audit_team_ref, audit_credential outside tests.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "changelog line 28",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md",
+        "src/store/maintenance"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1072",
+          "kind": "analysis",
+          "locator": "git grep -n -E \"audit::|audit_person|audit_team_ref|audit_credential\\(|lock_people|record\\(\" -- src/store/maintenance (non-test files)",
+          "summary": "Zero matches in mod.rs, runs.rs, reports.rs, evidence.rs, candidates.rs; the only matches are in tests.rs (audit_credentials table setup at 2360-2370, a SELECT audit_credential at 2526, a lock at 2556), which are tests, not module code.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "audit::|audit_person|audit_team_ref|audit_credential\\(|lock_people",
+              "scope": [
+                "src/store/maintenance/candidates.rs",
+                "src/store/maintenance/evidence.rs",
+                "src/store/maintenance/mod.rs",
+                "src/store/maintenance/reports.rs",
+                "src/store/maintenance/runs.rs"
+              ],
+              "hits": 0,
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:20:32.970496723Z",
+          "seal": {
+            "by": "server",
+            "mac": "28bab065b8a99b8f29147de7540640b034642323f99187da57b365a7f807d4a0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Zero-hit search in the five non-test files.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1072"
+          ],
+          "recorded_at": "2026-11-23T14:22:04.756722769Z",
+          "seal": {
+            "by": "server",
+            "mac": "0599d01b6fc4673599b199f90bfd66f34705861319b0be937e0f83ba96e5d027"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:04.756722769Z",
+      "seal": {
+        "by": "server",
+        "mac": "a8e5c736c9ab58909e7481bb6e1f7248cdb825b1b557b29f9fe76c841ca34172"
+      }
+    },
+    {
+      "id": "CLM-0807",
+      "statement": "Changelog: list_runs, get_run, get_finding, list_findings, count_findings and evidence::read read only the seven maintenance tables, documents and revisions; candidates::load and cursors read documents, revisions and the maintenance tables.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "changelog line 29",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md",
+        "src/store/maintenance"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1073",
+          "kind": "analysis",
+          "locator": "grep -o \"FROM|JOIN|INTO|UPDATE <table>\" over src/store/maintenance/{runs,reports,evidence,candidates}.rs",
+          "summary": "Tables named: candidates.rs reads documents, revisions, maintenance_evidence/findings/state/work; runs.rs reads api_keys (claim INSERT only, line 482), documents, maintenance_*; reports.rs reads documents and maintenance_*; evidence.rs reads revisions JOIN documents. The only account-table name in the read paths is the claim INSERT's api_keys, and the lock() helper's catalogs read; list_runs/get_run/get_finding/list_findings/count_findings/evidence::read touch only maintenance tables, documents, revisions (via snapshot, page_ids, summary, finding, load_evidence helpers).",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "api_keys|FROM catalogs|JOIN catalogs|JOIN api_keys|JOIN users|FROM users",
+              "scope": [
+                "src/store/maintenance/candidates.rs",
+                "src/store/maintenance/evidence.rs",
+                "src/store/maintenance/mod.rs",
+                "src/store/maintenance/reports.rs",
+                "src/store/maintenance/runs.rs"
+              ],
+              "hits": 1,
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:20:33.026759737Z",
+          "seal": {
+            "by": "server",
+            "mac": "b06882054a3352680bf661d76876537bd8ea3cec6726567f17802ced1a472237"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Table names per file show the read paths touch only maintenance tables, documents and revisions; the single api_keys hit is the claim INSERT.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1073"
+          ],
+          "recorded_at": "2026-11-23T14:22:04.831340191Z",
+          "seal": {
+            "by": "server",
+            "mac": "2c5e1ae6baa0a61b5b7a82e88b87b5650e8af118872062019d0253ff6ed049cb"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:04.831340191Z",
+      "seal": {
+        "by": "server",
+        "mac": "54403056639cef5d43fa64cdffc70b84d47e8e397118c2c25c72fd81077a9ceb"
+      }
+    },
+    {
+      "id": "CLM-0808",
+      "statement": "Changelog Not-traced note: outside src/store/maintenance/, the only code writing the maintenance tables are the migration tests in src/db.rs and the mcp/maintenance owner lookup reads; no other src file writes them, and migrations after 0017 hold no other triggers on them.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "changelog line 30",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1074",
+          "kind": "analysis",
+          "locator": "git grep -n -E \"maintenance_(state|runs|work|findings|evidence|dispositions|requests)\" -- src ':!src/store/maintenance'; git grep -n -E \"TRIGGER\" -- migrations",
+          "summary": "Outside src/store/maintenance, the table names appear in src/db.rs only (table-list assertion 263-269; migration tests with INSERTs at 1400-1504) and src/mcp/maintenance/work.rs (the owner SELECT at ~222 and a test that updates catalogs, not maintenance tables). Migrations containing CREATE TRIGGER: 0012_audit (2), 0015_provisioner (2), 0017 (2); only 0017 is on maintenance_runs; migrations 0018-0035 hold no trigger on a maintenance table (no hit for 'ON maintenance_' beyond 0006/0007 indexes and 0017).",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "maintenance_(state|runs|work|findings|evidence|dispositions|requests)",
+              "scope": [
+                "src/bin",
+                "src/cli",
+                "src/db.rs",
+                "src/housekeeping.rs",
+                "src/http",
+                "src/investigator",
+                "src/mcp"
+              ],
+              "hits": 43,
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:20:48.825449797Z",
+          "seal": {
+            "by": "server",
+            "mac": "43110b847d2b7a2a4b386c2bb945f132e2011a6fa817ca5277193f23675a94a1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Non-module writers of the maintenance tables in src are the src/db.rs migration tests; no later migration adds a trigger on them.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1074"
+          ],
+          "recorded_at": "2026-11-23T14:22:04.913396566Z",
+          "seal": {
+            "by": "server",
+            "mac": "3ba831f905a07aaf29e665517ee85ecb344903c420b63bf9610f3774ee9fc9ed"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:04.913396566Z",
+      "seal": {
+        "by": "server",
+        "mac": "1998d752249b8811dc8884130dd102c16dcf74488b9f66443b50cf60a20d2f84"
+      }
+    },
+    {
+      "id": "CLM-0809",
+      "statement": "The PR body's Changes bullet on the changelog states the inventory additions accurately: maintenance::lock (catalogs FOR KEY SHARE), the api_keys subselect at runs.rs:482, the foreign keys of the seven maintenance_* tables to catalogs and api_keys, and the audit_maintenance_run triggers.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body Changes bullet 4",
+      "derived_from": [
+        "CLM-0788"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1075",
+          "kind": "inspection",
+          "locator": "target/i962-logs/pr-962-body.md Changes bullet 4 vs changelog lines 19-27",
+          "summary": "The bullet names the registry lock (catalogs FOR KEY SHARE), the api_keys subselect at runs.rs:482, the foreign keys of seven maintenance_* tables to catalogs and api_keys, and the audit_maintenance_run triggers; each matches the code and migrations as recorded under the lock, subselect, FK and trigger claims. It omits that Task 12's ... statement is wrong, but the bullet itself does not repeat it.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T14:20:48.900541555Z",
+          "seal": {
+            "by": "server",
+            "mac": "744f7c3eb53e79265ba2d4d4673d04756a4c9c246eb8a89b30ca2d1d02dfb82d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The bullet restates only inventory items that were each verified.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1075"
+          ],
+          "recorded_at": "2026-11-23T14:22:04.981904101Z",
+          "seal": {
+            "by": "server",
+            "mac": "dcd569c480e4f02c397b9337bb275d1d9eb68416bd66e0a2097e6e0560b883b8"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:19:25.478862135Z",
+      "updated_at": "2026-11-23T14:22:04.981904101Z",
+      "seal": {
+        "by": "server",
+        "mac": "afdab27e7ea99c66e1242772425e7ca961b062a3afe4a69c18e32f578bf092e8"
+      }
+    },
+    {
+      "id": "CLM-0810",
+      "statement": "Changelog Still on App::pool(): the changeset listing (changesets::list_open and open_for_catalogs, joining catalogs and api_keys), the table reads in src/store/changesets.rs, src/store/repair.rs and src/store/users.rs that Task 5 splits, and ToolContext::resolve_changeset's catalogs::row_by_id are still on the account pool.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Changelog Notes (task 3), lines 34-36: \"Still on `App::pool()`, not part of this task\" (maintenance modules removed after #962)",
+      "derived_from": [
+        "CLM-0764"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T13-36-45Z-m21-task-03-catalog-reads-take-catalogdb.md",
+        "src/mcp/changesets.rs",
+        "src/mcp/context.rs",
+        "src/store/changesets.rs",
+        "src/store/repair.rs",
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:962"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1082",
+          "kind": "analysis",
+          "locator": "src/store/changesets.rs:590,616,640; src/mcp/changesets.rs:133; src/mcp/context.rs:984; src/store/repair.rs:280; src/store/users.rs (31 PgPool uses)",
+          "summary": "At HEAD list_open, open_for_catalogs and listed take `pool: &PgPool` and mcp/changesets.rs:133 passes ctx.app().pool(); ToolContext::resolve_changeset calls catalogs::row_by_id(self.app.pool(), ...) at context.rs:984; repair::missing_root_index takes &PgPool; users.rs still has 31 PgPool uses. All named items are still on the account pool, and the changelog text now carries the dated #962 note for the maintenance modules.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 588,
+                "end": 645
+              },
+              "commit": "15863564e571ca7f548c67f280c6a87d313f189f"
+            }
+          },
+          "recorded_at": "2026-11-23T14:23:14.121377233Z",
+          "seal": {
+            "by": "server",
+            "mac": "a029d1bc42d359d61bf4bc855185206140616a28750fa95119dd93dc6b5ada6b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every item listed still takes or is passed the account pool at HEAD.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1082"
+          ],
+          "recorded_at": "2026-11-23T14:23:19.020408616Z",
+          "seal": {
+            "by": "server",
+            "mac": "c7138439b00c3fa77340b117d60c7da63bd354930ad44bfd45022f9ed106a73a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T14:23:08.262550842Z",
+      "updated_at": "2026-11-23T14:23:19.020408616Z",
+      "seal": {
+        "by": "server",
+        "mac": "6fb92cba03d1748051057c53052e68d00d238c7451d747f85a26f88c0342195c"
       }
     }
   ]
