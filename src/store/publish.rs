@@ -648,6 +648,7 @@ fn split_lint(
 /// # Returns
 /// `(new, preexisting)`. A pre-existing finding keeps its place but its
 /// message says it was already there.
+#[tracing::instrument(level = "trace", skip_all)]
 fn demote_preexisting(
     errors: Vec<Finding>,
     published_errors: impl FnOnce() -> Vec<Finding>,
