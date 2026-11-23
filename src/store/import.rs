@@ -177,7 +177,6 @@ pub async fn import(
     // The account transaction wraps the store's (the audit entry and the
     // users it locks are account rows); the store commits first.
     let mut account_tx = db.accounts().begin().await?;
-    let mut tx = db.begin().await?;
     audit::lock_people(
         &mut account_tx,
         options.audit,
@@ -187,6 +186,13 @@ pub async fn import(
         },
     )
     .await?;
+    // Acquisition order (plan Task 11, issue #970): the account transaction
+    // and every account row lock (`lock_people`) come BEFORE the store
+    // connection. A change that held the store's connection while it waited
+    // for a user row would block a user deletion (which holds those rows and
+    // then needs a store connection) in a cycle PostgreSQL cannot see,
+    // because one edge is a pool wait.
+    let mut tx = db.begin().await?;
     // Under the lock, and read again: see `lock_by_name`.
     let found = catalogs::lock_by_name(&mut account_tx, &mut tx, catalog).await?;
     // Under the lock, before anything is written: a replacement under the

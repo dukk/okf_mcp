@@ -656,11 +656,17 @@ pub(crate) async fn discard(
         true => Some(app.accounts().begin().await?),
         false => None,
     };
-    let mut tx = app.store_db(state.store()).await?.begin().await?;
     if let Some(account_tx) = account_tx.as_mut() {
         // The entry's users before the changeset, as publish (issue #418).
         crate::store::publish::lock_people(account_tx, &ctx.audit_actor(), state.name()).await?;
     }
+    // Acquisition order (plan Task 11, issue #970): the account transaction
+    // and every account row lock (`lock_people`) come BEFORE the store
+    // connection. A change that held the store's connection while it waited
+    // for a user row would block a user deletion (which holds those rows and
+    // then needs a store connection) in a cycle PostgreSQL cannot see,
+    // because one edge is a pool wait.
+    let mut tx = app.store_db(state.store()).await?.begin().await?;
     catalogs::lock(&mut tx, state.id()).await?;
     changesets::lock_catalog(&mut tx, state.id()).await?;
     changesets::lock(&mut tx, changeset.id)

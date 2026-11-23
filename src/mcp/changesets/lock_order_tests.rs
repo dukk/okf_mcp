@@ -382,6 +382,81 @@ async fn a_revert_holding_its_changeset_finishes_before_its_users_deletion() {
     assert_eq!(state_of(&test, &handle).await, ChangesetState::Discarded);
 }
 
+/// Issue #970, Brooke's review of #1001: a change that audits holds an
+/// account transaction and a store transaction, and a user deletion holds
+/// the user's rows and then needs a store connection. If the change took the
+/// store's only connection BEFORE it locked the users, the deletion (holding
+/// the rows) and the change (holding the connection) would wait on each
+/// other with one edge a pool wait, which PostgreSQL's deadlock detector
+/// does not see. Account locks first, store connection second, removes it.
+///
+/// The order is forced, not raced: a holder keeps alice's row, the deletion
+/// queues for it first, the revert queues second, and the holder lets go. The
+/// store pool has ONE connection, the account pool several, and both sides
+/// use the app's own registry.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_audited_revert_and_its_users_deletion_share_one_store_connection() {
+    // Arrange
+    let config = Config {
+        store_max_connections: 1,
+        ..Config::default()
+    };
+    let test = app_with(&[("pg", &[("a.md", NOTE)])], config).await;
+    let alice = Arc::new(user_context(&test, "alice", Access::Write, false).await);
+    let handle = open(&alice).await;
+    body(&alice, &handle, "# A\n\nAlice.\n").await;
+    let store = test.app.main_db().await;
+    assert!(
+        test.app
+            .accounts()
+            .executor()
+            .options()
+            .get_max_connections()
+            >= 3,
+        "the account pool must have connections to spare"
+    );
+    assert_eq!(store.executor().options().get_max_connections(), 1);
+    let mut holder = test.app.accounts().begin().await.expect("begin the holder");
+    sqlx::query("SELECT id FROM users WHERE name = 'alice' FOR UPDATE")
+        .execute(&mut *holder)
+        .await
+        .expect("hold alice's row");
+    let pool = test.app.accounts().executor().clone();
+    let deleting = tokio::spawn(async move {
+        users::delete_on(
+            &pool,
+            &store,
+            "alice",
+            users::DeleteOptions::default(),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+    });
+    lock_waiters(&test, 1).await;
+    let reverter = Arc::clone(&alice);
+    let to_revert = handle.clone();
+    let reverting = tokio::spawn(async move {
+        let params = RevertParams {
+            path: "/a.md".to_string(),
+            revision: 1,
+            changeset: to_revert,
+        };
+        revert(&reverter, params).await
+    });
+    lock_waiters(&test, 2).await;
+
+    // Act: the deletion is first in the queue, so it gets the rows first.
+    holder.rollback().await.expect("release alice's row");
+
+    // Assert: both finish (a hang here is the invisible cycle). The deletion
+    // wins; the revert then finds its user gone and is refused, or, if it
+    // got in first, commits.
+    let deleted = finish(deleting, "the deletion").await;
+    let _ = finish(reverting, "the revert").await;
+    deleted.expect("the deletion");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_publish_racing_its_users_deletion_never_deadlocks() {
     // The issue's race, unforced and repeated: one side wins cleanly every
