@@ -1312,15 +1312,12 @@ mod tests {
 
     /// A rotated secret, then a plain read on the open pool: the read is
     /// refused, the credential task refreshes, and the next read works.
-    /// `quoted_role` gives the role a `"` in its name.
-    async fn a_plain_read_after_a_rotation_refreshes(quoted_role: bool) {
+    /// The role's name is `prefix` and the test database's name, so a
+    /// prefix can put quotation marks in it.
+    async fn a_plain_read_after_a_rotation_refreshes(prefix: &str) {
         let db = crate::db::test_db().await;
-        let role = if quoted_role {
-            let (_, _, database) = server_of(&db.pool);
-            make_named_role(&db.pool, &format!("app\"{database}"), "pw-1").await
-        } else {
-            make_role(&db.pool, "pw-1").await
-        };
+        let (_, _, database) = server_of(&db.pool);
+        let role = make_named_role(&db.pool, &format!("{prefix}{database}"), "pw-1").await;
         let secret = |password: &str| {
             serde_json::json!({ "username": role, "password": password }).to_string()
         };
@@ -1364,12 +1361,17 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_plain_read_refused_after_a_rotation_refreshes_the_login_and_the_next_read_works() {
-        a_plain_read_after_a_rotation_refreshes(false).await;
+        a_plain_read_after_a_rotation_refreshes("r_").await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_role_with_a_quotation_mark_still_refreshes_after_a_rotation() {
-        a_plain_read_after_a_rotation_refreshes(true).await;
+        a_plain_read_after_a_rotation_refreshes("app\"").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_role_with_two_adjacent_quotation_marks_still_refreshes_after_a_rotation() {
+        a_plain_read_after_a_rotation_refreshes("app\"\"").await;
     }
 
     /// Opens an IAM store, forgets it (one store, or all), and checks that

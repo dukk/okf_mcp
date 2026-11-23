@@ -468,34 +468,31 @@ pub(crate) fn is_auth_failure(error: &sqlx::Error) -> bool {
 static LOGINS_REFUSED: LazyLock<broadcast::Sender<Option<String>>> =
     LazyLock::new(|| broadcast::channel(64).0);
 
-/// The role a server message names between double quotes (Postgres writes
-/// `password authentication failed for user "NAME"`), or `None` when the
-/// message does not name one unambiguously.
+/// The role a refusal message names, when it can only be that one: the text
+/// between the message's only two `"` (Postgres writes `password
+/// authentication failed for user "NAME"`). `None` otherwise, which every
+/// credential task answers.
 ///
-/// A `"` inside a quoted name is doubled (`""`) in an identifier, but a
-/// server may write the name raw, and then the first closing quote is not
-/// the end. So the name is read up to the first lone `"`, and anything
-/// after it that holds another `"` makes the message ambiguous: `None`,
-/// which every credential task answers.
+/// The server writes the name raw, not as an escaped identifier, so a name
+/// holding a `"` cannot be told apart from the text around it. The rule is
+/// therefore one-sided: a task stays asleep only when the message names a
+/// single, quote-free, non-empty role that is not its own. Any other shape
+/// (no quoted name, an unterminated or empty one, several, or a name with
+/// quotation marks in it) wakes every task: a wasted fetch is cheap, while a
+/// missed one leaves a `secrets-manager` pool, which has no timer, refused
+/// for good.
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
     allow(uninstrumented_fn, reason = "parses text, no I/O")
 )]
-fn role_in(message: &str) -> Option<String> {
-    let (_, rest) = message.split_once('"')?;
-    let mut role = String::new();
-    let mut chars = rest.char_indices().peekable();
-    while let Some((at, character)) = chars.next() {
-        if character != '"' {
-            role.push(character);
-        } else if chars.next_if(|&(_, next)| next == '"').is_some() {
-            role.push('"');
-        } else {
-            let after = &rest[at + 1..];
-            return (!after.contains('"') && !role.is_empty()).then_some(role);
-        }
+fn role_in(message: &str) -> Option<&str> {
+    let mut pieces = message.split('"');
+    // `split` yields one piece more than there are quotation marks, so
+    // exactly two marks means exactly three pieces.
+    match (pieces.next(), pieces.next(), pieces.next(), pieces.next()) {
+        (Some(_), Some(role), Some(_), None) if !role.is_empty() => Some(role),
+        _ => None,
     }
-    None
 }
 
 /// Tells the credential tasks that a login was refused.
@@ -509,7 +506,8 @@ fn role_in(message: &str) -> Option<String> {
 pub(crate) fn signal_auth_refused(error: &sqlx::Error) {
     let role = error
         .as_database_error()
-        .and_then(|database| role_in(database.message()));
+        .and_then(|database| role_in(database.message()))
+        .map(str::to_owned);
     // No task listening (a pool on `env`) is not an error.
     let _ = LOGINS_REFUSED.send(role);
 }
@@ -1078,17 +1076,39 @@ mod tests {
     #[test]
     fn a_role_is_read_from_a_refusal_message_or_left_unknown() {
         let said = |name: &str| format!("password authentication failed for user \"{name}\"");
-        assert_eq!(role_in(&said("app")), Some("app".to_string()));
-        // A quotation mark in the name, doubled as in an identifier.
-        assert_eq!(
-            role_in(&said("app\"\"reader")),
-            Some("app\"reader".to_string())
-        );
-        // The same name written raw: ambiguous, so unknown.
+        assert_eq!(role_in(&said("app")), Some("app"));
+        // Postgres writes the name raw, so a name holding quotation marks,
+        // one or two adjacent, cannot be read back: unknown.
         assert_eq!(role_in(&said("app\"reader")), None);
+        assert_eq!(role_in(&said("app\"\"reader")), None);
         assert_eq!(role_in(&said("")), None);
         assert_eq!(role_in("no quoted name here"), None);
         assert_eq!(role_in("an unterminated \"name"), None);
+        // Several quoted names (pg_hba.conf's refusal): unknown.
+        assert_eq!(
+            role_in("no pg_hba.conf entry for host \"h\", user \"app\", database \"d\""),
+            None
+        );
+    }
+
+    #[test]
+    fn a_refusal_wakes_every_task_unless_it_names_another_role() {
+        let wakes = |message: &str, login: &str| {
+            let (sender, mut refused) = broadcast::channel(4);
+            sender.send(role_in(message).map(str::to_owned)).unwrap();
+            drop(sender);
+            let login = || login.to_string();
+            // A refusal that does not wake the task leaves it waiting on a
+            // closed channel, which never resolves.
+            futures_util::FutureExt::now_or_never(next_refusal(&mut refused, &login)).is_some()
+        };
+        let said = |name: &str| format!("password authentication failed for user \"{name}\"");
+        assert!(wakes(&said("app"), "app"));
+        assert!(!wakes(&said("other"), "app"));
+        assert!(wakes(&said("app\"\"reader"), "app\"\"reader"));
+        assert!(wakes(&said("app\"reader"), "app\"reader"));
+        assert!(wakes("an unterminated \"app", "app"));
+        assert!(wakes("no quoted name here", "app"));
     }
 
     #[test]
