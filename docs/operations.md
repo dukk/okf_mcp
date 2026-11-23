@@ -155,7 +155,7 @@ unknown keys are ignored, so one file serves every version.
 | `feedback.api_key_env` | none | The environment variable holding the form's API key, sent as `X-API-KEY`. Optional, but without a key Forminit takes one submission per 5 seconds from the server's address (5 per second with one), and a protected form needs it |
 | `feedback.worker` | `true` | Run the feedback worker in `serve`. With several replicas, turn it on for one only. Its own pool opens up to 3 connections, on top of `database_max_connections` |
 | `feedback.max_per_hour` | `10` | Submissions one credential (API key or OAuth grant) may make in any hour, 1 to 1000. Counted in Postgres, so it holds across replicas |
-| `feedback.retention` | `"30d"` | How long forwarded feedback is kept before the hourly prune deletes it, 1 day to 10 years. Failed feedback is kept |
+| `feedback.retention` | `"30d"` | How long forwarded feedback is kept before the hourly prune deletes it, 1 day to 10 years. Failed feedback is pruned after the same time, counted from when it failed |
 | `redis.url_env` | none | The `[redis]` table turns on shared state for several replicas (the [Redis](#redis) section). `url_env` is required: the name of the environment variable holding the URL, `redis://` or `rediss://`, which may carry a password (so it never goes in the file). Unknown keys in this table are an error |
 | `redis.key_prefix` | `"okf:"` | Starts every key and channel, so one Redis can serve several deployments. 1 to 64 bytes, with no whitespace, control character or brace: it goes inside the hash tag `{<key_prefix>}` |
 | `redis.mode` | `"standalone"` | `"standalone"` for one Redis or Valkey primary (or a managed primary endpoint), `"cluster"` for a cluster-aware client: ElastiCache Serverless, which runs only in cluster mode, and other clusters |
@@ -2780,8 +2780,23 @@ the post, or a failure to mark the row `sent` afterwards, sends it again on
 the next try, possibly from another replica. A duplicate carries the same
 `feedback_id`, so de-duplicate on that field in Forminit.
 
-The hourly prune deletes `sent` rows `retention` (30 days) after they were
-sent. `failed` rows stay, for the operator to read:
+The hourly prune deletes `sent` and `failed` rows `retention` (30 days)
+after they were sent or given up on. Until then the operator sees and
+retries failed rows from the command line (a running server's worker does
+the sending):
+
+```sh
+okf-mcp feedback list         # failed rows: id, user, kind, attempts, failed at, error
+okf-mcp feedback retry ID     # back to pending with no tries, and queued again
+```
+
+A `failed` row with `FORM_NOT_FOUND` or `VALIDATION_ERROR` fails every
+submission until the form id or the rating block is fixed, so check
+`[feedback]` before retrying. The worker logs a warning for each row it
+marks `failed` (`feedback not delivered; marked failed`, with the error
+code as `reason`). Deleting a user deletes that user's `pending` and
+`failed` feedback in the same transaction; `sent` rows, already delivered,
+are left for the prune. For anything else, read the table:
 
 ```sql
 SELECT id, status, attempts, last_error, created_at

@@ -18,8 +18,10 @@
 //!    [`MAX_TRIES`] tries, then the row is `failed`. Any other 4xx
 //!    (`FORM_NOT_FOUND`, `FORM_DISABLED`, a validation error): `failed` at
 //!    once, with Forminit's error code, never retried.
-//! 4. [`prune`] (a housekeeping job) deletes `sent` rows past
-//!    `[feedback] retention`, and the finished jobs that named them.
+//! 4. [`prune`] (a housekeeping job) deletes `sent` and `failed` rows past
+//!    `[feedback] retention`, and the finished jobs that named them. An
+//!    operator sees failed rows with [`list_failed`] and queues one again
+//!    with [`retry`] (`okf-mcp feedback list` and `retry`).
 //!
 //! Delivery is at-least-once. Fetching a job is exclusive in normal
 //! operation (apalis takes it `FOR UPDATE SKIP LOCKED`), but a try whose
@@ -233,6 +235,27 @@ pub struct NewFeedback<'a> {
     pub credential_kind: &'static str,
 }
 
+/// Queues one [`QUEUE`] job naming feedback `id`, in the caller's
+/// transaction (so the row and its job commit together).
+///
+/// # Errors
+/// [`OkfError::Io`] if the queue refuses the job.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn queue_job(tx: &mut sqlx::PgConnection, id: &str) -> Result<(), OkfError> {
+    let job = FeedbackJob {
+        feedback_id: id.to_string(),
+    };
+    // apalis-postgres stores the payload as JSON bytes, as for mail.
+    let payload = serde_json::to_vec(&job).map_err(queue_error)?;
+    let task = TaskBuilder::new(payload)
+        .max_attempts(APALIS_MAX_ATTEMPTS)
+        .build();
+    push_tasks(tx, QUEUE, vec![task])
+        .await
+        .map_err(queue_error)?;
+    Ok(())
+}
+
 /// Stores a submission and queues its delivery, refusing it when the
 /// credential has already sent `max_per_hour` in the last hour. The count is
 /// read from the table under a per-credential advisory lock, so it holds
@@ -304,17 +327,7 @@ pub async fn submit(
     .bind(now)
     .execute(&mut *tx)
     .await?;
-    let job = FeedbackJob {
-        feedback_id: id.clone(),
-    };
-    // apalis-postgres stores the payload as JSON bytes, as for mail.
-    let payload = serde_json::to_vec(&job).map_err(queue_error)?;
-    let task = TaskBuilder::new(payload)
-        .max_attempts(APALIS_MAX_ATTEMPTS)
-        .build();
-    push_tasks(&mut *tx, QUEUE, vec![task])
-        .await
-        .map_err(queue_error)?;
+    queue_job(&mut tx, &id).await?;
     tx.commit().await?;
     tracing::info!(feedback = %id, "feedback queued");
     Ok(id)
@@ -527,9 +540,10 @@ fn queue_error(error: impl std::fmt::Display) -> OkfError {
     }
 }
 
-/// Deletes `sent` feedback finished more than `retention` before `now`,
-/// and the finished jobs of [`QUEUE`] as old. `failed` rows are kept for the
-/// operator. Called by the housekeeping job's prune.
+/// Deletes `sent` and `failed` feedback finished more than `retention`
+/// before `now`, and the finished jobs of [`QUEUE`] as old. A `failed` row
+/// stays that long for the operator (`feedback list`, `feedback retry`).
+/// Called by the housekeeping job's prune.
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -548,11 +562,12 @@ pub async fn prune(
     retention: TimeDelta,
 ) -> Result<u64, OkfError> {
     let before = now - retention;
-    let pruned = sqlx::query("DELETE FROM feedback WHERE status = 'sent' AND finished_at < $1")
-        .bind(before)
-        .execute(pool)
-        .await?
-        .rows_affected();
+    let pruned =
+        sqlx::query("DELETE FROM feedback WHERE status IN ('sent', 'failed') AND finished_at < $1")
+            .bind(before)
+            .execute(pool)
+            .await?
+            .rows_affected();
     // The job holds only the id; once finished, it is bookkeeping.
     sqlx::query(
         "DELETE FROM apalis.jobs WHERE job_type = $1 AND done_at < $2 AND ( \
@@ -563,6 +578,88 @@ pub async fn prune(
     .execute(pool)
     .await?;
     Ok(pruned)
+}
+
+/// A `failed` feedback row, as `okf-mcp feedback list` shows it. The
+/// message and the credential are left out, as `mail queue` leaves out
+/// bodies.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct FailedFeedback {
+    /// The feedback's id.
+    pub id: String,
+    /// The sender's user name (`unassigned` for a key with no user).
+    pub user_slug: String,
+    /// The kind the sender chose.
+    pub kind: String,
+    /// Tries made.
+    pub attempts: i32,
+    /// Forminit's error code, or why the last try failed.
+    pub last_error: Option<String>,
+    /// When it was given up on.
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+/// The `failed` feedback rows, oldest first.
+///
+/// # Arguments
+/// * `pool` - the database.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "feedback.list_failed"))]
+pub async fn list_failed(pool: &PgPool) -> Result<Vec<FailedFeedback>, OkfError> {
+    Ok(sqlx::query_as::<_, FailedFeedback>(
+        "SELECT id, user_slug, kind, attempts, last_error, finished_at FROM feedback \
+         WHERE status = 'failed' ORDER BY finished_at, id",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Puts a `failed` row back to `pending` with no tries and queues a new
+/// job for it, in one transaction. The old job stays in the queue as a
+/// finished one, which [`prune`] removes; `last_error` is kept until the
+/// next outcome replaces it.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `id` - the feedback's id, from [`list_failed`].
+///
+/// # Errors
+/// [`OkfError::UnknownName`] (`noun: "feedback"`) for an id that names no
+/// row; [`OkfError::Refused`] for a row that has not failed;
+/// [`OkfError::Io`] if the queue refuses the job; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "feedback.retry"))]
+pub async fn retry(pool: &PgPool, id: &str) -> Result<(), OkfError> {
+    let mut tx = pool.begin().await?;
+    let requeued = sqlx::query(
+        "UPDATE feedback SET status = 'pending', attempts = 0, finished_at = NULL \
+         WHERE id = $1 AND status = 'failed'",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if requeued == 0 {
+        let status: Option<String> =
+            sqlx::query_scalar("SELECT status FROM feedback WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        return Err(match status {
+            None => OkfError::UnknownName {
+                noun: "feedback",
+                name: id.to_string(),
+            },
+            Some(status) => OkfError::Refused {
+                reason: format!("feedback {id} is {status}; only failed feedback is retried"),
+            },
+        });
+    }
+    queue_job(&mut tx, id).await?;
+    tx.commit().await?;
+    tracing::info!(feedback = %id, "failed feedback queued again");
+    Ok(())
 }
 
 /// Why a post did not go through.
@@ -1729,7 +1826,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn prune_deletes_sent_feedback_past_retention_only() {
+    async fn prune_deletes_sent_and_failed_feedback_past_retention_only() {
         let db = test_db().await;
         let mut ids = Vec::new();
         for _ in 0..4 {
@@ -1756,12 +1853,67 @@ pub(crate) mod tests {
 
         let pruned = prune(&db.pool, now(), TimeDelta::days(30)).await.unwrap();
 
-        assert_eq!(pruned, 1);
+        assert_eq!(pruned, 2);
         let left: Vec<String> = sqlx::query_scalar("SELECT id FROM feedback ORDER BY created_at")
             .fetch_all(&db.pool)
             .await
             .unwrap();
-        assert_eq!(left.len(), 3);
-        assert!(!left.contains(&ids[0]));
+        assert_eq!(left.len(), 2);
+        assert!(!left.contains(&ids[0]) && !left.contains(&ids[2]));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_row_is_listed_and_retried_once() {
+        let db = test_db().await;
+        let failed = submit(&db.pool, &sample("key-1"), 10, now()).await.unwrap();
+        let pending = submit(&db.pool, &sample("key-1"), 10, now()).await.unwrap();
+        sqlx::query(
+            "UPDATE feedback SET status = 'failed', attempts = 1, last_error = 'FORM_NOT_FOUND', \
+                 finished_at = $2 WHERE id = $1",
+        )
+        .bind(&failed)
+        .bind(now())
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let count_jobs = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM apalis.jobs WHERE job_type = $1")
+                .bind(QUEUE)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap()
+        };
+        let jobs_before = count_jobs().await;
+
+        let listed = list_failed(&db.pool).await.unwrap();
+        retry(&db.pool, &failed).await.unwrap();
+        let again = retry(&db.pool, &failed).await;
+        let not_failed = retry(&db.pool, &pending).await;
+        let unknown = retry(&db.pool, "nope").await;
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, failed);
+        assert_eq!(listed[0].last_error.as_deref(), Some("FORM_NOT_FOUND"));
+        assert_eq!(listed[0].user_slug, "alice");
+        let state = row_state(&db.pool, &failed).await;
+        assert_eq!((state.0.as_str(), state.1), ("pending", 0));
+        assert!(list_failed(&db.pool).await.unwrap().is_empty());
+        assert_eq!(
+            count_jobs().await,
+            jobs_before + 1,
+            "one new job, for the retry only"
+        );
+        assert!(matches!(again, Err(OkfError::Refused { .. })), "{again:?}");
+        assert!(
+            matches!(not_failed, Err(OkfError::Refused { .. })),
+            "{not_failed:?}"
+        );
+        assert!(matches!(
+            unknown,
+            Err(OkfError::UnknownName {
+                noun: "feedback",
+                ..
+            })
+        ));
     }
 }

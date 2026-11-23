@@ -1413,6 +1413,18 @@ async fn delete_checked(
             .execute(&mut *tx)
             .await?;
     }
+    // Feedback not yet delivered (`pending`, or `failed` with no one to
+    // retry it for) must not outlive its sender: a pending row would still
+    // be forwarded with the name as `sender.userId`. `feedback` has no
+    // foreign key by design (migration 0022), so it goes here. `sent` rows
+    // are delivered already and the hourly prune removes them. A queued
+    // job for a deleted row finds nothing and ends as skipped. The rows
+    // are taken in no order relative to other writers: nothing else locks
+    // a feedback row together with a user.
+    sqlx::query("DELETE FROM feedback WHERE user_slug = $1 AND status IN ('pending', 'failed')")
+        .bind(name)
+        .execute(&mut *tx)
+        .await?;
     // Before the user row goes: it finds the user's credentials through
     // `api_keys` and `sign_in_codes`, which that delete cascades.
     audit::forget_person(&mut tx, &user_id).await?;
@@ -2509,6 +2521,49 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert!(after > before, "the delete bumps the admin generation");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deleting_a_user_removes_its_undelivered_feedback_only() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        seed_user(&db.pool, "bob", None).await;
+        for (id, slug, status) in [
+            ("f-pending", "alice", "pending"),
+            ("f-failed", "alice", "failed"),
+            ("f-sent", "alice", "sent"),
+            ("f-other", "bob", "pending"),
+        ] {
+            sqlx::query(
+                "INSERT INTO feedback (id, credential, user_slug, message, kind, origin, \
+                     server_version, client, credential_kind, status, created_at, finished_at) \
+                 VALUES ($1, 'key-1', $2, 'm', 'bug', 'user', '0', 'c', 'api_key', $3, $4, \
+                     CASE WHEN $3 = 'pending' THEN NULL ELSE $4 END)",
+            )
+            .bind(id)
+            .bind(slug)
+            .bind(status)
+            .bind(now())
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+
+        delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        let left: Vec<String> = sqlx::query_scalar("SELECT id FROM feedback ORDER BY id")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(left, ["f-other", "f-sent"]);
     }
 
     #[tokio::test(flavor = "multi_thread")]
