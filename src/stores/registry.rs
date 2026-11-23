@@ -26,9 +26,14 @@ use std::time::Duration;
 
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 
+#[cfg(test)]
+use super::credentials::Environment;
+use super::credentials::{
+    is_auth_failure, spawn_keeper, Credential, CredentialSource, Keeper, Providers, Refresh,
+};
 use super::{CatalogDb, StoreName};
 use crate::error::OkfError;
-use crate::store::stores::{self, CredentialKind, StoreLocation, StoreRow};
+use crate::store::stores::{self, StoreLocation, StoreRow};
 use crate::telemetry::subscriber::split_event;
 
 /// The `search_path` of every store pool. Until the catalog tables move
@@ -86,8 +91,23 @@ enum OpenFailure {
     Unreachable,
 }
 
-/// Reads one environment variable: `None` when it is unset.
-type Environment = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+/// What the registry keeps for an open store: its handle, and the task that
+/// keeps its credential current (if the credential ever changes). Dropping
+/// the entry (on [`Stores::forget`], [`Stores::forget_all`] or when the
+/// registry goes) ends that task, so a forgotten store leaves none behind.
+struct OpenStore {
+    db: CatalogDb,
+    // Only held, for its `Drop`.
+    _keeper: Option<Keeper>,
+}
+
+/// Why one attempt to connect a pool failed (logged where it happened).
+enum ConnectFailure {
+    /// The server refused the login: a wrong or expired password or token.
+    LoginRefused,
+    /// Anything else, including the timeout.
+    Other,
+}
 
 /// Every store's pool, opened on first use.
 ///
@@ -102,10 +122,10 @@ struct Inner {
     // settings a store inside it (or a host store's user) inherits.
     accounts: PgPool,
     settings: PoolSettings,
-    pools: moka::future::Cache<StoreName, CatalogDb>,
-    // Reads an environment variable (an `env` credential's password).
-    // Injected so tests need not change the process's environment.
-    environment: Environment,
+    pools: moka::future::Cache<StoreName, Arc<OpenStore>>,
+    // How a row's credential is found: the environment and the AWS clients,
+    // injected so tests need not change the process's environment or call AWS.
+    providers: Providers,
     // Moved by every `forget`. An open that overlapped a forget may have
     // read the row before the change, so it serves its caller but is not
     // kept.
@@ -155,19 +175,19 @@ impl Stores {
         allow(uninstrumented_fn, reason = "builds an empty cache, no I/O")
     )]
     pub fn new(accounts: PgPool, settings: PoolSettings) -> Self {
-        Self::with_environment(
+        Self::with_providers(
             accounts,
             settings,
-            Arc::new(|name| std::env::var(name).ok()),
+            Providers::aws(Arc::new(|name| std::env::var(name).ok())),
         )
     }
 
-    /// [`Stores::new`] with the environment given: tests pass a map, so no
-    /// test changes the process's own variables.
+    /// [`Stores::new`] with the credential providers given: tests pass a
+    /// map for the environment and mocks for the AWS clients.
     ///
     /// # Arguments
     /// * `accounts`, `settings` - as for [`Stores::new`].
-    /// * `environment` - reads a variable by name.
+    /// * `providers` - how a row's credential is found.
     ///
     /// # Returns
     /// The registry.
@@ -175,16 +195,12 @@ impl Stores {
         dylint_lib = "hyp_tracing",
         allow(uninstrumented_fn, reason = "builds an empty cache, no I/O")
     )]
-    pub(crate) fn with_environment(
-        accounts: PgPool,
-        settings: PoolSettings,
-        environment: Environment,
-    ) -> Self {
+    fn with_providers(accounts: PgPool, settings: PoolSettings, providers: Providers) -> Self {
         Self {
             inner: Arc::new(Inner {
                 accounts,
                 settings,
-                environment,
+                providers,
                 pools: moka::future::Cache::builder()
                     .max_capacity(MAX_OPEN_STORES)
                     .build(),
@@ -230,6 +246,7 @@ impl Stores {
                 Box::pin(self.open(store)).await
             })
             .await;
+        let result = result.map(|open| open.db.clone());
         // An open that a `forget` overtook is returned but not kept, so the
         // next call reads the new row.
         if ran.load(Ordering::SeqCst) && self.inner.forgets.load(Ordering::SeqCst) != forgets_before
@@ -270,6 +287,9 @@ impl Stores {
     pub async fn forget(&self, store: &StoreName) {
         self.inner.forgets.fetch_add(1, Ordering::SeqCst);
         self.inner.pools.invalidate(store).await;
+        // Settle moka's bookkeeping now, so the entry (and with it the
+        // store's credential task) is dropped before this returns.
+        self.inner.pools.run_pending_tasks().await;
     }
 
     /// Drops every store's pool: what a replica does when it may have missed
@@ -312,7 +332,7 @@ impl Stores {
     /// An [`OpenFailure`]; the detail is logged here, on the local side
     /// only (a host name is operator detail).
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn open(&self, store: &StoreName) -> Result<CatalogDb, OpenFailure> {
+    async fn open(&self, store: &StoreName) -> Result<Arc<OpenStore>, OpenFailure> {
         let row = match stores::by_name(&self.inner.accounts, store).await {
             Ok(Some(row)) => row,
             Ok(None) => return Err(OpenFailure::NoSuchStore),
@@ -337,17 +357,115 @@ impl Stores {
     /// # Errors
     /// An [`OpenFailure`]; the detail is logged here, on the local side only.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn open_row(&self, row: StoreRow) -> Result<CatalogDb, OpenFailure> {
+    async fn open_row(&self, row: StoreRow) -> Result<Arc<OpenStore>, OpenFailure> {
         let store = &row.name;
-        let options = self.connect_options(&row).map_err(|reason| {
-            split_event!(
-                warn,
-                {},
-                { store = %store, reason, },
-                "a store's connection settings are unusable"
-            );
-            OpenFailure::Unreachable
-        })?;
+        let (base, source) = self.connection_of(&row);
+        let pool = self
+            .connect_with_credential(store, &base, source.as_deref())
+            .await?;
+        #[cfg(test)]
+        self.inner.opened.fetch_add(1, Ordering::SeqCst);
+        // A credential that changes is kept current for as long as this
+        // entry lives.
+        let keeper = source.and_then(|source| spawn_keeper(source, base, pool.clone()));
+        let db = CatalogDb::new(row.name, pool);
+        Ok(Arc::new(OpenStore {
+            db,
+            _keeper: keeper,
+        }))
+    }
+
+    /// The connection settings of a store's row, without its login, built
+    /// on the account database's (the user and TLS settings are shared),
+    /// and where the login comes from.
+    ///
+    /// # Returns
+    /// The options, and the credential source: `None` for a store inside
+    /// the account database, which uses the account pool's own login.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "builds options, no I/O")
+    )]
+    fn connection_of(
+        &self,
+        row: &StoreRow,
+    ) -> (PgConnectOptions, Option<Arc<dyn CredentialSource>>) {
+        let base = (*self.inner.accounts.connect_options()).clone();
+        match &row.location {
+            StoreLocation::AccountDatabase => (base, None),
+            StoreLocation::Host {
+                host,
+                port,
+                database,
+                credential_kind,
+                credential_ref,
+            } => (
+                base.host(host).port(*port).database(database),
+                Some(
+                    self.inner
+                        .providers
+                        .source(*credential_kind, credential_ref, host, *port),
+                ),
+            ),
+        }
+    }
+
+    /// Fetches the login and connects the pool. A refused login is fetched
+    /// again and tried once more, for a credential that changes (a rotated
+    /// secret, an expired token); a credential that never changes (`env`)
+    /// is not.
+    ///
+    /// # Errors
+    /// [`OpenFailure::Unreachable`] for any failure; the detail is logged
+    /// here, and never holds the login.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn connect_with_credential(
+        &self,
+        store: &StoreName,
+        base: &PgConnectOptions,
+        source: Option<&dyn CredentialSource>,
+    ) -> Result<PgPool, OpenFailure> {
+        let mut attempts_left = match source.map(CredentialSource::refresh) {
+            None | Some(Refresh::Never) => 1,
+            Some(Refresh::OnAuthFailure | Refresh::Every(_)) => 2,
+        };
+        loop {
+            let credential = match source {
+                Some(source) => Some(source.fetch().await.map_err(|error| {
+                    split_event!(
+                        warn,
+                        {},
+                        { store = %store, %error, },
+                        "a store's credential could not be found"
+                    );
+                    OpenFailure::Unreachable
+                })?),
+                None => None,
+            };
+            attempts_left -= 1;
+            match self.connect_pool(store, base, credential).await {
+                Ok(pool) => return Ok(pool),
+                Err(ConnectFailure::LoginRefused) if attempts_left > 0 => {}
+                Err(_) => return Err(OpenFailure::Unreachable),
+            }
+        }
+    }
+
+    /// Opens one pool, with the login applied to `base`.
+    ///
+    /// # Errors
+    /// Why it failed; logged here.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn connect_pool(
+        &self,
+        store: &StoreName,
+        base: &PgConnectOptions,
+        credential: Option<Credential>,
+    ) -> Result<PgPool, ConnectFailure> {
+        let options = match credential {
+            Some(credential) => credential.apply(base.clone()),
+            None => base.clone(),
+        };
         let settings = self.inner.settings;
         let pool_options = PgPoolOptions::new()
             .max_connections(settings.max_connections)
@@ -371,8 +489,8 @@ impl Stores {
         // timeout already bounds it; the outer timeout is a belt for a
         // resolver or TLS handshake that ignores it.
         let connecting = pool_options.connect_with(options);
-        let pool = match tokio::time::timeout(settings.connect_timeout, connecting).await {
-            Ok(Ok(pool)) => pool,
+        match tokio::time::timeout(settings.connect_timeout, connecting).await {
+            Ok(Ok(pool)) => Ok(pool),
             Ok(Err(error)) => {
                 split_event!(
                     warn,
@@ -380,7 +498,11 @@ impl Stores {
                     { store = %store, %error, },
                     "a store's pool could not connect"
                 );
-                return Err(OpenFailure::Unreachable);
+                Err(if is_auth_failure(&error) {
+                    ConnectFailure::LoginRefused
+                } else {
+                    ConnectFailure::Other
+                })
             }
             Err(_elapsed) => {
                 split_event!(
@@ -389,18 +511,15 @@ impl Stores {
                     { store = %store, },
                     "a store's pool did not connect within store_connect_timeout"
                 );
-                return Err(OpenFailure::Unreachable);
+                Err(ConnectFailure::Other)
             }
-        };
-        #[cfg(test)]
-        self.inner.opened.fetch_add(1, Ordering::SeqCst);
-        Ok(CatalogDb::new(row.name, pool))
+        }
     }
 
     /// Whether a store that has no row yet could be opened: the same open
     /// path as [`Stores::get`] (connection settings, credential, timeout),
-    /// on a row the caller has not stored. The pool is closed again and
-    /// nothing is cached.
+    /// on a row the caller has not stored. The pool is closed again, its
+    /// credential task ends, and nothing is cached.
     ///
     /// # Arguments
     /// * `row` - the row about to be stored.
@@ -416,49 +535,38 @@ impl Stores {
     pub async fn check(&self, row: StoreRow) -> Result<(), OkfError> {
         let name = row.name.clone();
         // Boxed for the same reason as in `get`: the open's state is large.
-        let db = Box::pin(self.open_row(row))
+        let open = Box::pin(self.open_row(row))
             .await
             .map_err(|_failure| OkfError::store_unavailable(&name))?;
-        db.executor().close().await;
+        open.db.executor().close().await;
         Ok(())
     }
 
-    /// The connection settings of a store's row, built on the account
-    /// database's (the user and TLS settings are shared).
-    ///
-    /// # Errors
-    /// Why the settings cannot be built (a message for the local log): the
-    /// credential's kind is not supported yet (Task 9), or the variable an
-    /// `env` credential names is unset.
-    #[tracing::instrument(level = "debug", skip_all)]
-    fn connect_options(&self, row: &StoreRow) -> Result<PgConnectOptions, String> {
-        let base = (*self.inner.accounts.connect_options()).clone();
-        match &row.location {
-            StoreLocation::AccountDatabase => Ok(base),
-            StoreLocation::Host {
-                host,
-                port,
-                database,
-                credential_kind,
-                credential_ref,
-            } => match credential_kind {
-                // The password comes from the named variable only: the
-                // account database's password is never sent to another host.
-                CredentialKind::Env => {
-                    let password = (self.inner.environment)(credential_ref)
-                        .ok_or_else(|| format!("the variable {credential_ref} is not set"))?;
-                    Ok(base
-                        .host(host)
-                        .port(*port)
-                        .database(database)
-                        .password(&password))
-                }
-                CredentialKind::Iam | CredentialKind::SecretsManager => Err(format!(
-                    "credential kind {} is not supported yet",
-                    credential_kind.as_str()
-                )),
-            },
-        }
+    /// [`Stores::new`] with the environment given and the real AWS clients
+    /// (which the tests using this never reach).
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "a test constructor")
+    )]
+    pub(crate) fn with_environment(
+        accounts: PgPool,
+        settings: PoolSettings,
+        environment: Environment,
+    ) -> Self {
+        Self::with_providers(accounts, settings, Providers::aws(environment))
+    }
+
+    /// Tests: the refresh count of an open store's credential task, which
+    /// closes when the task ends. `None` for a store that is not open or
+    /// whose credential never changes.
+    #[cfg(test)]
+    pub(crate) async fn credential_task(
+        &self,
+        store: &StoreName,
+    ) -> Option<tokio::sync::watch::Receiver<u64>> {
+        let open = self.inner.pools.get(store).await?;
+        open._keeper.as_ref().map(Keeper::watch)
     }
 }
 
@@ -765,5 +873,692 @@ mod tests {
         stores.forget_all().await;
         stores.get(&StoreName::main()).await.unwrap();
         assert_eq!(stores.pools_opened(), 3);
+    }
+
+    // -- credential kinds (issue #967) --------------------------------------
+
+    use std::sync::atomic::AtomicUsize;
+
+    use async_trait::async_trait;
+    use sqlx::{AssertSqlSafe, Connection};
+
+    use super::super::credentials::{
+        CredentialError, Providers, SecretReader, TokenSigner, IAM_REFRESH_EVERY,
+    };
+
+    /// The `iam` signer: a token is `token-N`, N counting 15-minute windows
+    /// of a test-controlled clock, so it "expires" when the test moves the
+    /// clock and nothing sleeps. `stale_first` makes the first answer one
+    /// the database does not accept.
+    struct ClockSigner {
+        now: Arc<AtomicU64>,
+        calls: AtomicUsize,
+        stale_first: bool,
+        always_wrong: bool,
+        token_override: std::sync::Mutex<Option<String>>,
+        seen: std::sync::Mutex<Vec<(String, u16, String)>>,
+    }
+
+    impl ClockSigner {
+        fn plain(now: &Arc<AtomicU64>) -> Self {
+            Self {
+                now: Arc::clone(now),
+                calls: AtomicUsize::new(0),
+                stale_first: false,
+                always_wrong: false,
+                token_override: std::sync::Mutex::new(None),
+                seen: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn new(now: &Arc<AtomicU64>) -> Arc<Self> {
+            Arc::new(Self::plain(now))
+        }
+
+        fn token_now(now: &AtomicU64) -> String {
+            format!("token-{}", now.load(Ordering::SeqCst) / 900)
+        }
+    }
+
+    #[async_trait]
+    impl TokenSigner for ClockSigner {
+        async fn token(
+            &self,
+            host: &str,
+            port: u16,
+            user: &str,
+        ) -> Result<String, CredentialError> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            self.seen
+                .lock()
+                .unwrap()
+                .push((host.to_string(), port, user.to_string()));
+            if let Some(token) = &*self.token_override.lock().unwrap() {
+                return Ok(token.clone());
+            }
+            if self.always_wrong || (self.stale_first && call == 0) {
+                return Ok("token-stale".to_string());
+            }
+            Ok(Self::token_now(&self.now))
+        }
+    }
+
+    /// A secrets manager holding one answer, which a test can replace.
+    struct MockSecrets {
+        answer: std::sync::Mutex<Result<String, CredentialError>>,
+        calls: AtomicUsize,
+    }
+
+    impl MockSecrets {
+        fn holding(text: &str) -> Arc<Self> {
+            Arc::new(Self {
+                answer: std::sync::Mutex::new(Ok(text.to_string())),
+                calls: AtomicUsize::new(0),
+            })
+        }
+
+        fn set(&self, answer: Result<String, CredentialError>) {
+            *self.answer.lock().unwrap() = answer;
+        }
+    }
+
+    #[async_trait]
+    impl SecretReader for MockSecrets {
+        async fn read(&self, _arn: &str) -> Result<String, CredentialError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            match &*self.answer.lock().unwrap() {
+                Ok(text) => Ok(text.clone()),
+                Err(CredentialError::Service { service, code }) => Err(CredentialError::Service {
+                    service,
+                    code: code.clone(),
+                }),
+                Err(_) => Err(CredentialError::Malformed { what: "the mock" }),
+            }
+        }
+    }
+
+    const EXAMPLE_ARN: &str = "arn:aws:secretsmanager:us-east-1:123456789012:secret:example";
+
+    /// The test server's host, port and database, as a `stores` row spells
+    /// them.
+    fn server_of(pool: &PgPool) -> (String, u16, String) {
+        let options = pool.connect_options();
+        (
+            options.get_host().to_string(),
+            options.get_port(),
+            options.get_database().expect("a database").to_string(),
+        )
+    }
+
+    /// Adds a `host` row for the test server with the given credential.
+    async fn add_row(pool: &PgPool, name: &str, kind: &str, reference: &str) {
+        let (_, _, database) = server_of(pool);
+        add_row_on(pool, name, kind, reference, &database).await;
+    }
+
+    /// [`add_row`], naming the database too (the table allows one row per
+    /// host, port and database).
+    async fn add_row_on(pool: &PgPool, name: &str, kind: &str, reference: &str, database: &str) {
+        let (host, port, _) = server_of(pool);
+        sqlx::query(
+            "INSERT INTO stores (name, location_kind, host, port, database, \
+             credential_kind, credential_ref, created_at) \
+             VALUES ($1, 'host', $2, $3, $4, $5, $6, now())",
+        )
+        .bind(name)
+        .bind(host)
+        .bind(i32::from(port))
+        .bind(database)
+        .bind(kind)
+        .bind(reference)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// `name` as a quoted SQL identifier (a `"` inside doubles).
+    fn quoted(name: &str) -> String {
+        format!("\"{}\"", name.replace('"', "\"\""))
+    }
+
+    /// A login role of its own (roles belong to the whole server, so the
+    /// name carries the test database's).
+    async fn make_role(pool: &PgPool, password: &str) -> String {
+        let (_, _, database) = server_of(pool);
+        make_named_role(pool, &format!("r_{database}"), password).await
+    }
+
+    /// A login role called `role`, which may contain a quotation mark.
+    async fn make_named_role(pool: &PgPool, role: &str, password: &str) -> String {
+        sqlx::query(AssertSqlSafe(format!(
+            "CREATE ROLE {} LOGIN PASSWORD '{password}'",
+            quoted(role)
+        )))
+        .execute(pool)
+        .await
+        .unwrap();
+        role.to_string()
+    }
+
+    async fn set_password(pool: &PgPool, role: &str, password: &str) {
+        sqlx::query(AssertSqlSafe(format!(
+            "ALTER ROLE {} PASSWORD '{password}'",
+            quoted(role)
+        )))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn drop_role(pool: &PgPool, role: &str) {
+        sqlx::query(AssertSqlSafe(format!("DROP ROLE {}", quoted(role))))
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    fn no_secrets() -> Arc<MockSecrets> {
+        MockSecrets::holding("")
+    }
+
+    fn iam_stores(
+        db: &crate::db::pg_support::TestDb,
+        signer: &Arc<ClockSigner>,
+        refresh_every: Duration,
+    ) -> Stores {
+        Stores::with_providers(
+            db.pool.clone(),
+            settings(),
+            Providers::new(
+                Arc::new(|_| None),
+                no_secrets(),
+                Arc::clone(signer) as Arc<dyn TokenSigner>,
+            )
+            .with_iam_refresh_every(refresh_every),
+        )
+    }
+
+    async fn current_user(store: &CatalogDb, connection: &mut sqlx::PgConnection) -> String {
+        let _ = store;
+        sqlx::query_scalar("SELECT current_user::text")
+            .fetch_one(connection)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn iam_replacement_connection_after_the_first_token_expires_uses_a_fresh_token() {
+        let db = crate::db::test_db().await;
+        let role = make_role(&db.pool, "token-0").await;
+        let now = Arc::new(AtomicU64::new(0));
+        let signer = ClockSigner::new(&now);
+        // A short timer, so the test waits on the refresh count and not on
+        // a clock.
+        let stores = iam_stores(&db, &signer, Duration::from_millis(20));
+        add_row(&db.pool, "shared-1", "iam", &role).await;
+        let name = StoreName::parse("shared-1").unwrap();
+
+        let store = stores.get(&name).await.unwrap();
+        let mut first = store.executor().acquire().await.unwrap();
+        assert_eq!(current_user(&store, &mut first).await, role);
+        // The signer was asked for this server and the row's user.
+        let (host, port, _) = server_of(&db.pool);
+        assert_eq!(signer.seen.lock().unwrap()[0], (host, port, role.clone()));
+
+        // The token expires: the clock passes its window, and the database
+        // now wants the next one.
+        now.store(900, Ordering::SeqCst);
+        set_password(&db.pool, &role, "token-1").await;
+        let mut refreshes = stores
+            .credential_task(&name)
+            .await
+            .expect("a credential task");
+        let seen = *refreshes.borrow();
+        // The second refresh after this point began after the clock moved.
+        refreshes
+            .wait_for(|count| *count >= seen + 2)
+            .await
+            .unwrap();
+
+        // The first connection is still held, so this is a new physical
+        // connection: it must carry the fresh token.
+        let mut second = store.executor().acquire().await.unwrap();
+        assert_eq!(current_user(&store, &mut second).await, role);
+        // The database really did refuse the old token.
+        let (host, port, database) = server_of(&db.pool);
+        let stale = db
+            .pool
+            .connect_options()
+            .as_ref()
+            .clone()
+            .host(&host)
+            .port(port)
+            .database(&database)
+            .username(&role)
+            .password("token-0");
+        let refused = sqlx::PgConnection::connect_with(&stale)
+            .await
+            .expect_err("refused");
+        assert!(
+            crate::stores::credentials::is_auth_failure(&refused),
+            "{refused:?}"
+        );
+
+        drop((first, second));
+        stores.forget_all().await;
+        drop_role(&db.pool, &role).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn iam_auth_failure_refreshes_once_and_retries() {
+        let db = crate::db::test_db().await;
+        let role = make_role(&db.pool, "token-0").await;
+        let now = Arc::new(AtomicU64::new(0));
+        // The first token the signer gives is one the database refuses.
+        let signer = Arc::new(ClockSigner {
+            stale_first: true,
+            ..ClockSigner::plain(&now)
+        });
+        let stores = iam_stores(&db, &signer, IAM_REFRESH_EVERY);
+        add_row(&db.pool, "shared-1", "iam", &role).await;
+
+        let store = stores
+            .get(&StoreName::parse("shared-1").unwrap())
+            .await
+            .unwrap();
+
+        // One refresh, one retry: two signatures, and the pool works.
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 2);
+        let one: i32 = sqlx::query_scalar("SELECT 1")
+            .fetch_one(store.executor())
+            .await
+            .unwrap();
+        assert_eq!(one, 1);
+        assert_eq!(stores.pools_opened(), 1);
+
+        stores.forget_all().await;
+        drop_role(&db.pool, &role).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_login_that_stays_refused_is_tried_twice_and_no_more() {
+        let db = crate::db::test_db().await;
+        let role = make_role(&db.pool, "token-0").await;
+        let now = Arc::new(AtomicU64::new(0));
+        let signer = Arc::new(ClockSigner {
+            always_wrong: true,
+            ..ClockSigner::plain(&now)
+        });
+        let stores = iam_stores(&db, &signer, IAM_REFRESH_EVERY);
+        add_row(&db.pool, "shared-1", "iam", &role).await;
+        // An `env` credential does not change, so it is tried once.
+        add_row_on(&db.pool, "shared-2", "env", "WRONG_PASSWORD", "other").await;
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&reads);
+        let env_stores = Stores::with_environment(
+            db.pool.clone(),
+            settings(),
+            Arc::new(move |_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Some("not-the-password".to_string())
+            }),
+        );
+
+        let failed = stores
+            .get(&StoreName::parse("shared-1").unwrap())
+            .await
+            .unwrap_err();
+        let env_failed = env_stores
+            .get(&StoreName::parse("shared-2").unwrap())
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(failed, OkfError::StoreUnavailable { .. }),
+            "{failed:?}"
+        );
+        assert!(
+            matches!(env_failed, OkfError::StoreUnavailable { .. }),
+            "{env_failed:?}"
+        );
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        assert_eq!(stores.pools_opened(), 0);
+        drop_role(&db.pool, &role).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_refused_login_on_an_open_pool_fetches_a_fresh_one_for_the_next_connection() {
+        let db = crate::db::test_db().await;
+        let role = make_role(&db.pool, "token-0").await;
+        let now = Arc::new(AtomicU64::new(0));
+        let signer = ClockSigner::new(&now);
+        // The timer is the default 10 minutes: only a refused login can
+        // cause the refresh this test waits for.
+        let stores = iam_stores(&db, &signer, IAM_REFRESH_EVERY);
+        add_row(&db.pool, "shared-1", "iam", &role).await;
+        let name = StoreName::parse("shared-1").unwrap();
+        let store = stores.get(&name).await.unwrap();
+        let _held = store.executor().acquire().await.unwrap();
+        let mut refreshes = stores.credential_task(&name).await.unwrap();
+
+        now.store(900, Ordering::SeqCst);
+        set_password(&db.pool, &role, "token-1").await;
+        // A new physical connection is refused: the caller sees an
+        // unavailable store, not a database error.
+        let refused = store.begin().await.unwrap_err();
+        assert!(
+            matches!(refused, OkfError::StoreUnavailable { .. }),
+            "{refused:?}"
+        );
+        refreshes.wait_for(|count| *count >= 1).await.unwrap();
+
+        let mut tx = store.begin().await.unwrap();
+        let user: String = sqlx::query_scalar("SELECT current_user::text")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(user, role);
+        // The refused attempt and nothing else caused the second signature.
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 2);
+
+        drop(tx);
+        stores.forget_all().await;
+        drop_role(&db.pool, &role).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_secrets_manager_store_opens_and_follows_a_rotated_secret() {
+        let db = crate::db::test_db().await;
+        let role = make_role(&db.pool, "pw-1").await;
+        let secrets = MockSecrets::holding(&format!(
+            r#"{{"username":"{role}","password":"pw-1","engine":"postgres"}}"#
+        ));
+        let stores = Stores::with_providers(
+            db.pool.clone(),
+            settings(),
+            Providers::new(
+                Arc::new(|_| None),
+                Arc::clone(&secrets) as Arc<dyn SecretReader>,
+                Arc::new(ClockSigner::plain(&Arc::new(AtomicU64::new(0)))),
+            ),
+        );
+        add_row(&db.pool, "shared-1", "secrets-manager", EXAMPLE_ARN).await;
+        let name = StoreName::parse("shared-1").unwrap();
+
+        let store = stores.get(&name).await.unwrap();
+        let mut first = store.executor().acquire().await.unwrap();
+        assert_eq!(current_user(&store, &mut first).await, role);
+        assert_eq!(secrets.calls.load(Ordering::SeqCst), 1);
+
+        // The secret is rotated: the database and the secret change.
+        set_password(&db.pool, &role, "pw-2").await;
+        secrets.set(Ok(format!(r#"{{"username":"{role}","password":"pw-2"}}"#)));
+        let mut refreshes = stores.credential_task(&name).await.unwrap();
+        let refused = store.begin().await.unwrap_err();
+        assert!(
+            matches!(refused, OkfError::StoreUnavailable { .. }),
+            "{refused:?}"
+        );
+        refreshes.wait_for(|count| *count >= 1).await.unwrap();
+        let mut second = store.executor().acquire().await.unwrap();
+        assert_eq!(current_user(&store, &mut second).await, role);
+        assert_eq!(secrets.calls.load(Ordering::SeqCst), 2);
+
+        drop((first, second));
+        stores.forget_all().await;
+        drop_role(&db.pool, &role).await;
+    }
+
+    /// A rotated secret, then a plain read on the open pool: the read is
+    /// refused, the credential task refreshes, and the next read works.
+    /// The role's name is `prefix` and the test database's name, so a
+    /// prefix can put quotation marks in it.
+    async fn a_plain_read_after_a_rotation_refreshes(prefix: &str) {
+        let db = crate::db::test_db().await;
+        let (_, _, database) = server_of(&db.pool);
+        let role = make_named_role(&db.pool, &format!("{prefix}{database}"), "pw-1").await;
+        let secret = |password: &str| {
+            serde_json::json!({ "username": role, "password": password }).to_string()
+        };
+        let secrets = MockSecrets::holding(&secret("pw-1"));
+        let stores = Stores::with_providers(
+            db.pool.clone(),
+            settings(),
+            Providers::new(
+                Arc::new(|_| None),
+                Arc::clone(&secrets) as Arc<dyn SecretReader>,
+                Arc::new(ClockSigner::plain(&Arc::new(AtomicU64::new(0)))),
+            ),
+        );
+        add_row(&db.pool, "shared-1", "secrets-manager", EXAMPLE_ARN).await;
+        let name = StoreName::parse("shared-1").unwrap();
+        let store = stores.get(&name).await.unwrap();
+        // One connection stays busy, so the reads below need a new one.
+        let _held = store.executor().acquire().await.unwrap();
+        let mut refreshes = stores.credential_task(&name).await.unwrap();
+
+        set_password(&db.pool, &role, "pw-2").await;
+        secrets.set(Ok(secret("pw-2")));
+        // A read that goes straight to the pool and propagates with `?`,
+        // never through `CatalogDb::classify` (the shape of the store
+        // layer's functions).
+        async fn plain_read(db: &CatalogDb) -> Result<i32, OkfError> {
+            Ok(sqlx::query_scalar("SELECT 1")
+                .fetch_one(db.executor())
+                .await?)
+        }
+        let refused = plain_read(&store).await.unwrap_err();
+        assert!(matches!(refused, OkfError::Database { .. }), "{refused:?}");
+        refreshes.wait_for(|count| *count >= 1).await.unwrap();
+
+        assert_eq!(plain_read(&store).await.unwrap(), 1);
+        assert_eq!(secrets.calls.load(Ordering::SeqCst), 2);
+
+        stores.forget_all().await;
+        drop_role(&db.pool, &role).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_plain_read_refused_after_a_rotation_refreshes_the_login_and_the_next_read_works() {
+        a_plain_read_after_a_rotation_refreshes("r_").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_role_with_a_quotation_mark_still_refreshes_after_a_rotation() {
+        a_plain_read_after_a_rotation_refreshes("app\"").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_role_with_two_adjacent_quotation_marks_still_refreshes_after_a_rotation() {
+        a_plain_read_after_a_rotation_refreshes("app\"\"").await;
+    }
+
+    /// Opens an IAM store, forgets it (one store, or all), and checks that
+    /// its credential task ends.
+    async fn forgetting_ends_the_credential_task(forget_everything: bool) {
+        let db = crate::db::test_db().await;
+        let role = make_role(&db.pool, "token-0").await;
+        let signer = ClockSigner::new(&Arc::new(AtomicU64::new(0)));
+        let stores = iam_stores(&db, &signer, IAM_REFRESH_EVERY);
+        add_row(&db.pool, "shared-1", "iam", &role).await;
+        let name = StoreName::parse("shared-1").unwrap();
+        let _store = stores.get(&name).await.unwrap();
+        let mut task = stores.credential_task(&name).await.expect("a task");
+        assert!(
+            task.has_changed().is_ok(),
+            "the task runs while the store is open"
+        );
+
+        if forget_everything {
+            stores.forget_all().await;
+        } else {
+            stores.forget(&name).await;
+        }
+
+        // The task owns the channel's sender: it closes when the task ends.
+        // The outer timeout only keeps a regression from hanging the suite.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while task.changed().await.is_ok() {}
+        })
+        .await
+        .expect("the credential task ends when the store is forgotten");
+        drop_role(&db.pool, &role).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn forgetting_a_store_ends_its_credential_task() {
+        forgetting_ends_the_credential_task(false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn forgetting_every_store_ends_their_credential_tasks() {
+        forgetting_ends_the_credential_task(true).await;
+    }
+
+    /// A log sink for one test.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+        type Writer = Captured;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    impl Captured {
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+        }
+
+        fn clear(&self) {
+            self.0.lock().unwrap().clear();
+        }
+    }
+
+    // A current-thread runtime, so the thread-local subscriber sees every
+    // event the registry and the pool's tasks emit.
+    #[tokio::test]
+    async fn a_credential_never_appears_in_logs_or_errors() {
+        const PASSWORD: &str = "pw-sentinel-aaa";
+        const TOKEN: &str = "tok-sentinel-bbb";
+        const SECRET_ARN: &str =
+            "arn:aws:secretsmanager:us-east-1:123456789012:secret:sentinel-ccc";
+        const JSON_PASSWORD: &str = "json-sentinel-ddd";
+        let db = crate::db::test_db().await;
+        let secrets = MockSecrets::holding("");
+        let signer = Arc::new(ClockSigner {
+            token_override: std::sync::Mutex::new(Some(TOKEN.to_string())),
+            ..ClockSigner::plain(&Arc::new(AtomicU64::new(0)))
+        });
+        let stores = Stores::with_providers(
+            db.pool.clone(),
+            settings(),
+            Providers::new(
+                Arc::new(|_| Some(PASSWORD.to_string())),
+                Arc::clone(&secrets) as Arc<dyn SecretReader>,
+                Arc::clone(&signer) as Arc<dyn TokenSigner>,
+            ),
+        );
+        let name = StoreName::parse("shared-1").unwrap();
+        let captured = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(captured.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        let _guard = crate::test_tracing::set_default(subscriber);
+
+        // Each case: the row's kind and reference, and what the AWS side
+        // answers. Every one ends in a failed open.
+        let cases: [(&str, &str, Result<String, CredentialError>); 5] = [
+            ("env", "SENTINEL_VARIABLE", Ok(String::new())),
+            (
+                "secrets-manager",
+                SECRET_ARN,
+                Err(CredentialError::Service {
+                    service: "secrets manager",
+                    code: "AccessDeniedException".to_string(),
+                }),
+            ),
+            (
+                "secrets-manager",
+                SECRET_ARN,
+                Ok(format!(
+                    r#"{{"username":"nobody","password":"{JSON_PASSWORD}"}}"#
+                )),
+            ),
+            (
+                "secrets-manager",
+                SECRET_ARN,
+                Ok(format!("not json {JSON_PASSWORD}")),
+            ),
+            ("iam", "nobody", Ok(String::new())),
+        ];
+        for round in 0..2 {
+            if round == 1 {
+                // Everything above warmed the callsites; recompute their
+                // cached interest against this subscriber, then capture.
+                tracing::callsite::rebuild_interest_cache();
+                captured.clear();
+            }
+            let mut replies = String::new();
+            for (kind, reference, answer) in &cases {
+                secrets.set(match answer {
+                    Ok(text) => Ok(text.clone()),
+                    Err(CredentialError::Service { service, code }) => {
+                        Err(CredentialError::Service {
+                            service,
+                            code: code.clone(),
+                        })
+                    }
+                    Err(_) => unreachable!("only service errors are used"),
+                });
+                add_row(&db.pool, "shared-1", kind, reference).await;
+                let failed = stores.get(&name).await.unwrap_err();
+                assert!(
+                    matches!(failed, OkfError::StoreUnavailable { .. }),
+                    "{kind}: {failed:?}"
+                );
+                replies.push_str(&failed.to_json().to_string());
+                replies.push_str(&format!("{failed} {failed:?}"));
+                sqlx::query("DELETE FROM stores WHERE name = 'shared-1'")
+                    .execute(&db.pool)
+                    .await
+                    .unwrap();
+            }
+            let logs = captured.text();
+            for private in [
+                PASSWORD,
+                TOKEN,
+                JSON_PASSWORD,
+                SECRET_ARN,
+                "sentinel-ccc",
+                "123456789012",
+            ] {
+                assert!(
+                    !logs.contains(private),
+                    "{private} reached the log:\n{logs}"
+                );
+                assert!(!replies.contains(private), "{private} reached a reply");
+            }
+            if round == 1 {
+                // The capture works: the failures themselves were logged.
+                assert!(logs.contains("could not"), "{logs}");
+            }
+        }
     }
 }

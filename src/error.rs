@@ -649,6 +649,13 @@ impl From<sqlx::Error> for OkfError {
             .as_database_error()
             .and_then(|db_error| db_error.code())
             .is_some_and(|code| RETRYABLE_SQLSTATES.contains(&code.as_ref()));
+        if crate::stores::is_auth_failure(&source) {
+            // A refused login on a store's pool (a rotated secret, an expired
+            // token) reaches here from every read that propagates a driver
+            // error with `?`, not only from `CatalogDb::classify`: wake the
+            // credential tasks. The error itself is unchanged.
+            crate::stores::signal_auth_refused(&source);
+        }
         if retryable {
             // `Busy` drops the driver error, and as a non-internal error it is
             // logged only at debug level, so keep Postgres' report (the
