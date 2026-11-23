@@ -357,10 +357,7 @@ impl Stores {
         // A credential that changes is kept current for as long as this
         // entry lives.
         let keeper = source.and_then(|source| spawn_keeper(source, base, pool.clone()));
-        let mut db = CatalogDb::new(row.name, pool);
-        if let Some(keeper) = &keeper {
-            db = db.with_auth_failure_signal(keeper.auth_failed());
-        }
+        let db = CatalogDb::new(row.name, pool);
         Ok(Arc::new(OpenStore {
             db,
             _keeper: keeper,
@@ -1261,6 +1258,49 @@ mod tests {
         assert_eq!(secrets.calls.load(Ordering::SeqCst), 2);
 
         drop((first, second));
+        stores.forget_all().await;
+        drop_role(&db.pool, &role).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_plain_read_refused_after_a_rotation_refreshes_the_login_and_the_next_read_works() {
+        let db = crate::db::test_db().await;
+        let role = make_role(&db.pool, "pw-1").await;
+        let secrets =
+            MockSecrets::holding(&format!(r#"{{"username":"{role}","password":"pw-1"}}"#));
+        let stores = Stores::with_providers(
+            db.pool.clone(),
+            settings(),
+            Providers::new(
+                Arc::new(|_| None),
+                Arc::clone(&secrets) as Arc<dyn SecretReader>,
+                Arc::new(ClockSigner::plain(&Arc::new(AtomicU64::new(0)))),
+            ),
+        );
+        add_row(&db.pool, "shared-1", "secrets-manager", EXAMPLE_ARN).await;
+        let name = StoreName::parse("shared-1").unwrap();
+        let store = stores.get(&name).await.unwrap();
+        // One connection stays busy, so the reads below need a new one.
+        let _held = store.executor().acquire().await.unwrap();
+        let mut refreshes = stores.credential_task(&name).await.unwrap();
+
+        set_password(&db.pool, &role, "pw-2").await;
+        secrets.set(Ok(format!(r#"{{"username":"{role}","password":"pw-2"}}"#)));
+        // A read that goes straight to the pool and propagates with `?`,
+        // never through `CatalogDb::classify` (the shape of the store
+        // layer's functions).
+        async fn plain_read(db: &CatalogDb) -> Result<i32, OkfError> {
+            Ok(sqlx::query_scalar("SELECT 1")
+                .fetch_one(db.executor())
+                .await?)
+        }
+        let refused = plain_read(&store).await.unwrap_err();
+        assert!(matches!(refused, OkfError::Database { .. }), "{refused:?}");
+        refreshes.wait_for(|count| *count >= 1).await.unwrap();
+
+        assert_eq!(plain_read(&store).await.unwrap(), 1);
+        assert_eq!(secrets.calls.load(Ordering::SeqCst), 2);
+
         stores.forget_all().await;
         drop_role(&db.pool, &role).await;
     }

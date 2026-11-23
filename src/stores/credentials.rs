@@ -30,7 +30,7 @@
 //! attempt fails authentication. The task ends when the pool's registry
 //! entry is dropped, so forgetting a store leaves no task behind.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
@@ -43,7 +43,7 @@ use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
 use serde::Deserialize;
 use sqlx::postgres::{PgConnectOptions, PgPool};
-use tokio::sync::{oneshot, watch, Notify, OnceCell};
+use tokio::sync::{broadcast, oneshot, watch, OnceCell};
 
 use crate::store::stores::CredentialKind;
 use crate::telemetry::subscriber::split_event;
@@ -456,12 +456,66 @@ pub(crate) fn is_auth_failure(error: &sqlx::Error) -> bool {
         .is_some_and(|code| code.starts_with("28"))
 }
 
+/// Carries each refused login, anywhere in the process, to the credential
+/// tasks: the role the server named, if its message names one.
+///
+/// sqlx gives no hook on a pool's connect path, and most store reads reach
+/// the pool through `CatalogDb::executor()` and propagate its error with `?`,
+/// so the refusal is seen where every driver error passes: `CatalogDb::classify`
+/// and `OkfError::from(sqlx::Error)` call [`signal_auth_refused`]. An error
+/// does not say which pool it came from, so every task hears it and answers
+/// only if the role is its pool's current login (or the message named none).
+static LOGINS_REFUSED: LazyLock<broadcast::Sender<Option<String>>> =
+    LazyLock::new(|| broadcast::channel(64).0);
+
+/// The first double-quoted name in a server message: Postgres writes
+/// `password authentication failed for user "NAME"`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "parses text, no I/O")
+)]
+fn role_in(message: &str) -> Option<&str> {
+    let (_, rest) = message.split_once('"')?;
+    rest.split_once('"').map(|(role, _)| role)
+}
+
+/// Tells the credential tasks that a login was refused.
+///
+/// # Arguments
+/// * `error` - the refusal (see [`is_auth_failure`]).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "sends a message, no I/O")
+)]
+pub(crate) fn signal_auth_refused(error: &sqlx::Error) {
+    let role = error
+        .as_database_error()
+        .and_then(|database| role_in(database.message()))
+        .map(str::to_string);
+    // No task listening (a pool on `env`) is not an error.
+    let _ = LOGINS_REFUSED.send(role);
+}
+
+/// Waits until a login of `login` was refused (or the message named no
+/// role, or messages were missed).
+#[tracing::instrument(level = "trace", skip_all)]
+async fn next_refusal(
+    refused: &mut broadcast::Receiver<Option<String>>,
+    login: &impl Fn() -> String,
+) {
+    loop {
+        match refused.recv().await {
+            Ok(Some(role)) if role != login() => {}
+            Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => return,
+            Err(broadcast::error::RecvError::Closed) => std::future::pending().await,
+        }
+    }
+}
+
 /// What keeps a pool's connect options current. Dropping it stops the
 /// task, which releases the pool.
 #[derive(Debug)]
 pub(super) struct Keeper {
-    /// Tell the task a connection attempt failed authentication.
-    auth_failed: Arc<Notify>,
     // Dropped with the keeper: the task sees the channel close and ends.
     _stop: oneshot::Sender<()>,
     /// Counts the refreshes that replaced the options; closes when the task
@@ -471,15 +525,6 @@ pub(super) struct Keeper {
 }
 
 impl Keeper {
-    /// The signal a pool's handle raises on an authentication failure.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(uninstrumented_fn, reason = "one-line accessor")
-    )]
-    pub(super) fn auth_failed(&self) -> Arc<Notify> {
-        Arc::clone(&self.auth_failed)
-    }
-
     /// Tests: watches the refresh count; the channel closes when the task
     /// ends.
     #[cfg(test)]
@@ -513,24 +558,25 @@ pub(super) fn spawn_keeper(
         Refresh::OnAuthFailure => None,
         Refresh::Every(every) => Some(every),
     };
-    let auth_failed = Arc::new(Notify::new());
     let (stop, stopped) = oneshot::channel();
     let (count, _refreshed) = watch::channel(0_u64);
     #[cfg(test)]
     let refreshed = _refreshed;
+    let current = pool.clone();
+    let login = move || current.connect_options().get_username().to_string();
     let apply = move |credential: Credential| {
         pool.set_connect_options(credential.apply(base.clone()));
     };
     tokio::spawn(keep_current(
         source,
         every,
-        Arc::clone(&auth_failed),
+        LOGINS_REFUSED.subscribe(),
+        login,
         stopped,
         count,
         apply,
     ));
     Some(Keeper {
-        auth_failed,
         _stop: stop,
         #[cfg(test)]
         refreshed,
@@ -543,7 +589,8 @@ pub(super) fn spawn_keeper(
 /// # Arguments
 /// * `source` - where a fresh login comes from.
 /// * `every` - the timer, if any.
-/// * `auth_failed` - raised when a connection attempt was refused.
+/// * `refused` - the refused logins ([`LOGINS_REFUSED`]).
+/// * `login` - the role the pool connects as now.
 /// * `stopped` - closes when the pool's registry entry is dropped.
 /// * `count` - bumped after each login is applied.
 /// * `apply` - installs a login.
@@ -551,7 +598,8 @@ pub(super) fn spawn_keeper(
 async fn keep_current(
     source: Arc<dyn CredentialSource>,
     every: Option<Duration>,
-    auth_failed: Arc<Notify>,
+    mut refused: broadcast::Receiver<Option<String>>,
+    login: impl Fn() -> String + Send,
     mut stopped: oneshot::Receiver<()>,
     count: watch::Sender<u64>,
     apply: impl Fn(Credential) + Send,
@@ -566,9 +614,12 @@ async fn keep_current(
         };
         tokio::select! {
             _ = &mut stopped => return,
-            () = auth_failed.notified() => {}
+            () = next_refusal(&mut refused, &login) => {}
             () = timer => {}
         }
+        // Whatever was refused so far is answered by this fetch; a refusal
+        // that arrives during it or the gap that follows wakes the next one.
+        while refused.try_recv().is_ok() {}
         let fetched = tokio::select! {
             _ = &mut stopped => return,
             fetched = source.fetch() => fetched,
@@ -699,13 +750,11 @@ impl TokenSigner for AwsTokenSigner {
         let provider = sdk.credentials_provider().ok_or(CredentialError::Signing {
             reason: "the server has no AWS credentials",
         })?;
-        let region = sdk
-            .region()
-            .map(|region| region.as_ref().to_string())
-            .or_else(|| region_of_rds_host(host).map(str::to_string))
-            .ok_or(CredentialError::Signing {
+        let region = signing_region(host, sdk.region().map(AsRef::as_ref)).ok_or(
+            CredentialError::Signing {
                 reason: "no AWS region is configured",
-            })?;
+            },
+        )?;
         let credentials = tokio::time::timeout(AWS_CALL_TIMEOUT, provider.provide_credentials())
             .await
             .map_err(|_| CredentialError::Service {
@@ -718,13 +767,32 @@ impl TokenSigner for AwsTokenSigner {
             })?;
         presign_token(
             &Identity::from(credentials),
-            &region,
+            region,
             host,
             port,
             user,
             SystemTime::now(),
         )
     }
+}
+
+/// The region a token for `host` is signed for: the database's, read from a
+/// recognised RDS host name, because RDS rejects a token signed for another
+/// region; the server's own region only for a host name that does not say
+/// (a proxy, a CNAME).
+///
+/// # Arguments
+/// * `host` - the row's host.
+/// * `server_region` - the region of the server's AWS configuration.
+///
+/// # Returns
+/// The region, or `None` when neither source has one.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "picks a string, no I/O")
+)]
+fn signing_region<'a>(host: &'a str, server_region: Option<&'a str>) -> Option<&'a str> {
+    region_of_rds_host(host).or(server_region)
 }
 
 /// The region in an RDS host name (`name.id.REGION.rds.amazonaws.com`).
@@ -1004,6 +1072,22 @@ mod tests {
     }
 
     #[test]
+    fn a_token_is_signed_for_the_databases_region_not_the_servers() {
+        let server = Some("us-east-1");
+        // The host names another region: it wins.
+        assert_eq!(
+            signing_region("example.abcdefgh.eu-west-2.rds.amazonaws.com", server),
+            Some("eu-west-2")
+        );
+        // A name that does not say falls back to the server's region.
+        assert_eq!(
+            signing_region("db.example.internal", server),
+            Some("us-east-1")
+        );
+        assert_eq!(signing_region("db.example.internal", None), None);
+    }
+
+    #[test]
     fn an_iam_token_is_a_presigned_connect_url_for_the_user() {
         let credentials = aws_credential_types::Credentials::new(
             "AKIDEXAMPLE",
@@ -1085,7 +1169,7 @@ mod tests {
     struct Harness {
         source: Arc<Counting>,
         applied: Arc<Mutex<Vec<String>>>,
-        auth_failed: Arc<Notify>,
+        refused: broadcast::Sender<Option<String>>,
         stop: Option<oneshot::Sender<()>>,
         refreshed: watch::Receiver<u64>,
         task: tokio::task::JoinHandle<()>,
@@ -1098,7 +1182,7 @@ mod tests {
             refresh,
         });
         let applied = Arc::new(Mutex::new(Vec::new()));
-        let auth_failed = Arc::new(Notify::new());
+        let (refused, refusals) = broadcast::channel(8);
         let (stop, stopped) = oneshot::channel();
         let (count, refreshed) = watch::channel(0_u64);
         let sink = Arc::clone(&applied);
@@ -1109,7 +1193,8 @@ mod tests {
         let task = tokio::spawn(keep_current(
             Arc::clone(&source) as Arc<dyn CredentialSource>,
             every,
-            Arc::clone(&auth_failed),
+            refusals,
+            || "example_role".to_string(),
             stopped,
             count,
             move |credential| sink.lock().unwrap().push(credential.password),
@@ -1117,7 +1202,7 @@ mod tests {
         Harness {
             source,
             applied,
-            auth_failed,
+            refused,
             stop: Some(stop),
             refreshed,
             task,
@@ -1152,12 +1237,12 @@ mod tests {
         let mut keeper = start(Refresh::OnAuthFailure);
 
         // Three failed attempts before the keeper runs are one signal.
-        keeper.auth_failed.notify_one();
-        keeper.auth_failed.notify_one();
-        keeper.auth_failed.notify_one();
+        keeper.refused.send(None).unwrap();
+        keeper.refused.send(None).unwrap();
+        keeper.refused.send(None).unwrap();
         keeper.refreshes(1).await;
         // Further failures wait out the minimum gap, then refresh once more.
-        keeper.auth_failed.notify_one();
+        keeper.refused.send(None).unwrap();
         keeper.refreshes(2).await;
 
         assert_eq!(keeper.source.fetches.load(Ordering::SeqCst), 2);

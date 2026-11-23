@@ -15,6 +15,7 @@ use sqlx::{Postgres, Transaction};
 mod credentials;
 mod registry;
 
+pub(crate) use credentials::{is_auth_failure, signal_auth_refused};
 pub use registry::{PoolSettings, Stores, STORE_SEARCH_PATH};
 
 use crate::error::OkfError;
@@ -180,10 +181,6 @@ impl AccountDb {
 pub struct CatalogDb {
     store: StoreName,
     pool: PgPool,
-    // Raised when a connection attempt on this pool is refused its login,
-    // so the credential task fetches a fresh one (`None` for a credential
-    // that never changes).
-    auth_failed: Option<std::sync::Arc<tokio::sync::Notify>>,
 }
 
 impl CatalogDb {
@@ -197,28 +194,7 @@ impl CatalogDb {
         allow(uninstrumented_fn, reason = "one-line constructor")
     )]
     pub fn new(store: StoreName, pool: PgPool) -> Self {
-        Self {
-            store,
-            pool,
-            auth_failed: None,
-        }
-    }
-
-    /// This handle, told where to report a refused login (see
-    /// [`CatalogDb::classify`]).
-    ///
-    /// # Arguments
-    /// * `signal` - raised on a refused login.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(uninstrumented_fn, reason = "one-line builder")
-    )]
-    pub(crate) fn with_auth_failure_signal(
-        mut self,
-        signal: std::sync::Arc<tokio::sync::Notify>,
-    ) -> Self {
-        self.auth_failed = Some(signal);
-        self
+        Self { store, pool }
     }
 
     /// The store's name.
@@ -261,11 +237,9 @@ impl CatalogDb {
     pub fn classify(&self, error: sqlx::Error) -> OkfError {
         // A refused login is the store being unreachable to this server (a
         // rotated secret, an expired token), not a fault in the request;
-        // the credential task is told to fetch a fresh one.
+        // the credential tasks are told to fetch a fresh login.
         if credentials::is_auth_failure(&error) {
-            if let Some(signal) = &self.auth_failed {
-                signal.notify_one();
-            }
+            credentials::signal_auth_refused(&error);
             return OkfError::store_unavailable(&self.store);
         }
         match error {
