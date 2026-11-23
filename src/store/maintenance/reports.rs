@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{PgConnection, Row};
 
-use super::{evidence, lock, receipt, refused, replay, runs, validate, RunWatch};
+use super::{evidence, lock, receipt, refused, replay, runs, validate, AuditTarget, RunWatch};
 use crate::error::OkfError;
 use crate::maintenance::types::{
     new_id, Actor, Disposition, Evidence, FindingInput, Lane, Receipt, RevisionPin, Submission,
@@ -438,11 +438,13 @@ pub async fn submit(
         item.pin = report::pin(&item.pin)?;
     }
     let payload = json!({"work_id":work_id,"token":token,"submission":input});
+    // Read before the store transaction: see `AuditTarget`.
+    let target = AuditTarget::read(db, catalog_id).await?;
     let mut tx = db.begin().await?;
     // The catalog lock protects identity; state serializes maintenance writes.
     // Source row locks below exclude concurrent publication of the cited pins.
     lock(&mut tx, catalog_id, now).await?;
-    let watch = RunWatch::open(&mut tx, catalog_id).await?;
+    let watch = RunWatch::open(&mut tx, catalog_id, target).await?;
     let run_id: String =
         sqlx::query_scalar("SELECT run_id FROM maintenance_work WHERE catalog_id=$1 AND id=$2")
             .bind(catalog_id)

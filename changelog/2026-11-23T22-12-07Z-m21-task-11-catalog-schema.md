@@ -84,6 +84,17 @@ the store connection formed a cycle PostgreSQL cannot see. Regression test:
 (one store connection, a larger account pool, one registry; without the
 fix the deletion fails `StoreUnavailable` after `store_connect_timeout`).
 
+Two related fixes from the same review. `catalogs::delete_on` now locks the
+keys whose default is the catalog (`api_keys`, id order) on its account
+transaction before it takes the store connection and the changesets' locks,
+so a forced catalog deletion and a user deletion holding that key cannot
+wait on each other (`a_forced_catalog_deletion_and_a_users_deletion_never_wait_on_each_other`;
+without the lock the catalog deletion hangs). `RunWatch` reads the catalog's
+name and owner team (`AuditTarget`) before the store transaction begins, and
+`record_ended_run` inserts from those values, so a catalog deleted after the
+store commit no longer loses the `catalog.maintenance_run` entry
+(`an_ended_runs_entry_survives_the_catalogs_deletion_before_it_is_written`).
+
 ## Evidence
 
 Gates on this change (`tools/agentic/gate.sh`: fmt, lint, dylint, test) ran

@@ -108,6 +108,40 @@ async fn lock(
 pub(super) struct RunWatch {
     catalog_id: i64,
     running: Vec<String>,
+    target: AuditTarget,
+}
+
+/// What a maintenance entry says about its catalog, read from the account
+/// database BEFORE the store transaction begins (the acquisition order of
+/// plan Task 11, issue #970: no store connection is held while an account
+/// connection is taken) and kept until the entry is written. A catalog
+/// deleted between the store commit and the entry therefore does not lose
+/// the entry: it is inserted from these values, not from the registry row.
+#[derive(Debug, Clone)]
+pub(super) struct AuditTarget {
+    name: String,
+    owner_team_id: Option<String>,
+}
+
+impl AuditTarget {
+    /// Reads the catalog's name and owner team.
+    ///
+    /// # Errors
+    /// [`OkfError::Refused`] if the catalog no longer exists;
+    /// [`OkfError::Database`].
+    #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "maintenance.audit_target", catalog_id = catalog_id))]
+    pub(super) async fn read(db: &CatalogDb, catalog_id: i64) -> Result<Self, OkfError> {
+        let row: Option<(String, Option<String>)> =
+            sqlx::query_as("SELECT name, owner_team_id FROM catalogs WHERE id = $1")
+                .bind(catalog_id)
+                .fetch_optional(db.accounts().executor())
+                .await?;
+        let (name, owner_team_id) = row.ok_or_else(|| refused("the catalog no longer exists"))?;
+        Ok(Self {
+            name,
+            owner_team_id,
+        })
+    }
 }
 
 /// A run that ended, with what its audit entry says.
@@ -127,7 +161,11 @@ impl RunWatch {
     /// # Errors
     /// [`OkfError::Database`].
     #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "maintenance.watch_runs", catalog_id = catalog_id))]
-    pub(super) async fn open(conn: &mut PgConnection, catalog_id: i64) -> Result<Self, OkfError> {
+    pub(super) async fn open(
+        conn: &mut PgConnection,
+        catalog_id: i64,
+        target: AuditTarget,
+    ) -> Result<Self, OkfError> {
         let running = sqlx::query_scalar(
             "SELECT id FROM maintenance_runs WHERE catalog_id=$1 AND state='running'",
         )
@@ -137,6 +175,7 @@ impl RunWatch {
         Ok(Self {
             catalog_id,
             running,
+            target,
         })
     }
 
@@ -180,7 +219,7 @@ impl RunWatch {
         }
         let mut account_tx = db.accounts().begin().await?;
         for run in &ended {
-            record_ended_run(&mut account_tx, self.catalog_id, run).await?;
+            record_ended_run(&mut account_tx, &self.target, run).await?;
         }
         account_tx.commit().await?;
         Ok(())
@@ -195,10 +234,10 @@ impl RunWatch {
 ///
 /// # Errors
 /// [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "maintenance.record_ended_run", catalog_id = catalog_id))]
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "maintenance.record_ended_run"))]
 async fn record_ended_run(
     account: &mut PgConnection,
-    catalog_id: i64,
+    target: &AuditTarget,
     run: &EndedRun,
 ) -> Result<(), OkfError> {
     // Taken `FOR KEY SHARE SKIP LOCKED`: the entry's foreign key takes that
@@ -219,11 +258,10 @@ async fn record_ended_run(
                 'system:maintenance', \
                 EXISTS (SELECT 1 FROM api_keys k LEFT JOIN users u ON u.id = k.user_id \
                          WHERE k.id = $3 AND (k.access = 'admin' OR COALESCE(u.is_admin, false))), \
-                'catalog', c.name, \
-                COALESCE((SELECT ARRAY[t.id] FROM audit_teams t WHERE t.team_id = c.owner_team_id), \
+                'catalog', $7::text, \
+                COALESCE((SELECT ARRAY[t.id] FROM audit_teams t WHERE t.team_id = $8::text), \
                          '{}'::bigint[]), \
-                jsonb_build_object('run', $4::text, 'state', $5::text, 'findings', $6::bigint) \
-         FROM catalogs c WHERE c.id = $7",
+                jsonb_build_object('run', $4::text, 'state', $5::text, 'findings', $6::bigint)",
     )
     .bind(run.at)
     .bind(credential)
@@ -231,7 +269,8 @@ async fn record_ended_run(
     .bind(&run.id)
     .bind(&run.state)
     .bind(run.findings)
-    .bind(catalog_id)
+    .bind(&target.name)
+    .bind(&target.owner_team_id)
     .execute(account)
     .await?;
     Ok(())

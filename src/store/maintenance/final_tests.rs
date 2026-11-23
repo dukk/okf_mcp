@@ -616,3 +616,46 @@ async fn maintenance_final_completed_close_acknowledges_without_rewriting_histor
         );
     }
 }
+
+/// Issue #970, Brooke's review of #1001: the entry of an ended run names its
+/// catalog from values read BEFORE the store transaction. A catalog deleted
+/// between the store commit and the entry (here: before it) must not make the
+/// entry disappear.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_ended_runs_entry_survives_the_catalogs_deletion_before_it_is_written() {
+    // Arrange: the target is read, then the catalog is deleted.
+    let db = test_db().await;
+    let catalog = setup(&db.pool, &[]).await;
+    let target = super::AuditTarget::read(&CatalogDb::main_of(&db.pool), catalog)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM catalogs WHERE id = $1")
+        .bind(catalog)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let run = super::EndedRun {
+        id: "run-1".to_string(),
+        state: "completed".to_string(),
+        at: t0(),
+        credential_id: "no-such-credential".to_string(),
+        key_id: None,
+        findings: 2,
+    };
+
+    // Act
+    let mut conn = db.pool.acquire().await.unwrap();
+    super::record_ended_run(&mut conn, &target, &run)
+        .await
+        .unwrap();
+
+    // Assert: exactly one entry, naming the deleted catalog.
+    let entries: Vec<(String, String)> = sqlx::query_as(
+        "SELECT target_name, details->>'run' FROM audit_entries \
+         WHERE action = 'catalog.maintenance_run'",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(entries, vec![("pg".to_string(), "run-1".to_string())]);
+}
