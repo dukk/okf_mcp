@@ -24,10 +24,13 @@
 
 ## Notes
 
-- Write paths: `ceiling::change_member_access` and `oauth::clients::insert_dcr`
-  convert the row before `commit`, so the error drops the transaction and
-  rolls back. Readers called inside a caller's transaction
-  (`ceiling::read_catalog_locked`, `teams::current_role`, `changesets::lock`,
-  and `changesets::open`, an `INSERT ... RETURNING` whose state is the literal
-  `open`) propagate with `?` before that transaction commits.
+- Write paths: each converts its row before `commit` and propagates with
+  `?`, so the error drops the transaction, which rolls back. These are
+  `ceiling::change_member_access`, `oauth::clients::insert_dcr`,
+  `oauth::tokens::revoke`, `unlocks::create` and `unlocks::revoke` (both call
+  `find_in` before `tx.commit()`), and the readers that run inside a
+  caller's transaction (`ceiling::read_catalog_locked`,
+  `teams::current_role`, `changesets::lock` and `changesets::open`, an
+  `INSERT ... RETURNING` whose state is the literal `open`). Every other
+  converted site is a plain read.
 - `OkfError::Database` is internal: clients see only the kind, never the text.
