@@ -15,6 +15,7 @@ use crate::invalidate::{invalidate, Invalidation};
 use crate::labels::DisplayName;
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock, Target};
 use crate::store::catalogs::is_valid_name;
+use crate::store::decode_column;
 use crate::store::users;
 
 /// A member's role in a team.
@@ -200,17 +201,21 @@ macro_rules! select_members {
 
 /// Joins team rows with their membership rows (two queries, so there is no
 /// query per team).
+///
+/// # Errors
+/// [`OkfError::Database`] for a stored role that is not a known spelling.
 #[tracing::instrument(level = "trace", skip_all)]
-fn assemble(rows: Vec<TeamRow>, member_rows: Vec<MemberRow>) -> Vec<TeamRecord> {
+fn assemble(rows: Vec<TeamRow>, member_rows: Vec<MemberRow>) -> Result<Vec<TeamRecord>, OkfError> {
     // The member rows arrive sorted by user, so each team's list stays sorted.
     let mut members: HashMap<String, Vec<Member>> = HashMap::with_capacity(rows.len());
     for row in member_rows {
         members.entry(row.team).or_default().push(Member {
             user: row.user,
-            role: Role::parse(&row.role).expect("the schema checks team_members.role"),
+            role: decode_column(Role::parse(&row.role), "team_members.role")?,
         });
     }
-    rows.into_iter()
+    Ok(rows
+        .into_iter()
         .map(|row| TeamRecord {
             members: members.remove(&row.name).unwrap_or_default(),
             // `map` runs only for `Some`: a team with a time is suspended.
@@ -227,7 +232,7 @@ fn assemble(rows: Vec<TeamRow>, member_rows: Vec<MemberRow>) -> Vec<TeamRecord> 
             created_at: row.created_at,
             catalogs: row.catalogs,
         })
-        .collect()
+        .collect())
 }
 
 /// Creates a shared team with `owner` as its first owner, records
@@ -325,7 +330,7 @@ pub async fn list(pool: &PgPool) -> Result<Vec<TeamRecord>, OkfError> {
         sqlx::query_as::<_, MemberRow>(concat!(select_members!(), " ORDER BY u.name"))
             .fetch_all(pool)
             .await?;
-    Ok(assemble(rows, member_rows))
+    assemble(rows, member_rows)
 }
 
 /// The team called `name`, with its members and catalogs.
@@ -360,7 +365,7 @@ pub async fn find(pool: &PgPool, name: &str) -> Result<TeamRecord, OkfError> {
     .fetch_all(pool)
     .await?;
     // `assemble` returns exactly one record for one row.
-    Ok(assemble(vec![row], member_rows)
+    Ok(assemble(vec![row], member_rows)?
         .pop()
         .expect("one team row gives one record"))
 }
@@ -1021,7 +1026,8 @@ async fn current_role(
             .fetch_optional(&mut *conn)
             .await?;
     // `Option::map` applies the closure only to `Some`, like a None-safe call.
-    Ok(role.map(|text| Role::parse(&text).expect("the schema checks team_members.role")))
+    role.map(|text| decode_column(Role::parse(&text), "team_members.role"))
+        .transpose()
 }
 
 /// Inserts one membership row.
@@ -2721,5 +2727,34 @@ mod tests {
             find(&db.pool, "family").await.unwrap().display_name,
             "The family"
         );
+    }
+
+    /// Issue #642: a stored role that is not a known spelling is a database
+    /// error from the list and the role lookup, not a panic.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_corrupt_role_is_a_database_error() {
+        let db = test_db().await;
+        family(&db.pool).await;
+        let (team_id, user_id): (String, String) = sqlx::query_as(
+            "SELECT t.id, u.id FROM teams t, users u WHERE t.name = 'family' AND u.name = 'alice'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        crate::store::drop_check_constraints(&db.pool, "team_members").await;
+        sqlx::query("UPDATE team_members SET role = 'bogus-role' WHERE team_id = $1")
+            .bind(&team_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let listed = list(&db.pool).await;
+        let found = find(&db.pool, "family").await;
+        let mut conn = db.pool.acquire().await.unwrap();
+        let role = current_role(&mut conn, &team_id, &user_id).await;
+
+        crate::store::assert_decode_error(listed, "team_members.role", "bogus-role");
+        crate::store::assert_decode_error(found, "team_members.role", "bogus-role");
+        crate::store::assert_decode_error(role, "team_members.role", "bogus-role");
     }
 }

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use crate::error::OkfError;
+use crate::store::decode_column;
 
 /// How a client got its id.
 // `Serialize, Deserialize` (serde): stored in Redis inside a pending
@@ -113,7 +114,9 @@ struct ClientRow {
     created_at: DateTime<Utc>,
 }
 
-impl From<ClientRow> for ClientRecord {
+impl TryFrom<ClientRow> for ClientRecord {
+    type Error = OkfError;
+
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -121,17 +124,17 @@ impl From<ClientRow> for ClientRecord {
             reason = "trivial accessor or conversion: maps a value, no I/O"
         )
     )]
-    fn from(row: ClientRow) -> Self {
-        Self {
+    fn try_from(row: ClientRow) -> Result<Self, OkfError> {
+        Ok(Self {
             client_id: row.client_id,
-            kind: ClientKind::parse(&row.kind).expect("the schema checks oauth_clients.kind"),
+            kind: decode_column(ClientKind::parse(&row.kind), "oauth_clients.kind")?,
             client_name: row.client_name,
             redirect_uris: row.redirect_uris,
             metadata: row.metadata,
             fetched_at: row.fetched_at,
             cache_expires_at: row.cache_expires_at,
             created_at: row.created_at,
-        }
+        })
     }
 }
 
@@ -156,8 +159,9 @@ pub async fn find(pool: &PgPool, client_id: &str) -> Result<Option<ClientRecord>
     .bind(client_id)
     .fetch_optional(pool)
     .await?;
-    // `Option::map(ClientRecord::from)` converts the row, if there is one.
-    Ok(row.map(ClientRecord::from))
+    // `Option::map(ClientRecord::try_from)` converts the row, if there is
+    // one; `transpose` turns `Option<Result<..>>` into `Result<Option<..>>`.
+    row.map(ClientRecord::try_from).transpose()
 }
 
 /// Deletes the dynamically registered clients created before
@@ -270,8 +274,10 @@ pub async fn insert_dcr(
     .bind(max_unbound)
     .fetch_optional(&mut *tx)
     .await?;
+    // Converted before the commit: a corrupt row errors and `tx` rolls back.
+    let record = row.map(ClientRecord::try_from).transpose()?;
     tx.commit().await?;
-    Ok(row.map(ClientRecord::from))
+    Ok(record)
 }
 
 /// Stores a freshly fetched Client ID Metadata Document, or refreshes the
@@ -613,5 +619,22 @@ mod tests {
         insert_grant(&db.pool, "bound", Access::Read, &["main"], now()).await;
 
         assert_eq!(count_unbound_dcr(&db.pool).await.unwrap(), 2);
+    }
+
+    /// Issue #642: a stored kind that is not a known spelling is a database
+    /// error, not a panic.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_corrupt_kind_is_a_database_error() {
+        let db = test_db().await;
+        insert_dcr_row(&db.pool, "corrupt-client", now()).await;
+        crate::store::drop_check_constraints(&db.pool, "oauth_clients").await;
+        sqlx::query("UPDATE oauth_clients SET kind = 'bogus-kind'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let found = find(&db.pool, "corrupt-client").await;
+
+        crate::store::assert_decode_error(found, "oauth_clients.kind", "bogus-kind");
     }
 }

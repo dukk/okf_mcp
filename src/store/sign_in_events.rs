@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
+use crate::store::decode_column;
 use crate::telemetry::subscriber::split_event;
 
 /// How someone tried to sign in.
@@ -249,16 +250,17 @@ pub async fn recent(pool: &PgPool, user: &str, limit: i64) -> Result<Vec<SignInE
     .bind(limit)
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|(method, outcome, ip, at)| SignInEvent {
+    rows.into_iter()
+        .map(|(method, outcome, ip, at)| {
             // The table's CHECK constraints admit only these spellings.
-            method: Method::parse(&method).expect("sign_in_events.method is checked"),
-            outcome: Outcome::parse(&outcome).expect("sign_in_events.outcome is checked"),
-            ip: ip.and_then(|text| text.parse().ok()),
-            at,
+            Ok(SignInEvent {
+                method: decode_column(Method::parse(&method), "sign_in_events.method")?,
+                outcome: decode_column(Outcome::parse(&outcome), "sign_in_events.outcome")?,
+                ip: ip.and_then(|text| text.parse().ok()),
+                at,
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// Deletes events from before `before` (the hourly prune passes 90 days ago).
@@ -434,5 +436,47 @@ mod tests {
             Err(OkfError::UnknownName { noun: "user", .. })
         ));
         assert_eq!((kept, pruned), (0, 1));
+    }
+
+    /// Issue #642: a stored method or outcome that is not a known spelling is
+    /// a database error, not a panic.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_corrupt_method_or_outcome_is_a_database_error() {
+        let db = test_db().await;
+        let alice = seed_user(&db.pool, "alice", None).await;
+        record(
+            &db.pool,
+            Some(&alice.id),
+            Method::Password,
+            Outcome::Ok,
+            None,
+            now(),
+        )
+        .await
+        .unwrap();
+        crate::store::drop_check_constraints(&db.pool, "sign_in_events").await;
+
+        // Each round corrupts one column, reads, then puts the column right.
+        for (column, bad, good, set) in [
+            (
+                "method",
+                "bogus-method",
+                "password",
+                "UPDATE sign_in_events SET method = $1",
+            ),
+            (
+                "outcome",
+                "bogus-outcome",
+                "ok",
+                "UPDATE sign_in_events SET outcome = $1",
+            ),
+        ] {
+            sqlx::query(set).bind(bad).execute(&db.pool).await.unwrap();
+
+            let result = recent(&db.pool, "alice", 10).await;
+
+            crate::store::assert_decode_error(result, &format!("sign_in_events.{column}"), bad);
+            sqlx::query(set).bind(good).execute(&db.pool).await.unwrap();
+        }
     }
 }

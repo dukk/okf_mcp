@@ -24,6 +24,7 @@ use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::error::OkfError;
 use crate::store::catalogs;
+use crate::store::decode_column;
 
 /// What [`lock_catalog`] reports when the catalog row is gone: it was
 /// deleted while the write waited for the delete to finish.
@@ -168,7 +169,9 @@ struct RawChangeset {
     updated_at: DateTime<Utc>,
 }
 
-impl From<RawChangeset> for ChangesetRow {
+impl TryFrom<RawChangeset> for ChangesetRow {
+    type Error = OkfError;
+
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -176,19 +179,19 @@ impl From<RawChangeset> for ChangesetRow {
             reason = "trivial accessor or conversion: maps a value, no I/O"
         )
     )]
-    fn from(raw: RawChangeset) -> Self {
-        Self {
+    fn try_from(raw: RawChangeset) -> Result<Self, OkfError> {
+        Ok(Self {
             id: raw.id,
             handle: raw.handle,
             catalog_id: raw.catalog_id,
             key_id: raw.key_id,
             actor: raw.actor,
             // The column's CHECK constraint allows only the three spellings.
-            state: ChangesetState::parse(&raw.state).expect("the schema checks changesets.state"),
+            state: decode_column(ChangesetState::parse(&raw.state), "changesets.state")?,
             version: raw.version,
             created_at: raw.created_at,
             updated_at: raw.updated_at,
-        }
+        })
     }
 }
 
@@ -271,7 +274,7 @@ pub async fn by_id<'e>(
     .bind(id)
     .fetch_optional(executor)
     .await?;
-    Ok(row.map(ChangesetRow::from))
+    row.map(ChangesetRow::try_from).transpose()
 }
 
 /// Opens a new changeset for `key_id` in a catalog (M8 Decision 1). Several
@@ -312,7 +315,7 @@ pub async fn open(
     .bind(now)
     .fetch_one(&mut *conn)
     .await?;
-    Ok(row.into())
+    ChangesetRow::try_from(row)
 }
 
 /// Can `handle` be one the server issued? Postgres draws each as
@@ -364,7 +367,7 @@ pub async fn by_handle<'e>(
     .bind(handle)
     .fetch_optional(executor)
     .await?;
-    Ok(row.map(ChangesetRow::from))
+    row.map(ChangesetRow::try_from).transpose()
 }
 
 /// Locks one changeset's row for the rest of the transaction, then reads it
@@ -668,15 +671,16 @@ async fn listed(
     .bind(key_id)
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|raw| ListedRow {
-            changeset: raw.changeset.into(),
-            catalog: raw.catalog,
-            key_name: raw.key_name,
-            paths: raw.paths,
+    rows.into_iter()
+        .map(|raw| {
+            Ok(ListedRow {
+                changeset: ChangesetRow::try_from(raw.changeset)?,
+                catalog: raw.catalog,
+                key_name: raw.key_name,
+                paths: raw.paths,
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// Discards every open changeset without entries whose last change is
@@ -1286,5 +1290,27 @@ mod tests {
         let plan = plan.join("\n");
         assert!(plan.contains("changesets_open"), "{plan}");
         assert!(!plan.contains("Seq Scan on changesets"), "{plan}");
+    }
+
+    /// Issue #642: a changeset whose stored state is not a known spelling
+    /// (a hand-edited row) is a database error from the readers, not a panic. (`listed` selects only `open` rows, so a
+    /// bad state never reaches it.)
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_corrupt_state_is_a_database_error_from_each_reader() {
+        let db = test_db().await;
+        let pg = setup(&db.pool).await;
+        let row = opened(&db.pool, pg, "alice", now()).await;
+        crate::store::drop_check_constraints(&db.pool, "changesets").await;
+        sqlx::query("UPDATE changesets SET state = 'bogus-state' WHERE id = $1")
+            .bind(row.id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let by_id = by_id(&db.pool, row.id).await;
+        let by_handle = by_handle(&db.pool, &row.handle).await;
+
+        crate::store::assert_decode_error(by_id, "changesets.state", "bogus-state");
+        crate::store::assert_decode_error(by_handle, "changesets.state", "bogus-state");
     }
 }

@@ -10,6 +10,7 @@ use crate::error::OkfError;
 use crate::invalidate::{invalidate, Invalidation};
 use crate::store::audit::{self, Action, AuditActor, Entry, Target};
 use crate::store::catalogs::{self, is_unique_violation};
+use crate::store::decode_column;
 use crate::store::users;
 
 /// What a key may do. Each level includes the ones before it, so the
@@ -946,7 +947,11 @@ macro_rules! select_key_records {
     };
 }
 
-impl From<KeyRow> for KeyRecord {
+/// `TryFrom`, not `From`: a stored access or kind that is not a known
+/// spelling (a hand-edited row) is an error, not a panic (issue #642).
+impl TryFrom<KeyRow> for KeyRecord {
+    type Error = OkfError;
+
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -954,20 +959,24 @@ impl From<KeyRow> for KeyRecord {
             reason = "trivial accessor or conversion: maps a value, no I/O"
         )
     )]
-    fn from(row: KeyRow) -> Self {
-        let catalog_access =
-            row.catalogs
-                .iter()
-                .cloned()
-                .zip(row.levels.iter().map(|level| {
-                    Access::parse(level).expect("the schema checks key_catalogs.access")
-                }))
-                .collect();
-        KeyRecord {
+    fn try_from(row: KeyRow) -> Result<Self, OkfError> {
+        let catalog_access = row
+            .catalogs
+            .iter()
+            .cloned()
+            .zip(row.levels.iter())
+            .map(|(catalog, level)| {
+                Ok((
+                    catalog,
+                    decode_column(Access::parse(level), "key_catalogs.access")?,
+                ))
+            })
+            .collect::<Result<_, OkfError>>()?;
+        Ok(KeyRecord {
             id: row.id,
             name: row.name,
             sha256: row.sha256,
-            access: Access::parse(&row.access).expect("the schema checks api_keys.access"),
+            access: decode_column(Access::parse(&row.access), "api_keys.access")?,
             provisioner: row.provisioner,
             maintenance_report: row.maintenance_report,
             all_catalogs: row.all_catalogs,
@@ -978,14 +987,14 @@ impl From<KeyRow> for KeyRecord {
             created_at: row.created_at,
             revoked_at: row.revoked_at,
             expires_at: row.expires_at,
-            kind: KeyKind::parse(&row.kind).expect("the schema checks api_keys.kind"),
+            kind: decode_column(KeyKind::parse(&row.kind), "api_keys.kind")?,
             client_id: row.client_id,
             client_name: row.client_name,
             user: row.user,
             user_id: row.user_id,
             self_issued: row.self_issued,
             last_activity: row.last_activity,
-        }
+        })
     }
 }
 
@@ -1007,8 +1016,9 @@ pub async fn list(pool: &PgPool) -> Result<Vec<KeyRecord>, OkfError> {
     ))
     .fetch_all(pool)
     .await?;
-    // `KeyRecord::from` is the `From<KeyRow>` above.
-    Ok(rows.into_iter().map(KeyRecord::from).collect())
+    // `KeyRecord::try_from` is the `TryFrom<KeyRow>` above; collecting
+    // `Result`s stops at the first error.
+    rows.into_iter().map(KeyRecord::try_from).collect()
 }
 
 /// A key or grant with the audit id its accesses are recorded with: what
@@ -1032,7 +1042,9 @@ struct CredentialRow {
     audit_credential: Option<i64>,
 }
 
-impl From<CredentialRow> for CredentialRecord {
+impl TryFrom<CredentialRow> for CredentialRecord {
+    type Error = OkfError;
+
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -1040,11 +1052,11 @@ impl From<CredentialRow> for CredentialRecord {
             reason = "trivial accessor or conversion: maps a value, no I/O"
         )
     )]
-    fn from(row: CredentialRow) -> Self {
-        Self {
-            record: KeyRecord::from(row.key),
+    fn try_from(row: CredentialRow) -> Result<Self, OkfError> {
+        Ok(Self {
+            record: KeyRecord::try_from(row.key)?,
             audit_credential: row.audit_credential,
-        }
+        })
     }
 }
 
@@ -1075,7 +1087,7 @@ pub async fn record_by_hash(
     .bind(sha256.as_slice())
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(CredentialRecord::from))
+    row.map(CredentialRecord::try_from).transpose()
 }
 
 /// The key or grant with this id, with its audit id, in one query: what the
@@ -1100,7 +1112,7 @@ pub async fn record_by_id(pool: &PgPool, id: &str) -> Result<Option<CredentialRe
     .bind(id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(CredentialRecord::from))
+    row.map(CredentialRecord::try_from).transpose()
 }
 
 /// Sets the independent maintenance-report capability on an active key.
@@ -4479,5 +4491,51 @@ mod tests {
         }
         let principal = crate::auth::Principal::from(record);
         assert!(principal.provisioner && !principal.reaches("main"));
+    }
+
+    /// Issue #642: a stored access or kind that is not a known spelling is a
+    /// database error from the key readers, not a panic.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_corrupt_access_or_kind_is_a_database_error() {
+        let db = test_db().await;
+        let id = "corrupt-key";
+        insert_legacy_test_key(&db.pool, id, Access::Write, "actor", now()).await;
+        crate::store::drop_check_constraints(&db.pool, "api_keys").await;
+
+        // Each round corrupts one column, reads, then puts the column right.
+        for (column, bad, good, set) in [
+            (
+                "access",
+                "bogus-access",
+                "write",
+                "UPDATE api_keys SET access = $1 WHERE id = $2",
+            ),
+            (
+                "kind",
+                "bogus-kind",
+                "key",
+                "UPDATE api_keys SET kind = $1 WHERE id = $2",
+            ),
+        ] {
+            sqlx::query(set)
+                .bind(bad)
+                .bind(id)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+
+            let listed = list(&db.pool).await;
+            let by_id = record_by_id(&db.pool, id).await;
+
+            let name = format!("api_keys.{column}");
+            crate::store::assert_decode_error(listed, &name, bad);
+            crate::store::assert_decode_error(by_id, &name, bad);
+            sqlx::query(set)
+                .bind(good)
+                .bind(id)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
     }
 }

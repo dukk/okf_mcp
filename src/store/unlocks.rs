@@ -35,6 +35,7 @@ use crate::store::audit::{
     self, AccessKind, Action, AuditActor, Entry, FixedPerson, People, RowLock, Target,
 };
 use crate::store::catalogs::{self, is_valid_name};
+use crate::store::decode_column;
 use crate::store::settings::Brand;
 
 /// `unlock_max_hours` with no override.
@@ -326,14 +327,14 @@ impl UnlockRow {
             reason = "trivial accessor or conversion: maps a value, no I/O"
         )
     )]
-    fn into_record(self) -> UnlockRecord {
-        UnlockRecord {
+    fn into_record(self) -> Result<UnlockRecord, OkfError> {
+        Ok(UnlockRecord {
             id: self.id,
             catalog: self.catalog,
             owner_team: self.owner_team,
             user: self.user_name,
             person: self.person,
-            category: Category::parse(&self.category).expect("the schema checks unlocks.category"),
+            category: decode_column(Category::parse(&self.category), "unlocks.category")?,
             reason: self.reason,
             created_at: self.created_at,
             expires_at: self.expires_at,
@@ -341,7 +342,7 @@ impl UnlockRow {
             reads: self.reads,
             writes: self.writes,
             exports: self.exports,
-        }
+        })
     }
 }
 
@@ -742,10 +743,10 @@ pub async fn find_in(conn: &mut PgConnection, id: i64) -> Result<UnlockRecord, O
         .bind(id)
         .fetch_optional(&mut *conn)
         .await?
-        .map(UnlockRow::into_record)
         .ok_or_else(|| OkfError::NotFound {
             path: format!("unlocks/{id}"),
-        })
+        })?
+        .into_record()
 }
 
 /// One unlock.
@@ -795,7 +796,7 @@ pub async fn list(pool: &PgPool, filter: &UnlockFilter<'_>) -> Result<Vec<Unlock
     .bind(filter.live_at)
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().map(UnlockRow::into_record).collect())
+    rows.into_iter().map(UnlockRow::into_record).collect()
 }
 
 /// The unlocks in force at `now`, for the key cache: neither ended nor
@@ -1529,5 +1530,27 @@ mod tests {
         // the demotion then went through.
         assert!(unlocked.is_ok(), "{unlocked:?}");
         assert!(demoted.unwrap(), "staff was an admin before the demotion");
+    }
+
+    /// Issue #642: a stored category that is not a known spelling is a
+    /// database error from the readers, not a panic.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_corrupt_category_is_a_database_error() {
+        let db = test_db().await;
+        staff_and_main(&db.pool).await;
+        let made = create(&db.pool, &new(2), &policy(), &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        crate::store::drop_check_constraints(&db.pool, "unlocks").await;
+        sqlx::query("UPDATE unlocks SET category = 'bogus-category'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let found = find(&db.pool, made.id).await;
+        let listed = list(&db.pool, &UnlockFilter::default()).await;
+
+        crate::store::assert_decode_error(found, "unlocks.category", "bogus-category");
+        crate::store::assert_decode_error(listed, "unlocks.category", "bogus-category");
     }
 }

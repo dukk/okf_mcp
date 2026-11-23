@@ -5,6 +5,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
+use crate::store::decode_column;
 
 /// An access or a refresh token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,12 +200,7 @@ pub async fn revoke(
         Some((family_id, kind)) => {
             // The column's CHECK allows only the two spellings, so this
             // fails only for a hand-edited row; answer an error, not a panic.
-            let kind = TokenKind::parse(&kind).ok_or_else(|| OkfError::Database {
-                source: sqlx::Error::ColumnDecode {
-                    index: "kind".to_string(),
-                    source: format!("unknown oauth_tokens.kind {kind:?}").into(),
-                },
-            })?;
+            let kind = decode_column(TokenKind::parse(&kind), "oauth_tokens.kind")?;
             Some(RevokedToken { family_id, kind })
         }
     };
