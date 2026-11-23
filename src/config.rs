@@ -1062,8 +1062,8 @@ pub struct Config {
     /// unused.
     #[serde(with = "humantime_serde")]
     pub store_idle_timeout: Duration,
-    /// How long opening a store's pool, or waiting for one of its
-    /// connections, may take (`"5s"`). Past it the request fails with
+    /// How long opening a store's pool, or waiting for a
+    /// connection to begin a transaction on it, may take (`"5s"`). Past it the request fails with
     /// `StoreUnavailable`.
     #[serde(with = "humantime_serde")]
     pub store_connect_timeout: Duration,

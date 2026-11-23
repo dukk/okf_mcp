@@ -472,6 +472,36 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn an_exhausted_open_pool_is_store_unavailable_without_naming_the_store() {
+        let db = crate::db::test_db().await;
+        let stores = Stores::with_environment(
+            db.pool.clone(),
+            PoolSettings {
+                max_connections: 2,
+                idle_timeout: Duration::from_secs(60),
+                connect_timeout: Duration::from_millis(300),
+            },
+            Arc::new(|_| None),
+        );
+        let store = stores.get(&StoreName::main()).await.unwrap();
+        // Every connection of the open pool is in use.
+        let _first = store.begin().await.unwrap();
+        let _second = store.begin().await.unwrap();
+
+        let started = Instant::now();
+        let failed = store.begin().await.unwrap_err();
+
+        assert!(
+            matches!(failed, OkfError::StoreUnavailable { .. }),
+            "{failed:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(!failed.to_json().to_string().contains("main"));
+        // The pool is still the cached one: nothing reopened.
+        assert_eq!(stores.pools_opened(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_first_use_opens_one_pool() {
         let db = crate::db::test_db().await;
         let stores = Stores::new(db.pool.clone(), settings());
