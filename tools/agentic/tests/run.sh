@@ -538,17 +538,38 @@ hanging_ps() {
     chmod +x "$fx/bin/ps"
 }
 
+# watch_until_warnings <count> [env...]: runs the looping watchdog from $work/wt
+# in the background, polls (up to 30 s) until its output holds <count> warnings,
+# then stops it explicitly. Sets still_running (1 when it had to be stopped, so
+# it was running until then) and out.
+watch_until_warnings() {
+    local count=$1 tick; shift
+    cd "$work/wt" || return 1
+    env "$@" "$tools/watchdog.sh" >"$fx/watchdog.out" 2>&1 &
+    wd_pid=$!
+    trap 'kill "$wd_pid" 2>/dev/null' EXIT
+    for ((tick = 0; tick < 300; tick++)); do
+        [ "$(grep -c "ps scan failed or timed out" "$fx/watchdog.out")" -ge "$count" ] && break
+        kill -0 "$wd_pid" 2>/dev/null || break
+        sleep 0.1
+    done
+    still_running=0
+    if kill -0 "$wd_pid" 2>/dev/null; then still_running=1; kill -TERM "$wd_pid"; fi
+    wait "$wd_pid" 2>/dev/null
+    out=$(<"$fx/watchdog.out")
+}
+
 test_watchdog_skips_a_pass_when_the_ps_scan_hangs() {
-    # #675: an unbounded ps would freeze the watchdog, which then runs until
-    # timeout stops it (124) with at most one warning. Bounded, each 1 s scan
-    # is skipped with a warning and the next pass runs: two fit in 3 s.
+    # #675: an unbounded ps would freeze the watchdog after at most one
+    # warning. Bounded, every scan is skipped with a warning and the next
+    # pass runs: wait for the second warning, then the watchdog must still be
+    # running (it is stopped by the test, not by itself).
     hanging_ps
-    out=$(cd "$work/wt" && PATH="$fx/bin:$PATH" AGENTIC_CALL_TIMEOUT=1 \
-        AGENTIC_WATCHDOG_INTERVAL=0 timeout 3 "$tools/watchdog.sh" 2>&1)
-    rc=$?
-    want_rc 124; want_out "ps scan failed or timed out"; want_no_out WATCHDOG
+    watch_until_warnings 2 PATH="$fx/bin:$PATH" AGENTIC_CALL_TIMEOUT=1 AGENTIC_WATCHDOG_INTERVAL=0
+    [ "$still_running" = 1 ] || die "the watchdog exited by itself"
     [ "$(grep -c "ps scan failed or timed out" <<<"$out")" -ge 2 ] \
         || die "the watchdog did not run a second pass"
+    want_no_out WATCHDOG
 }
 
 test_watchdog_once_exits_0_when_the_ps_scan_hangs() {
@@ -557,6 +578,49 @@ test_watchdog_once_exits_0_when_the_ps_scan_hangs() {
         timeout 10 "$tools/watchdog.sh" --once 2>&1)
     rc=$?
     want_rc 0; want_out "ps scan failed or timed out"; want_no_out WATCHDOG
+}
+
+# third_scan_fails_ps <worktree name>: a stub `ps` that lists one test process in the checkout
+# far over its limit (a real sleep, so /proc/<pid>/cwd resolves), an empty idle
+# reader list, and hangs only on the quiet-agent scan (pid=,comm=,args=). A
+# pending expectation makes the watchdog reach that scan.
+third_scan_fails_ps() {
+    new_fixtures; expect_wt "$1"
+    expect_start "$work/$1" "task 9"
+    fake_pids=()
+    trap 'kill "${fake_pids[@]}" 2>/dev/null' EXIT
+    (cd "$work/wt" && exec -a "$work/wt/target/debug/deps/fake_test" sleep 30) >/dev/null 2>&1 &
+    ps_pid=$!; fake_pids+=("$ps_pid")
+    sleep 0.3
+    mkdir -p "$fx/bin"
+    printf '%s\n' "693000.50 1.00" >"$fx/uptime"
+    cat >"$fx/bin/ps" <<STUB
+#!/usr/bin/env bash
+case "\$*" in
+    *"-p "*) echo "  5001" ;;
+    *pid=,comm=,args=*) exec sleep 30 ;;
+    *pid=,etimes=,comm=*) ;;
+    *) echo "$ps_pid 5000 $work/wt/target/debug/deps/fake_test" ;;
+esac
+STUB
+    chmod +x "$fx/bin/ps"
+}
+
+test_watchdog_skips_the_pass_when_only_the_third_scan_fails() {
+    # An alert found by the first scan must not survive a failed later scan.
+    third_scan_fails_ps ex-third-once
+    out=$(cd "$work/wt" && PATH="$fx/bin:$PATH" AGENTIC_UPTIME_FILE="$fx/uptime" \
+        AGENTIC_CALL_TIMEOUT=1 timeout 15 "$tools/watchdog.sh" --once 2>&1)
+    rc=$?
+    want_rc 0; want_out "ps scan failed or timed out"; want_no_out WATCHDOG
+}
+
+test_watchdog_loop_skips_the_pass_when_only_the_third_scan_fails() {
+    third_scan_fails_ps ex-third-loop
+    watch_until_warnings 2 PATH="$fx/bin:$PATH" AGENTIC_UPTIME_FILE="$fx/uptime" \
+        AGENTIC_CALL_TIMEOUT=1 AGENTIC_WATCHDOG_INTERVAL=0
+    [ "$still_running" = 1 ] || die "the watchdog exited by itself"
+    want_no_out WATCHDOG
 }
 
 test_watchdog_ignores_a_wrapped_etimes_reading() {

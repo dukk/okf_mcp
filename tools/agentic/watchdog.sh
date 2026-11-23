@@ -119,15 +119,14 @@ check_expectations() {
     [ -d "$dir" ] || return 0
     # Working processes: the cwd of each cargo, rustc, just or flock, of a
     # gate.sh (a bash, so by its argument) and of a test binary.
-    local busy_cwds=() procs
-    scan_ps procs -eo pid=,comm=,args= || return 0
+    local busy_cwds=()
     while read -r pid comm args; do
         case "$comm" in
             cargo | cargo-* | rustc | just | flock) ;;
             *) case "$args" in */gate.sh* | */debug/deps/* | */debug/build/*/out/*) ;; *) continue ;; esac ;;
         esac
         cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null) && busy_cwds+=("$cwd")
-    done < <(grep -v -E 'grep|watchdog\.sh' <<<"$procs")
+    done < <(grep -v -E 'grep|watchdog\.sh' <<<"$busy_procs")
     now=$(agentic_now)
     for file in "$dir"/*; do
         [ -f "$file" ] || continue
@@ -169,9 +168,13 @@ while :; do
         < <(agentic_git -C "$root" worktree list --porcelain | sed -n 's/^worktree //p')
     found=""
     uptime=$(agentic_uptime)
-    # Both scans are bounded. When one times out the whole pass is skipped
-    # (with a warning from scan_ps, never an alarm); the next pass tries again.
-    if ! { scan_ps all_procs -eo pid=,etimes=,args= && scan_ps readers -eo pid=,etimes=,comm=; }; then
+    # Every scan is taken before any alert is raised, and each is bounded. When
+    # one times out the whole pass is skipped (with a warning from scan_ps,
+    # never an alarm, even if an earlier scan found something); the next pass
+    # tries again. busy_procs feeds check_expectations.
+    if ! { scan_ps all_procs -eo pid=,etimes=,args= \
+        && scan_ps readers -eo pid=,etimes=,comm= \
+        && scan_ps busy_procs -eo pid=,comm=,args=; }; then
         [ "$once" = 1 ] && exit 0
         sleep "$interval"
         continue
