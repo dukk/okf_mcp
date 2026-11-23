@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 974,
+  "next_claim_seq": 977,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "9b3de045e53ac279151666fa7a16b491600184c8568c2fd360f39f6adc2fa397"
+    "mac": "9b50295c595beb4a782f4fbf679aac283fb20b8a9b006bc508daa90bd430a0b4"
   },
-  "next_evidence_seq": 1384,
+  "next_evidence_seq": 1387,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "dc06a77977d56424560fc0256e8c3e2f9bd972a20dbd8ed8cad454d3b32b797d"
+    "mac": "49af4de4bbc14384afb1d0440c7bd548397202c1681fa829405fb1673591183c"
   },
   "claims": [
     {
@@ -78338,7 +78338,9 @@
         "review-round"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Stale counts after review round 3 added two tests: stores:: now reports 59 passed and the library suite 2962 passed. Replaced by a corrected claim.",
+        "retired_at": "2026-11-23T20:01:05.830597557Z"
       },
       "evidence": [
         {
@@ -78370,10 +78372,10 @@
         }
       ],
       "created_at": "2026-11-23T19:41:51.690155239Z",
-      "updated_at": "2026-11-23T19:42:03.781189199Z",
+      "updated_at": "2026-11-23T20:01:05.830597557Z",
       "seal": {
         "by": "server",
-        "mac": "a8dbe27d5bf016310f54909e2adaf1b8ca0c7def7082ddd686809388da2bea14"
+        "mac": "449508d2b97225ce4be8beae16a8251b75485b1fda81800afb4e857b3eb9ec22"
       }
     },
     {
@@ -78398,7 +78400,9 @@
         "review-round"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Wrong after review round 3: PostgreSQL writes the refused role raw, not as an escaped identifier, so role_in no longer decodes a doubled quote; it names a role only when the message has exactly two quotation marks around a non-empty name. Replaced by a corrected claim.",
+        "retired_at": "2026-11-23T19:52:27.651053042Z"
       },
       "evidence": [
         {
@@ -78440,10 +78444,10 @@
         }
       ],
       "created_at": "2026-11-23T19:41:51.785354300Z",
-      "updated_at": "2026-11-23T19:42:03.851090018Z",
+      "updated_at": "2026-11-23T19:52:27.651053042Z",
       "seal": {
         "by": "server",
-        "mac": "6c7b21162fd5e45de4363ac3d3ab717431023f455c62ca6b1c2ddb4aca9cee64"
+        "mac": "63cd78ae934296972a1b41c69cc293a8b4a2fc94c380c94f8ea771ac392007c8"
       }
     },
     {
@@ -78514,6 +78518,198 @@
       "seal": {
         "by": "server",
         "mac": "d37f5e740d1eb7ebc7558c34d289a625215415181e365f1fc05513ee3cace3b8"
+      }
+    },
+    {
+      "id": "CLM-0974",
+      "statement": "role_in names a role only when the refusal message holds exactly two quotation marks around a non-empty name; every other shape (no quoted name, unterminated, empty, several quoted names, or a name holding one or two adjacent quotation marks) names none, so next_refusal wakes every credential task, and a task stays asleep only for a message naming a different quote-free role; tests a_role_is_read_from_a_refusal_message_or_left_unknown and a_refusal_wakes_every_task_unless_it_names_another_role assert it.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source_anchor": {
+        "path": "src/stores/credentials.rs",
+        "lines": {
+          "start": 471,
+          "end": 495
+        },
+        "commit": "6022973168db70292f9dbb3c1028ddd8c38cb68e"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:967",
+        "review-round"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1384",
+          "kind": "inspection",
+          "locator": "src/stores/credentials.rs:488-496 (role_in), 518-529 (next_refusal), tests at 1076-1108; target/i967-logs/narrow.log lines 7-8",
+          "summary": "role_in splits on '\"' and matches exactly 3 pieces with non-empty middle, so exactly two quotes around a non-empty name gives Some; no quote, one quote, empty, 3+ quotes (several names, or a name holding 1 or 2 quotes) give None. next_refusal returns on Ok(None), Lagged, and on Some(role) unless role != login(); it sleeps only for a Some role differing from this task's login (necessarily quote-free). Test 1 asserts each shape; test 2 asserts wake/sleep for app, other, app\"\"reader, app\"reader, unterminated, no-quote. Log shows both tests ok in cargo test --lib stores::.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/credentials.rs",
+              "lines": {
+                "start": 488,
+                "end": 529
+              },
+              "commit": "6022973168db70292f9dbb3c1028ddd8c38cb68e"
+            }
+          },
+          "recorded_at": "2026-11-23T19:57:00.070880156Z",
+          "seal": {
+            "by": "server",
+            "mac": "a3b6a240908875c27da10b5e2392bb9747527e3553539c36c357d95f45b4dd6d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and both named tests match the statement shape by shape; tests passed in narrow.log.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1384"
+          ],
+          "recorded_at": "2026-11-23T19:57:05.071498476Z",
+          "seal": {
+            "by": "server",
+            "mac": "df3d3c3246c4c9227dc05f2f24f4e24b18fd85137926c344c71028410371adc0"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T19:52:28.651488587Z",
+      "updated_at": "2026-11-23T19:57:05.071498476Z",
+      "seal": {
+        "by": "server",
+        "mac": "4dcec765d4cbb3cbd80a19ac6862f79d50b8b874d140062be56ef6a897050875"
+      }
+    },
+    {
+      "id": "CLM-0975",
+      "statement": "A secrets-manager store whose role contains two adjacent literal quotation marks (app\"\"<database>) refreshes its login after a rotation when a plain read is refused, and the next read succeeds; test a_role_with_two_adjacent_quotation_marks_still_refreshes_after_a_rotation asserts it against PostgreSQL.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source_anchor": {
+        "path": "src/stores/registry.rs",
+        "lines": {
+          "start": 1314,
+          "end": 1376
+        },
+        "commit": "6022973168db70292f9dbb3c1028ddd8c38cb68e"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:967",
+        "review-round"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1385",
+          "kind": "test",
+          "locator": "src/stores/registry.rs:1317-1376 (helper and test a_role_with_two_adjacent_quotation_marks_still_refreshes_after_a_rotation); narrow.log line 34",
+          "summary": "The test calls a_plain_read_after_a_rotation_refreshes(\"app\\\"\\\"\") so the role is app\"\"<database>, created in real PostgreSQL via crate::db::test_db. After password rotation a plain SELECT 1 via the pool is refused (asserted OkfError::Database), the credential task refresh count reaches 1, the next read returns 1, and the secret was fetched exactly twice. narrow.log records the test as ok.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 1314,
+                "end": 1376
+              },
+              "commit": "6022973168db70292f9dbb3c1028ddd8c38cb68e"
+            }
+          },
+          "recorded_at": "2026-11-23T19:57:00.140956937Z",
+          "seal": {
+            "by": "server",
+            "mac": "13acc732a2d19a7e411070834cd737c4a12a3e84b4631994d30c4b3b8b36038f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Named test runs the shared helper with role prefix app\"\" against PostgreSQL, asserts refusal, refresh, and successful next read; passed in narrow.log.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1385"
+          ],
+          "recorded_at": "2026-11-23T19:57:05.126446476Z",
+          "seal": {
+            "by": "server",
+            "mac": "da082958c68682d1195f8f6d4a6a4d9e2a33ce557f1ca7ef443c620cc2b14d7e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T19:52:28.651488587Z",
+      "updated_at": "2026-11-23T19:57:05.126446476Z",
+      "seal": {
+        "by": "server",
+        "mac": "3b3913075af489999e5dccf55bb4afdeea313cc80e30d81f82aa846565dfc678"
+      }
+    },
+    {
+      "id": "CLM-0976",
+      "statement": "The stores:: unit tests pass on the head commit: tools/agentic/gate.sh narrow --lib stores:: reports 59 passed, 0 failed (the filter also matches http::api::stores::tests); the full test gate (tools/agentic/gate.sh test) exits 0 and its library suite reports 2962 passed, 0 failed, 2 ignored.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:967",
+        "review-round"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1386",
+          "kind": "log",
+          "locator": "target/i967-logs/narrow.log:5,66 (\"running 59 tests\", \"test result: ok. 59 passed; 0 failed; 0 ignored\"); target/i967-logs/test.log:129,3095 (lib suite: \"2962 passed; 0 failed; 2 ignored\")",
+          "summary": "narrow.log: lib run of 59 tests, 59 passed, 0 failed, 2905 filtered out. test.log: lib suite ran 2964 tests, 2962 passed, 0 failed, 2 ignored (first \"test result\" line); every later suite and the doctests also report ok, with no \"... FAILED\" lines in either log. Not shown in the logs: the gate's exit code (only inferred from every suite ending ok through the doctests), the commit tested, and that the 59 include http::api::stores::tests (not checked).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T20:01:24.066120002Z",
+          "seal": {
+            "by": "server",
+            "mac": "e239ca07d33ccafa9e838e46c330196a5755778da2167f269dacec24abc7a050"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All counts match exactly (59/0 narrow; 2962 passed/0 failed/2 ignored lib suite). Gate exit 0 and the head commit are not in the logs; exit 0 is inferred from every suite ending ok through the doctests with no FAILED lines.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1386"
+          ],
+          "recorded_at": "2026-11-23T20:01:28.641949701Z",
+          "seal": {
+            "by": "server",
+            "mac": "7cbec68eb39e4649025f5b334b277e664f4c90be0f11d0f2158cf18cfbb39d85"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T20:01:05.893166632Z",
+      "updated_at": "2026-11-23T20:01:28.641949701Z",
+      "seal": {
+        "by": "server",
+        "mac": "d8db80c1810a0fd168720d6c7c7c72c246021df4cb51c1a5904947333708af3f"
       }
     }
   ]
