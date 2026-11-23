@@ -193,7 +193,11 @@ bounded_capture() {
         elif kill -0 -- "-$bc_pid" 2>/dev/null; then
             bc_reason="$bc_reason, processes left behind"
         fi
-        [ -z "$bc_left" ] || echo "watchdog: warning: $2 call exited leaving processes behind; stopped them" >&2
+        if [ -n "$bc_left" ]; then
+            bc_left="stopped them"
+            kill -0 -- "-$bc_pid" 2>/dev/null && bc_left="some survived KILL and were left behind"
+            echo "watchdog: warning: $2 call exited leaving processes behind; $bc_left" >&2
+        fi
     fi
     trap - INT TERM
     if [ "$bc_status" -eq 124 ]; then
