@@ -269,7 +269,10 @@ impl CatalogState {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn refresh(&self, pool: &PgPool, rebuilds: &KeyedLocks) -> Result<bool, OkfError> {
         let generation = self.generation_in(pool).await?;
-        self.refresh_at(pool, rebuilds, generation).await
+        // Boxed: this future is embedded in the request handlers' futures, and
+        // one more inline layer pushes the `scale` test past the compiler's
+        // layout query depth limit.
+        Box::pin(self.refresh_at(pool, rebuilds, generation)).await
     }
 
     /// [`CatalogState::refresh`] once the database's generation is known.

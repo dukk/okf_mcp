@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 673,
+  "next_claim_seq": 681,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "237248fc17c11f3beb98e67ac39afece70c006243d6ca3ed05dfb5b98d995258"
+    "mac": "05528a26fc2bc79dab13aefa6751433c91777295a63a118c57ba0891a36dbbb6"
   },
-  "next_evidence_seq": 849,
+  "next_evidence_seq": 856,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "b7cc9849e9be9566b90f67c81456fe1573b311a3c46873b44bab52ab181800a9"
+    "mac": "35424644cf4cd7a97bba4876e39135d5aa3fe8ea733a58b3c238f5d862cca2f2"
   },
   "claims": [
     {
@@ -52130,6 +52130,398 @@
       "seal": {
         "by": "server",
         "mac": "8b521a2fbdbd3c7f5dcc1d42542e13b15ce36ea685e67048be36c65fac8ac708"
+      }
+    },
+    {
+      "id": "CLM-0673",
+      "statement": "Issue #671 is delivered: the catalog refresh no longer stalls against a publish on an exhausted pool because of the rebuild lock and a pooled connection being held in opposite orders.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/671",
+      "derived_from": [],
+      "artifacts": [
+        "src/catalog.rs",
+        "src/store/publish.rs",
+        "src/app.rs"
+      ],
+      "tags": [
+        "from-issue:671"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [],
+      "verdicts": [],
+      "created_at": "2026-11-23T07:04:56.767602576Z",
+      "updated_at": "2026-11-23T07:04:56.767602576Z",
+      "seal": {
+        "by": "server",
+        "mac": "0180812405f665a83e2300b3bdb28612058a6c0fe8b6c21199b6552c03a102f7"
+      }
+    },
+    {
+      "id": "CLM-0674",
+      "statement": "Every path that takes the catalog rebuild lock (CatalogState::refresh via refresh_at, and refresh_locked) already holds a pooled connection when it takes it, so one order (connection, then rebuild lock) applies everywhere.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #671 'Pick one order for the two resources and apply it everywhere'; PR body: 'Now every path takes the connection first, then the lock'",
+      "derived_from": [
+        "CLM-0673"
+      ],
+      "artifacts": [
+        "src/catalog.rs"
+      ],
+      "tags": [
+        "from-issue:671"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0849",
+          "kind": "analysis",
+          "locator": "src/catalog.rs:308-309,373-385,442",
+          "summary": "refresh_to (the only taker of rebuilds.lock, line 442; grep for rebuilds.lock/rebuild_locks finds no other taker) has two callers: refresh_at opens begin_read(pool) at 308 before calling it, and refresh_locked reads on the caller's connection (publish transaction). All other refresh paths (poll, announcement, current_covering, cache) go through refresh -> refresh_at.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 296,
+                "end": 311
+              },
+              "commit": "9cb09230c561ec53ee7cc4d379f1a707c2a5dfb0"
+            }
+          },
+          "recorded_at": "2026-11-23T07:05:17.055960114Z",
+          "seal": {
+            "by": "server",
+            "mac": "8a0bd6e35dd616c08fcf73d81457bd53ea15ebb84a9892e6dcdf7b76766a0cd5"
+          }
+        }
+      ],
+      "verdicts": [],
+      "created_at": "2026-11-23T07:04:56.767602576Z",
+      "updated_at": "2026-11-23T07:05:17.055960114Z",
+      "seal": {
+        "by": "server",
+        "mac": "62ab5bdc79768cc1cbb794c1307f15c165e1b623e4b4514f00d9051bad60f36f"
+      }
+    },
+    {
+      "id": "CLM-0675",
+      "statement": "After the change no pooled connection is held while waiting for the rebuild lock mutex anywhere.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Coordinator requirement: 'don't hold a pooled connection across waiting for a mutex anywhere after the change'",
+      "derived_from": [
+        "CLM-0673"
+      ],
+      "artifacts": [
+        "src/catalog.rs",
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:671"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0850",
+          "kind": "analysis",
+          "locator": "src/catalog.rs:308-309 and src/store/publish.rs:402 -> src/catalog.rs:442",
+          "summary": "refresh_at holds the begin_read transaction (a pooled connection) while refresh_to awaits rebuilds.lock(self.id); the PR body concedes it ('A refresher now holds a connection while waiting for the lock'). A publish likewise holds its transaction connection while refresh_locked awaits the same lock. Both hold a connection across waiting for a mutex.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 305,
+                "end": 310
+              },
+              "commit": "9cb09230c561ec53ee7cc4d379f1a707c2a5dfb0"
+            }
+          },
+          "recorded_at": "2026-11-23T07:05:17.101920495Z",
+          "seal": {
+            "by": "server",
+            "mac": "8aee100410f912c029663a195c4438bed3a7f2911d4bb1797f0c04c2fa7a36e0"
+          }
+        },
+        {
+          "id": "EVD-0851",
+          "kind": "analysis",
+          "locator": "src/store/publish.rs:395-410",
+          "summary": "current_base calls state.refresh_locked(conn, rebuilds) with the publish transaction's connection held, so the publish waits for the rebuild lock while holding a pooled connection; unchanged by the diff.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 395,
+                "end": 410
+              },
+              "commit": "9cb09230c561ec53ee7cc4d379f1a707c2a5dfb0"
+            }
+          },
+          "recorded_at": "2026-11-23T07:05:17.147808196Z",
+          "seal": {
+            "by": "server",
+            "mac": "2fce20560c31361509bd283c1caa0b020993c0b97759ad4631746a6f82ad7884"
+          }
+        }
+      ],
+      "verdicts": [],
+      "created_at": "2026-11-23T07:04:56.767602576Z",
+      "updated_at": "2026-11-23T07:05:17.147808196Z",
+      "seal": {
+        "by": "server",
+        "mac": "e087ef856fe7d3e26cfbd2321225d807d9c5598e2cdc7d8ed07e46a97eb1f137"
+      }
+    },
+    {
+      "id": "CLM-0676",
+      "statement": "A publish still observes its own write: refresh_locked builds on the publish transaction's own connection, and current_base returns Busy unless the snapshot's generation equals the database's.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Coordinator requirement: read-your-writes; PR body: 'a publish must see its own write before it returns'",
+      "derived_from": [
+        "CLM-0673"
+      ],
+      "artifacts": [
+        "src/catalog.rs",
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:671"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0852",
+          "kind": "inspection",
+          "locator": "src/catalog.rs:373-385; src/store/publish.rs:389-415",
+          "summary": "refresh_locked is unchanged by the diff: it reads generation and documents on the caller's connection and swaps in a snapshot at that generation (or returns false only if another rebuild already reached it). current_base still returns Busy when base.generation() != the database generation read under the advisory lock.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 389,
+                "end": 415
+              },
+              "commit": "9cb09230c561ec53ee7cc4d379f1a707c2a5dfb0"
+            }
+          },
+          "recorded_at": "2026-11-23T07:05:17.195251382Z",
+          "seal": {
+            "by": "server",
+            "mac": "211e73c6f1c56c2d572a1a9f2bc0235c16526b271e1d6d5df49f5ce60726c86a"
+          }
+        },
+        {
+          "id": "EVD-0853",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --jobs 4 --lib a_refresh_waiting_for_a_connection (1 passed)",
+          "summary": "The new test asserts the publish's refresh_locked returns true (swapped) and state.current().generation() == generation after the race, i.e. the publisher's own refresh took effect. 1 passed, 0 failed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 664,
+                "end": 689
+              },
+              "commit": "9cb09230c561ec53ee7cc4d379f1a707c2a5dfb0"
+            }
+          },
+          "recorded_at": "2026-11-23T07:05:17.238148652Z",
+          "seal": {
+            "by": "server",
+            "mac": "baafa6f524814067564543a40a014d62ca6a208b87b359f019be0eb16ae49f6b"
+          }
+        }
+      ],
+      "verdicts": [],
+      "created_at": "2026-11-23T07:04:56.767602576Z",
+      "updated_at": "2026-11-23T07:05:17.238148652Z",
+      "seal": {
+        "by": "server",
+        "mac": "f1c4a7b2c3ee59a2a571e30db4809eb0cac13cfad652cf2375725f781d179b5a"
+      }
+    },
+    {
+      "id": "CLM-0677",
+      "statement": "The new test a_refresh_waiting_for_a_connection_does_not_hold_up_a_publish_refresh uses a pool of 2 with an 8 s acquire timeout, races a queued refresh against a publish's refresh_locked, and requires the publish refresh to finish within 4 s and the queued refresh to finish once a connection is free.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: 'pool of 2, 8 s acquire timeout; ... the publish's refresh_locked must finish within 4 s'",
+      "derived_from": [
+        "CLM-0673"
+      ],
+      "artifacts": [
+        "src/catalog.rs"
+      ],
+      "tags": [
+        "from-issue:671"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0854",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --jobs 4 --lib a_refresh_waiting_for_a_connection (1 passed, finished in 2.38s)",
+          "summary": "Test at src/catalog.rs:616-689 uses max_connections(2), acquire_timeout 8 s, holds both connections, spawns refresh_at, then asserts refresh_locked completes under a 4 s timeout and the queued refresh completes within 4 s after connections drop. Passes on head. It exercises refresh_at (the path behind refresh and refresh_announced), not refresh_announced itself.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/catalog.rs",
+              "lines": {
+                "start": 616,
+                "end": 689
+              },
+              "commit": "9cb09230c561ec53ee7cc4d379f1a707c2a5dfb0"
+            }
+          },
+          "recorded_at": "2026-11-23T07:05:17.281166042Z",
+          "seal": {
+            "by": "server",
+            "mac": "ae8187b2340ec17991863b7a6dd6c700fc9c97e7648decfba2eb54ff6f94c0de"
+          }
+        }
+      ],
+      "verdicts": [],
+      "created_at": "2026-11-23T07:04:56.767602576Z",
+      "updated_at": "2026-11-23T07:05:17.281166042Z",
+      "seal": {
+        "by": "server",
+        "mac": "ac5b9bfe1e75c17e950d2587b134d69301410004654154f9b37bc4116c4b3afc"
+      }
+    },
+    {
+      "id": "CLM-0678",
+      "statement": "That test fails (times out) with the old lock order and passes with the new one.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: 'Fails (times out) with the old order, passes with the new one.'; coordinator: the new test must fail with the old order",
+      "derived_from": [
+        "CLM-0673"
+      ],
+      "artifacts": [
+        "src/catalog.rs"
+      ],
+      "tags": [
+        "from-issue:671"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [],
+      "verdicts": [],
+      "created_at": "2026-11-23T07:04:56.767602576Z",
+      "updated_at": "2026-11-23T07:04:56.767602576Z",
+      "seal": {
+        "by": "server",
+        "mac": "cfa7da63f7bf56cc106421a30d5a1e1ed6dea7813b34f4ebe4ca7951b4dd7083"
+      }
+    },
+    {
+      "id": "CLM-0679",
+      "statement": "A changelog entry under changelog/ describes the change, and the doc comments that describe refresh locking (CatalogState::refresh, refresh_at, refresh_to, App::rebuild_locks, keyed_lock module) state the connection-then-lock order.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Coordinator: add a changelog entry and update docs that describe the refresh locking; PR body 'Changes'",
+      "derived_from": [
+        "CLM-0673"
+      ],
+      "artifacts": [
+        "changelog/2026-11-23T08-00-00Z-issue-671-refresh-lock-order.md",
+        "src/catalog.rs",
+        "src/app.rs",
+        "src/keyed_lock.rs"
+      ],
+      "tags": [
+        "from-issue:671"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0855",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T08-00-00Z-issue-671-refresh-lock-order.md; src/catalog.rs:271-285,405-414; src/app.rs:95-98; src/keyed_lock.rs:8-12",
+          "summary": "Timestamped changelog entry exists and describes problem, change, try_lock rationale and test. Doc comments on refresh_at, refresh_to, App::rebuild_locks and the keyed_lock module state the connection-then-lock order. CatalogState::refresh's own doc (lines 250-257) and App::refresh_announced doc (app.rs:1191-1197) still describe the lock without the order, and no markdown under docs/ outside historical plans/changelogs describes refresh locking. The changelog time 08-00-00Z is a round time, later than the repo clock (claims server shows 07:04Z), not from date -u.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T08-00-00Z-issue-671-refresh-lock-order.md",
+              "commit": "9cb09230c561ec53ee7cc4d379f1a707c2a5dfb0"
+            }
+          },
+          "recorded_at": "2026-11-23T07:05:17.321631283Z",
+          "seal": {
+            "by": "server",
+            "mac": "3ab6bda829938b07761297185dc734643d842882d55af781f498be88362e76be"
+          }
+        }
+      ],
+      "verdicts": [],
+      "created_at": "2026-11-23T07:04:56.767602576Z",
+      "updated_at": "2026-11-23T07:05:17.321631283Z",
+      "seal": {
+        "by": "server",
+        "mac": "bf6131a72b5e486b0448b515f55234553fa7670c8672e6252e5b031398e1e239"
+      }
+    },
+    {
+      "id": "CLM-0680",
+      "statement": "PR body: 'A refresher now holds a connection while waiting for the lock; it rolls the unused transaction back if another refresh got there first. No cycle: everyone waits for the lock holding at most one connection, and the lock holder already has its connection.'",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body, Lock order section, Cost bullet",
+      "derived_from": [
+        "CLM-0673"
+      ],
+      "artifacts": [
+        "src/catalog.rs"
+      ],
+      "tags": [
+        "from-issue:671"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [],
+      "verdicts": [],
+      "created_at": "2026-11-23T07:04:56.767602576Z",
+      "updated_at": "2026-11-23T07:04:56.767602576Z",
+      "seal": {
+        "by": "server",
+        "mac": "15148fe99faf20432f96731ebd4ac55da32bc0a42f715a6dfc0c3bd478381329"
       }
     }
   ]
