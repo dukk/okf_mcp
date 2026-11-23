@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 694,
+  "next_claim_seq": 702,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "7cff03b0cd27bb3977c9c65be3dc67b6169a8f12048eacc4e2eae03c70102083"
+    "mac": "d6b7cc165cbc01843e32338b6291fae2d45b4923b632548395dfb41ab4250192"
   },
-  "next_evidence_seq": 880,
+  "next_evidence_seq": 891,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "3d306c592dcf45207ff7c43ee900c02a75441a1374ff1dfa9ef7b16bc36acfe9"
+    "mac": "5a712a1c72ffd25173a5f7d9fe02d6d88225fab0ea97c2f1d32810d3915d542b"
   },
   "claims": [
     {
@@ -53805,6 +53805,573 @@
       "seal": {
         "by": "server",
         "mac": "271a6a8b1ce7cb5b3172d06db01a21de4b12988ed2de7a27ad03098c7dc6646e"
+      }
+    },
+    {
+      "id": "CLM-0694",
+      "statement": "Issue #675 is resolved: watchdog.sh's ps scans are time-bounded, a hung scan is a skipped pass, and a test covers it.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/675",
+      "derived_from": [],
+      "artifacts": [
+        "tools/agentic/watchdog.sh",
+        "tools/agentic/tests/run.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0890",
+          "kind": "analysis",
+          "locator": "children of CLM-0694",
+          "summary": "Children cover the bounded scans, skip semantics, the stub-ps test, command-line secrecy, test run, unbounded-call survey and README; all supported.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T08:38:00.147052703Z",
+          "seal": {
+            "by": "server",
+            "mac": "5ae883414da00b1b0488dc0a3707f25e0d4ee0d7125d6007e923fda4a6932ffe"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All seven children supported; together they cover bounding, skip semantics, test, and secrecy.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0890"
+          ],
+          "recorded_at": "2026-11-23T08:38:06.336893873Z",
+          "seal": {
+            "by": "server",
+            "mac": "d0698b832a2a576cad2569a5333c1c492323727fadd25e819f2dbc81e0197088"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T08:38:06.336893873Z",
+      "seal": {
+        "by": "server",
+        "mac": "ffdf7743a195916a9da7191372e5933e887b54c8a841599d3cb53429adc336f3"
+      }
+    },
+    {
+      "id": "CLM-0695",
+      "statement": "Each of watchdog.sh's three main ps -eo scans (process list for expectations, test/gate processes, idle readers) runs through agentic_bounded_call and its output is captured to a variable that the loops then read.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #675: run watchdog.sh's ps scan through agentic_bounded_call (capture to a variable, then loop); PR: \"runs each of its three `ps -eo ...` scans through `agentic_bounded_call`\"",
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/watchdog.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0880",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh:105-112,123,174",
+          "summary": "scan_ps runs agentic_bounded_call ps and stores output via printf -v. Three scans use it: procs (line 123, check_expectations), all_procs and readers (line 174); loops read them by here-string. No unbounded ps -eo remains (the other two ps calls, lines 187/214, are also bounded).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 101,
+                "end": 112
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:46.670437185Z",
+          "seal": {
+            "by": "server",
+            "mac": "2b099838b7c467430ed1479e68648a038979d8d0d03522249d6ec44ebfe3af11"
+          }
+        },
+        {
+          "id": "EVD-0881",
+          "kind": "analysis",
+          "locator": "git grep -nE \"ps -eo|\\bps \" tools/agentic/watchdog.sh (search anchor)",
+          "summary": "Every ps invocation in watchdog.sh sits behind agentic_bounded_call; only scan_ps's own ps -eo lines are arguments to scan_ps. Mutation check: replacing the bounded call with plain ps makes the two new tests fail.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 170,
+                "end": 178
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:46.722837491Z",
+          "seal": {
+            "by": "server",
+            "mac": "ede51faecb18fc113859d9b5755da56f412872b4a14319940fee0b43abea6eaa"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code shows all three scans via scan_ps/agentic_bounded_call, captured then looped; mutation shows the bound is what the tests exercise.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0880",
+            "EVD-0881"
+          ],
+          "recorded_at": "2026-11-23T08:37:59.865848244Z",
+          "seal": {
+            "by": "server",
+            "mac": "83f3be1ca989585e1c04e30bf5caa1ff6ba3bac402d306f81aad108917aa0da7"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T08:37:59.865848244Z",
+      "seal": {
+        "by": "server",
+        "mac": "e371be3944b970ca907049901c8c2de32d156415dd277ef76ca141dfd6007467"
+      }
+    },
+    {
+      "id": "CLM-0696",
+      "statement": "When a ps scan times out or fails, watchdog.sh prints a warning on stderr, skips that pass without an alarm (no WATCHDOG output, no exit 3) and does not exit in looping mode; with --once it exits 0.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #675: a timed-out scan is a skipped pass with a warning, not an alarm and not an exit; PR: \"A scan that times out or fails skips that pass with a warning; it is not an alarm and does not exit.\"",
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/watchdog.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0882",
+          "kind": "test",
+          "locator": "bash tools/agentic/tests/run.sh: test_watchdog_skips_a_pass_when_the_ps_scan_hangs, test_watchdog_once_exits_0_when_the_ps_scan_hangs",
+          "summary": "Both ok (3106 ms, 1113 ms). Loop test: exit 124 from timeout (still running), warning present at least twice, no WATCHDOG output. --once: exit 0, warning, no WATCHDOG.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/tests/run.sh",
+              "lines": {
+                "start": 541,
+                "end": 561
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:46.762111199Z",
+          "seal": {
+            "by": "server",
+            "mac": "2997a04260d3480f4b6e589506ee69ca4d876ab2f7a26fdc626e014aa2c13b74"
+          }
+        },
+        {
+          "id": "EVD-0883",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh:105-112,123,172-178",
+          "summary": "scan_ps warns to stderr and returns 1; the main loop then exits 0 only if --once, else sleeps and continues (before any WATCHDOG echo/exit 3); check_expectations returns 0 on a failed scan. Skip never reaches found/alarm.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 172,
+                "end": 178
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:46.806554870Z",
+          "seal": {
+            "by": "server",
+            "mac": "b509e411a45d9bec2ad195bc4a633d2425c8fd953dbfa10ad6d030c2727d745c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Tests run both modes against a hanging ps and pass; control flow confirms skip is before any alarm or exit 3.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0882",
+            "EVD-0883"
+          ],
+          "recorded_at": "2026-11-23T08:37:59.907606733Z",
+          "seal": {
+            "by": "server",
+            "mac": "4bdaa573f868fd11f371bf7ded126fcfc48d058179f064cbe0f91f9f35a3cde6"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T08:37:59.907606733Z",
+      "seal": {
+        "by": "server",
+        "mac": "9ceb5eab3279307944046f10ee538ed863799afb3383c434b3009e25f6e7db9d"
+      }
+    },
+    {
+      "id": "CLM-0697",
+      "statement": "tools/agentic/tests/run.sh has cases using a stub ps that sleeps past the bound: the looping watchdog keeps running and warns on at least two passes, and --once exits 0; both fail when the scan is unbounded.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #675: add a tools/agentic/tests/run.sh case with a stub ps that sleeps past the bound; PR: \"With the old unbounded scan restored, both fail.\"",
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/tests/run.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0884",
+          "kind": "test",
+          "locator": "bash tools/agentic/tests/run.sh (both ps_scan_hangs tests ok); mutation in scratch copy replacing agentic_bounded_call ps with ps",
+          "summary": "Stub ps is `exec sleep 30` first on PATH with AGENTIC_CALL_TIMEOUT=1. Assertions read: rc 124, warning text, no WATCHDOG, warning count >= 2; once: rc 0. With the unbounded call restored in a scratch copy, run.sh reported 78 passed, 2 failed, exactly these two.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/tests/run.sh",
+              "lines": {
+                "start": 533,
+                "end": 561
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:46.845761059Z",
+          "seal": {
+            "by": "server",
+            "mac": "efb61e386cdcf5fbdbfa45210fda77b28ccbf680299c4fff7466bc32f0e043c0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Tests exist with the stated assertions and both fail (2 of 80) when the unbounded ps is restored.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0884"
+          ],
+          "recorded_at": "2026-11-23T08:37:59.948444819Z",
+          "seal": {
+            "by": "server",
+            "mac": "2fc9137e2a3e39c66709020393f4e7a9cb9abed3ffb03c1b0381a518c0c6e3b2"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T08:37:59.948444819Z",
+      "seal": {
+        "by": "server",
+        "mac": "d48f69cb2689cc6d1dba24cd2f08db2f3f385d76a32d44f757d01ec98fa54181"
+      }
+    },
+    {
+      "id": "CLM-0698",
+      "statement": "The watchdog never prints or logs process command lines (ps args= output), including in the new timeout warning.",
+      "kind": "security",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "Brief for #675: the watchdog must never print or log process command lines; PR: \"A timed-out scan prints a warning on stderr without any scan output.\"",
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/watchdog.sh",
+        "tools/agentic/lib.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0885",
+          "kind": "analysis",
+          "locator": "tools/agentic/watchdog.sh:105-112,192,218,222; tools/agentic/lib.sh:52-58",
+          "summary": "The scan_ps warning prints only a fixed text and the numeric status; captured output is discarded on failure. found+= lines carry only pid, elapsed, comm, cwd. $args is used only inside case/grep matching, never echoed. lib.sh's leftover-process warning prints '$2', the command name (ps), not its arguments. ps stderr is not captured but ps does not print command lines in errors. Tests also assert no WATCHDOG output on a hung scan.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 101,
+                "end": 112
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:46.891567096Z",
+          "seal": {
+            "by": "server",
+            "mac": "c8f7d11dbcc46184ce38dd23228bf4282fcb2b261b7bb0d0db6cc80d0c756474"
+          }
+        },
+        {
+          "id": "EVD-0886",
+          "kind": "analysis",
+          "locator": "gap: no test asserts a command-line sentinel is absent from the warning",
+          "summary": "The tests check only for WATCHDOG and the warning text. Nothing asserts that a unique token placed in the stub ps's args or output never reaches stdout/stderr. Support rests on code reading alone.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T08:37:46.933000445Z",
+          "seal": {
+            "by": "server",
+            "mac": "813e53fe0de5495dc8ce762e55d1222676eb15c11a0f5e7500485bbc24024bde"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "No path echoes ps args or scan output; the warning is fixed text plus a status number. Caveat (neutral EVD-0886): no test pins this with a sentinel in the stub's args.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0885"
+          ],
+          "recorded_at": "2026-11-23T08:37:59.988378191Z",
+          "seal": {
+            "by": "server",
+            "mac": "c1f786cadf0d583b68542692838e9b5894ca8a44c29217ad5f4e3ad950164750"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T08:37:59.988378191Z",
+      "seal": {
+        "by": "server",
+        "mac": "1ffef95c29b813999190a1ecf3408cea4a29c1de5b9dc59ecdf014bb95cbf1d5"
+      }
+    },
+    {
+      "id": "CLM-0699",
+      "statement": "tools/agentic/tests/run.sh passes with 80 passed, 0 failed on the head commit.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR: \"`tools/agentic/tests/run.sh`: 80 passed, 0 failed\"",
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/tests/run.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0887",
+          "kind": "test",
+          "locator": "bash tools/agentic/tests/run.sh",
+          "summary": "Ran on head f100e25: \"80 passed, 0 failed\" (48 s).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T08:37:46.973291588Z",
+          "seal": {
+            "by": "server",
+            "mac": "ffe68388fcfeefdb62a0a3e47d07f6b342d5152c0ce3ce2d88ce008c24230d47"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reran on head: 80 passed, 0 failed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0887"
+          ],
+          "recorded_at": "2026-11-23T08:38:00.028766265Z",
+          "seal": {
+            "by": "server",
+            "mac": "07487339383fa7cfe7d6789a87201f7a5b050916f9a158373dd2e204faa755ea"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T08:38:00.028766265Z",
+      "seal": {
+        "by": "server",
+        "mac": "cbce4e969f915f9c248762051b874708de4104975f940ea0fdf27bd066eda2aa"
+      }
+    },
+    {
+      "id": "CLM-0700",
+      "statement": "Apart from the watchdog's ps scans, the only unbounded external call in tools/agentic/*.sh is pgrep -c -g in lib.sh.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR: \"Other unbounded external calls in `tools/agentic/*.sh`: only `pgrep -c -g` in `lib.sh`\"",
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/lib.sh",
+        "tools/agentic/watchdog.sh"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0888",
+          "kind": "analysis",
+          "locator": "git grep -nE \"\\bpgrep\\b|\\bps\\b\" tools/agentic/*.sh; tools/agentic/lib.sh:56",
+          "summary": "The only non-watchdog pgrep/ps in the scripts is lib.sh:56 pgrep -c -g (unbounded). Remaining watchdog calls are bounded (ps, find, git) or local builtins/coreutils (readlink on /proc, date, tr, awk, grep, read of /proc files). A readlink or read on a stuck /proc entry is theoretically unbounded but is not an external-tool call of the kind meant.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/lib.sh",
+              "lines": {
+                "start": 56,
+                "end": 56
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:47.017615739Z",
+          "seal": {
+            "by": "server",
+            "mac": "5bd0ea983310091dbcf7e60e1f616a9058c9dc0858d4b0e72ab81affe5093819"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Grep of all tools/agentic scripts finds only lib.sh:56 pgrep unbounded outside the now-bounded ps scans.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0888"
+          ],
+          "recorded_at": "2026-11-23T08:38:00.068341545Z",
+          "seal": {
+            "by": "server",
+            "mac": "126553776f532225133e168677750172b0a1df20256fefad0bbef2470e118b97"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T08:38:00.068341545Z",
+      "seal": {
+        "by": "server",
+        "mac": "15e5981373f3add3d371a954d91d169304714acee22deb80d7669d0b219434aa"
+      }
+    },
+    {
+      "id": "CLM-0701",
+      "statement": "tools/agentic/README.md documents that each watchdog ps scan is bounded by AGENTIC_CALL_TIMEOUT and a failed scan skips the pass with a warning, never an alarm.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR: \"README and changelog updated.\"",
+      "derived_from": [
+        "CLM-0694"
+      ],
+      "artifacts": [
+        "tools/agentic/README.md"
+      ],
+      "tags": [
+        "from-issue:675"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0889",
+          "kind": "inspection",
+          "locator": "tools/agentic/README.md:13 and :54",
+          "summary": "Row for watchdog.sh states each ps scan is bounded by AGENTIC_CALL_TIMEOUT and a hung or failed scan skips the pass with a warning, never an alarm, --once still exits 0. The AGENTIC_CALL_TIMEOUT row now names watchdog ps calls.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/README.md",
+              "lines": {
+                "start": 13,
+                "end": 13
+              },
+              "commit": "f100e251171498899fe1ca65180a039cf028866b"
+            }
+          },
+          "recorded_at": "2026-11-23T08:37:47.062420681Z",
+          "seal": {
+            "by": "server",
+            "mac": "4efe608060eb82b3dde8c9d46954df5673bddda0c4e31c1d2e92b1f2d1ee018c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "README.md line 13 states the bound and skip behavior.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0889"
+          ],
+          "recorded_at": "2026-11-23T08:38:00.107906865Z",
+          "seal": {
+            "by": "server",
+            "mac": "85ef7a390096dab13dad9d661d47e23657adcf7baddfefd1d4ea1a1cbaac382e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T08:37:18.948193469Z",
+      "updated_at": "2026-11-23T08:38:00.107906865Z",
+      "seal": {
+        "by": "server",
+        "mac": "56955a318f98f5af8a3916073245d4559e14b990efcb7d0aa2b1c1f1139a2853"
       }
     }
   ]
