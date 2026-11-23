@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1024,
+  "next_claim_seq": 1029,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "ddc55107830dc6907d4c66c1f90cca85e16aeea547667f15c8111a078911f178"
+    "mac": "42044c86f93e3555bf47f2e9cf87d623aeb9e67cb995e54503017957105ee2a3"
   },
-  "next_evidence_seq": 1478,
+  "next_evidence_seq": 1490,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "ac2f025d777aa287725643145dd4215478043208af2f3fbd2687ffc0d3b8c612"
+    "mac": "42fc2b39b27c76b9c24de54ec9fe117751f8b14897003e8d335db09ec44647ac"
   },
   "claims": [
     {
@@ -81029,6 +81029,18 @@
             "by": "server",
             "mac": "2c662909b56a72f2919bcac872abb24d04475c8798edb06eb0c09d6777e34f9e"
           }
+        },
+        {
+          "id": "EVD-1489",
+          "kind": "analysis",
+          "locator": "children of CLM-0999",
+          "summary": "At 3e85ac4 every active child (CLM-1000 to CLM-1017, CLM-1020 to CLM-1028) is supported; CLM-1018 and CLM-1019 stay retired.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T23:48:38.967169Z",
+          "seal": {
+            "by": "server",
+            "mac": "581924a963c14f34b7da0cdab579347718b40dabd97098dbdebc1869ef625c0e"
+          }
         }
       ],
       "verdicts": [
@@ -81057,13 +81069,26 @@
             "by": "server",
             "mac": "bf0f23959f2383d49366a969a4b5564accfddd2ecbb6e3ba60dace755876be5b"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All active children supported at 3e85ac4.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1489"
+          ],
+          "recorded_at": "2026-11-23T23:48:41.861631900Z",
+          "seal": {
+            "by": "server",
+            "mac": "cf1876670cb243a2b6305cf8c33c6551460befa43730852c6cda12f12edac64a"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T23:23:52.040119690Z",
+      "updated_at": "2026-11-23T23:48:41.861631900Z",
       "seal": {
         "by": "server",
-        "mac": "321343bf2bba96d2946e9652794ad5a477becd6febd27f55f120fcb2ed92b947"
+        "mac": "b1c48533bb181a62fb570e3de1286c1c49bc4d8e17a95d469a3ce58f0105cb38"
       }
     },
     {
@@ -81333,6 +81358,28 @@
             "by": "server",
             "mac": "a3fcb76edee62ac2a403b330286500e6537f04e6b1ef49a7207336f6ff0bbba6"
           }
+        },
+        {
+          "id": "EVD-1488",
+          "kind": "test",
+          "locator": "src/stores/registry.rs a_store_keeps_its_search_path_after_a_credential_refresh",
+          "summary": "The old anchor (registry.rs 1341-1395) is marked changed by the 8d0719a edit to registry.rs. The test passed at 8d0719a (audit2-a_store_keeps_its_search_path.log); no later commit touches registry.rs, and set_search_path remains in after_connect.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "STORE_SEARCH_PATH|set_search_path",
+              "scope": [
+                "src/stores/registry.rs"
+              ],
+              "hits": 7,
+              "commit": "3e85ac4fcb81535fdf82db2c93ccbfa35954057b"
+            }
+          },
+          "recorded_at": "2026-11-23T23:48:22.182977340Z",
+          "seal": {
+            "by": "server",
+            "mac": "1775e2a89fdc4fd744f9e62e588534b7cb833505ea2cd117c8cf58768f3fef9e"
+          }
         }
       ],
       "verdicts": [
@@ -81349,13 +81396,26 @@
             "by": "server",
             "mac": "21ba6fd6008d3bcf98507a40acd14983c51fc08c3b96e34a34dadac030cd4060"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged: registry.rs unchanged since 8d0719a where the test passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1488"
+          ],
+          "recorded_at": "2026-11-23T23:48:38.910526289Z",
+          "seal": {
+            "by": "server",
+            "mac": "d4b2e0fc035ddb6cab9bb15d0add7334b020d6b659851582fee61107acaa19c1"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T22:43:42.929317353Z",
+      "updated_at": "2026-11-23T23:48:38.910526289Z",
       "seal": {
         "by": "server",
-        "mac": "60c9b719a46dae6ce9e52394c832dbced6fedc5b1765be7f5d44420edb340ccd"
+        "mac": "ca4021fd02f5b99b47c91e4c155a094ffca0771c9131e5f1267cd4c759568f10"
       }
     },
     {
@@ -81761,6 +81821,28 @@
             "by": "server",
             "mac": "870329892e63d2c060d5c4bf906a23c5212f7d00cf83e373747494b6a5070098"
           }
+        },
+        {
+          "id": "EVD-1484",
+          "kind": "test",
+          "locator": "audit3 log maintenance_run_end_is_audited_after_the_trigger_is_gone; src/store/maintenance/mod.rs:238-275",
+          "summary": "record_ended_run now takes an AuditTarget instead of a catalog id; the test still passes at 3e85ac4 and the entry is inserted once per run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/mod.rs",
+              "lines": {
+                "start": 232,
+                "end": 276
+              },
+              "commit": "3e85ac4fcb81535fdf82db2c93ccbfa35954057b"
+            }
+          },
+          "recorded_at": "2026-11-23T23:48:21.920440970Z",
+          "seal": {
+            "by": "server",
+            "mac": "d9a010f2f8c0e0f1985e8625e9baaf951c1f2d57a62e5daeb548ebd7195934bc"
+          }
         }
       ],
       "verdicts": [
@@ -81777,13 +81859,26 @@
             "by": "server",
             "mac": "0bb059a69a7fee5705fb6d7e1ef0dc7b8550b831f735335f17df08af9b6ed80a"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 3e85ac4 after the AuditTarget change; test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1484"
+          ],
+          "recorded_at": "2026-11-23T23:48:38.684051689Z",
+          "seal": {
+            "by": "server",
+            "mac": "f443db925f8ca3822b41c3655fecdd88296871e2e17e262c57d55f40dae64b3e"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T22:43:43.214118787Z",
+      "updated_at": "2026-11-23T23:48:38.684051689Z",
       "seal": {
         "by": "server",
-        "mac": "b41d42c4d2c0988dbf3458e65a30f6a6162f208e441e7698d3d8b94316682c79"
+        "mac": "df64f8ebbd59c5cdca819b396ef03e9d43f0e5af06fb2122295b29f93456597e"
       }
     },
     {
@@ -81852,6 +81947,28 @@
             "by": "server",
             "mac": "b21bf72795f933cd58c8e2a4c0eb41393e30f56f8cf909824c197fab1eb9d425"
           }
+        },
+        {
+          "id": "EVD-1485",
+          "kind": "test",
+          "locator": "audit3 log an_empty_maintenance_run_is_audited_after_the_trigger_is_gone; src/store/maintenance/runs.rs:481-484",
+          "summary": "claim reads AuditTarget before db.begin() and RunWatch still records the empty-run entry; the test passes at 3e85ac4.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/runs.rs",
+              "lines": {
+                "start": 478,
+                "end": 486
+              },
+              "commit": "3e85ac4fcb81535fdf82db2c93ccbfa35954057b"
+            }
+          },
+          "recorded_at": "2026-11-23T23:48:21.985942679Z",
+          "seal": {
+            "by": "server",
+            "mac": "5b419fdee5f99bd1a21af49e9b9aeb271fa916b5bc10178a445a7ad7bb7f1d88"
+          }
         }
       ],
       "verdicts": [
@@ -81868,13 +81985,26 @@
             "by": "server",
             "mac": "b6822a0a07646f279b3f244d98852bf3f72fa6dfe2857d779366d1187070d23c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 3e85ac4; test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1485"
+          ],
+          "recorded_at": "2026-11-23T23:48:38.741055591Z",
+          "seal": {
+            "by": "server",
+            "mac": "901bd19cccea55900adf3c3a7873add20f655ff462d4c513dd7fb0e6eca6195b"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T22:43:43.271174276Z",
+      "updated_at": "2026-11-23T23:48:38.741055591Z",
       "seal": {
         "by": "server",
-        "mac": "9e48c3f8ca0568d08eab1671b1c7d4c2b1fd32cc3fcd35891786eea3ac10fab4"
+        "mac": "2efd7ccc2d9c454a67f0116b2d37a157aeda62f6ac62991b9d36fef100ffc83e"
       }
     },
     {
@@ -81921,6 +82051,29 @@
             "by": "server",
             "mac": "ab72bd89cb077a072447a8657b786b23a916d0eacdd0742039886604fcfd2bb3"
           }
+        },
+        {
+          "id": "EVD-1486",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/runs.rs and reports.rs RunWatch::open / watch.commit",
+          "summary": "At 3e85ac4 RunWatch::open still appears in claim (runs.rs:484), renew (582), close (713) and submit (reports.rs:447), each followed by watch.commit on every exit (runs.rs:554, 620, 636, 677, 751, 770, 784; reports.rs:486, 580). The new target argument does not change the wrapping.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "RunWatch::open|watch\\.commit",
+              "scope": [
+                "src/store/maintenance/reports.rs",
+                "src/store/maintenance/runs.rs"
+              ],
+              "hits": 13,
+              "commit": "3e85ac4fcb81535fdf82db2c93ccbfa35954057b"
+            }
+          },
+          "recorded_at": "2026-11-23T23:48:22.051155547Z",
+          "seal": {
+            "by": "server",
+            "mac": "3cfde3dc131ad21aa31769ec41ce76642af2ff939cc4482eb8910f1b512e6c5b"
+          }
         }
       ],
       "verdicts": [
@@ -81936,13 +82089,26 @@
             "by": "server",
             "mac": "1c6c15a883042ec9c570453457caac16b65782e3ef3aae8b11998ad8f8f720d8"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 3e85ac4; open/commit wrapping unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1486"
+          ],
+          "recorded_at": "2026-11-23T23:48:38.797131028Z",
+          "seal": {
+            "by": "server",
+            "mac": "dbd442e279fdf7c4e8748f3ea6c4708f46e0254cb70ec079f7eac3774f360950"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T22:43:43.327643102Z",
+      "updated_at": "2026-11-23T23:48:38.797131028Z",
       "seal": {
         "by": "server",
-        "mac": "31cd8a273848e0541a57f2bdec0ca4266ab443a00889ae6793971e2bcce82eac"
+        "mac": "8bcfb59e6e516f349e3d8a4996dfa1bca0ed363c90fb7d3579e4bea4c11f974a"
       }
     },
     {
@@ -82640,6 +82806,28 @@
             "by": "server",
             "mac": "47fcef945f8f8f5e01cd5d0d01e0e3665860c4f2007b4793e52c1aa70e65687c"
           }
+        },
+        {
+          "id": "EVD-1487",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:467",
+          "summary": "The 'Corrected (issue #970, 2026-11-23)' note is still there, now at line 467 and extended with the acquisition-order rule.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "Corrected \\(issue #970, 2026-11-23\\)",
+              "scope": [
+                "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+              ],
+              "hits": 1,
+              "commit": "3e85ac4fcb81535fdf82db2c93ccbfa35954057b"
+            }
+          },
+          "recorded_at": "2026-11-23T23:48:22.118606916Z",
+          "seal": {
+            "by": "server",
+            "mac": "f44bfdc81a05600af900a3c1fa98d2d1940190c6c39c8a6c921e2607209be758"
+          }
         }
       ],
       "verdicts": [
@@ -82655,13 +82843,26 @@
             "by": "server",
             "mac": "2d7fb85ba44202d1e5bcc028726f32cb8eeea605c145c86480e9649ef8758492"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 3e85ac4; note retained and extended.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1487"
+          ],
+          "recorded_at": "2026-11-23T23:48:38.853779218Z",
+          "seal": {
+            "by": "server",
+            "mac": "0902b036888e4f003655d0cd280189bae8f20184ab90dfef55b35e92a307b975"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T22:43:43.798337174Z",
+      "updated_at": "2026-11-23T23:48:38.853779218Z",
       "seal": {
         "by": "server",
-        "mac": "70fafc1b06fe79952d10d53167c95b657caf10a185ee78ab23a190d0199cd8ad"
+        "mac": "e2080844ee4bcad44b6b881d3d16fdec31c936d57abb009fac7a51f71a3c1ae5"
       }
     },
     {
@@ -83073,6 +83274,365 @@
       "seal": {
         "by": "server",
         "mac": "641f7a16491343e5096335ad6aa68af44bfc7fa758249f49d016bac4f1684430"
+      }
+    },
+    {
+      "id": "CLM-1024",
+      "statement": "write.rs audited revert, mcp/changesets.rs recorded discard, store/import.rs, store/repair.rs and catalogs::recover_holding each begin the store transaction (db.begin()) only after audit::lock_people has run on the account transaction.",
+      "kind": "functional",
+      "level": "component",
+      "verification_method": "inspection",
+      "source": "Review round 2 of PR #1001",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/write.rs",
+        "src/mcp/changesets.rs",
+        "src/store/import.rs",
+        "src/store/repair.rs",
+        "src/store/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1478",
+          "kind": "inspection",
+          "locator": "src/write.rs:184-197; src/mcp/changesets.rs:655-671; src/store/import.rs:177-196; src/store/repair.rs:96-115; src/store/catalogs.rs:580-601",
+          "summary": "In each of the five paths the account transaction is begun, audit::lock_people (or publish::lock_people) runs on it, and only then db.begin() (or app.store_db(..).begin()) opens the store transaction, under an 'Acquisition order' comment. The commit's diff removed the earlier db.begin() line that sat before lock_people in each. In write.rs and the discard the account tx and lock_people are conditional on the change being audited; the begin is after both either way. lock_by_name in import/repair afterwards only reads the account `catalogs` row (no FOR UPDATE).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/write.rs",
+              "lines": {
+                "start": 184,
+                "end": 197
+              },
+              "commit": "3e85ac4fcb81535fdf82db2c93ccbfa35954057b"
+            }
+          },
+          "recorded_at": "2026-11-23T23:48:09.805466994Z",
+          "seal": {
+            "by": "server",
+            "mac": "8a38208d3ba86a6355ecc884ccb5a4751556e14407e0ce44ad6646d9e18c27cf"
+          }
+        },
+        {
+          "id": "EVD-1479",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:574-601 recover_holding",
+          "summary": "recover_holding: account_tx begin, audit::lock_people (585), then db.begin() at 600.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 580,
+                "end": 601
+              },
+              "commit": "3e85ac4fcb81535fdf82db2c93ccbfa35954057b"
+            }
+          },
+          "recorded_at": "2026-11-23T23:48:09.872341391Z",
+          "seal": {
+            "by": "server",
+            "mac": "7f3392a64186c8696ac8099bfff53a2571e513ec3029204d780af568b52d95bc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All five paths order lock_people before the store begin at 3e85ac4.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1478",
+            "EVD-1479"
+          ],
+          "recorded_at": "2026-11-23T23:48:38.376527410Z",
+          "seal": {
+            "by": "server",
+            "mac": "58be12be47673c1046b65580731f2907fee8ae4ddb64a227820c20417d39a605"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T23:47:48.251916715Z",
+      "updated_at": "2026-11-23T23:48:38.376527410Z",
+      "seal": {
+        "by": "server",
+        "mac": "c874935adfc803fa3ad1984f7bb3aa003cb393bad00341a69476e65a96109d11"
+      }
+    },
+    {
+      "id": "CLM-1025",
+      "statement": "catalogs::delete_on locks the api_keys rows whose default_catalog_id is the catalog (ORDER BY id FOR UPDATE) on the account transaction before it calls db.begin() for the store transaction.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "source": "Review round 2 of PR #1001",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/store/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1480",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:1846-1873 delete_on",
+          "summary": "delete_on begins the account tx, lock_people, find, then 'SELECT id FROM api_keys WHERE default_catalog_id = $1 ORDER BY id FOR UPDATE' on the account tx (line 1869), and only then db.begin() at 1873. The test a_forced_catalog_deletion_and_a_users_deletion_never_wait_on_each_other passes at HEAD.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 1846,
+                "end": 1873
+              },
+              "commit": "3e85ac4fcb81535fdf82db2c93ccbfa35954057b"
+            }
+          },
+          "recorded_at": "2026-11-23T23:48:09.935331884Z",
+          "seal": {
+            "by": "server",
+            "mac": "6aca405ef520716462160389d68826dfe955d9364d793d9ba65139fe20d93092"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The api_keys lock precedes db.begin() in delete_on.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1480"
+          ],
+          "recorded_at": "2026-11-23T23:48:38.456758524Z",
+          "seal": {
+            "by": "server",
+            "mac": "9e87a86021412387d6913b1b8d66beaaebf60d424b26229613187da53a479b33"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T23:47:48.251916715Z",
+      "updated_at": "2026-11-23T23:48:38.456758524Z",
+      "seal": {
+        "by": "server",
+        "mac": "e7f2989d626c3f8acbaeb9dec79fa7ca5c2283b17c63cb77b109db619cb735bc"
+      }
+    },
+    {
+      "id": "CLM-1026",
+      "statement": "RunWatch holds an AuditTarget (catalog name and owner_team_id) read from the account database before the store transaction begins in claim, renew, close and submit, and record_ended_run inserts the audit entry from that target without reading `catalogs`.",
+      "kind": "functional",
+      "level": "component",
+      "verification_method": "inspection",
+      "source": "Review round 2 of PR #1001",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/store/maintenance/mod.rs",
+        "src/store/maintenance/runs.rs",
+        "src/store/maintenance/reports.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1481",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/mod.rs:104-146,238-275; runs.rs:481-484,579-582,710-713; reports.rs:442-447",
+          "summary": "AuditTarget::read selects name, owner_team_id FROM catalogs on db.accounts(); claim, renew, close (runs.rs) and submit (reports.rs) each call it immediately before db.begin() and pass it into RunWatch::open. record_ended_run's INSERT now binds target.name and target.owner_team_id ($7, $8) and has no FROM catalogs. The three RunWatch consumers with db.begin() elsewhere (runs.rs:111, reports.rs:294) do not use RunWatch. Every watch.commit still follows RunWatch::open. final test passes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/mod.rs",
+              "lines": {
+                "start": 104,
+                "end": 146
+              },
+              "commit": "3e85ac4fcb81535fdf82db2c93ccbfa35954057b"
+            }
+          },
+          "recorded_at": "2026-11-23T23:48:09.992015852Z",
+          "seal": {
+            "by": "server",
+            "mac": "08c89f2eee84e22ec1dc17145c2aca4e1067305bbad607dafc4b2b82dfa94202"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Target read before db.begin() in all four entry points; record_ended_run no longer reads catalogs.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1481"
+          ],
+          "recorded_at": "2026-11-23T23:48:38.513891477Z",
+          "seal": {
+            "by": "server",
+            "mac": "532e84e0c411ba9270d74012d0751c4c833c021f488b2665dd43dcbb4335216e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T23:47:48.251916715Z",
+      "updated_at": "2026-11-23T23:48:38.513891477Z",
+      "seal": {
+        "by": "server",
+        "mac": "e3b8884bda6f47ad2de5fd9dc5a0b1f9fb2ae78189158bfe946037781be0531e"
+      }
+    },
+    {
+      "id": "CLM-1027",
+      "statement": "The tests an_audited_revert_and_its_users_deletion_share_one_store_connection (store_max_connections 1, the app's own registry), a_forced_catalog_deletion_and_a_users_deletion_never_wait_on_each_other and an_ended_runs_entry_survives_the_catalogs_deletion_before_it_is_written exist and pass at HEAD 3e85ac4.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "source": "Review round 2 of PR #1001",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/mcp/changesets/lock_order_tests.rs",
+        "src/store/maintenance/final_tests.rs"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1482",
+          "kind": "test",
+          "locator": "target/i970-logs/audit3-*.log; src/mcp/changesets/lock_order_tests.rs:398,469; src/store/maintenance/final_tests.rs:625",
+          "summary": "All three tests exist and each printed '1 passed; 0 failed' via gate.sh narrow at HEAD 3e85ac4. lock_order_tests.rs:401 sets store_max_connections: 1 and :414-418 asserts the store pool has one connection and the account pool more; the same app registry serves both sides. The forced-deletion test uses store_max_connections 3 and a held changeset lock.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets/lock_order_tests.rs",
+              "lines": {
+                "start": 396,
+                "end": 425
+              },
+              "commit": "3e85ac4fcb81535fdf82db2c93ccbfa35954057b"
+            }
+          },
+          "recorded_at": "2026-11-23T23:48:10.047017690Z",
+          "seal": {
+            "by": "server",
+            "mac": "14b03118ed319f56981fa144cd7375449c390f3a5778f3784b6058f6bad2239f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All three tests exist and pass. Revert-without-fix behaviour not rerun.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1482"
+          ],
+          "recorded_at": "2026-11-23T23:48:38.570331396Z",
+          "seal": {
+            "by": "server",
+            "mac": "a0a12fb62b46288c899ce5f072b358c928daf8aca5efde5180b72e7b12b01edc"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T23:47:48.251916715Z",
+      "updated_at": "2026-11-23T23:48:38.570331396Z",
+      "seal": {
+        "by": "server",
+        "mac": "f5e14612282be49bbcae4c2bf306c85fd7415e35d7315f5ed7d7f27bacfe5493"
+      }
+    },
+    {
+      "id": "CLM-1028",
+      "statement": "The account-before-store acquisition order rule is documented in the CatalogDb::begin doc comment, the plan's Task 11 correction note and the Task 11 changelog.",
+      "kind": "documentation",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "source": "Review round 2 of PR #1001",
+      "derived_from": [
+        "CLM-0999"
+      ],
+      "artifacts": [
+        "src/stores/mod.rs",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "changelog/2026-11-23T22-12-07Z-m21-task-11-catalog-schema.md"
+      ],
+      "tags": [
+        "from-issue:970"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1483",
+          "kind": "inspection",
+          "locator": "src/stores/mod.rs:234; plan line 467; changelog Task 11 line 73",
+          "summary": "CatalogDb::begin has a '# Acquisition order' doc section (account connection, account row locks, then store; store commits first). The plan's Task 11 correction note has an 'Acquisition order (rule...)' passage naming the five paths and the tests. The Task 11 changelog has a section '## Acquisition order (review of PR #1001, round 2)'.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "Acquisition order",
+              "scope": [
+                "changelog/2026-11-23T22-12-07Z-m21-task-11-catalog-schema.md",
+                "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+                "src/stores/mod.rs"
+              ],
+              "hits": 3,
+              "commit": "3e85ac4fcb81535fdf82db2c93ccbfa35954057b"
+            }
+          },
+          "recorded_at": "2026-11-23T23:48:10.105313527Z",
+          "seal": {
+            "by": "server",
+            "mac": "f1deb9b675a5ad4faf638854eb1def410bcb9cc6ca13ac3f2b1c1352ffdec854"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Rule documented in all three places (3 hits).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1483"
+          ],
+          "recorded_at": "2026-11-23T23:48:38.627512409Z",
+          "seal": {
+            "by": "server",
+            "mac": "b2d512a12aa85dc6be6b63342357d2f9523fe5b9526edf1eb030bcbc433f3e05"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T23:47:48.251916715Z",
+      "updated_at": "2026-11-23T23:48:38.627512409Z",
+      "seal": {
+        "by": "server",
+        "mac": "f578facbac5b3e577f21c4aabebc39b3edca9d1556e707d4f12ec572c19255bf"
       }
     }
   ]
