@@ -12,6 +12,7 @@ import { api, enc } from '../core/api.js';
 import { catalogLabel } from '../core/labels.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
+import { latest } from '../core/latest.js';
 import { when } from '../core/format.js';
 import { requireSession } from '../core/shell.js';
 import { listTable } from '../components/list-table.js';
@@ -51,7 +52,11 @@ export async function render(main) {
     table.setFilter(grant => !grant.revoked_at);
     main.append(table);
 
+    // Numbers the list's reads: a slower older read never draws over a
+    // newer one, and none draws once the page was left (core/latest.js).
+    const reads = latest(main);
     async function load() {
+        const current = reads();
         let grants;
         let ceiling;
         try {
@@ -59,7 +64,7 @@ export async function render(main) {
             // now, which the cap notes read.
             ({ grants, ceiling } = await api.get('/me/grants'));
         } catch { return; /* toasted */ }
-        if (!main.isConnected) return;
+        if (!current()) return;
         grantsCeiling = ceiling ?? {};
         table.redraw(grants);
     }

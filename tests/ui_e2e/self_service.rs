@@ -167,13 +167,19 @@ async fn alices_key(server: &TestServer, name: &str) {
 /// # Returns
 /// The grant's id.
 async fn alices_grant(server: &TestServer) -> String {
+    alices_grant_for(server, "Example Client", "example-client").await
+}
+
+/// [`alices_grant`] for a client called `client_name`, with the grant's key
+/// named `grant_name` (the page's `my-grant-<name>` test id).
+async fn alices_grant_for(server: &TestServer, client_name: &str, grant_name: &str) -> String {
     let pool = &server.db.pool;
     let redirect_uris = ["https://client.example.com/callback".to_string()];
     let metadata = json!({ "redirect_uris": redirect_uris });
     let client = client_rows::insert_dcr(
         pool,
         &NewDcrClient {
-            client_name: Some("Example Client"),
+            client_name: Some(client_name),
             redirect_uris: &redirect_uris,
             metadata: &metadata,
         },
@@ -187,11 +193,13 @@ async fn alices_grant(server: &TestServer) -> String {
     let id: String = sqlx::query_scalar(
         "INSERT INTO api_keys \
              (name, access, all_catalogs, actor, created_at, kind, client_id, user_id, self_issued) \
-         SELECT 'example-client', 'read', false, 'Example Client', now(), 'oauth', $1, u.id, true \
+         SELECT $2::text, 'read', false, $3::text, now(), 'oauth', $1, u.id, true \
          FROM users u WHERE u.name = 'alice' \
          RETURNING id",
     )
     .bind(&client.client_id)
+    .bind(grant_name)
+    .bind(client_name)
     .fetch_one(pool)
     .await
     .expect("insert alice's grant");
@@ -912,4 +920,74 @@ async fn a_ticked_catalog_lowered_meanwhile_is_created_at_its_new_level() {
         key.catalog_access,
         [("main".to_string(), Access::Read)].into_iter().collect()
     );
+}
+
+/// Issue #665: the list read after revoking the first key answers late and
+/// still lists the second key as active; the read after revoking the second
+/// answers first and lists neither. The older answer, released now, must
+/// not bring the revoked key back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_older_list_read_that_answers_late_never_redraws_the_my_keys_table() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    alices_key(&server, "laptop").await;
+    alices_key(&server, "desk").await;
+    drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.open("/my-keys");
+        ui.wait_visible("[data-test=my-key-laptop]");
+        ui.wait_visible("[data-test=my-key-desk]");
+        ui.click("[data-test=my-key-laptop]");
+        ui.hold_answer("GET", "/api/v1/me/keys", || {
+            ui.wait_visible("#my-key-revoke");
+            ui.click("#my-key-revoke");
+            ui.click("#confirm-ok");
+        });
+        ui.click("[data-test=my-key-desk]");
+        ui.wait_visible("#my-key-revoke");
+        ui.click("#my-key-revoke");
+        ui.click("#confirm-ok");
+        ui.wait_text_gone("#my-keys-table", "desk");
+        // The older answer must not replace the newer table.
+        ui.release_held();
+        assert!(
+            !ui.present("[data-test=my-key-desk]"),
+            "the older read redrew the my keys table"
+        );
+    })
+    .await;
+}
+
+/// Issue #665: the same for My grants: the older read, released late, still
+/// lists the second grant as active and must not bring it back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_older_list_read_that_answers_late_never_redraws_the_my_grants_table() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    alices_grant(&server).await;
+    alices_grant_for(&server, "Other Client", "other-client").await;
+    drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.open("/my-grants");
+        ui.wait_visible("[data-test=my-grant-example-client]");
+        ui.wait_visible("[data-test=my-grant-other-client]");
+        ui.click("[data-test=my-grant-example-client]");
+        ui.hold_answer("GET", "/api/v1/me/grants", || {
+            ui.wait_visible("#my-grant-revoke");
+            ui.click("#my-grant-revoke");
+            ui.click("#confirm-ok");
+        });
+        ui.click("[data-test=my-grant-other-client]");
+        ui.wait_visible("#my-grant-revoke");
+        ui.click("#my-grant-revoke");
+        ui.click("#confirm-ok");
+        ui.wait_text_gone("#my-grants-table", "Other Client");
+        // The older answer must not replace the newer table.
+        ui.release_held();
+        assert!(
+            !ui.present("[data-test=my-grant-other-client]"),
+            "the older read redrew the my grants table"
+        );
+    })
+    .await;
 }
