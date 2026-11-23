@@ -2739,7 +2739,7 @@ forminit_form_id = "<form id>"            # not a secret
 api_key_env = "OKF_MCP_FORMINIT_API_KEY"  # optional: the variable holding the X-API-KEY
 # worker = true                           # one replica only, as [mail] worker
 # max_per_hour = 10                       # per credential
-# retention = "30d"                       # how long sent feedback is kept
+# retention = "30d"                       # how long sent and failed feedback is kept
 ```
 
 What a submission holds, and nothing else: text blocks `message`, `kind`
