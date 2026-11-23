@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 523,
+  "next_claim_seq": 533,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "832704121b3a2ebdcb8335564c65b957ab2777810568a3cc7d8dbc438524ba2c"
+    "mac": "20bbba5e9b31b600e95df5119bcdccf4b7c24435f0b9a379a583b60c3df8ecbe"
   },
-  "next_evidence_seq": 670,
+  "next_evidence_seq": 681,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "8d099fad4ba846fb5903e526018a59523991fed194eda480fae31b90eda65929"
+    "mac": "f2e5830f9970dbee5b8537170fc231f7975096a8742110438c48959cd952d08e"
   },
   "claims": [
     {
@@ -41862,6 +41862,624 @@
       "seal": {
         "by": "server",
         "mac": "ad4b2a149de786fec9339d86c3de8494f9dbb4992cb8b151b5dfe25c0b82689f"
+      }
+    },
+    {
+      "id": "CLM-0523",
+      "statement": "Issue #588 is resolved: with [redis] on, a failed link-index swap in OidcProviders::store_flow no longer leaves the just-inserted flow in Redis until its TTL.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/588 'OIDC: remove the stored flow when the link index swap fails'",
+      "derived_from": [],
+      "artifacts": [
+        "src/oidc.rs",
+        "src/http/oidc.rs"
+      ],
+      "tags": [
+        "from-issue:588"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [],
+      "verdicts": [],
+      "created_at": "2026-11-23T00:09:45.671818241Z",
+      "updated_at": "2026-11-23T00:09:45.671818241Z",
+      "seal": {
+        "by": "server",
+        "mac": "e23ecc9b1906687bb58c0ee2ed0145df6b5c31ae684017573d49347910d38bee"
+      }
+    },
+    {
+      "id": "CLM-0524",
+      "statement": "In store_flow, when Index::replace returns an error, the flow just inserted into the flow store is removed before the function returns.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #588 required fix: 'on replace failure, best-effort remove the just-inserted flow'; PR body: 'on a failed Index::replace, remove the flow just inserted'",
+      "derived_from": [
+        "CLM-0523"
+      ],
+      "artifacts": [
+        "src/oidc.rs"
+      ],
+      "tags": [
+        "from-issue:588"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0670",
+          "kind": "inspection",
+          "locator": "src/oidc.rs:447-459",
+          "summary": "The Err arm of Index::replace calls self.flows.remove(id) (the id just inserted at the preceding flows.insert) before returning.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oidc.rs",
+              "lines": {
+                "start": 447,
+                "end": 459
+              },
+              "commit": "a57813103661f70da3a6aa1063fcfb2f4d4019d0"
+            }
+          },
+          "recorded_at": "2026-11-23T00:10:05.715379822Z",
+          "seal": {
+            "by": "server",
+            "mac": "e6f2d793258d806c853659da639c724b6903c9ed6c772063eb59587c55e9b6ac"
+          }
+        },
+        {
+          "id": "EVD-0671",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib a_failed_link_index_swap_removes_the_stored_flow",
+          "summary": "Reran at head a578131: 2 passed, 0 failed (standalone and cluster). Test forces the swap to fail and asserts zero oidc:flow keys afterwards.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T00:10:05.756600318Z",
+          "seal": {
+            "by": "server",
+            "mac": "9e33b045aaa410b702941001259a0002f11206149745baf1ddcec745c9c23469"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code removes the id in the replace Err arm; the test forces that arm and sees no flow key; the revert check confirms the test depends on it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0670",
+            "EVD-0671"
+          ],
+          "recorded_at": "2026-11-23T00:10:20.938263801Z",
+          "seal": {
+            "by": "server",
+            "mac": "c42b640fc23bbdeec413fe82c8ba99450f6c760fddee63acbecd533ba1b22e08"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:09:45.671818241Z",
+      "updated_at": "2026-11-23T00:10:20.938263801Z",
+      "seal": {
+        "by": "server",
+        "mac": "748f5b040a2d7f7671f595a0fd7020d23537b96e7e0cb7ae39a5ca9150e08e09"
+      }
+    },
+    {
+      "id": "CLM-0525",
+      "statement": "The removal in store_flow is best effort: its own failure is discarded and does not replace the error returned.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #588: 'best-effort remove'; PR body: 'remove the flow (best effort)'",
+      "derived_from": [
+        "CLM-0523"
+      ],
+      "artifacts": [
+        "src/oidc.rs"
+      ],
+      "tags": [
+        "from-issue:588"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0672",
+          "kind": "inspection",
+          "locator": "src/oidc.rs:454-456",
+          "summary": "`let _ = self.flows.remove(id).await;` discards the removal's Result, then `return Err(error)` returns the swap error, so a removal failure cannot replace it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oidc.rs",
+              "lines": {
+                "start": 448,
+                "end": 458
+              },
+              "commit": "a57813103661f70da3a6aa1063fcfb2f4d4019d0"
+            }
+          },
+          "recorded_at": "2026-11-23T00:10:05.792293149Z",
+          "seal": {
+            "by": "server",
+            "mac": "547244e8763d20138b830a63e0bacd57aac8794e77a20d08d1eab30bc9a8f0d9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The removal Result is bound to `_` and the swap error is returned unconditionally.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0672"
+          ],
+          "recorded_at": "2026-11-23T00:10:20.997066546Z",
+          "seal": {
+            "by": "server",
+            "mac": "445ac143401f7b60f2e5c50637986efff8d4998acd90c220ea0660fec710208e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:09:45.671818241Z",
+      "updated_at": "2026-11-23T00:10:20.997066546Z",
+      "seal": {
+        "by": "server",
+        "mac": "c5cfbee916dd43559e12d5a7b706e77af87253071e453a4556673f65eec060de"
+      }
+    },
+    {
+      "id": "CLM-0526",
+      "statement": "After the removal, store_flow returns the error that Index::replace produced.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #588: 'then return the error'; PR body: 'returns the swap's own error'",
+      "derived_from": [
+        "CLM-0523"
+      ],
+      "artifacts": [
+        "src/oidc.rs"
+      ],
+      "tags": [
+        "from-issue:588"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0673",
+          "kind": "inspection",
+          "locator": "src/oidc.rs:447-458",
+          "summary": "The Err(error) binding from replace is the value returned by `return Err(error)`; no wrapping or substitution.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/oidc.rs",
+              "lines": {
+                "start": 447,
+                "end": 458
+              },
+              "commit": "a57813103661f70da3a6aa1063fcfb2f4d4019d0"
+            }
+          },
+          "recorded_at": "2026-11-23T00:10:05.826884585Z",
+          "seal": {
+            "by": "server",
+            "mac": "bf218da5787f154916dc359e22d8a513f8d03eb40f3d86e8b413ada54efc8b91"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "`return Err(error)` returns replace's own error unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0673"
+          ],
+          "recorded_at": "2026-11-23T00:10:21.051189291Z",
+          "seal": {
+            "by": "server",
+            "mac": "bd89bca7f20ef4d0aae6e871ab6ace3d9ff6d2e48a34cfc00455069ed336272a"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:09:45.671818241Z",
+      "updated_at": "2026-11-23T00:10:21.051189291Z",
+      "seal": {
+        "by": "server",
+        "mac": "1e330b69ea0b2ca5f292f014eb03fedfa9772db3cda3f33be23ca53ed2855083"
+      }
+    },
+    {
+      "id": "CLM-0527",
+      "statement": "A failed removal of a flow is already counted as a Redis remove error by the store (redis_remove -> Redis::failed(RedisOp::Remove)), so the change adds no new metric.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: 'A failed removal is already counted as a Redis `remove` error by the store (`redis_remove` -> `Redis::failed(RedisOp::Remove)`), so no new metric.'",
+      "derived_from": [
+        "CLM-0523"
+      ],
+      "artifacts": [
+        "src/oidc.rs",
+        "src/shared/ephemeral.rs",
+        "src/shared/mod.rs"
+      ],
+      "tags": [
+        "from-issue:588"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0674",
+          "kind": "inspection",
+          "locator": "src/shared/ephemeral.rs:548-555; src/shared/mod.rs:377-380",
+          "summary": "Store remove (Redis arm) calls redis_remove, which maps a DEL error through redis.failed(RedisOp::Remove, ..); failed() calls self.metrics.redis_error(op). The diff touches neither file nor adds a metric.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/shared/ephemeral.rs",
+              "lines": {
+                "start": 548,
+                "end": 555
+              },
+              "commit": "a57813103661f70da3a6aa1063fcfb2f4d4019d0"
+            }
+          },
+          "recorded_at": "2026-11-23T00:10:05.864181683Z",
+          "seal": {
+            "by": "server",
+            "mac": "9f85635feec1662d40868eec2d969c9ecdf0351f8ca109037cc27dfe32eb1a6c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "redis_remove routes DEL failure through Redis::failed(RedisOp::Remove), which increments the redis error metric; the diff adds no metric code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0674"
+          ],
+          "recorded_at": "2026-11-23T00:10:21.112252696Z",
+          "seal": {
+            "by": "server",
+            "mac": "d1af96f4ef8ffc2f49ea1a340de84892ccdb399bc8767d163aca374aafbbb71f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:09:45.671818241Z",
+      "updated_at": "2026-11-23T00:10:21.112252696Z",
+      "seal": {
+        "by": "server",
+        "mac": "1d9672131c7df5c52ac728f22a139f54ac02108681f8e5945fc962abd3debd97"
+      }
+    },
+    {
+      "id": "CLM-0528",
+      "statement": "The test a_failed_link_index_swap_removes_the_stored_flow makes the link index swap fail with an ACL NOPERM on the index keys and asserts that no oidc:flow key remains (and that the start answers 503).",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #588 required test: 'make the index swap fail (ACL NOPERM) and assert no flow key remains'; PR body: 'a_failed_link_index_swap_removes_the_stored_flow ... restricts ... asserts a 503 and that no oidc:flow key remains'",
+      "derived_from": [
+        "CLM-0523"
+      ],
+      "artifacts": [
+        "src/http/oidc.rs"
+      ],
+      "tags": [
+        "from-issue:588"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0675",
+          "kind": "inspection",
+          "locator": "src/http/oidc.rs:1955-2023",
+          "summary": "Test sets ACL SETUSER default resetkeys ~*oidc:flow:* ~*ratelimit:* so the link index SET lacks key permission (NOPERM); POSTs the link start; asserts 503 and in_space(keys, prefix, \"oidc:flow\") == 0 (and oidc:link == 0).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/oidc.rs",
+              "lines": {
+                "start": 1955,
+                "end": 2023
+              },
+              "commit": "a57813103661f70da3a6aa1063fcfb2f4d4019d0"
+            }
+          },
+          "recorded_at": "2026-11-23T00:10:05.896942721Z",
+          "seal": {
+            "by": "server",
+            "mac": "d81cec96839f98655445c978a342624b32d190bb008913006237162e9a91328e"
+          }
+        },
+        {
+          "id": "EVD-0680",
+          "kind": "test",
+          "locator": "revert check: removal line commented out, tools/agentic/gate.sh narrow --lib a_failed_link_index_swap_removes_the_stored_flow",
+          "summary": "With the fix disabled the test fails at src/http/oidc.rs:2017 'no orphan flow stays' listing the oidc:flow key, in both modes, so the swap really failed (NOPERM) and the assertion detects the orphan; with the fix it passes.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T00:10:27.335798596Z",
+          "seal": {
+            "by": "server",
+            "mac": "9ebfa7e1afaa4f34f822cf71f3cdbee62fab81a1d56518080f097f9775515e04"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "I read the assertions: 503 status and zero oidc:flow keys, after an ACL restriction that denies the index keys; the revert check shows the swap really failed and the assertion catches the orphan.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0675",
+            "EVD-0680"
+          ],
+          "recorded_at": "2026-11-23T00:10:31.876778967Z",
+          "seal": {
+            "by": "server",
+            "mac": "4d15d95402a7f8d2387bebc5ca63205a4fac91a908bf3eee9ac163b7ec4dda76"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:09:45.671818241Z",
+      "updated_at": "2026-11-23T00:10:31.876778967Z",
+      "seal": {
+        "by": "server",
+        "mac": "200e862240c4d23bc2f8e7b10933bb2147cc298b8db3deb55ab0d1d49d6e5abf"
+      }
+    },
+    {
+      "id": "CLM-0529",
+      "statement": "The new test runs, and passes, on both a standalone Redis and a one-node cluster.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'on standalone Redis and a one-node cluster'",
+      "derived_from": [
+        "CLM-0523"
+      ],
+      "artifacts": [
+        "src/http/oidc.rs"
+      ],
+      "tags": [
+        "from-issue:588"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0676",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib a_failed_link_index_swap_removes_the_stored_flow",
+          "summary": "Output listed http::oidc::tests::standalone::... ok and http::oidc::tests::cluster::... ok; 2 passed, 0 failed. No TEST_REDIS env vars were set, so the shared-server early return did not apply.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T00:10:05.925147189Z",
+          "seal": {
+            "by": "server",
+            "mac": "b92be6261fbf5d90eed905e17c54a6953fc699f92c1bf995383d82377bb01dc7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both the standalone and cluster variants ran and passed in my rerun.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0676"
+          ],
+          "recorded_at": "2026-11-23T00:10:21.203749570Z",
+          "seal": {
+            "by": "server",
+            "mac": "da213bd928163eb49ecb892ba0114ba465ecefdc994cd9836a85102bb241350d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:09:45.671818241Z",
+      "updated_at": "2026-11-23T00:10:21.203749570Z",
+      "seal": {
+        "by": "server",
+        "mac": "c4c3e1b9447d7c9ddda50a5f7ba5565ab2bd768448eebdd078b67bb90d041daa"
+      }
+    },
+    {
+      "id": "CLM-0530",
+      "statement": "With the removal line disabled, the new test fails in both modes with the orphan oidc:flow key listed.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: 'Revert check: with the removal line disabled, the new test fails on both modes with the orphan `oidc:flow` key listed.'",
+      "derived_from": [
+        "CLM-0523"
+      ],
+      "artifacts": [
+        "src/http/oidc.rs",
+        "src/oidc.rs"
+      ],
+      "tags": [
+        "from-issue:588"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0677",
+          "kind": "test",
+          "locator": "sed the removal line to a comment in src/oidc.rs, then tools/agentic/gate.sh narrow --lib a_failed_link_index_swap_removes_the_stored_flow (then git checkout src/oidc.rs)",
+          "summary": "Both standalone and cluster tests FAILED at src/http/oidc.rs:2017 'no orphan flow stays' with the {prefix}oidc:flow:<hash> key listed; 0 passed, 2 failed. File restored afterwards (tree clean).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T00:10:05.955084964Z",
+          "seal": {
+            "by": "server",
+            "mac": "08faa1337d785a81da571c0849423b3ec90318ab8616504d3c66c05018b45bb6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "I reproduced the revert: both modes failed with the orphan oidc:flow key listed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0677"
+          ],
+          "recorded_at": "2026-11-23T00:10:21.252660940Z",
+          "seal": {
+            "by": "server",
+            "mac": "46047cd1899fa3618d49e8d1401673dcd78139b0ca08574b824569d7891b9588"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:09:45.671818241Z",
+      "updated_at": "2026-11-23T00:10:21.252660940Z",
+      "seal": {
+        "by": "server",
+        "mac": "5ee2570fe1e7b9b9ecbb3e13eb0cd050bdce195c4afe7cb2434ece2f4d0053aa"
+      }
+    },
+    {
+      "id": "CLM-0531",
+      "statement": "gate.sh fmt, lint, dylint and test all pass on the head commit, with 3323 tests passed and 0 failed.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: '`gate.sh fmt`, `lint`, `dylint`, `test` all green (3323 passed, 0 failed).'",
+      "derived_from": [
+        "CLM-0523"
+      ],
+      "artifacts": [
+        "src/oidc.rs",
+        "src/http/oidc.rs"
+      ],
+      "tags": [
+        "from-issue:588"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0678",
+          "kind": "log",
+          "locator": "target/i588-logs/test.log (summed 'test result' lines: 3323 passed, 0 failed)",
+          "summary": "Author's log sums to 3323 passed, 0 failed, matching the PR text. I did not rerun fmt, lint, dylint or the full test suite (instructed not to), and the log is untracked and undated against head, so I cannot confirm it ran on a578131. Only the narrow new test was rerun.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T00:10:05.987482080Z",
+          "seal": {
+            "by": "server",
+            "mac": "88f91eeec188d5911fa352c02193ef9dab57e59f7c4aa0b2ddff450e6caa0b07"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Only the author's untracked log supports it (counts match), and I was told not to rerun the full gates. Fix: rerun tools/agentic/gate.sh fmt, lint, dylint and test on head a578131 and record the printed counts.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0678"
+          ],
+          "recorded_at": "2026-11-23T00:10:21.309046855Z",
+          "seal": {
+            "by": "server",
+            "mac": "2ffe4d006d1cb1a1c564df1933be77037dc08eb443c912ec7d3f8a574dc8b9ea"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:09:45.671818241Z",
+      "updated_at": "2026-11-23T00:10:21.309046855Z",
+      "seal": {
+        "by": "server",
+        "mac": "1b25c450a62eff1f593d746703ce5af673d5ece954ad53d72e85d07e27938e54"
+      }
+    },
+    {
+      "id": "CLM-0532",
+      "statement": "The change adds a changelog file changelog/2026-11-22T23-30-00Z-issue-588-oidc-orphan-flow.md.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: '`changelog/2026-11-22T23-30-00Z-issue-588-oidc-orphan-flow.md`.'",
+      "derived_from": [
+        "CLM-0523"
+      ],
+      "artifacts": [
+        "changelog/2026-11-22T23-30-00Z-issue-588-oidc-orphan-flow.md"
+      ],
+      "tags": [
+        "from-issue:588"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0679",
+          "kind": "inspection",
+          "locator": "git diff origin/main...HEAD --stat",
+          "summary": "The changelog file is added in the commit (19 lines) and describes the fix and the test.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-22T23-30-00Z-issue-588-oidc-orphan-flow.md",
+              "commit": "a57813103661f70da3a6aa1063fcfb2f4d4019d0"
+            }
+          },
+          "recorded_at": "2026-11-23T00:10:06.023093891Z",
+          "seal": {
+            "by": "server",
+            "mac": "8cbb94e2129065638bf0e173d44b1c37f85055a185db058300e4535889daf3ae"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The file is in the branch diff at the stated path.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0679"
+          ],
+          "recorded_at": "2026-11-23T00:10:21.365567830Z",
+          "seal": {
+            "by": "server",
+            "mac": "7a69ac12a922ce6154fafe7b36045ea3699276b160ea565cb65512c8e3e20318"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T00:09:45.671818241Z",
+      "updated_at": "2026-11-23T00:10:21.365567830Z",
+      "seal": {
+        "by": "server",
+        "mac": "1d62a4d4d4b4e54ff485aa1dffa4bf8eacf5e485107e24c995cd15dd96445e10"
       }
     }
   ]
