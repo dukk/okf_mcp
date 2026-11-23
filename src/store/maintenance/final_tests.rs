@@ -1,5 +1,5 @@
 use chrono::Duration;
-use sqlx::{PgConnection, Row};
+use sqlx::Row;
 
 use super::tests::{actor, revision, setup, t0};
 use super::{candidates, reports, runs};
@@ -8,6 +8,7 @@ use crate::maintenance::select::select;
 use crate::maintenance::types::*;
 use crate::okf::workspace::StoredFile;
 use crate::store::import::{import, ImportOptions, ImportScope};
+use crate::test_locks::wait_waiter;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn maintenance_final_candidate_queries_are_constant_with_growth() {
@@ -101,70 +102,6 @@ fn supported(lease: &Lease) -> Submission {
         findings: vec![],
         reported_tokens: None,
     }
-}
-
-/// A session queued for a heavyweight lock that another session holds, as
-/// `pg_locks` shows it.
-#[derive(Debug)]
-struct Waiter {
-    /// The waiting session's backend pid.
-    pid: i32,
-    /// `pg_locks.locktype` of the lock it waits for (`advisory`,
-    /// `transactionid`, `tuple`, `relation`, ...).
-    locktype: String,
-    /// For an advisory lock taken with the two-key form, the first key
-    /// (`classid`); `None` for other lock types.
-    key1: Option<i64>,
-    /// For an advisory lock taken with the two-key form, the second key
-    /// (`objid`); `None` for other lock types.
-    key2: Option<i64>,
-}
-
-/// Waits (up to 10 s) until some session is queued for a lock that `holder`
-/// holds, and returns that session and the lock it waits for.
-///
-/// It reads `pg_locks`, not `pg_stat_activity.query`. `pg_stat_activity`
-/// takes its query text and state from a snapshot taken once per
-/// transaction, while `wait_event_type` and `pg_blocking_pids` are read
-/// live, so a session that was idle when the snapshot was taken and is
-/// blocked now shows up with the text of the statement it ran before
-/// (issue #372). `pg_locks` lists the lock each waiter has requested and
-/// not been granted, read when the query runs.
-///
-/// # Arguments
-/// * `conn` - the connection to poll from.
-/// * `holder` - the backend pid holding the lock.
-///
-/// # Returns
-/// The first waiter (lowest pid) queued behind `holder`.
-///
-/// # Panics
-/// When no session waits on `holder` within 10 s, or a query fails.
-async fn wait_waiter(conn: &mut PgConnection, holder: i32) -> Waiter {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        loop {
-            // `classid`/`objid` are `oid`s, cast so they decode as `i64`.
-            let row: Option<(i32, String, Option<i64>, Option<i64>)> = sqlx::query_as(
-                "SELECT pid, locktype, classid::int8, objid::int8 FROM pg_locks \
-                 WHERE NOT granted AND $1 = ANY(pg_blocking_pids(pid)) ORDER BY pid LIMIT 1",
-            )
-            .bind(holder)
-            .fetch_optional(&mut *conn)
-            .await
-            .unwrap();
-            if let Some((pid, locktype, key1, key2)) = row {
-                return Waiter {
-                    pid,
-                    locktype,
-                    key1,
-                    key2,
-                };
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("no session queued for a lock the holder holds")
 }
 
 async fn replacement_import_race(submit: bool) {
