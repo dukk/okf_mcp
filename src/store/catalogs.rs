@@ -318,7 +318,8 @@ pub async fn set_owner(
     // had none.
     let previous: Option<(i64, Option<String>, Option<String>)> = sqlx::query_as(
         "UPDATE catalogs c SET owner_team_id = $2 \
-         FROM (SELECT id, owner_team_id FROM catalogs WHERE name = $1 FOR UPDATE) old \
+         FROM (SELECT id, owner_team_id FROM catalogs \
+               WHERE name = $1 AND provisioned_at IS NOT NULL FOR UPDATE) old \
          WHERE c.id = old.id \
          RETURNING c.id, old.owner_team_id, \
                    (SELECT t.name FROM teams t WHERE t.id = old.owner_team_id)",
@@ -476,7 +477,7 @@ pub async fn update_details(
         "UPDATE catalogs c SET display_name = COALESCE($2, c.display_name), \
                                description = COALESCE($3, c.description) \
          FROM (SELECT id, owner_team_id, display_name, description FROM catalogs \
-               WHERE name = $1 FOR NO KEY UPDATE) old \
+               WHERE name = $1 AND provisioned_at IS NOT NULL FOR NO KEY UPDATE) old \
          WHERE c.id = old.id \
          RETURNING c.id, old.owner_team_id, old.display_name, old.description",
     )
@@ -775,8 +776,8 @@ pub async fn set_maintenance(
     // checks (`FOR KEY SHARE`) on the catalog need not wait for it.
     let row: Option<(i64, bool, Option<String>)> = sqlx::query_as(
         "UPDATE catalogs c SET maintenance = $2 \
-         FROM (SELECT id, maintenance, owner_team_id FROM catalogs WHERE name = $1 \
-               FOR NO KEY UPDATE) old \
+         FROM (SELECT id, maintenance, owner_team_id FROM catalogs \
+               WHERE name = $1 AND provisioned_at IS NOT NULL FOR NO KEY UPDATE) old \
          WHERE c.id = old.id RETURNING c.id, old.maintenance, old.owner_team_id",
     )
     .bind(name)
@@ -825,7 +826,8 @@ pub async fn set_maintenance(
     Ok(previous)
 }
 
-/// Every catalog, by name.
+/// Every catalog, by name. A half-created catalog (`provisioned_at` NULL,
+/// plan Task 10b) is not one yet and is left out.
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -837,13 +839,18 @@ pub async fn set_maintenance(
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.list"))]
 pub async fn list(pool: &PgPool) -> Result<Vec<Catalog>, OkfError> {
-    let catalogs = sqlx::query_as::<_, Catalog>(concat!(select_catalogs!(), " ORDER BY c.name"))
-        .fetch_all(pool)
-        .await?;
+    let catalogs = sqlx::query_as::<_, Catalog>(concat!(
+        select_catalogs!(),
+        " WHERE c.provisioned_at IS NOT NULL ORDER BY c.name"
+    ))
+    .fetch_all(pool)
+    .await?;
     Ok(catalogs)
 }
 
-/// The catalog called `name`.
+/// The catalog called `name`. A half-created catalog (`provisioned_at`
+/// NULL, plan Task 10b) is not one yet: it is unknown here, so nothing that
+/// finds a catalog by name can read, change or delete it.
 ///
 /// # Arguments
 /// * `executor` - a pool, connection or transaction (`&mut *tx`).
@@ -859,13 +866,16 @@ pub async fn list(pool: &PgPool) -> Result<Vec<Catalog>, OkfError> {
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.find"))]
 pub async fn find<'e>(executor: impl PgExecutor<'e>, name: &str) -> Result<Catalog, OkfError> {
     check_name(name)?;
-    sqlx::query_as::<_, Catalog>(concat!(select_catalogs!(), " WHERE c.name = $1"))
-        .bind(name)
-        .fetch_optional(executor)
-        .await?
-        .ok_or_else(|| OkfError::CatalogNotSelected {
-            catalog: name.to_string(),
-        })
+    sqlx::query_as::<_, Catalog>(concat!(
+        select_catalogs!(),
+        " WHERE c.provisioned_at IS NOT NULL AND c.name = $1"
+    ))
+    .bind(name)
+    .fetch_optional(executor)
+    .await?
+    .ok_or_else(|| OkfError::CatalogNotSelected {
+        catalog: name.to_string(),
+    })
 }
 
 /// An owner team's suspension, as the directory holds it.
@@ -1210,6 +1220,9 @@ pub async fn ceiling_page<'e>(
 #[cfg(test)]
 #[path = "catalogs_rows_tests.rs"]
 mod rows_tests;
+#[cfg(test)]
+#[path = "catalogs_unprovisioned_tests.rs"]
+mod unprovisioned_tests;
 
 /// Deletes a catalog with its documents, history, changesets and grants
 /// (cascading foreign keys), under the catalog's lock, and bumps the
