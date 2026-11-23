@@ -90,7 +90,7 @@ The spec already carries these: P1 is its Decision 5, P2 Decision 7, P3 Decision
   - Create's store transaction, holding it, first checks on the account database that the registry row still exists and is unprovisioned. It aborts if not.
   - Recovery, holding it, checks the store side. If present, it sets `provisioned_at`. If absent, it deletes the registry row and commits that before releasing the lock.
   - So a stalled create either finishes first, and recovery sees its data, or waits behind recovery, then finds its row gone and writes nothing. There's no time threshold to get wrong.
-- **P10 (from review of PR #956): release 3 deploys in a maintenance window, not as a rolling upgrade.** Release-2 replicas query tables in `public` and read `catalogs.generation`, and migrations 0037-0038 remove both. Procedure: snapshot the database; scale `serve` to zero; run `okf-mcp migrate` (account migrations, then adoption); start the new release. Task 19 writes it into `docs/operations.md`, and Task 20's smoke test follows it.
+- **P10 (from review of PR #956): release 3 deploys in a maintenance window, not as a rolling upgrade.** Release-2 replicas query tables in `public` and read `catalogs.generation`, and migrations 0038-0039 remove both. Procedure: snapshot the database; scale `serve` to zero; run `okf-mcp migrate` (account migrations, then adoption); start the new release. Task 19 writes it into `docs/operations.md`, and Task 20's smoke test follows it.
 
 - **P11 (from review of PR #956): release 2 is compatible with release-1 replicas.** Migration 0036 gives `catalogs.store` the default `main` and `provisioned_at` the default `now()`, so a release-1 create still works and lands provisioned. Hiding unprovisioned rows ships in Task 8, and two-step creation (Task 10b) ships later as release 2b, so no replica that would show a half-created catalog is still running when the first one is written.
 - **P12 (from review of PR #956): deleting a catalog holds the store's row lock across the account commit.** A store transaction holding `catalog_state` `FOR UPDATE` wraps the account transaction, and `catalog_state.deleted_at` tells writers that waited behind it that the catalog is gone. Without force, a delete never discards work written during it (Task 13).
@@ -115,7 +115,7 @@ Out (spec non-goals): moving a catalog between stores; revision storage changes 
 | `src/db.rs` | modify | two migrators, adoption, `migrate_store` |
 | `migrations/` -> `migrations/accounts/` | move | today's migrations, unchanged |
 | `migrations/accounts/0036_stores.sql` | new | Task 7 |
-| `migrations/accounts/0037_catalog_schema.sql` | new | Task 11 |
+| `migrations/accounts/0038_catalog_schema.sql` | new | Task 11 |
 | `migrations/catalog/0001_baseline.sql` | new | Task 14 |
 | `src/store/*.rs`, `src/store/maintenance/*.rs` | modify | entry points typed by side |
 | `src/catalog.rs`, `src/overlay.rs`, `src/write.rs` | modify | catalog side |
@@ -293,7 +293,7 @@ Each release ends deployable: after Task 6 (types only, rolling), after Task 10 
 
 **Files:** move `migrations/*.sql` to `migrations/accounts/`; `src/db.rs` (`migrate!("./migrations/accounts")`), `build.rs` if it names the folder, `tests/support/pg.rs` (template); create `migrations/accounts/0036_stores.sql`.
 
-- [ ] `main` already holds migrations up to 0035 (the feedback indexes). Number the new ones from the next free version when the task starts (0036, 0037, 0038 below, if nothing else has landed), and correct every reference in this plan.
+- [ ] `main` already holds migrations up to 0035 (the feedback indexes). Number the new ones from the next free version when the task starts (0036, 0038, 0039 below, if nothing else has landed; 0037 is the validation of 0036's audit checks, see the note after the migration), and correct every reference in this plan.
 - [ ] Moving the files changes nothing sqlx checks (version and checksum). Confirm with a test that a database migrated before the move reports no pending or unknown migration after it: `moving_the_migrations_folder_keeps_their_history`.
 - [ ] Migration:
 
@@ -346,6 +346,8 @@ UPDATE catalogs SET provisioned_at = created_at;
 -- The provisioning job finds half-created catalogs by this.
 CREATE INDEX catalogs_unprovisioned ON catalogs (created_at) WHERE provisioned_at IS NULL;
 ```
+
+> **Corrected (issue #965).** The audit widening below needs two statements on `audit_entries`, a table every write touches, and a CHECK added as a plain `ADD CONSTRAINT` scans the whole log under ACCESS EXCLUSIVE. Migration 0036 therefore adds both audit CHECKs `NOT VALID`, and a new `0037_stores_audit_validate.sql` validates them in its own transaction (SHARE UPDATE EXCLUSIVE), as 0031 and 0032 did. Later migrations move up one: `0038_catalog_schema.sql` (Task 11) and `0039_catalog_audit.sql` (Task 12). The `stores` DDL, the `default_store` setting, `teams.store`, and the `catalogs` columns shipped as written. The folder move is checked by `moving_the_migrations_folder_keeps_their_history`, which compares the embedded history with `tests/fixtures/migration_history_0035.txt`, taken before the move.
 
 - [ ] The same migration widens `audit_entries.target_kind` to include `store` and adds a `WHEN 'store'` arm to `audit_entries_target_shape` (`target_name IS NOT NULL`, the other target columns NULL), for Task 10's actions. Copy the constraint's current text from the latest migration that redefines it, so nothing else changes.
 - [ ] Tests: `a_release_one_create_after_0036_lands_on_main_provisioned` (an insert naming only today's columns); `migration_0036_puts_every_catalog_on_main_provisioned`; `stores_refuses_a_host_row_without_a_credential_reference`; `stores_refuses_an_account_database_row_with_a_host`; `a_second_account_database_store_is_refused`; `a_second_row_for_the_same_host_port_and_database_is_refused`.
@@ -402,9 +404,9 @@ Release 2b is deployable here (rolling, after release 2 is on every replica): ev
 
 ## Release 3: the split
 
-### Task 11: migration 0037 (schema `catalog`, `catalog_state`, foreign keys) and the lock changes
+### Task 11: migration 0038 (schema `catalog`, `catalog_state`, foreign keys) and the lock changes
 
-**Files:** create `migrations/accounts/0037_catalog_schema.sql`; modify `src/store/publish.rs`, `src/store/repair.rs`, `src/catalog.rs`, `src/store/changesets.rs`, `src/store/catalogs.rs`, `src/stores/registry.rs` (search_path to `catalog`).
+**Files:** create `migrations/accounts/0038_catalog_schema.sql`; modify `src/store/publish.rs`, `src/store/repair.rs`, `src/catalog.rs`, `src/store/changesets.rs`, `src/store/catalogs.rs`, `src/stores/registry.rs` (search_path to `catalog`).
 
 - [ ] Migration (constraint names below are Postgres's defaults; confirm with `\d` on a migrated database at task start and correct here):
 
@@ -488,7 +490,7 @@ CREATE TABLE store_cleanups (
 
 ### Task 12: catalog audit on the store
 
-**Files:** create `migrations/accounts/0038_catalog_audit.sql`; modify `src/store/audit.rs`, `src/write.rs`, `src/store/publish.rs`, `src/store/import.rs`, `src/store/repair.rs`, `src/http/api/audit.rs`, `src/http/api/audit/cursor.rs`, `src/cli/audit.rs`.
+**Files:** create `migrations/accounts/0039_catalog_audit.sql`; modify `src/store/audit.rs`, `src/write.rs`, `src/store/publish.rs`, `src/store/import.rs`, `src/store/repair.rs`, `src/http/api/audit.rs`, `src/http/api/audit/cursor.rs`, `src/cli/audit.rs`.
 
 - [ ] Migration:
 
@@ -568,7 +570,7 @@ CREATE TRIGGER catalog_audit_entries_no_truncate BEFORE TRUNCATE ON catalog.cata
 **Files:** create `migrations/catalog/0001_baseline.sql`; modify `src/db.rs`, `src/stores/registry.rs`, `src/cli/stores.rs`, `tests/support/pg.rs`.
 
 - [ ] `CATALOG_MIGRATOR` is `migrate!("./migrations/catalog")` with its history table set to `catalog._sqlx_migrations` (`dangerous_set_table_name`). `db::migrate_store(conn)` runs it under the existing advisory lock, after creating schema `catalog` if absent.
-- [ ] The baseline is the `catalog` schema exactly as migrations 0037 and 0038 leave it: `catalog_state`, the moved tables with their indexes and constraints, and `audit_entries`. Generate it from a schema-only dump of a migrated database, then edit it into readable SQL.
+- [ ] The baseline is the `catalog` schema exactly as migrations 0038 and 0039 leave it: `catalog_state`, the moved tables with their indexes and constraints, and `audit_entries`. Generate it from a schema-only dump of a migrated database, then edit it into readable SQL.
 - [ ] Adoption: when `catalog.catalog_state` exists and `catalog._sqlx_migrations` has no rows, insert the baseline's history row (version, description, checksum from the embedded migration, `success = true`) instead of running it, in the same locked connection.
 - [ ] **Store identity.** The catalog baseline adds `catalog.store_identity (name text PRIMARY KEY)`, holding one row: the name of the store the database belongs to. Migrating or adopting writes it if absent (`main` on the account database at adoption). Adding a store connects to it, migrates it, then refuses if its `store_identity` row names another store, or if the target holds the account tables (`public.stores` exists), which means it is the account database under another name. `Stores::get` checks the row on first open and refuses a mismatch with `StoreUnavailable`, logged with both names. Each physical database therefore answers to one store name, whatever host name reached it.
 - [ ] `Stores::get` migrates a store the first time its pool opens in this process. `okf-mcp stores migrate` migrates every store and reports each one's result.
