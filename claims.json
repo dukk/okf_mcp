@@ -5,10 +5,10 @@
     "by": "server",
     "mac": "d6b7cc165cbc01843e32338b6291fae2d45b4923b632548395dfb41ab4250192"
   },
-  "next_evidence_seq": 893,
+  "next_evidence_seq": 896,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "39c1f06f127b950ca2966d0ffe2c4b8c4f2c314fcd4b3bdb8a19638f0605f75c"
+    "mac": "4f3a3b6e7208b1ed8cc463d79e370f094d8b468f26a8575c5898c0f86dac6364"
   },
   "claims": [
     {
@@ -53864,7 +53864,7 @@
     },
     {
       "id": "CLM-0695",
-      "statement": "Each of watchdog.sh's three main ps -eo scans (process list for expectations, test/gate processes, idle readers) runs through agentic_bounded_call and its output is captured to a variable that the loops then read.",
+      "statement": "Each of watchdog.sh's three main ps -eo scans runs through scan_ps, which captures ps output to a private temp file, polls with a deadline (AGENTIC_CALL_TIMEOUT), escalates TERM then KILL, and abandons a child that survives without waiting for it or for its output to close; the loops read the captured variable.",
       "kind": "functional",
       "level": "component",
       "integrity_level": 3,
@@ -53926,6 +53926,28 @@
             "by": "server",
             "mac": "ede51faecb18fc113859d9b5755da56f412872b4a14319940fee0b43abea6eaa"
           }
+        },
+        {
+          "id": "EVD-0893",
+          "kind": "inspection",
+          "locator": "tools/agentic/watchdog.sh: scan_ps and its call in the main loop",
+          "summary": "scan_ps starts ps with setsid, output to a mktemp file, polls kill -0 up to the budget, sends TERM, then KILL, then disowns a survivor and deletes the file; no wait on a timed-out child. The main loop calls it three times before any alert. The only part not run by a test is the final disown branch (a real D-state process cannot be made in a test).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 101,
+                "end": 155
+              },
+              "commit": "647c1465643d58db3fda8c66ef972113eddb0ed0"
+            }
+          },
+          "recorded_at": "2026-11-23T08:59:17.315714264Z",
+          "seal": {
+            "by": "server",
+            "mac": "01e0d8dcf6c31abd7c6fe33a93a58d2409c5413a12802e15326cb21aa1a337ba"
+          }
         }
       ],
       "verdicts": [
@@ -53942,13 +53964,26 @@
             "by": "server",
             "mac": "83f3be1ca989585e1c04e30bf5caa1ff6ba3bac402d306f81aad108917aa0da7"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "scan_ps code matches the restated claim; the disown branch is by inspection only.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0893"
+          ],
+          "recorded_at": "2026-11-23T08:59:22.198349101Z",
+          "seal": {
+            "by": "server",
+            "mac": "39e07d8b7fa0b05c157976e49b1ed25ff54b0783f109dbf2cbd05c53af471a0f"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T08:37:59.865848244Z",
+      "updated_at": "2026-11-23T08:59:22.198349101Z",
       "seal": {
         "by": "server",
-        "mac": "e371be3944b970ca907049901c8c2de32d156415dd277ef76ca141dfd6007467"
+        "mac": "ef8e453a8045273d72d81bfba4260f51dcfe1517b8470377b85d78dbf518572b"
       }
     },
     {
@@ -54117,6 +54152,28 @@
             "by": "server",
             "mac": "efb61e386cdcf5fbdbfa45210fda77b28ccbf680299c4fff7466bc32f0e043c0"
           }
+        },
+        {
+          "id": "EVD-0894",
+          "kind": "test",
+          "locator": "tools/agentic/tests/run.sh: test_watchdog_abandons_a_ps_scan_it_cannot_stop",
+          "summary": "A stub ps ignores TERM and leaves a detached grandchild holding its output open. The watchdog warns twice, keeps running, leaves no temp file, and the test kills and confirms every grandchild by pid. With the previous watchdog.sh (pipe capture) this test fails (82 passed, 1 failed).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/tests/run.sh",
+              "lines": {
+                "start": 583,
+                "end": 620
+              },
+              "commit": "647c1465643d58db3fda8c66ef972113eddb0ed0"
+            }
+          },
+          "recorded_at": "2026-11-23T08:59:17.354571169Z",
+          "seal": {
+            "by": "server",
+            "mac": "5beea7ebe2443769a1e3eb101b05299b697ccae93c841cfd9651822c768be601"
+          }
         }
       ],
       "verdicts": [
@@ -54132,13 +54189,26 @@
             "by": "server",
             "mac": "2fc9137e2a3e39c66709020393f4e7a9cb9abed3ffb03c1b0381a518c0c6e3b2"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The abandon test passes now and fails against the pipe-capture watchdog.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0894"
+          ],
+          "recorded_at": "2026-11-23T08:59:22.282122093Z",
+          "seal": {
+            "by": "server",
+            "mac": "d014524b6d9c259548f4e42e007dd6d743f31ee66b401caf88953247c50e588d"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T08:37:59.948444819Z",
+      "updated_at": "2026-11-23T08:59:22.282122093Z",
       "seal": {
         "by": "server",
-        "mac": "d48f69cb2689cc6d1dba24cd2f08db2f3f385d76a32d44f757d01ec98fa54181"
+        "mac": "58ac46fca0c3edd3380ce3d8e9ff75ca1c212bac3d4213df0383b8a465935ada"
       }
     },
     {
@@ -54222,7 +54292,7 @@
     },
     {
       "id": "CLM-0699",
-      "statement": "tools/agentic/tests/run.sh passes with 80 passed, 0 failed on the head commit.",
+      "statement": "tools/agentic/tests/run.sh passes with 83 passed, 0 failed on the head commit, three runs in a row.",
       "kind": "functional",
       "level": "artifact",
       "integrity_level": 2,
@@ -54252,6 +54322,18 @@
             "by": "server",
             "mac": "ffe68388fcfeefdb62a0a3e47d07f6b342d5152c0ce3ce2d88ce008c24230d47"
           }
+        },
+        {
+          "id": "EVD-0895",
+          "kind": "test",
+          "locator": "bash tools/agentic/tests/run.sh (3 runs)",
+          "summary": "83 passed, 0 failed in each of three runs in a row on the code commit 647c146.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T08:59:17.389676699Z",
+          "seal": {
+            "by": "server",
+            "mac": "cd826d0bf173ab8ebc74dfa2ebd6c52f13c393fdd9e53e4c2937068f6285125f"
+          }
         }
       ],
       "verdicts": [
@@ -54267,13 +54349,26 @@
             "by": "server",
             "mac": "07487339383fa7cfe7d6789a87201f7a5b050916f9a158373dd2e204faa755ea"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Three runs of 83 passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0895"
+          ],
+          "recorded_at": "2026-11-23T08:59:22.319559462Z",
+          "seal": {
+            "by": "server",
+            "mac": "ed575d2de82574b9162c437a4e2da48d574891d41bf8117c41f69b06abecca68"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T08:38:00.028766265Z",
+      "updated_at": "2026-11-23T08:59:22.319559462Z",
       "seal": {
         "by": "server",
-        "mac": "cbce4e969f915f9c248762051b874708de4104975f940ea0fdf27bd066eda2aa"
+        "mac": "ce232a2b0032bae95bb893c4ec792fdeb8f74737af367d9017d6dcb2a96ae229"
       }
     },
     {
