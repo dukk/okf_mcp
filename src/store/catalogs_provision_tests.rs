@@ -167,6 +167,50 @@ async fn a_half_created_catalog_is_outside_every_ceiling() {
     )
     .await;
     assert!(matches!(refused, Err(OkfError::CatalogNotSelected { .. })));
+    // The console's reads and the entitlement writes by name.
+    assert!(matches!(
+        ceiling::member_access(&db.pool, "half").await,
+        Err(OkfError::CatalogNotSelected { .. })
+    ));
+    let page = ceiling::TeamPage {
+        members_after: "",
+        entitlements_after: "",
+        limit: 10,
+        lists: ceiling::TeamLists::Both,
+    };
+    assert!(ceiling::team_access(&db.pool, "half", None, &page)
+        .await
+        .is_err());
+    let entitle = ceiling::NewEntitlement {
+        user: TEST_USER,
+        catalog: "half",
+        access: crate::store::keys::Access::Read,
+    };
+    assert!(
+        ceiling::entitle(&db.pool, &entitle, &AuditActor::cli(), now())
+            .await
+            .is_err()
+    );
+    // The details and maintenance changes by name.
+    let details = DetailsChange {
+        catalog: "half",
+        display_name: None,
+        description: Some("x"),
+        owner: None,
+    };
+    assert!(matches!(
+        update_details(&db.pool, &details, &AuditActor::cli(), now()).await,
+        Err(OkfError::CatalogNotSelected { .. })
+    ));
+    let maintenance = MaintenanceChange {
+        catalog: "half",
+        to: true.into(),
+        owner: None,
+    };
+    assert!(matches!(
+        set_maintenance(&db.pool, &maintenance, &AuditActor::cli(), now()).await,
+        Err(OkfError::CatalogNotSelected { .. })
+    ));
 
     // Once provisioned, the same readers show it.
     mark_provisioned(&db.pool, catalog.id, now()).await.unwrap();

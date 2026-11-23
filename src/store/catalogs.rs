@@ -108,13 +108,13 @@ pub struct NewCatalog<'a> {
 /// the store holding the catalog's data are never written in one
 /// transaction (plan Task 10b, decision P9):
 ///
-/// 1. [`register`]: one account transaction chooses the store, inserts the
+/// 1. `register`: one account transaction chooses the store, inserts the
 ///    registry row with `provisioned_at` NULL (a row every lookup and
 ///    listing treats as absent), and records `catalog.created`.
-/// 2. [`provision_store_side`]: one store transaction takes the catalog's
+/// 2. `provision_store_side`: one store transaction takes the catalog's
 ///    lock on the store, checks that the registry row is still there and
 ///    still unprovisioned, and writes the starter files.
-/// 3. [`mark_provisioned`]: one account transaction sets `provisioned_at`
+/// 3. `mark_provisioned`: one account transaction sets `provisioned_at`
 ///    and announces the catalog to the other replicas.
 ///
 /// A create that stops after step 1 or 2 leaves a half-created row, which
@@ -473,7 +473,7 @@ pub enum Recovery {
 
 /// Finishes or removes one half-created catalog (decision P9). In one
 /// store transaction it takes the catalog's lock, checks the registry row,
-/// and checks the store side ([`store_side_exists`]). If the store side is
+/// and checks the store side (`store_side_exists`). If the store side is
 /// there it sets `provisioned_at`. If not it records the failed create in
 /// the audit log and deletes the registry row, and commits that before the
 /// lock is released. A create that stalled therefore either committed first
@@ -482,7 +482,7 @@ pub enum Recovery {
 ///
 /// # Arguments
 /// * `db` - the store the catalog was placed on (also the account
-///   database until release 3: see [`registration`]).
+///   database until release 3: see `registration`).
 /// * `catalog` - the half-created catalog.
 /// * `now` - the server clock.
 ///

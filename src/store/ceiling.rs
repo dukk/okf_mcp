@@ -724,11 +724,13 @@ pub async fn change_member_access(
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.member_access"))]
 pub async fn member_access(pool: &PgPool, catalog: &str) -> Result<MemberAccess, OkfError> {
     check_names(None, catalog)?;
-    let stored: Option<String> =
-        sqlx::query_scalar("SELECT member_access FROM catalogs WHERE name = $1")
-            .bind(catalog)
-            .fetch_optional(pool)
-            .await?;
+    let stored: Option<String> = sqlx::query_scalar(
+        "SELECT member_access FROM catalogs \
+             WHERE name = $1 AND provisioned_at IS NOT NULL",
+    )
+    .bind(catalog)
+    .fetch_optional(pool)
+    .await?;
     let stored = stored.ok_or_else(|| unknown_catalog(catalog))?;
     decode_column(MemberAccess::parse(&stored), "catalogs.member_access")
 }
