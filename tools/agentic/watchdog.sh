@@ -109,16 +109,17 @@ newest_log_time() {
 # `ps` that times out or fails is a skipped scan, not an alarm: it warns,
 # without any output of the scan, and returns 1.
 scan_ps() {
-    local file pid tick budget status=0 reason=""
+    local file pid='' tick budget status=0 reason=""
     budget=$(agentic_call_budget)
     file=$(mktemp "${TMPDIR:-/tmp}/watchdog-scan.XXXXXX") || return 1
+    # Installed before ps starts, so a signal can't leave the temp file behind.
+    trap '[ -z "$pid" ] || kill -KILL -- "-$pid" 2>/dev/null; rm -f "$file"; trap - INT; kill -INT "$BASHPID"' INT
+    trap '[ -z "$pid" ] || kill -KILL -- "-$pid" 2>/dev/null; rm -f "$file"; trap - TERM; kill -TERM "$BASHPID"' TERM
     if [ "$budget" -le 0 ]; then
         reason="no time left"; status=124
     else
         setsid ps "${@:2}" >"$file" 2>/dev/null </dev/null &
         pid=$!
-        trap 'kill -KILL -- "-$pid" 2>/dev/null; rm -f "$file"; trap - INT; kill -INT "$BASHPID"' INT
-        trap 'kill -KILL -- "-$pid" 2>/dev/null; rm -f "$file"; trap - TERM; kill -TERM "$BASHPID"' TERM
         for ((tick = 0; tick < budget * 10; tick++)); do
             kill -0 "$pid" 2>/dev/null || break
             sleep 0.1
@@ -146,8 +147,8 @@ scan_ps() {
             wait "$pid" || status=$?
             [ "$status" -eq 0 ] || reason="failed"
         fi
-        trap - INT TERM
     fi
+    trap - INT TERM
     if [ "$status" -ne 0 ]; then
         rm -f "$file"
         echo "watchdog: warning: ps scan $reason (status $status); skipping it" >&2
