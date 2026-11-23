@@ -257,6 +257,8 @@ Each release ends deployable: after Task 6 (types only, rolling), after Task 10 
 - [ ] Same treatment for runs, work, findings, evidence and candidates. Add to the "crosses" inventory, including `runs.rs:481`'s `api_keys` subselect.
 - [ ] Tests: existing tests pass.
 
+> **Corrected (issue #962, 2026-11-23).** Shipped: every public entry point in `src/store/maintenance/{runs,reports,evidence}.rs` that took `&PgPool` takes `&CatalogDb` (`runs::{list_runs, get_run, claim, renew, close}`, `reports::{get_finding, list_findings, list_findings_with, count_findings, dispose, submit}`, `evidence::read`, and the private `runs::snapshot`); the transactions begin with `CatalogDb::begin`. `candidates` and the helpers in `mod.rs` keep `&mut PgConnection` (P2). `src/mcp/maintenance/{reports,work}.rs` pass `App::main_store()`; the owner lookup in `work.rs` reads `maintenance_runs` through `main_store().executor()`. `src/maintenance/` holds no SQL and needed no change. The inventory is in `changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md`; it adds two items the task text did not name: `maintenance::lock` takes the catalog's advisory lock and `FOR KEY SHARE` on `catalogs` at the start of every maintenance write, and the foreign keys from all seven `maintenance_*` tables to `catalogs`. Task 11 must handle both. The `api_keys` subselect is at `runs.rs:482`.
+
 ### Task 5: the five joined statements are split
 
 **Files:** `src/store/changesets.rs`, `src/store/repair.rs`, `src/store/users.rs`, `src/store/maintenance/runs.rs`, and their callers.
@@ -264,7 +266,7 @@ Each release ends deployable: after Task 6 (types only, rolling), after Task 10 
 - [ ] Each statement in "Verified facts" that joins both sides becomes two statements: one on each side, joined in Rust by id. Keep result order and pagination identical.
   - `changesets.rs:654`: read the changesets from the store, then the catalog names and key labels from the account database in one `= ANY($1)` query each.
   - `users.rs:1268` and `:1494`: read the user's key ids from the account database, then the open changesets for those key ids from the store. In release 1 the store is `main_store()`; Task 13 makes this a fan-out over every store.
-  - `runs.rs:481`: the caller checks the key id exists on the account database first, then inserts the plain value.
+  - `runs.rs:482` (in `claim`; line 481 at `22c07f7`): the caller checks the key id exists on the account database first, then inserts the plain value.
   - `repair.rs:281`: read the catalog ids from the account database, then the documents.
 - [ ] Tests: one test per split statement, asserting the same rows as before on a fixture with two catalogs, two keys and a deleted key: `changeset_listing_names_catalogs_and_keys_after_the_split`, `user_catalogs_with_open_changesets_after_the_split`, `deleting_a_user_discards_their_changesets_after_the_split`, `maintenance_run_records_a_missing_key_as_null`, `repair_lists_the_same_catalogs_after_the_split`.
 

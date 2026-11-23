@@ -117,7 +117,7 @@ pub(crate) async fn maintenance_claim(
     let state = ctx.one(Some(&params.catalog)).await?;
     ctx.require_maintenance_report(&state).await?;
     let mut result = runs::claim(
-        ctx.app().pool(),
+        ctx.app().main_store(),
         state.id(),
         &actor(ctx),
         &params.idempotency_key,
@@ -140,7 +140,7 @@ pub(crate) async fn maintenance_renew(
     let state = ctx.one(Some(&params.catalog)).await?;
     ctx.require_maintenance_report(&state).await?;
     let mut result = runs::renew(
-        ctx.app().pool(),
+        ctx.app().main_store(),
         state.id(),
         &actor(ctx),
         &params.work_id,
@@ -172,7 +172,7 @@ pub(crate) async fn maintenance_read_revision(
     // admitted once the request is valid. The other tools here claim,
     // renew, submit or close work and read none, so they admit nothing.
     ctx.admit(&state, AccessKind::Read).await?;
-    let mut result = evidence::read(ctx.app().pool(), state.id(), &pin).await?;
+    let mut result = evidence::read(ctx.app().main_store(), state.id(), &pin).await?;
     super::pin_path(&mut result.pin);
     Ok(MaintenanceResult::new(state.name(), result))
 }
@@ -185,7 +185,7 @@ pub(crate) async fn maintenance_submit(
     let state = ctx.one(Some(&params.catalog)).await?;
     ctx.require_maintenance_report(&state).await?;
     let result = reports::submit(
-        ctx.app().pool(),
+        ctx.app().main_store(),
         state.id(),
         &actor(ctx),
         &params.work_id,
@@ -224,7 +224,7 @@ pub(crate) async fn maintenance_close(
     )
     .bind(state.id())
     .bind(&params.run_id)
-    .fetch_optional(ctx.app().pool())
+    .fetch_optional(ctx.app().main_store().executor())
     .await?;
     let owner = owner.ok_or_else(super::not_found)?;
     let own = owner == ctx.principal().key_id;
@@ -235,7 +235,7 @@ pub(crate) async fn maintenance_close(
     }
     // Own-run retries keep the same store payload even if ordinary access changes.
     let result = runs::close(
-        ctx.app().pool(),
+        ctx.app().main_store(),
         state.id(),
         &actor(ctx),
         &params.run_id,

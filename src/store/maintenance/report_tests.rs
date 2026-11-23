@@ -4,13 +4,14 @@ use super::{reports, runs};
 use crate::db::test_db;
 use crate::error::OkfError;
 use crate::maintenance::types::*;
+use crate::stores::CatalogDb;
 use chrono::Duration;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
 async fn fixture(pool: &PgPool, catalog: i64, key: &str) -> (Lease, String) {
     let lease = runs::claim(
-        pool,
+        &CatalogDb::main_of(pool),
         catalog,
         &actor("reporter"),
         key,
@@ -49,7 +50,7 @@ async fn fixture(pool: &PgPool, catalog: i64, key: &str) -> (Lease, String) {
         reported_tokens: None,
     };
     let receipt = reports::submit(
-        pool,
+        &CatalogDb::main_of(pool),
         catalog,
         &actor("reporter"),
         &lease.work_id,
@@ -79,7 +80,9 @@ async fn maintenance_disposition_preserves_history_and_content() {
     let catalog = setup(&db.pool, &["a.md", "b.md"]).await;
     let (lease, id) = fixture(&db.pool, catalog, "first").await;
     let before = canonical(&db.pool, catalog).await;
-    let initial = reports::get_finding(&db.pool, catalog, &id).await.unwrap();
+    let initial = reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, &id)
+        .await
+        .unwrap();
     assert_eq!(initial.disposition, Disposition::Open);
     assert!(initial.dispositions.is_empty());
     assert_eq!(initial.actor, "agent/reporter");
@@ -94,7 +97,7 @@ async fn maintenance_disposition_preserves_history_and_content() {
     .enumerate()
     {
         let response = reports::dispose(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &human,
             &id,
@@ -115,7 +118,9 @@ async fn maintenance_disposition_preserves_history_and_content() {
         assert_eq!(response.dispositions[n].rationale, "Human rationale");
         responses.push(response);
     }
-    let current = reports::get_finding(&db.pool, catalog, &id).await.unwrap();
+    let current = reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, &id)
+        .await
+        .unwrap();
     assert_eq!(current.dispositions.len(), 3);
     assert_eq!(current.disposition, Disposition::Open);
     assert!(current.dispositions.windows(2).all(|w| w[0].id < w[1].id));
@@ -127,7 +132,7 @@ async fn maintenance_disposition_preserves_history_and_content() {
         actor: "renamed human".into(),
     };
     let retry = reports::dispose(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &renamed,
         &id,
@@ -145,7 +150,7 @@ async fn maintenance_disposition_preserves_history_and_content() {
     ] {
         assert!(matches!(
             reports::dispose(
-                &db.pool,
+                &CatalogDb::main_of(&db.pool),
                 catalog,
                 &human,
                 &id,
@@ -159,7 +164,7 @@ async fn maintenance_disposition_preserves_history_and_content() {
         ));
     }
     assert!(reports::dispose(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog + 1,
         &human,
         &id,
@@ -175,7 +180,7 @@ async fn maintenance_disposition_preserves_history_and_content() {
         actor: human.actor.clone(),
     };
     assert!(reports::dispose(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &invalid,
         &id,
@@ -191,7 +196,7 @@ async fn maintenance_disposition_preserves_history_and_content() {
     revision(&db.pool, catalog, "b.md", 3, t0(), "Body restored").await;
     let after_edit = canonical(&db.pool, catalog).await;
     let other = reports::dispose(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("other-human"),
         &id,
@@ -205,13 +210,15 @@ async fn maintenance_disposition_preserves_history_and_content() {
     assert_eq!(other.dispositions.len(), 4); // Credential-scoped idempotency, not another credential's receipt.
     assert_eq!(other.disposition, Disposition::NeedsInput); // Append order wins over the backward clock.
     assert_eq!(
-        reports::get_finding(&db.pool, catalog, &id).await.unwrap(),
+        reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, &id)
+            .await
+            .unwrap(),
         other
     );
     assert_eq!(canonical(&db.pool, catalog).await, after_edit);
     assert_eq!(before[2], after_edit[2]);
     assert_eq!(before[3], after_edit[3]);
-    let export = json!({"run": runs::get_run(&db.pool, catalog, &lease.run_id).await.unwrap(), "findings": reports::list_findings(&db.pool, catalog, None, 20).await.unwrap()});
+    let export = json!({"run": runs::get_run(&CatalogDb::main_of(&db.pool), catalog, &lease.run_id).await.unwrap(), "findings": reports::list_findings(&CatalogDb::main_of(&db.pool), catalog, None, 20).await.unwrap()});
     let text = export.to_string();
     assert!(!text.contains(&lease.token));
     assert!(!text.contains("lease_token"));
@@ -259,7 +266,7 @@ async fn maintenance_disposition_rejects_invalid_text_and_ids_atomically() {
         format!("password: {}", "SuperSecretPassword123!"),
     ] {
         assert!(reports::dispose(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &actor("human"),
             &id,
@@ -274,7 +281,7 @@ async fn maintenance_disposition_rejects_invalid_text_and_ids_atomically() {
     let secret = format!("{}{}", "ghp_", "Ab3dEf7hIj9kLm2nOp4qRs6tUv8wXy0z1234");
     for (rationale, key) in [(secret.as_str(), "secret-rationale"), ("", secret.as_str())] {
         let error = reports::dispose(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &actor("human"),
             &id,
@@ -290,7 +297,7 @@ async fn maintenance_disposition_rejects_invalid_text_and_ids_atomically() {
     }
     for key in ["", "space key", "\n", &"x".repeat(129)] {
         assert!(reports::dispose(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &actor("human"),
             &id,
@@ -303,9 +310,13 @@ async fn maintenance_disposition_rejects_invalid_text_and_ids_atomically() {
         .is_err());
     }
     for id in ["", " ", "missing"] {
-        assert!(reports::get_finding(&db.pool, catalog, id).await.is_err());
+        assert!(
+            reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, id)
+                .await
+                .is_err()
+        );
         assert!(reports::dispose(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &actor("human"),
             id,
@@ -317,11 +328,13 @@ async fn maintenance_disposition_rejects_invalid_text_and_ids_atomically() {
         .await
         .is_err());
     }
-    assert!(reports::get_finding(&db.pool, catalog, &id)
-        .await
-        .unwrap()
-        .dispositions
-        .is_empty());
+    assert!(
+        reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, &id)
+            .await
+            .unwrap()
+            .dispositions
+            .is_empty()
+    );
     let requests: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM maintenance_requests WHERE catalog_id=$1 AND operation='dispose'",
     )
@@ -338,11 +351,11 @@ async fn maintenance_report_outdated_tracks_all_evidence() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md", "b.md"]).await;
     let (lease, id) = fixture(&db.pool, catalog, "first").await;
-    let original = runs::get_run(&db.pool, catalog, &lease.run_id)
+    let original = runs::get_run(&CatalogDb::main_of(&db.pool), catalog, &lease.run_id)
         .await
         .unwrap();
     assert!(
-        !reports::get_finding(&db.pool, catalog, &id)
+        !reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, &id)
             .await
             .unwrap()
             .outdated
@@ -356,7 +369,7 @@ async fn maintenance_report_outdated_tracks_all_evidence() {
     );
     revision(&db.pool, catalog, "b.md", 2, t0(), "Body new").await;
     assert!(
-        reports::get_finding(&db.pool, catalog, &id)
+        reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, &id)
             .await
             .unwrap()
             .outdated
@@ -368,7 +381,7 @@ async fn maintenance_report_outdated_tracks_all_evidence() {
         .await
         .unwrap();
     assert!(
-        !reports::get_finding(&db.pool, catalog, &id)
+        !reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, &id)
             .await
             .unwrap()
             .outdated
@@ -380,7 +393,7 @@ async fn maintenance_report_outdated_tracks_all_evidence() {
         .await
         .unwrap();
     assert!(
-        reports::get_finding(&db.pool, catalog, &id)
+        reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, &id)
             .await
             .unwrap()
             .outdated
@@ -391,27 +404,27 @@ async fn maintenance_report_outdated_tracks_all_evidence() {
         .await
         .unwrap();
     assert!(
-        reports::get_finding(&db.pool, catalog, &id)
+        reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, &id)
             .await
             .unwrap()
             .outdated
     );
     revision(&db.pool, catalog, "a.md", 2, t0(), "Body").await;
     assert!(
-        reports::get_finding(&db.pool, catalog, &id)
+        reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, &id)
             .await
             .unwrap()
             .outdated
     );
     assert!(
-        reports::list_findings(&db.pool, catalog, None, 20)
+        reports::list_findings(&CatalogDb::main_of(&db.pool), catalog, None, 20)
             .await
             .unwrap()
             .items[0]
             .outdated
     );
     assert_eq!(
-        runs::get_run(&db.pool, catalog, &lease.run_id)
+        runs::get_run(&CatalogDb::main_of(&db.pool), catalog, &lease.run_id)
             .await
             .unwrap(),
         original
@@ -441,18 +454,30 @@ async fn maintenance_report_pages_are_catalog_scoped() {
     revision(&db.pool, foreign, "a.md", 1, t0(), "Body").await;
     revision(&db.pool, foreign, "b.md", 1, t0(), "Body").await;
     let (foreign_run, foreign_finding) = fixture(&db.pool, foreign, "first").await;
-    let all = runs::list_runs(&db.pool, catalog, None, 20, RunOrder::Asc)
-        .await
-        .unwrap();
+    let all = runs::list_runs(
+        &CatalogDb::main_of(&db.pool),
+        catalog,
+        None,
+        20,
+        RunOrder::Asc,
+    )
+    .await
+    .unwrap();
     assert_eq!(all.items.len(), 2);
     assert!(all.items[0].id < all.items[1].id); // Equal timestamps: ID is the tie breaker.
     assert_eq!(all.next_after, None);
-    let page = runs::list_runs(&db.pool, catalog, None, 1, RunOrder::Asc)
-        .await
-        .unwrap();
+    let page = runs::list_runs(
+        &CatalogDb::main_of(&db.pool),
+        catalog,
+        None,
+        1,
+        RunOrder::Asc,
+    )
+    .await
+    .unwrap();
     assert_eq!(page.items, all.items[..1]);
     let last = runs::list_runs(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         page.next_after.as_deref(),
         1,
@@ -462,67 +487,95 @@ async fn maintenance_report_pages_are_catalog_scoped() {
     .unwrap();
     assert_eq!(last.items, all.items[1..]);
     assert_eq!(last.next_after, None);
-    let findings = reports::list_findings(&db.pool, catalog, None, 200)
+    let findings = reports::list_findings(&CatalogDb::main_of(&db.pool), catalog, None, 200)
         .await
         .unwrap();
     assert_eq!(findings.items.len(), 2);
     assert!(findings.items[0].id < findings.items[1].id);
-    let page = reports::list_findings(&db.pool, catalog, None, 1)
+    let page = reports::list_findings(&CatalogDb::main_of(&db.pool), catalog, None, 1)
         .await
         .unwrap();
     assert_eq!(page.items, findings.items[..1]);
-    let last = reports::list_findings(&db.pool, catalog, page.next_after.as_deref(), 1)
-        .await
-        .unwrap();
+    let last = reports::list_findings(
+        &CatalogDb::main_of(&db.pool),
+        catalog,
+        page.next_after.as_deref(),
+        1,
+    )
+    .await
+    .unwrap();
     assert_eq!(last.items, findings.items[1..]);
     assert_eq!(last.next_after, None);
-    assert!(
-        reports::list_findings(&db.pool, catalog, Some(&findings.items[1].id), 1)
-            .await
-            .unwrap()
-            .items
-            .is_empty()
-    );
+    assert!(reports::list_findings(
+        &CatalogDb::main_of(&db.pool),
+        catalog,
+        Some(&findings.items[1].id),
+        1
+    )
+    .await
+    .unwrap()
+    .items
+    .is_empty());
     for cursor in [&foreign_run.run_id, "missing", ""] {
         assert!(matches!(
-            runs::list_runs(&db.pool, catalog, Some(cursor), 20, RunOrder::Asc).await,
+            runs::list_runs(
+                &CatalogDb::main_of(&db.pool),
+                catalog,
+                Some(cursor),
+                20,
+                RunOrder::Asc
+            )
+            .await,
             Err(OkfError::NotFound { .. })
         ));
     }
     for cursor in [&foreign_finding, "missing", ""] {
         assert!(matches!(
-            reports::list_findings(&db.pool, catalog, Some(cursor), 20).await,
+            reports::list_findings(&CatalogDb::main_of(&db.pool), catalog, Some(cursor), 20).await,
             Err(OkfError::NotFound { .. })
         ));
     }
     for limit in [0, 201, u32::MAX] {
         assert!(matches!(
-            runs::list_runs(&db.pool, catalog, None, limit, RunOrder::Asc).await,
+            runs::list_runs(
+                &CatalogDb::main_of(&db.pool),
+                catalog,
+                None,
+                limit,
+                RunOrder::Asc
+            )
+            .await,
             Err(OkfError::Refused { .. })
         ));
         assert!(matches!(
-            reports::list_findings(&db.pool, catalog, None, limit).await,
+            reports::list_findings(&CatalogDb::main_of(&db.pool), catalog, None, limit).await,
             Err(OkfError::Refused { .. })
         ));
     }
     assert!(matches!(
-        runs::get_run(&db.pool, catalog, &foreign_run.run_id).await,
+        runs::get_run(&CatalogDb::main_of(&db.pool), catalog, &foreign_run.run_id).await,
         Err(OkfError::NotFound { .. })
     ));
     assert!(matches!(
-        reports::get_finding(&db.pool, catalog, &foreign_finding).await,
+        reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, &foreign_finding).await,
         Err(OkfError::NotFound { .. })
     ));
     for id in ["", " ", "missing"] {
-        assert!(runs::get_run(&db.pool, catalog, id).await.is_err());
-    }
-    assert!(
-        runs::list_runs(&db.pool, foreign + 1, None, 20, RunOrder::Asc)
+        assert!(runs::get_run(&CatalogDb::main_of(&db.pool), catalog, id)
             .await
-            .unwrap()
-            .items
-            .is_empty()
-    );
+            .is_err());
+    }
+    assert!(runs::list_runs(
+        &CatalogDb::main_of(&db.pool),
+        foreign + 1,
+        None,
+        20,
+        RunOrder::Asc
+    )
+    .await
+    .unwrap()
+    .items
+    .is_empty());
     // Unequal timestamps must outrank ID ordering, including cursor continuation.
     sqlx::query("UPDATE maintenance_runs SET created_at=$3 WHERE catalog_id=$1 AND id=$2")
         .bind(catalog)
@@ -531,13 +584,19 @@ async fn maintenance_report_pages_are_catalog_scoped() {
         .execute(&db.pool)
         .await
         .unwrap();
-    let by_time = runs::list_runs(&db.pool, catalog, None, 1, RunOrder::Asc)
-        .await
-        .unwrap();
+    let by_time = runs::list_runs(
+        &CatalogDb::main_of(&db.pool),
+        catalog,
+        None,
+        1,
+        RunOrder::Asc,
+    )
+    .await
+    .unwrap();
     assert_eq!(by_time.items[0].id, all.items[1].id);
     assert_eq!(
         runs::list_runs(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             by_time.next_after.as_deref(),
             200,
@@ -556,21 +615,26 @@ async fn maintenance_report_pages_are_catalog_scoped() {
         .execute(&db.pool)
         .await
         .unwrap();
-    let by_time = reports::list_findings(&db.pool, catalog, None, 1)
+    let by_time = reports::list_findings(&CatalogDb::main_of(&db.pool), catalog, None, 1)
         .await
         .unwrap();
     assert_eq!(by_time.items[0].id, findings.items[1].id);
     assert_eq!(
-        reports::list_findings(&db.pool, catalog, by_time.next_after.as_deref(), 200)
-            .await
-            .unwrap()
-            .items[0]
+        reports::list_findings(
+            &CatalogDb::main_of(&db.pool),
+            catalog,
+            by_time.next_after.as_deref(),
+            200
+        )
+        .await
+        .unwrap()
+        .items[0]
             .id,
         findings.items[0].id
     );
     assert!(matches!(
         reports::dispose(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &actor("human"),
             &foreign_finding,
@@ -583,7 +647,7 @@ async fn maintenance_report_pages_are_catalog_scoped() {
         Err(OkfError::NotFound { .. })
     ));
     let decision = reports::dispose(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("human"),
         &findings.items[0].id,
@@ -600,28 +664,34 @@ async fn maintenance_report_pages_are_catalog_scoped() {
         .execute(&db.pool)
         .await
         .unwrap();
-    assert!(runs::get_run(&db.pool, catalog, &first.run_id)
-        .await
-        .is_err());
-    assert!(runs::get_run(&db.pool, catalog, &second.run_id)
-        .await
-        .is_err());
-    assert!(reports::list_findings(&db.pool, catalog, None, 20)
-        .await
-        .unwrap()
-        .items
-        .is_empty());
+    assert!(
+        runs::get_run(&CatalogDb::main_of(&db.pool), catalog, &first.run_id)
+            .await
+            .is_err()
+    );
+    assert!(
+        runs::get_run(&CatalogDb::main_of(&db.pool), catalog, &second.run_id)
+            .await
+            .is_err()
+    );
+    assert!(
+        reports::list_findings(&CatalogDb::main_of(&db.pool), catalog, None, 20)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
     let count: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM maintenance_runs WHERE catalog_id=$1) + (SELECT count(*) FROM maintenance_work WHERE catalog_id=$1) + (SELECT count(*) FROM maintenance_findings WHERE catalog_id=$1) + (SELECT count(*) FROM maintenance_evidence WHERE catalog_id=$1) + (SELECT count(*) FROM maintenance_dispositions WHERE catalog_id=$1) + (SELECT count(*) FROM maintenance_requests WHERE catalog_id=$1)").bind(catalog).fetch_one(&db.pool).await.unwrap();
     assert_eq!(count, 0);
     assert_eq!(
-        reports::get_finding(&db.pool, foreign, &foreign_finding)
+        reports::get_finding(&CatalogDb::main_of(&db.pool), foreign, &foreign_finding)
             .await
             .unwrap()
             .id,
         foreign_finding
     );
     assert_eq!(
-        runs::get_run(&db.pool, foreign, &foreign_run.run_id)
+        runs::get_run(&CatalogDb::main_of(&db.pool), foreign, &foreign_run.run_id)
             .await
             .unwrap()
             .run
@@ -638,9 +708,10 @@ async fn maintenance_disposition_concurrent_retry_is_one_append() {
     let before = canonical(&db.pool, catalog).await;
     let human = actor("human");
     let rationale = "é".repeat(2048); // Exactly 4096 UTF-8 bytes is allowed.
+    let store = CatalogDb::main_of(&db.pool);
     let (a, b) = tokio::join!(
         reports::dispose(
-            &db.pool,
+            &store,
             catalog,
             &human,
             &id,
@@ -650,7 +721,7 @@ async fn maintenance_disposition_concurrent_retry_is_one_append() {
             t0()
         ),
         reports::dispose(
-            &db.pool,
+            &store,
             catalog,
             &human,
             &id,
@@ -665,7 +736,9 @@ async fn maintenance_disposition_concurrent_retry_is_one_append() {
     assert_eq!(result.dispositions.len(), 1);
     assert_eq!(result.dispositions[0].rationale, rationale);
     assert_eq!(
-        reports::get_finding(&db.pool, catalog, &id).await.unwrap(),
+        reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, &id)
+            .await
+            .unwrap(),
         result
     );
     let credentials: Vec<String> = sqlx::query_scalar(
@@ -711,7 +784,7 @@ async fn maintenance_report_assessment_and_sibling_pins_and_dto_contracts() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md", "b.md", "c.md", "d.md"]).await;
     let lease = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "batch",
@@ -748,7 +821,7 @@ async fn maintenance_report_assessment_and_sibling_pins_and_dto_contracts() {
         reported_tokens: None,
     };
     let receipt = reports::submit(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &lease.work_id,
@@ -760,13 +833,15 @@ async fn maintenance_report_assessment_and_sibling_pins_and_dto_contracts() {
     .await
     .unwrap();
     let id = &receipt.finding_ids[0];
-    let original = reports::get_finding(&db.pool, catalog, id).await.unwrap();
+    let original = reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, id)
+        .await
+        .unwrap();
     assert_eq!(original.input, input.findings[0]);
     assert!(!original.outdated);
     // A pin cited only in assessment evidence still invalidates the finding.
     revision(&db.pool, catalog, "c.md", 2, t0(), "Body new").await;
     assert!(
-        reports::get_finding(&db.pool, catalog, id)
+        reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, id)
             .await
             .unwrap()
             .outdated
@@ -779,13 +854,13 @@ async fn maintenance_report_assessment_and_sibling_pins_and_dto_contracts() {
     // Likewise for evidence cited only by a sibling finding in the same work.
     revision(&db.pool, catalog, "d.md", 2, t0(), "Body new").await;
     assert!(
-        reports::get_finding(&db.pool, catalog, id)
+        reports::get_finding(&CatalogDb::main_of(&db.pool), catalog, id)
             .await
             .unwrap()
             .outdated
     );
     let disposed = reports::dispose(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("human"),
         id,
@@ -814,7 +889,7 @@ async fn maintenance_report_assessment_and_sibling_pins_and_dto_contracts() {
         &disposed.dispositions[0],
         &["id", "disposition", "rationale", "actor", "at"],
     );
-    let run = runs::get_run(&db.pool, catalog, &lease.run_id)
+    let run = runs::get_run(&CatalogDb::main_of(&db.pool), catalog, &lease.run_id)
         .await
         .unwrap();
     assert_dto(&run, &["run", "work"]);
@@ -832,14 +907,20 @@ async fn maintenance_report_assessment_and_sibling_pins_and_dto_contracts() {
         ],
     );
     assert_eq!(run.work[0].evidence, input.evidence);
-    let page = reports::list_findings(&db.pool, catalog, None, 20)
+    let page = reports::list_findings(&CatalogDb::main_of(&db.pool), catalog, None, 20)
         .await
         .unwrap();
     assert_dto(&page, &["items", "next_after"]);
     assert_dto(
-        &runs::list_runs(&db.pool, catalog, None, 20, RunOrder::Asc)
-            .await
-            .unwrap(),
+        &runs::list_runs(
+            &CatalogDb::main_of(&db.pool),
+            catalog,
+            None,
+            20,
+            RunOrder::Asc,
+        )
+        .await
+        .unwrap(),
         &["items", "next_after"],
     );
 }
@@ -849,7 +930,7 @@ async fn maintenance_report_terminal_and_running_work_without_findings() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md", "b.md"]).await;
     let batch = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "batch",
@@ -859,7 +940,7 @@ async fn maintenance_report_terminal_and_running_work_without_findings() {
     )
     .await
     .unwrap();
-    let running = runs::get_run(&db.pool, catalog, &batch.run_id)
+    let running = runs::get_run(&CatalogDb::main_of(&db.pool), catalog, &batch.run_id)
         .await
         .unwrap();
     assert_eq!(running.work.len(), 2);
@@ -883,7 +964,7 @@ async fn maintenance_report_terminal_and_running_work_without_findings() {
         ),
     ] {
         reports::submit(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &actor("one"),
             &lease.work_id,
@@ -902,7 +983,7 @@ async fn maintenance_report_terminal_and_running_work_without_findings() {
         .await
         .unwrap();
     }
-    let report = runs::get_run(&db.pool, catalog, &batch.run_id)
+    let report = runs::get_run(&CatalogDb::main_of(&db.pool), catalog, &batch.run_id)
         .await
         .unwrap();
     assert_eq!(report.run.failed_count, 1);
@@ -912,11 +993,13 @@ async fn maintenance_report_terminal_and_running_work_without_findings() {
         assert!(work.evidence.is_empty());
         assert!(work.finding_ids.is_empty());
     }
-    assert!(reports::list_findings(&db.pool, catalog, None, 20)
-        .await
-        .unwrap()
-        .items
-        .is_empty());
+    assert!(
+        reports::list_findings(&CatalogDb::main_of(&db.pool), catalog, None, 20)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -935,7 +1018,7 @@ async fn maintenance_findings_filter_and_count_by_current_disposition() {
     // Page order is (created_at, id), and the ids are random, so take the
     // order from the store; then dismiss the middle one, so a non-matching
     // finding sits between the two matching ones.
-    let all = reports::list_findings(&db.pool, catalog, None, 20)
+    let all = reports::list_findings(&CatalogDb::main_of(&db.pool), catalog, None, 20)
         .await
         .unwrap();
     let order = ids(&all);
@@ -945,7 +1028,7 @@ async fn maintenance_findings_filter_and_count_by_current_disposition() {
         let (pool, human, middle) = (&db.pool, &human, &middle);
         async move {
             reports::dispose(
-                pool,
+                &CatalogDb::main_of(pool),
                 catalog,
                 human,
                 middle,
@@ -959,18 +1042,29 @@ async fn maintenance_findings_filter_and_count_by_current_disposition() {
         }
     };
     decide(Disposition::Dismissed, "dismiss").await;
-    let open = reports::list_findings_with(&db.pool, catalog, None, 20, Some(Disposition::Open))
-        .await
-        .unwrap();
+    let open = reports::list_findings_with(
+        &CatalogDb::main_of(&db.pool),
+        catalog,
+        None,
+        20,
+        Some(Disposition::Open),
+    )
+    .await
+    .unwrap();
     assert_eq!(ids(&open), [before.clone(), after.clone()]);
     assert_eq!(open.next_after, None);
-    let dismissed =
-        reports::list_findings_with(&db.pool, catalog, None, 20, Some(Disposition::Dismissed))
-            .await
-            .unwrap();
+    let dismissed = reports::list_findings_with(
+        &CatalogDb::main_of(&db.pool),
+        catalog,
+        None,
+        20,
+        Some(Disposition::Dismissed),
+    )
+    .await
+    .unwrap();
     assert_eq!(ids(&dismissed), std::slice::from_ref(&middle));
     assert!(reports::list_findings_with(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         None,
         20,
@@ -981,7 +1075,9 @@ async fn maintenance_findings_filter_and_count_by_current_disposition() {
     .items
     .is_empty());
     assert_eq!(
-        reports::count_findings(&db.pool, catalog).await.unwrap(),
+        reports::count_findings(&CatalogDb::main_of(&db.pool), catalog)
+            .await
+            .unwrap(),
         reports::FindingCounts {
             open: 2,
             accepted_for_follow_up: 0,
@@ -993,13 +1089,19 @@ async fn maintenance_findings_filter_and_count_by_current_disposition() {
     // The filter applies before the limit: one-row pages of Open skip the
     // dismissed middle finding instead of returning an empty page for it,
     // and the cursor (a matching finding) continues within the filter.
-    let page = reports::list_findings_with(&db.pool, catalog, None, 1, Some(Disposition::Open))
-        .await
-        .unwrap();
+    let page = reports::list_findings_with(
+        &CatalogDb::main_of(&db.pool),
+        catalog,
+        None,
+        1,
+        Some(Disposition::Open),
+    )
+    .await
+    .unwrap();
     assert_eq!(ids(&page), std::slice::from_ref(&before));
     assert_eq!(page.next_after.as_deref(), Some(before.as_str()));
     let rest = reports::list_findings_with(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         page.next_after.as_deref(),
         1,
@@ -1012,7 +1114,7 @@ async fn maintenance_findings_filter_and_count_by_current_disposition() {
     // A cursor may be a finding outside the filter (it changed disposition
     // since its page was read): Open after the dismissed middle is the last.
     let from_middle = reports::list_findings_with(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         Some(&middle),
         20,
@@ -1024,12 +1126,20 @@ async fn maintenance_findings_filter_and_count_by_current_disposition() {
 
     // Only the last decision counts: reopening moves the finding back.
     decide(Disposition::Open, "reopen").await;
-    let open = reports::list_findings_with(&db.pool, catalog, None, 20, Some(Disposition::Open))
-        .await
-        .unwrap();
+    let open = reports::list_findings_with(
+        &CatalogDb::main_of(&db.pool),
+        catalog,
+        None,
+        20,
+        Some(Disposition::Open),
+    )
+    .await
+    .unwrap();
     assert_eq!(ids(&open), order);
     assert_eq!(
-        reports::count_findings(&db.pool, catalog).await.unwrap(),
+        reports::count_findings(&CatalogDb::main_of(&db.pool), catalog)
+            .await
+            .unwrap(),
         reports::FindingCounts {
             open: 3,
             ..Default::default()
@@ -1055,24 +1165,42 @@ async fn runs_page_newest_first_with_a_descending_cursor() {
         .execute(&db.pool)
         .await
         .unwrap();
-    let asc = runs::list_runs(&db.pool, catalog, None, 20, RunOrder::Asc)
-        .await
-        .unwrap();
-    let desc = runs::list_runs(&db.pool, catalog, None, 20, RunOrder::Desc)
-        .await
-        .unwrap();
+    let asc = runs::list_runs(
+        &CatalogDb::main_of(&db.pool),
+        catalog,
+        None,
+        20,
+        RunOrder::Asc,
+    )
+    .await
+    .unwrap();
+    let desc = runs::list_runs(
+        &CatalogDb::main_of(&db.pool),
+        catalog,
+        None,
+        20,
+        RunOrder::Desc,
+    )
+    .await
+    .unwrap();
     let mut reversed = asc.items.clone();
     reversed.reverse();
     assert_eq!(desc.items, reversed);
     assert_eq!(desc.items[0].id, first.run_id);
     assert_eq!(desc.next_after, None);
-    let page = runs::list_runs(&db.pool, catalog, None, 1, RunOrder::Desc)
-        .await
-        .unwrap();
+    let page = runs::list_runs(
+        &CatalogDb::main_of(&db.pool),
+        catalog,
+        None,
+        1,
+        RunOrder::Desc,
+    )
+    .await
+    .unwrap();
     assert_eq!(page.items, desc.items[..1]);
     assert_eq!(page.next_after.as_deref(), Some(first.run_id.as_str()));
     let last = runs::list_runs(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         page.next_after.as_deref(),
         1,
@@ -1084,7 +1212,14 @@ async fn runs_page_newest_first_with_a_descending_cursor() {
     assert_eq!(last.next_after, None);
     // An unknown cursor is refused in this order too.
     assert!(matches!(
-        runs::list_runs(&db.pool, catalog, Some("missing"), 20, RunOrder::Desc).await,
+        runs::list_runs(
+            &CatalogDb::main_of(&db.pool),
+            catalog,
+            Some("missing"),
+            20,
+            RunOrder::Desc
+        )
+        .await,
         Err(OkfError::NotFound { .. })
     ));
     // The default order is unchanged.

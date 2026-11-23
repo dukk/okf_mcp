@@ -9,6 +9,7 @@ use crate::db::test_db;
 use crate::maintenance::select::select;
 use crate::maintenance::types::{Actor, RunState};
 use crate::store::catalogs;
+use crate::stores::CatalogDb;
 
 pub(super) fn t0() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 11, 6, 12, 0, 0).unwrap()
@@ -71,7 +72,9 @@ async fn maintenance_evidence_uses_exact_revision_bytes() {
         path: "/./a.md".into(),
         revision: 2,
     };
-    let read = evidence::read(&db.pool, catalog, &pin).await.unwrap();
+    let read = evidence::read(&CatalogDb::main_of(&db.pool), catalog, &pin)
+        .await
+        .unwrap();
     assert_eq!(read.content.as_bytes(), source.as_bytes());
     assert_eq!(read.pin.path, "a.md");
     assert!(!read.outdated);
@@ -103,7 +106,7 @@ async fn maintenance_evidence_uses_exact_revision_bytes() {
         .await
         .unwrap());
     assert!(
-        evidence::read(&db.pool, catalog, &pin)
+        evidence::read(&CatalogDb::main_of(&db.pool), catalog, &pin)
             .await
             .unwrap()
             .outdated
@@ -116,7 +119,7 @@ async fn maintenance_evidence_uses_exact_revision_bytes() {
         .unwrap();
     assert!(
         evidence::read(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &RevisionPin {
                 path: "a.md".into(),
@@ -163,13 +166,17 @@ async fn maintenance_evidence_uses_exact_revision_bytes() {
     .unwrap()
     .unwrap();
     assert_eq!(stored.content.unwrap(), source.as_bytes());
-    assert!(evidence::read(&db.pool, catalog + 1, &pin).await.is_err());
+    assert!(
+        evidence::read(&CatalogDb::main_of(&db.pool), catalog + 1, &pin)
+            .await
+            .is_err()
+    );
     sqlx::query("INSERT INTO revisions (catalog_id,path,revision,op,content,executable,actor,message,created_at) VALUES ($1,'gone.md',2,'delete',NULL,false,'test','deleted',$2)")
         .bind(catalog).bind(t0()).execute(&db.pool).await.unwrap();
     sqlx::query("INSERT INTO revisions (catalog_id,path,revision,op,content,executable,actor,message,created_at) VALUES ($1,'gone.md',3,'import',NULL,false,'test','no content',$2)")
         .bind(catalog).bind(t0()).execute(&db.pool).await.unwrap();
     let null_error = evidence::read(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &RevisionPin {
             path: "gone.md".into(),
@@ -208,7 +215,7 @@ async fn maintenance_evidence_uses_exact_revision_bytes() {
     ] {
         assert!(
             evidence::read(
-                &db.pool,
+                &CatalogDb::main_of(&db.pool),
                 catalog,
                 &RevisionPin {
                     path: path.into(),
@@ -233,7 +240,7 @@ async fn maintenance_evidence_uses_exact_revision_bytes() {
     revision(&db.pool, catalog, "index.md", 1, t0(), "index").await;
     for path in ["tools/x.md", "index.md"] {
         assert!(evidence::read(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &RevisionPin {
                 path: path.into(),
@@ -275,7 +282,7 @@ async fn maintenance_close_rationale_limits_and_masking() {
     let catalog = setup(&db.pool, &["a.md"]).await;
     let actor = actor("one");
     let run = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor,
         "claim",
@@ -288,7 +295,7 @@ async fn maintenance_close_rationale_limits_and_masking() {
     let secret = format!("{}{}", "ghp_", "Ab3dEf7hIj9kLm2nOp4qRs6tUv8wXy0z1234");
     for rationale in [secret.clone(), "x".repeat(4097)] {
         let error = runs::close(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &actor,
             &run.run_id,
@@ -322,7 +329,7 @@ async fn maintenance_close_rationale_limits_and_masking() {
     }
     let rationale = "é".repeat(2048);
     let closed = runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor,
         &run.run_id,
@@ -343,9 +350,10 @@ async fn maintenance_claims_are_exclusive_and_recover() {
     let catalog = setup(&db.pool, &["a.md", "b.md", "c.md", "d.md"]).await;
     let one = actor("one");
     let two = actor("two");
+    let store = CatalogDb::main_of(&db.pool);
     let (a, b) = tokio::join!(
         runs::claim(
-            &db.pool,
+            &store,
             catalog,
             &one,
             "claim-a",
@@ -354,7 +362,7 @@ async fn maintenance_claims_are_exclusive_and_recover() {
             t0()
         ),
         runs::claim(
-            &db.pool,
+            &store,
             catalog,
             &two,
             "claim-b",
@@ -370,7 +378,7 @@ async fn maintenance_claims_are_exclusive_and_recover() {
     assert_eq!(first.len() + second.len(), 4);
     let original = &a.leases[0];
     let replacement = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("two"),
         "claim-c",
@@ -385,7 +393,7 @@ async fn maintenance_claims_are_exclusive_and_recover() {
         .iter()
         .any(|l| l.pin == original.pin && l.token != original.token));
     assert!(runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &original.work_id,
@@ -396,7 +404,7 @@ async fn maintenance_claims_are_exclusive_and_recover() {
     .await
     .is_err());
     assert!(runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("two"),
         &original.work_id,
@@ -413,7 +421,7 @@ async fn maintenance_claim_replay_does_not_extend_a_lease() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "claim-a",
@@ -424,7 +432,7 @@ async fn maintenance_claim_replay_does_not_extend_a_lease() {
     .await
     .unwrap();
     let replay = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "claim-a",
@@ -440,7 +448,7 @@ async fn maintenance_claim_replay_does_not_extend_a_lease() {
         (t0() + Duration::seconds(900)).to_rfc3339()
     );
     assert!(runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "claim-a",
@@ -451,7 +459,7 @@ async fn maintenance_claim_replay_does_not_extend_a_lease() {
     .await
     .is_err());
     assert!(runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "bad key",
@@ -462,7 +470,7 @@ async fn maintenance_claim_replay_does_not_extend_a_lease() {
     .await
     .is_err());
     assert!(runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "zero",
@@ -473,7 +481,7 @@ async fn maintenance_claim_replay_does_not_extend_a_lease() {
     .await
     .is_err());
     assert!(runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "large",
@@ -484,7 +492,7 @@ async fn maintenance_claim_replay_does_not_extend_a_lease() {
     .await
     .is_err());
     assert!(runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &first.leases[0].work_id,
@@ -508,7 +516,7 @@ async fn maintenance_source_change_supersedes_only_old_revision() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -528,7 +536,7 @@ async fn maintenance_source_change_supersedes_only_old_revision() {
     )
     .await;
     let second = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("two"),
         "second",
@@ -546,7 +554,7 @@ async fn maintenance_source_change_supersedes_only_old_revision() {
         .unwrap();
     assert_eq!(outcome, "superseded");
     assert!(runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &first.leases[0].work_id,
@@ -572,7 +580,7 @@ async fn maintenance_close_obeys_deadline_and_owner() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -583,7 +591,7 @@ async fn maintenance_close_obeys_deadline_and_owner() {
     .await
     .unwrap();
     assert!(runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("two"),
         &first.run_id,
@@ -596,7 +604,7 @@ async fn maintenance_close_obeys_deadline_and_owner() {
     .await
     .is_err());
     assert!(runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &first.run_id,
@@ -609,7 +617,7 @@ async fn maintenance_close_obeys_deadline_and_owner() {
     .await
     .is_err());
     let expired = runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &first.run_id,
@@ -628,7 +636,7 @@ async fn maintenance_close_obeys_deadline_and_owner() {
         (t0() + Duration::seconds(3600)).to_rfc3339()
     );
     let replacement = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("two"),
         "again",
@@ -640,7 +648,7 @@ async fn maintenance_close_obeys_deadline_and_owner() {
     .unwrap();
     assert_eq!(replacement.leases.len(), 1);
     let cancelled = runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &replacement.run_id,
@@ -815,7 +823,7 @@ async fn maintenance_renewal_caps_at_deadline() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -827,7 +835,7 @@ async fn maintenance_renewal_caps_at_deadline() {
     .unwrap();
     let work = &first.leases[0];
     let renewal = runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &work.work_id,
@@ -842,7 +850,7 @@ async fn maintenance_renewal_caps_at_deadline() {
         (t0() + Duration::seconds(1799)).to_rfc3339()
     );
     let renewal = runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &work.work_id,
@@ -857,7 +865,7 @@ async fn maintenance_renewal_caps_at_deadline() {
         (t0() + Duration::seconds(2698)).to_rfc3339()
     );
     let renewal = runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &work.work_id,
@@ -872,7 +880,7 @@ async fn maintenance_renewal_caps_at_deadline() {
         (t0() + Duration::seconds(3597)).to_rfc3339()
     );
     let capped = runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &work.work_id,
@@ -887,7 +895,7 @@ async fn maintenance_renewal_caps_at_deadline() {
         (t0() + Duration::seconds(3600)).to_rfc3339()
     );
     assert!(runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &work.work_id,
@@ -904,7 +912,7 @@ async fn maintenance_active_renewal_is_not_reverted_by_other_claim() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md", "b.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -916,7 +924,7 @@ async fn maintenance_active_renewal_is_not_reverted_by_other_claim() {
     .unwrap();
     let work = &first.leases[0];
     let renewed = runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &work.work_id,
@@ -927,7 +935,7 @@ async fn maintenance_active_renewal_is_not_reverted_by_other_claim() {
     .await
     .unwrap();
     let second = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("two"),
         "second",
@@ -951,7 +959,7 @@ async fn maintenance_claim_limits_primary_count_and_empty_run() {
     let names: Vec<&str> = paths.iter().map(String::as_str).collect();
     let catalog = setup(&db.pool, &names).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -969,7 +977,7 @@ async fn maintenance_claim_limits_primary_count_and_empty_run() {
         .unwrap();
     assert_eq!(count, 50);
     let second = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "second",
@@ -981,7 +989,7 @@ async fn maintenance_claim_limits_primary_count_and_empty_run() {
     .unwrap();
     assert_eq!(second.leases.len(), 1);
     let empty = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "empty",
@@ -1006,7 +1014,7 @@ async fn maintenance_reissued_key_name_cannot_use_old_lease() {
     let catalog = setup(&db.pool, &["a.md"]).await;
     let old = actor("id-one");
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &old,
         "first",
@@ -1022,7 +1030,7 @@ async fn maintenance_reissued_key_name_cannot_use_old_lease() {
     };
     let work = &first.leases[0];
     assert!(runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &reissued,
         &work.work_id,
@@ -1033,7 +1041,7 @@ async fn maintenance_reissued_key_name_cannot_use_old_lease() {
     .await
     .is_err());
     assert!(runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &reissued,
         &first.run_id,
@@ -1052,7 +1060,7 @@ async fn maintenance_claim_replay_ignores_review_interval_change() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "same",
@@ -1063,7 +1071,7 @@ async fn maintenance_claim_replay_ignores_review_interval_change() {
     .await
     .unwrap();
     let replay = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "same",
@@ -1076,7 +1084,7 @@ async fn maintenance_claim_replay_ignores_review_interval_change() {
     assert_eq!(replay, first);
     assert_eq!(replay.leases[0].expires_at, first.leases[0].expires_at);
     assert!(runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "same",
@@ -1110,7 +1118,7 @@ async fn maintenance_claim_replay_conflict_preserves_original_lease() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let initial = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "same",
@@ -1121,7 +1129,7 @@ async fn maintenance_claim_replay_conflict_preserves_original_lease() {
     .await
     .unwrap();
     assert!(runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "same",
@@ -1152,7 +1160,7 @@ async fn maintenance_fresh_source_rechecks_against_locked_revision() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let batch = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1173,7 +1181,7 @@ async fn maintenance_fresh_source_rechecks_against_locked_revision() {
     )
     .await;
     let new = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "second",
@@ -1191,7 +1199,7 @@ async fn maintenance_old_success_does_not_override_new_failed_cooldown() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1204,7 +1212,7 @@ async fn maintenance_old_success_does_not_override_new_failed_cooldown() {
     sqlx::query("UPDATE maintenance_work SET outcome='completed', assessment='supported_current', ended_at=$2 WHERE id=$1")
         .bind(&first.leases[0].work_id).bind(t0()+Duration::seconds(10)).execute(&db.pool).await.unwrap();
     let second = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "second",
@@ -1231,7 +1239,7 @@ async fn maintenance_new_failure_after_success_still_cools_down() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1244,7 +1252,7 @@ async fn maintenance_new_failure_after_success_still_cools_down() {
     sqlx::query("UPDATE maintenance_work SET outcome='completed', assessment='supported_current', ended_at=$2 WHERE id=$1")
         .bind(&first.leases[0].work_id).bind(t0()).execute(&db.pool).await.unwrap();
     let second = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "second",
@@ -1266,7 +1274,7 @@ async fn maintenance_new_failure_after_success_still_cools_down() {
     assert_eq!(rows[0].retry_at, Some(t0() + Duration::days(32)));
     // The previous success does not suppress this new failure's cooldown.
     let second_failure = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "third",
@@ -1284,7 +1292,7 @@ async fn maintenance_failed_attempt_cooldown_uses_latest_attempt_only() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1297,7 +1305,7 @@ async fn maintenance_failed_attempt_cooldown_uses_latest_attempt_only() {
     sqlx::query("UPDATE maintenance_work SET outcome='failed', reason='investigator', ended_at=$2 WHERE id=$1")
         .bind(&first.leases[0].work_id).bind(t0()).execute(&db.pool).await.unwrap();
     let second = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "second",
@@ -1324,7 +1332,7 @@ async fn maintenance_last_aging_completion_is_revision_scoped() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1379,7 +1387,7 @@ async fn maintenance_recovery_respects_retry_and_rollback() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let original = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "initial",
@@ -1393,7 +1401,7 @@ async fn maintenance_recovery_respects_retry_and_rollback() {
     sqlx::query("UPDATE maintenance_work SET outcome='failed', assessment='not_assessed', reason='investigator', ended_at=$2 WHERE id=$1")
         .bind(&original.leases[0].work_id).bind(t0()).execute(&db.pool).await.unwrap();
     let cooled = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "cooled",
@@ -1405,7 +1413,7 @@ async fn maintenance_recovery_respects_retry_and_rollback() {
     .unwrap();
     assert!(cooled.leases.is_empty());
     let eligible = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "eligible",
@@ -1423,7 +1431,7 @@ async fn maintenance_recovery_respects_retry_and_rollback() {
             .await
             .unwrap();
     assert!(runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &eligible.run_id,
@@ -1449,7 +1457,7 @@ async fn maintenance_expiry_and_supersession_leave_no_live_old_claim() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1469,7 +1477,7 @@ async fn maintenance_expiry_and_supersession_leave_no_live_old_claim() {
     )
     .await;
     let second = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "second",
@@ -1487,7 +1495,7 @@ async fn maintenance_expiry_and_supersession_leave_no_live_old_claim() {
         .unwrap();
     assert_eq!(outcome, "superseded");
     let empty = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "third",
@@ -1505,7 +1513,7 @@ async fn maintenance_close_rejection_preserves_unrelated_recovery() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md", "b.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1516,7 +1524,7 @@ async fn maintenance_close_rejection_preserves_unrelated_recovery() {
     .await
     .unwrap();
     let second = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "second",
@@ -1527,7 +1535,7 @@ async fn maintenance_close_rejection_preserves_unrelated_recovery() {
     .await
     .unwrap();
     assert!(runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &second.run_id,
@@ -1553,7 +1561,7 @@ async fn maintenance_failed_recovery_is_committed_before_rejected_renewal() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let batch = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1565,7 +1573,7 @@ async fn maintenance_failed_recovery_is_committed_before_rejected_renewal() {
     .unwrap();
     let work = &batch.leases[0];
     assert!(runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &work.work_id,
@@ -1589,7 +1597,7 @@ async fn maintenance_renewal_rejects_changed_source_without_replay_receipt() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1610,7 +1618,7 @@ async fn maintenance_renewal_rejects_changed_source_without_replay_receipt() {
     )
     .await;
     assert!(runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &work.work_id,
@@ -1641,7 +1649,7 @@ async fn maintenance_renewed_run_is_failed_at_exact_deadline() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1654,7 +1662,7 @@ async fn maintenance_renewed_run_is_failed_at_exact_deadline() {
     let work = &first.leases[0];
     for (n, at) in [("one", 899), ("two", 1798), ("three", 2697), ("four", 3596)] {
         runs::renew(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &actor("one"),
             &work.work_id,
@@ -1666,7 +1674,7 @@ async fn maintenance_renewed_run_is_failed_at_exact_deadline() {
         .unwrap();
     }
     let expired = runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &first.run_id,
@@ -1687,7 +1695,7 @@ async fn maintenance_recovery_orders_run_before_work_on_expiry() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1698,7 +1706,7 @@ async fn maintenance_recovery_orders_run_before_work_on_expiry() {
     .await
     .unwrap();
     let renewed = runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &first.leases[0].work_id,
@@ -1713,7 +1721,7 @@ async fn maintenance_recovery_orders_run_before_work_on_expiry() {
         (t0() + Duration::seconds(1799)).to_rfc3339()
     );
     let next = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("two"),
         "next",
@@ -1738,7 +1746,7 @@ async fn maintenance_idempotency_key_rejects_secret_pattern() {
     let catalog = setup(&db.pool, &["a.md"]).await;
     let secret_shaped = format!("ghp_{}", "a".repeat(36));
     assert!(runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &secret_shaped,
@@ -1774,7 +1782,7 @@ async fn maintenance_requested_completion_never_closes_active_work() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1785,7 +1793,7 @@ async fn maintenance_requested_completion_never_closes_active_work() {
     .await
     .unwrap();
     assert!(runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &first.run_id,
@@ -1829,7 +1837,7 @@ async fn maintenance_renewed_lease_is_not_reissued_at_initial_expiry() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1841,7 +1849,7 @@ async fn maintenance_renewed_lease_is_not_reissued_at_initial_expiry() {
     .unwrap();
     let work = &first.leases[0];
     runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &work.work_id,
@@ -1852,7 +1860,7 @@ async fn maintenance_renewed_lease_is_not_reissued_at_initial_expiry() {
     .await
     .unwrap();
     let next = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("two"),
         "next",
@@ -1864,7 +1872,7 @@ async fn maintenance_renewed_lease_is_not_reissued_at_initial_expiry() {
     .unwrap();
     assert!(next.leases.is_empty());
     let new = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("two"),
         "later",
@@ -1882,7 +1890,7 @@ async fn maintenance_retry_follows_latest_terminal_attempt() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1895,7 +1903,7 @@ async fn maintenance_retry_follows_latest_terminal_attempt() {
     sqlx::query("UPDATE maintenance_work SET outcome='failed', assessment='not_assessed', reason='investigator', ended_at=$2 WHERE id=$1")
         .bind(&first.leases[0].work_id).bind(t0()).execute(&db.pool).await.unwrap();
     let second = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "second",
@@ -1922,7 +1930,7 @@ async fn maintenance_latest_supported_assessment_wins() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1935,7 +1943,7 @@ async fn maintenance_latest_supported_assessment_wins() {
     sqlx::query("UPDATE maintenance_work SET outcome='completed', assessment='supported_current', ended_at=$2 WHERE id=$1")
         .bind(&first.leases[0].work_id).bind(t0()).execute(&db.pool).await.unwrap();
     let second = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "second",
@@ -1984,7 +1992,7 @@ async fn maintenance_cursor_advances_only_on_terminal_completion() {
         .await
         .unwrap();
     let batch = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -1999,7 +2007,7 @@ async fn maintenance_cursor_advances_only_on_terminal_completion() {
         .unwrap();
     assert_eq!(before, after_claim);
     runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &batch.run_id,
@@ -2022,7 +2030,7 @@ async fn maintenance_renewal_and_close_replay_preserve_receipts() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "first",
@@ -2034,7 +2042,7 @@ async fn maintenance_renewal_and_close_replay_preserve_receipts() {
     .unwrap();
     let work = &first.leases[0];
     let renewed = runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &work.work_id,
@@ -2049,7 +2057,7 @@ async fn maintenance_renewal_and_close_replay_preserve_receipts() {
         (t0() + Duration::seconds(1799)).to_rfc3339()
     );
     assert!(runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("two"),
         &work.work_id,
@@ -2060,7 +2068,7 @@ async fn maintenance_renewal_and_close_replay_preserve_receipts() {
     .await
     .is_err());
     let replay = runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &work.work_id,
@@ -2072,7 +2080,7 @@ async fn maintenance_renewal_and_close_replay_preserve_receipts() {
     .unwrap();
     assert_eq!(replay, renewed);
     let closed = runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &first.run_id,
@@ -2087,7 +2095,7 @@ async fn maintenance_renewal_and_close_replay_preserve_receipts() {
     assert_eq!(closed.state, RunState::Cancelled);
     assert_eq!(closed.failed_count, 1);
     let replay = runs::close(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &first.run_id,
@@ -2101,7 +2109,7 @@ async fn maintenance_renewal_and_close_replay_preserve_receipts() {
     .unwrap();
     assert_eq!(closed, replay);
     let replacement = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "again",
@@ -2113,7 +2121,7 @@ async fn maintenance_renewal_and_close_replay_preserve_receipts() {
     .unwrap();
     assert_eq!(replacement.leases.len(), 1);
     assert!(runs::renew(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         &work.work_id,
@@ -2146,7 +2154,7 @@ async fn maintenance_renew_obsolete_source_terminalizes_work_and_run() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "claim",
@@ -2171,7 +2179,7 @@ async fn maintenance_renew_obsolete_source_terminalizes_work_and_run() {
     let renewal = tokio::spawn(async move {
         started.send(()).unwrap();
         runs::renew(
-            &pool,
+            &CatalogDb::main_of(&pool),
             catalog,
             &actor,
             &work_id,
@@ -2230,7 +2238,7 @@ async fn maintenance_claim_defers_newly_published_selection() {
     let claimant = tokio::spawn(async move {
         claim_ready.send(()).unwrap();
         runs::claim(
-            &pool,
+            &CatalogDb::main_of(&pool),
             catalog,
             &actor("one"),
             "race-claim",
@@ -2264,7 +2272,7 @@ async fn maintenance_claim_defers_newly_published_selection() {
     assert_eq!(claimed.leases[0].pin.path, "a.md");
     assert_eq!(claimed.leases[0].pin.revision, 2);
     let later = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "later-claim",
@@ -2284,7 +2292,7 @@ async fn maintenance_deleted_catalog_identity_cannot_replay() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "initial",
@@ -2318,7 +2326,7 @@ async fn maintenance_deleted_catalog_identity_cannot_replay() {
     .unwrap();
     assert_ne!(recreated.id, catalog);
     assert!(runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
         "initial",
@@ -2329,7 +2337,7 @@ async fn maintenance_deleted_catalog_identity_cannot_replay() {
     .await
     .is_err());
     let fresh = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         recreated.id,
         &actor("one"),
         "initial",
@@ -2377,7 +2385,7 @@ async fn each_run_that_ends_writes_one_maintenance_run_entry() {
         let runner = runner.clone();
         async move {
             runs::close(
-                &pool,
+                &CatalogDb::main_of(&pool),
                 catalog,
                 &runner,
                 &run,
@@ -2393,7 +2401,7 @@ async fn each_run_that_ends_writes_one_maintenance_run_entry() {
     };
 
     let first = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &runner,
         "claim-1",
@@ -2409,7 +2417,7 @@ async fn each_run_that_ends_writes_one_maintenance_run_entry() {
     // A second run that recovery fails once its deadline passes; the claim
     // that recovers it finds the work again and starts a third run.
     let second = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &runner,
         "claim-2",
@@ -2421,7 +2429,7 @@ async fn each_run_that_ends_writes_one_maintenance_run_entry() {
     .unwrap();
     let late = t0() + Duration::seconds(3_601);
     runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &runner,
         "claim-3",
@@ -2466,7 +2474,7 @@ async fn a_pass_that_finds_nothing_writes_one_maintenance_run_entry() {
     let catalog = setup(&db.pool, &[]).await;
 
     let run = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("runner"),
         "claim-1",
@@ -2525,7 +2533,7 @@ async fn a_run_ends_without_waiting_for_its_users_or_credentials_rows() {
         actor: "runner".into(),
     };
     let run = runs::claim(
-        &db.pool,
+        &CatalogDb::main_of(&db.pool),
         catalog,
         &runner,
         "claim-1",
@@ -2554,7 +2562,7 @@ async fn a_run_ends_without_waiting_for_its_users_or_credentials_rows() {
     let closed = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         runs::close(
-            &db.pool,
+            &CatalogDb::main_of(&db.pool),
             catalog,
             &runner,
             &run.run_id,

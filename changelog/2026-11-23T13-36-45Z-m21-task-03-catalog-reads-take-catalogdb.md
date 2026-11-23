@@ -37,3 +37,5 @@
   - `src/store/maintenance/*` and `src/mcp/maintenance/*` (Task 4).
 - Files named by the issue that needed no change: `src/store/documents.rs` (executor-based helpers), `src/store/gates.rs` (reads only account tables: `team_members`, `user_catalogs`, `unlocks`, `audit_people` and `audit_credentials`), `src/mcp/documents.rs` and `src/mcp/search.rs` (they read the in-memory snapshot and reach the database only through `ToolContext`, which this task types).
 - I traced the statements above in the code; I did not trace the SQL functions beyond the names Task 2 already lists.
+
+> **Update (issue #962, 2026-11-23).** The maintenance modules named under "Still on `App::pool()`" above moved to `&CatalogDb` in Task 4; see `changelog/2026-11-23T14-04-24Z-m21-task-04-maintenance-takes-catalogdb.md`.
