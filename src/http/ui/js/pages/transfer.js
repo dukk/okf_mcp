@@ -119,7 +119,11 @@ export async function render(main, rest) {
 
     // Import: shown for `write` or more on the picked catalog (issue #260;
     // the server checks anyway). A member's level differs per catalog, so
-    // the panel follows the picker.
+    // the panel follows the picker. While the catalog's owner team is
+    // suspended (`suspended` is {team, notice}, else null, in the catalog
+    // list) only an admin may import, as the server decides: everyone else
+    // keeps the panel, disabled, with a note saying why (issue #647).
+    const importBlocked = () => !!current().suspended && !store.canOn('admin', chosen);
     const result = h('div', { id: 'import-result' });
     const progress = h('progress', { id: 'import-progress', max: '100', value: '0', hidden: true });
     const replace = h('input', { type: 'checkbox', id: 'import-replace' });
@@ -134,7 +138,7 @@ export async function render(main, rest) {
             // A file chosen during an import waits for it: the running
             // import's button state and result panel stay its own.
             if (busy) return;
-            importButton.disabled = false;
+            importButton.disabled = importBlocked();
             clear(result);
         },
     });
@@ -142,7 +146,7 @@ export async function render(main, rest) {
         busy = value;
         picker.disabled = value;
         exportButton.disabled = value;
-        importButton.disabled = value || !file;
+        importButton.disabled = value || !file || importBlocked();
     }
     importButton.addEventListener('click', async () => {
         if (!file || busy) return;
@@ -161,7 +165,7 @@ export async function render(main, rest) {
                 fraction => { progress.value = Math.round(fraction * 100); });
             result.append(reportPanel(report));
             toast(`Imported into ${target}.`, 'ok');
-            try { catalogs = (await api.pages('/catalogs', 'catalogs')).catalogs; showGeneration(); } catch { /* toasted */ }
+            try { catalogs = (await api.pages('/catalogs', 'catalogs')).catalogs; showGeneration(); showImport(); } catch { /* toasted */ }
         } catch (error) {
             result.append(errorPanel(error));
             toast(error.status === 0 ? error.message : 'The import was refused.', 'error');
@@ -173,24 +177,37 @@ export async function render(main, rest) {
 
     picker.addEventListener('change', () => {
         chosen = picker.value;
-        importPanel.hidden = !store.canOn('write', chosen);
         showGeneration();
+        showImport();
         clear(result);
         exportOut.replaceChildren();
         forget();
     });
     showGeneration();
 
-    const importPanel = h('section', { class: 'panel', id: 'import-panel' },
-        h('h2', {}, 'Import'),
+    const suspendedNote = h('p', { id: 'import-suspended', class: 'notice', role: 'status', hidden: true },
+        'This catalog is suspended: only an admin can import into it. Export still works.');
+    const importControls = h('fieldset', { id: 'import-controls', class: 'import-controls' },
         drop,
         h('div', { class: 'options' },
             h('label', {}, replace, ' Replace the catalog\'s contents'),
             h('label', {}, machinery, ' Only machinery (AGENTS.md, tools/, ...)'),
             h('label', {}, 'Expected generation ', generation)),
         h('p', { class: 'muted small' }, 'The import is refused if the catalog has moved past the expected generation; clear the field to skip the check.'),
-        importButton, progress, result);
-    importPanel.hidden = !store.canOn('write', chosen);
+        importButton);
+    // The panel follows the picked catalog's level and suspension.
+    function showImport() {
+        importPanel.hidden = !store.canOn('write', chosen);
+        const blocked = importBlocked();
+        suspendedNote.hidden = !blocked;
+        importControls.disabled = blocked;
+        importButton.disabled = busy || !file || blocked;
+    }
+
+    const importPanel = h('section', { class: 'panel', id: 'import-panel' },
+        h('h2', {}, 'Import'),
+        suspendedNote, importControls, progress, result);
+    showImport();
 
     fill(main,
         h('div', { class: 'page-head' },

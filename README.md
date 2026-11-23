@@ -428,6 +428,7 @@ Catalogs can be created, described and deleted from the console's
 Administer group. Import & export, in the main navigation, exports any
 catalog you can read and imports into any you can write, with no archive
 piped through a shell on the server.
+A suspended catalog's import is open to admins only, and the page says so.
 
 Maintenance findings can be triaged (accepted, dismissed, needs input,
 reopened) and runs inspected from the browser.

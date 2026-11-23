@@ -124,6 +124,8 @@ main { padding: 1.75rem 2.25rem; min-width: 0; }
 .notice { background: var(--warn-soft); border-left: 3px solid var(--warn); border-radius: var(--radius-sm);
     padding: .75rem 1rem; }
 .notice h2 { font-size: 1.05rem; margin-bottom: .5rem; }
+/* Import's controls, which a suspended catalog disables as one */
+.import-controls { border: 0; margin: 0; padding: 0; }
 
 /* drawer, dialogs, toasts */
 .drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.25); z-index: 20; }
