@@ -23,6 +23,7 @@ use crate::error::OkfError;
 use crate::invalidate::{invalidate, Invalidation};
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock};
 use crate::store::catalogs::{self, CatalogEvent, CatalogRow};
+use crate::store::decode_column;
 use crate::store::gates::UserGates;
 use crate::store::keys::Access;
 use crate::store::users;
@@ -677,8 +678,7 @@ pub async fn change_member_access(
     if owner_team.is_some() && owner_team != owner_team_id {
         return Err(not_team_owner());
     }
-    let previous =
-        MemberAccess::parse(&previous).expect("the schema checks catalogs.member_access");
+    let previous = decode_column(MemberAccess::parse(&previous), "catalogs.member_access")?;
     if previous != access {
         catalogs::record_catalog(
             &mut tx,
@@ -725,7 +725,7 @@ pub async fn member_access(pool: &PgPool, catalog: &str) -> Result<MemberAccess,
             .fetch_optional(pool)
             .await?;
     let stored = stored.ok_or_else(|| unknown_catalog(catalog))?;
-    Ok(MemberAccess::parse(&stored).expect("the schema checks catalogs.member_access"))
+    decode_column(MemberAccess::parse(&stored), "catalogs.member_access")
 }
 
 /// One member of a catalog's owning team, as [`team_access`] lists it.
@@ -834,8 +834,10 @@ async fn read_catalog_locked(
     if team.is_some() && team != owner_team {
         return Err(not_team_owner());
     }
-    let member_access =
-        MemberAccess::parse(&member_access).expect("the schema checks catalogs.member_access");
+    let member_access = decode_column(
+        MemberAccess::parse(&member_access),
+        "catalogs.member_access",
+    )?;
     Ok((catalog_id, member_access, owner_team, team))
 }
 
@@ -955,11 +957,13 @@ pub async fn team_access(
         .collect();
     let entitlements: Vec<CatalogEntitlement> = entitlements
         .into_iter()
-        .map(|(user, access)| CatalogEntitlement {
-            user,
-            access: Access::parse(&access).expect("the schema checks user_catalogs.access"),
+        .map(|(user, access)| {
+            Ok(CatalogEntitlement {
+                user,
+                access: decode_column(Access::parse(&access), "user_catalogs.access")?,
+            })
         })
-        .collect();
+        .collect::<Result<_, OkfError>>()?;
     let (members, members_next) = cut_page(members, limit, |member| &member.user);
     let (entitlements, entitlements_next) = cut_page(entitlements, limit, |entry| &entry.user);
     Ok(TeamAccess {
@@ -1368,14 +1372,15 @@ pub(crate) async fn entitlements_in(
     .bind(&user_id)
     .fetch_all(&mut *conn)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|(catalog, access, created_at)| Entitlement {
-            catalog,
-            access: Access::parse(&access).expect("the schema checks user_catalogs.access"),
-            created_at,
+    rows.into_iter()
+        .map(|(catalog, access, created_at)| {
+            Ok(Entitlement {
+                catalog,
+                access: decode_column(Access::parse(&access), "user_catalogs.access")?,
+                created_at,
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// May `principal` set `catalog`'s member access (or a user's
@@ -2853,5 +2858,67 @@ mod tests {
             "{entitled:?}"
         );
         assert!(entitlements(&db.pool, "bob").await.unwrap().is_empty());
+    }
+
+    /// Issue #642: a stored member access or entitlement level that is not a
+    /// known spelling is a database error from the readers, and a write that
+    /// reads it rolls back, not a panic.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_corrupt_member_access_or_entitlement_is_a_database_error() {
+        let db = test_db().await;
+        family(&db.pool).await;
+        let alice = id(&db.pool, "alice").await;
+        let new = NewEntitlement {
+            user: "bob",
+            catalog: "shared",
+            access: Access::Read,
+        };
+        entitle(&db.pool, &new, &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        crate::store::drop_check_constraints(&db.pool, "catalogs").await;
+        crate::store::drop_check_constraints(&db.pool, "user_catalogs").await;
+        sqlx::query("UPDATE catalogs SET member_access = 'bogus-member'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE user_catalogs SET access = 'bogus-level'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let page = TeamPage {
+            members_after: "",
+            entitlements_after: "",
+            limit: 100,
+            lists: TeamLists::Both,
+        };
+        let change = MemberAccessChange {
+            catalog: "shared",
+            access: MemberAccess::Read,
+            owner: None,
+        };
+
+        let scalar = member_access(&db.pool, "shared").await;
+        let as_owner = member_access_as_owner(&db.pool, "shared", &alice).await;
+        let changed = change_member_access(&db.pool, &change, &AuditActor::cli(), now()).await;
+        // The refused change was rolled back: the value it replaced stays.
+        let stored: String =
+            sqlx::query_scalar("SELECT member_access FROM catalogs WHERE name = 'shared'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        let entitled = entitlements(&db.pool, "bob").await;
+        sqlx::query("UPDATE catalogs SET member_access = 'write'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let team = team_access(&db.pool, "shared", None, &page).await;
+
+        crate::store::assert_decode_error(scalar, "catalogs.member_access", "bogus-member");
+        crate::store::assert_decode_error(as_owner, "catalogs.member_access", "bogus-member");
+        crate::store::assert_decode_error(changed, "catalogs.member_access", "bogus-member");
+        crate::store::assert_decode_error(entitled, "user_catalogs.access", "bogus-level");
+        crate::store::assert_decode_error(team, "user_catalogs.access", "bogus-level");
+        assert_eq!(stored, "bogus-member");
     }
 }
