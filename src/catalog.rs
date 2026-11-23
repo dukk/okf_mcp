@@ -271,28 +271,6 @@ impl CatalogState {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn refresh(&self, pool: &PgPool, rebuilds: &KeyedLocks) -> Result<bool, OkfError> {
         let generation = self.generation_in(pool).await?;
-        self.refresh_at(pool, rebuilds, generation).await
-    }
-
-    /// [`CatalogState::refresh`] once the database's generation is known.
-    ///
-    /// # Arguments
-    /// * `pool` - the database.
-    /// * `rebuilds` - the rebuild locks, by catalog id.
-    /// * `generation` - the database's generation, as just read.
-    ///
-    /// # Returns
-    /// Whether a new snapshot was swapped in.
-    ///
-    /// # Errors
-    /// As [`CatalogState::refresh`].
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn refresh_at(
-        &self,
-        pool: &PgPool,
-        rebuilds: &KeyedLocks,
-        generation: i64,
-    ) -> Result<bool, OkfError> {
         self.refresh_to(rebuilds, generation, || build(pool, self.id, &self.name))
             .await
     }
@@ -641,17 +619,33 @@ mod tests {
         let other = small.acquire().await.unwrap();
         let generation = behind + 1;
 
-        // Act: the refresh takes the lock and queues for a connection
-        // (`refresh_at` skips only the generation read, which would also need
-        // one), then the publish refreshes on the connection it holds.
+        // Act: the refresh takes the rebuild lock (`refresh_to`, called with
+        // its own load step so the test can signal), tells the test, and only
+        // then asks the pool for a connection, which has none free. The
+        // publish refreshes on the connection it holds once the lock is held.
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
         let refresher = {
             let (state, small, rebuilds) =
                 (Arc::clone(&state), small.clone(), Arc::clone(&rebuilds));
-            tokio::spawn(async move { state.refresh_at(&small, &rebuilds, generation).await })
+            tokio::spawn(async move {
+                let (id, name) = (state.id(), state.name().to_string());
+                state
+                    .refresh_to(&rebuilds, generation, || async {
+                        // Runs under the lock, before the build's connection.
+                        locked_tx.send(()).expect("the test waits for the signal");
+                        build(&small, id, &name).await
+                    })
+                    .await
+            })
         };
-        // A one-sided wait: a refresh not yet queued only lets a regression
-        // pass this run; it never fails a correct one.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::timeout(Duration::from_secs(4), locked_rx)
+            .await
+            .expect("the refresh takes the rebuild lock")
+            .expect("the refresh signals");
+        assert!(
+            !refresher.is_finished(),
+            "the refresh waits for a connection of the exhausted pool"
+        );
         let published = tokio::time::timeout(
             Duration::from_secs(4),
             state.refresh_locked(&mut publish_conn),

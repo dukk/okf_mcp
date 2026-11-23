@@ -36,9 +36,11 @@ lock holder whose generation read may predate the publish.
 
 - `catalog::tests::a_refresh_waiting_for_a_connection_does_not_hold_up_a_publish_refresh`:
   pool of 2 with an 8 s acquire timeout; the test holds one connection as the
-  publisher and one more, and a refresh holds the rebuild lock and is queued
-  for a connection. The publish's `refresh_locked` must finish within 4 s
-  and the refresh once a connection frees. With `refresh_locked` waiting for
-  the lock again, the publish waits until the acquire timeout and the test
-  fails.
+  publisher and one more. A refresh (`refresh_to` with a load step that
+  signals first) takes the rebuild lock, signals the test, and only then asks
+  the pool for a connection. The test waits for that signal, so the held-lock,
+  exhausted-pool state is certain, and then runs the publish's
+  `refresh_locked`, which must finish within 4 s, and the refresh once a
+  connection frees. With `refresh_locked` waiting for the lock again, the
+  publish waits until the acquire timeout and the test fails every run.
 - `catalog::tests::a_swap_never_moves_the_snapshot_back`.
