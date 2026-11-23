@@ -182,6 +182,11 @@ impl AccountDb {
 pub struct CatalogDb {
     store: StoreName,
     pool: PgPool,
+    // The account database this store belongs to. Until Task 12 moves the
+    // audit entry into the store transaction, a change that touches both
+    // (the audit entry, the users it locks, the catalog's registry row)
+    // runs an account transaction beside the store's, and takes it from here.
+    accounts: AccountDb,
 }
 
 impl CatalogDb {
@@ -190,12 +195,29 @@ impl CatalogDb {
     /// # Arguments
     /// * `store` - the store's name.
     /// * `pool` - a pool on the store's database.
+    /// * `accounts` - the account database the store serves.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(uninstrumented_fn, reason = "one-line constructor")
     )]
-    pub fn new(store: StoreName, pool: PgPool) -> Self {
-        Self { store, pool }
+    pub fn new(store: StoreName, pool: PgPool, accounts: AccountDb) -> Self {
+        Self {
+            store,
+            pool,
+            accounts,
+        }
+    }
+
+    /// The account database this store serves: the other side of a change
+    /// that writes both (an audit entry and the rows it locks, a catalog's
+    /// registry row). The store's own pool is never the account's, even when
+    /// the store is inside the account database (plan decision P1).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn accounts(&self) -> &AccountDb {
+        &self.accounts
     }
 
     /// The store's name.
@@ -208,6 +230,16 @@ impl CatalogDb {
     }
 
     /// Begins a transaction on the store's database.
+    ///
+    /// # Acquisition order
+    /// A change that also holds an account transaction takes the account
+    /// side first: the account connection, then every account row lock
+    /// (`lock_people`, the user and key rows), and only then this. A
+    /// transaction that holds the store's connection must never wait for an
+    /// account row, because a user deletion holds those rows and then needs
+    /// a store connection: with one store connection that is a cycle
+    /// PostgreSQL cannot detect (one edge is a pool wait). The store
+    /// commits first, then the account transaction (issue #970).
     ///
     /// # Returns
     /// The transaction, which owns its connection (`'static`).
@@ -263,15 +295,36 @@ impl CatalogDb {
         &self.pool
     }
 
-    /// The release-1 `main` store over a test pool: the one-line handle the
-    /// tests build around the pool they hold.
+    /// The `main` store when it is the account database, for a caller that
+    /// holds only the account pool (the tests, and tools that run outside
+    /// the server): a pool of its own on the same database and login, with
+    /// the store's `search_path` ([`STORE_SEARCH_PATH`]), so a query for an
+    /// account table sent to it fails as it does in production. The pool is
+    /// lazy (it connects on first use) and as large as `accounts`.
+    ///
+    /// # Arguments
+    /// * `accounts` - the account pool.
+    ///
+    /// # Returns
+    /// A handle for the store `main`. The server itself never calls this: it
+    /// gets its handles from [`Stores`].
+    #[cfg(test)]
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn main_in(accounts: &PgPool) -> Self {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(accounts.options().get_max_connections())
+            .after_connect(|connection, _meta| Box::pin(registry::set_search_path(connection)))
+            .connect_lazy_with((*accounts.connect_options()).clone());
+        Self::new(StoreName::main(), pool, AccountDb::new(accounts.clone()))
+    }
+
     #[cfg(test)]
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(uninstrumented_fn, reason = "one-line test constructor")
     )]
     pub(crate) fn main_of(pool: &PgPool) -> Self {
-        Self::new(StoreName::main(), pool.clone())
+        Self::main_in(pool)
     }
 }
 
@@ -284,7 +337,11 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://u:p@127.0.0.1:1/x")
             .unwrap();
-        let db = CatalogDb::new(StoreName::parse("shared-1").unwrap(), pool);
+        let db = CatalogDb::new(
+            StoreName::parse("shared-1").unwrap(),
+            pool.clone(),
+            AccountDb::new(pool),
+        );
 
         for failure in [
             sqlx::Error::PoolTimedOut,
@@ -382,5 +439,138 @@ mod tests {
             .unwrap();
         assert_eq!(from_accounts, from_store);
         assert_eq!(app.main_db().await.store(), &StoreName::main());
+    }
+    /// The Postgres error code for "undefined table".
+    const UNDEFINED_TABLE: &str = "42P01";
+
+    /// Whether `error` is Postgres's "the relation does not exist".
+    fn is_undefined_table(error: &sqlx::Error) -> bool {
+        error
+            .as_database_error()
+            .and_then(|database| database.code())
+            .is_some_and(|code| code == UNDEFINED_TABLE)
+    }
+
+    /// Issue #970 review: with `database_max_connections = 1` the process
+    /// holds one connection per pool, and every path reaches the `main`
+    /// store through the registry's one pool for it, never a pool of its
+    /// own: a create, an import (the publish write path), the directory
+    /// load and a deletion all run, within a time limit, and the registry
+    /// opened exactly one store pool.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_one_connection_configuration_never_opens_a_second_pool_for_main() {
+        use crate::archive::files;
+        use crate::cache::directory::CatalogDirectory;
+        use crate::labels::DisplayName;
+        use crate::store::audit::AuditActor;
+        use crate::store::catalogs::{self, NewCatalog};
+        use crate::store::import::{import, ImportOptions, ImportScope};
+        use crate::telemetry::metrics::Metrics;
+        use std::time::Duration;
+
+        let db = crate::db::test_db().await;
+        let one = crate::db::connect(&db.url, 1).await.unwrap();
+        let stores = Stores::new(
+            one.clone(),
+            PoolSettings {
+                max_connections: 1,
+                idle_timeout: Duration::from_secs(60),
+                connect_timeout: Duration::from_secs(5),
+            },
+        );
+        let limit = Duration::from_secs(30);
+        let cli = AuditActor::cli();
+        let name = DisplayName::default();
+        let new = NewCatalog {
+            name: "solo",
+            display_name: &name,
+            description: "",
+            owner_team: crate::db::TEST_TEAM,
+        };
+
+        let work = async {
+            catalogs::create_in(&stores, &new, &cli, chrono::Utc::now()).await?;
+            let main = stores.get(&StoreName::main()).await?;
+            let options = ImportOptions {
+                replace: true,
+                scope: ImportScope::Everything,
+                expect_generation: None,
+                expect_catalog_id: None,
+                actor: "t",
+                audit: &cli,
+                now: chrono::Utc::now(),
+            };
+            import(&main, "solo", files(&[("a.md", "# A\n")]), &options).await?;
+            let directory = CatalogDirectory::new(
+                one.clone(),
+                stores.clone(),
+                10,
+                Duration::from_secs(60),
+                Metrics::global(),
+            );
+            let row = directory.resolve("solo").await?.expect("the catalog");
+            assert_eq!(row.generation, 1);
+            catalogs::delete_in(&stores, "solo", true, &cli, chrono::Utc::now()).await
+        };
+        tokio::time::timeout(limit, work)
+            .await
+            .expect("finished on one connection")
+            .unwrap();
+
+        assert_eq!(stores.pools_opened(), 1);
+        assert!(one.size() <= 1);
+        let main = stores.get(&StoreName::main()).await.unwrap();
+        assert!(main.executor().size() <= 1);
+        assert_eq!(stores.pools_opened(), 1);
+    }
+
+    /// Migration 0041 (issue #970): a store's connections see schema
+    /// `catalog` only, so a query for an account table fails there, and the
+    /// store's own tables answer.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_pool_cannot_see_account_tables() {
+        let db = crate::db::test_db().await;
+        let store = CatalogDb::main_in(&db.pool);
+
+        let account = sqlx::query("SELECT 1 FROM users")
+            .fetch_all(store.executor())
+            .await
+            .unwrap_err();
+        let registry = sqlx::query("SELECT 1 FROM catalogs")
+            .fetch_all(store.executor())
+            .await
+            .unwrap_err();
+        let own: i64 = sqlx::query_scalar("SELECT count(*) FROM documents")
+            .fetch_one(store.executor())
+            .await
+            .unwrap();
+
+        assert!(is_undefined_table(&account), "{account:?}");
+        assert!(is_undefined_table(&registry), "{registry:?}");
+        assert_eq!(own, 0);
+    }
+
+    /// The reverse: an account pool sees `public` only, so a query for a
+    /// catalog table by its bare name fails there (it must be qualified).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_account_pool_cannot_see_catalog_tables() {
+        let db = crate::db::test_db().await;
+
+        let bare = sqlx::query("SELECT 1 FROM documents")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap_err();
+        let state = sqlx::query("SELECT 1 FROM catalog_state")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap_err();
+        let qualified: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.documents")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+
+        assert!(is_undefined_table(&bare), "{bare:?}");
+        assert!(is_undefined_table(&state), "{state:?}");
+        assert_eq!(qualified, 0);
     }
 }

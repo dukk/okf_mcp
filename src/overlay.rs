@@ -690,7 +690,7 @@ mod tests {
         };
         let republished = files(&[("a.md", "# A\n"), ("b.md", "# B\n")]);
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+            &crate::stores::CatalogDb::main_in(pool),
             "pg",
             republished,
             &options,

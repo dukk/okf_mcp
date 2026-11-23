@@ -131,7 +131,7 @@ struct Analyzed {
 ///
 /// Into an empty catalog every file is inserted; with `replace`, or into a
 /// catalog at generation 0 (holding only its starter files, see
-/// [`catalogs::create`]), only the differences are written: changed and new files get `import` revisions,
+/// `catalogs::create_in`), only the differences are written: changed and new files get `import` revisions,
 /// live documents missing from `files` become tombstones with `delete`
 /// revisions (message `import`), and unchanged files keep their revision.
 /// A path that had been deleted continues its revision numbers. The
@@ -174,9 +174,11 @@ pub async fn import(
 ) -> Result<ImportReport, OkfError> {
     let now = options.now;
     // Dropping `tx` without `commit()` (any `?` or early `return`) rolls back.
-    let mut tx = db.begin().await?;
+    // The account transaction wraps the store's (the audit entry and the
+    // users it locks are account rows); the store commits first.
+    let mut account_tx = db.accounts().begin().await?;
     audit::lock_people(
-        &mut tx,
+        &mut account_tx,
         options.audit,
         &People {
             catalogs: &[catalog],
@@ -184,8 +186,15 @@ pub async fn import(
         },
     )
     .await?;
+    // Acquisition order (plan Task 11, issue #970): the account transaction
+    // and every account row lock (`lock_people`) come BEFORE the store
+    // connection. A change that held the store's connection while it waited
+    // for a user row would block a user deletion (which holds those rows and
+    // then needs a store connection) in a cycle PostgreSQL cannot see,
+    // because one edge is a pool wait.
+    let mut tx = db.begin().await?;
     // Under the lock, and read again: see `lock_by_name`.
-    let found = catalogs::lock_by_name(&mut tx, catalog).await?;
+    let found = catalogs::lock_by_name(&mut account_tx, &mut tx, catalog).await?;
     // Under the lock, before anything is written: a replacement under the
     // same name is not what the caller was let into.
     catalogs::check_incarnation(catalog, found.id, options.expect_catalog_id)?;
@@ -285,18 +294,13 @@ pub async fn import(
     }
     let written = report.added.len() + report.updated.len();
     if written + report.deleted.len() > 0 {
-        let generation: i64 = sqlx::query_scalar(
-            "UPDATE catalogs SET generation = generation + 1 WHERE id = $1 RETURNING generation",
-        )
-        .bind(found.id)
-        .fetch_one(&mut *tx)
-        .await?;
+        let generation = catalogs::bump_generation(&mut tx, found.id).await?;
         let scope = match options.scope {
             ImportScope::Everything => "everything",
             ImportScope::Machinery => "machinery",
         };
         catalogs::record_catalog(
-            &mut tx,
+            &mut account_tx,
             options.audit,
             CatalogEvent {
                 action: Action::CatalogImported,
@@ -314,7 +318,7 @@ pub async fn import(
         )
         .await?;
         invalidate(
-            &mut tx,
+            &mut account_tx,
             &[Invalidation::Catalog {
                 id: found.id,
                 generation,
@@ -327,6 +331,7 @@ pub async fn import(
         });
     }
     tx.commit().await?;
+    account_tx.commit().await?;
     Ok(report)
 }
 
@@ -455,7 +460,7 @@ mod tests {
     /// `(path, revision, deleted, content)` of every row, by path.
     async fn rows(pool: &PgPool) -> Vec<(String, i32, bool, Vec<u8>)> {
         sqlx::query_as(
-            "SELECT path, revision, deleted_at IS NOT NULL, content FROM documents ORDER BY path",
+            "SELECT path, revision, deleted_at IS NOT NULL, content FROM catalog.documents ORDER BY path",
         )
         .fetch_all(pool)
         .await
@@ -463,7 +468,7 @@ mod tests {
     }
 
     async fn generation(pool: &PgPool) -> i64 {
-        catalogs::find(pool, "pg").await.unwrap().generation
+        catalogs::test_generation(pool, "pg").await
     }
 
     const CONCEPT: &[u8] = b"---\ntype: Note\ntitle: A\ntags: [x]\n---\nSee [b](b.md).\n";
@@ -504,7 +509,7 @@ mod tests {
 
         // Generation 0: no `replace` needed.
         let report = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             incoming.clone(),
             &options(false, at(1)),
@@ -512,7 +517,7 @@ mod tests {
         .await
         .unwrap();
         let again = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             incoming,
             &options(false, at(2)),
@@ -562,7 +567,7 @@ mod tests {
         ]);
 
         let report = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             incoming,
             &options(false, at(1)),
@@ -587,7 +592,7 @@ mod tests {
             String,
         );
         let derived: DerivedRow = sqlx::query_as(
-            "SELECT kind, concept_type, title, tags, updated_at, updated_by FROM documents \
+            "SELECT kind, concept_type, title, tags, updated_at, updated_by FROM catalog.documents \
              WHERE path = 'a.md'",
         )
         .fetch_one(&db.pool)
@@ -604,20 +609,22 @@ mod tests {
                 "test/import".into()
             )
         );
-        let png: (Option<String>, Vec<u8>) =
-            sqlx::query_as("SELECT kind, content FROM documents WHERE path = 'img/logo.png'")
-                .fetch_one(&db.pool)
-                .await
-                .unwrap();
+        let png: (Option<String>, Vec<u8>) = sqlx::query_as(
+            "SELECT kind, content FROM catalog.documents WHERE path = 'img/logo.png'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
         assert_eq!(png, (None, b"\x89PNG\0\xff".to_vec()));
-        let executable: bool =
-            sqlx::query_scalar("SELECT executable FROM documents WHERE path = 'tools/run.sh'")
-                .fetch_one(&db.pool)
-                .await
-                .unwrap();
+        let executable: bool = sqlx::query_scalar(
+            "SELECT executable FROM catalog.documents WHERE path = 'tools/run.sh'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
         assert!(executable);
         let history: Vec<(String, i32, String, String, DateTime<Utc>)> = sqlx::query_as(
-            "SELECT path, revision, op, actor, created_at FROM revisions ORDER BY path",
+            "SELECT path, revision, op, actor, created_at FROM catalog.revisions ORDER BY path",
         )
         .fetch_all(&db.pool)
         .await
@@ -642,7 +649,7 @@ mod tests {
             ("drop.md", b"# Drop\n", false),
         ]);
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             first.clone(),
             &options(false, at(1)),
@@ -651,7 +658,7 @@ mod tests {
         .unwrap();
 
         let refused = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             first,
             &options(false, at(2)),
@@ -663,7 +670,7 @@ mod tests {
             ("new.md", b"# New\n", false),
         ]);
         let report = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             second,
             &options(true, at(3)),
@@ -699,7 +706,7 @@ mod tests {
         );
         type RevisionRow = (i32, String, Option<Vec<u8>>, String, DateTime<Utc>);
         let drop_history: Vec<RevisionRow> = sqlx::query_as(
-            "SELECT revision, op, content, message, created_at FROM revisions \
+            "SELECT revision, op, content, message, created_at FROM catalog.revisions \
                  WHERE path = 'drop.md' ORDER BY revision",
         )
         .fetch_all(&db.pool)
@@ -709,11 +716,12 @@ mod tests {
             drop_history[1],
             (2, "delete".to_string(), None, "import".to_string(), at(3))
         );
-        let tombstone: (Option<String>, Option<String>, DateTime<Utc>) =
-            sqlx::query_as("SELECT kind, title, deleted_at FROM documents WHERE path = 'drop.md'")
-                .fetch_one(&db.pool)
-                .await
-                .unwrap();
+        let tombstone: (Option<String>, Option<String>, DateTime<Utc>) = sqlx::query_as(
+            "SELECT kind, title, deleted_at FROM catalog.documents WHERE path = 'drop.md'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
         assert_eq!(tombstone, (None, None, at(3)));
         assert_eq!(generation(&db.pool).await, 2);
     }
@@ -723,7 +731,7 @@ mod tests {
         let db = test_db().await;
         create_empty(&db.pool).await;
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             files(&[("a.md", b"1", false)]),
             &options(false, at(1)),
@@ -731,7 +739,7 @@ mod tests {
         .await
         .unwrap();
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             files(&[("b.md", b"b", false)]),
             &options(true, at(2)),
@@ -741,7 +749,7 @@ mod tests {
         let both = files(&[("a.md", b"3", false), ("b.md", b"b", false)]);
 
         let recreated = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             both.clone(),
             &options(true, at(3)),
@@ -749,7 +757,7 @@ mod tests {
         .await
         .unwrap();
         let again = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             both,
             &options(true, at(4)),
@@ -781,7 +789,7 @@ mod tests {
             ("tools/old.sh", b"old\n", true),
         ]);
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             exported.clone(),
             &options(false, at(1)),
@@ -796,7 +804,7 @@ mod tests {
             ("tools/old.sh", b"old\n", true),
         ]);
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             published,
             &options(true, at(2)),
@@ -817,7 +825,7 @@ mod tests {
         };
 
         let report = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             overlaid,
             &machinery,
@@ -857,7 +865,7 @@ mod tests {
         let db = test_db().await;
         create_empty(&db.pool).await;
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             files(&[("a.md", b"1", false)]),
             &options(false, at(1)),
@@ -871,14 +879,14 @@ mod tests {
         };
 
         let stale = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             files(&[("a.md", b"stale", false)]),
             &guarded(0),
         )
         .await;
         let current = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             files(&[("a.md", b"2", false)]),
             &guarded(1),
@@ -904,7 +912,7 @@ mod tests {
         let db = test_db().await;
         let catalog = create_empty(&db.pool).await;
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             files(&[("a.md", b"1", false)]),
             &options(false, at(1)),
@@ -923,7 +931,7 @@ mod tests {
                 ..options(true, at(3))
             };
             import(
-                &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+                &crate::stores::CatalogDb::main_in(&pool),
                 "pg",
                 files(&[("a.md", b"stale", false)]),
                 &guarded,
@@ -935,7 +943,7 @@ mod tests {
         // The publish the import waited behind: a new revision of `a.md` and
         // generation 2, as `store::publish` writes them.
         sqlx::query(
-            "UPDATE documents SET content = 'published', revision = 2 \
+            "UPDATE catalog.documents SET content = 'published', revision = 2 \
              WHERE catalog_id = $1 AND path = 'a.md'",
         )
         .bind(catalog.id)
@@ -943,7 +951,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO revisions (catalog_id, path, revision, op, content, executable, actor, \
+            "INSERT INTO catalog.revisions (catalog_id, path, revision, op, content, executable, actor, \
              message, created_at) \
              VALUES ($1, 'a.md', 2, 'update', 'published', false, 'publisher', 'edit', $2)",
         )
@@ -952,7 +960,7 @@ mod tests {
         .execute(&mut *holder)
         .await
         .unwrap();
-        sqlx::query("UPDATE catalogs SET generation = generation + 1 WHERE id = $1")
+        sqlx::query("UPDATE catalog.catalog_state SET generation = generation + 1 WHERE id = $1")
             .bind(catalog.id)
             .execute(&mut *holder)
             .await
@@ -970,7 +978,7 @@ mod tests {
             [("a.md".to_string(), 2, false, b"published".to_vec())]
         );
         let history: Vec<(i32, String)> =
-            sqlx::query_as("SELECT revision, actor FROM revisions ORDER BY revision")
+            sqlx::query_as("SELECT revision, actor FROM catalog.revisions ORDER BY revision")
                 .fetch_all(&db.pool)
                 .await
                 .unwrap();
@@ -986,7 +994,7 @@ mod tests {
         let db = test_db().await;
         create_empty(&db.pool).await;
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             files(&[("run.sh", b"x", false)]),
             &options(false, at(1)),
@@ -995,7 +1003,7 @@ mod tests {
         .unwrap();
 
         let report = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             files(&[("run.sh", b"x", true)]),
             &options(true, at(2)),
@@ -1008,7 +1016,7 @@ mod tests {
             (vec!["run.sh".to_string()], 0)
         );
         let history: Vec<(i32, bool)> =
-            sqlx::query_as("SELECT revision, executable FROM revisions ORDER BY revision")
+            sqlx::query_as("SELECT revision, executable FROM catalog.revisions ORDER BY revision")
                 .fetch_all(&db.pool)
                 .await
                 .unwrap();
@@ -1026,14 +1034,14 @@ mod tests {
         ]);
 
         let binary = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             binary_markdown,
             &options(false, at(1)),
         )
         .await;
         let unknown = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "nope",
             files(&[("a.md", b"# A\n", false)]),
             &options(false, at(1)),
@@ -1078,7 +1086,7 @@ mod tests {
         // `tokio::spawn` runs the import concurrently; it blocks on the lock.
         let waiting = tokio::spawn(async move {
             import(
-                &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+                &crate::stores::CatalogDb::main_in(&pool),
                 "pg",
                 files(&[("a.md", b"# A\n", false)]),
                 &options(false, at(1)),
@@ -1106,7 +1114,7 @@ mod tests {
         let second = files(&[("a.md", b"# Changed\n", false)]);
 
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             first,
             &options(false, at(1)),
@@ -1114,7 +1122,7 @@ mod tests {
         .await
         .unwrap();
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             second.clone(),
             &options(true, at(2)),
@@ -1122,7 +1130,7 @@ mod tests {
         .await
         .unwrap();
         let same = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             second,
             &options(true, at(3)),
@@ -1130,14 +1138,14 @@ mod tests {
         .await
         .unwrap();
         let refused = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             files(&[]),
             &options(false, at(4)),
         )
         .await;
         let malformed = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "p\0g",
             files(&[]),
             &options(true, at(5)),
@@ -1174,7 +1182,7 @@ mod tests {
             .await;
 
         let refused = import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             files(&[("a.md", CONCEPT, false)]),
             &options(false, at(1)),

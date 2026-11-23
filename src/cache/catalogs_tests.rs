@@ -84,7 +84,7 @@ async fn import_behind(pool: &PgPool, catalog: &str, files: &[(&str, &str)]) -> 
         now: Utc::now(),
     };
     import(
-        &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+        &crate::stores::CatalogDb::main_in(pool),
         catalog,
         files,
         &options,
@@ -100,7 +100,7 @@ async fn import_behind(pool: &PgPool, catalog: &str, files: &[(&str, &str)]) -> 
 /// moves the generation, so that generation's snapshot fails to build.
 async fn break_catalog(pool: &PgPool, catalog_id: i64) {
     sqlx::query(
-        "INSERT INTO documents (catalog_id, path, content, executable, revision, \
+        "INSERT INTO catalog.documents (catalog_id, path, content, executable, revision, \
                                 updated_at, updated_by) \
          VALUES ($1, '../escape.md', '', false, 1, now(), 'test')",
     )
@@ -113,7 +113,7 @@ async fn break_catalog(pool: &PgPool, catalog_id: i64) {
 
 /// Moves a catalog's generation, as an import or publish does.
 async fn bump_generation(pool: &PgPool, catalog_id: i64) {
-    sqlx::query("UPDATE catalogs SET generation = generation + 1 WHERE id = $1")
+    sqlx::query("UPDATE catalog.catalog_state SET generation = generation + 1 WHERE id = $1")
         .bind(catalog_id)
         .execute(pool)
         .await
@@ -243,7 +243,7 @@ async fn a_broken_generation_is_not_rebuilt_on_every_request() {
     assert!(test.app.catalog("pg").await.unwrap().is_none());
 
     // Repaired, and the generation moves (as an import would move it).
-    sqlx::query("DELETE FROM documents WHERE catalog_id = $1 AND path = '../escape.md'")
+    sqlx::query("DELETE FROM catalog.documents WHERE catalog_id = $1 AND path = '../escape.md'")
         .bind(id)
         .execute(&pool)
         .await
@@ -486,7 +486,7 @@ async fn a_load_overtaken_by_a_catalog_message_is_served_but_not_kept() {
     // Hold the documents table, so the load reads the generation and then
     // waits; release it on every path (dropping the transaction rolls back).
     let mut hold = pool.begin().await.unwrap();
-    sqlx::query("LOCK TABLE documents IN ACCESS EXCLUSIVE MODE")
+    sqlx::query("LOCK TABLE catalog.documents IN ACCESS EXCLUSIVE MODE")
         .execute(&mut *hold)
         .await
         .unwrap();

@@ -21,7 +21,7 @@
 //! every method takes `&self`. `Option<Arc<CatalogRow>>` is "a row or
 //! `None`", with the row shared between callers instead of copied.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -36,6 +36,7 @@ use crate::cache::{Bounded, CacheName, Limit};
 use crate::error::OkfError;
 use crate::invalidate::Invalidation;
 use crate::store::catalogs::{self, CatalogRow};
+use crate::stores::{StoreName, Stores};
 use crate::telemetry::metrics::Metrics;
 
 /// How long a name with no catalog is remembered (spec Decision 6).
@@ -158,6 +159,10 @@ pub fn parse_cursor(cursor: Option<&str>) -> Result<Option<String>, OkfError> {
 /// Catalog rows by name, with absent names remembered briefly.
 pub struct CatalogDirectory {
     pool: PgPool,
+    // Where each catalog's generation is read: its store's `catalog_state`.
+    // The server's own registry, so a store's pool is the one pool the
+    // process holds for it.
+    stores: Stores,
     // `None` is a name with no catalog. It is dropped from here at once (see
     // `remember_absent`) and kept in `absent` instead, for the shorter time.
     rows: Bounded<String, Loaded>,
@@ -185,7 +190,9 @@ impl CatalogDirectory {
     /// An empty directory.
     ///
     /// # Arguments
-    /// * `pool` - the database.
+    /// * `pool` - the account database.
+    /// * `stores` - the registry of stores (each catalog's generation is
+    ///   read from its store).
     /// * `entries` - the most rows (and, separately, absent names) kept
     ///   (`catalog_directory_entries`).
     /// * `ttl` - how long a row is served (`catalog_ttl`).
@@ -194,8 +201,29 @@ impl CatalogDirectory {
     /// # Returns
     /// The directory.
     #[tracing::instrument(level = "trace", skip_all)]
-    pub fn new(pool: PgPool, entries: u64, ttl: Duration, metrics: Metrics) -> Self {
-        Self::with_absent_ttl(pool, entries, ttl, ABSENT_TTL, metrics)
+    pub fn new(
+        pool: PgPool,
+        stores: Stores,
+        entries: u64,
+        ttl: Duration,
+        metrics: Metrics,
+    ) -> Self {
+        Self::with_absent_ttl(pool, stores, entries, ttl, ABSENT_TTL, metrics)
+    }
+
+    /// [`CatalogDirectory::new`] with a registry of its own over `pool`
+    /// (the tests: one pool, `main` in the account database).
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "test constructor")
+    )]
+    pub(crate) fn for_tests(pool: PgPool, entries: u64, ttl: Duration, metrics: Metrics) -> Self {
+        let stores = Stores::new(
+            pool.clone(),
+            crate::stores::PoolSettings::from_config(&crate::config::Config::default()),
+        );
+        Self::new(pool, stores, entries, ttl, metrics)
     }
 
     /// [`CatalogDirectory::new`] with the lifetime of an absent name given:
@@ -203,6 +231,7 @@ impl CatalogDirectory {
     #[tracing::instrument(level = "trace", skip_all)]
     fn with_absent_ttl(
         pool: PgPool,
+        stores: Stores,
         entries: u64,
         ttl: Duration,
         absent_ttl: Duration,
@@ -210,11 +239,53 @@ impl CatalogDirectory {
     ) -> Self {
         Self {
             pool,
+            stores,
             rows: Bounded::new(CacheName::Directory, Limit::Entries(entries), ttl)
                 .with_metrics(metrics),
             absent: Bounded::new(CacheName::Directory, Limit::Entries(entries), absent_ttl),
             meta_changes: AtomicU64::new(0),
         }
+    }
+
+    /// Sets each row's `generation` from its store's `catalog_state`: the
+    /// registry rows no longer carry it. A catalog with no state row keeps 0.
+    ///
+    /// # Errors
+    /// [`OkfError::StoreUnavailable`] if a store cannot be opened;
+    /// [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn fill_generations(&self, rows: &mut [CatalogRow]) -> Result<(), OkfError> {
+        let mut by_store: HashMap<StoreName, Vec<i64>> = HashMap::new();
+        for row in rows.iter() {
+            by_store.entry(row.store.clone()).or_default().push(row.id);
+        }
+        let mut generations: HashMap<i64, i64> = HashMap::with_capacity(rows.len());
+        for (store, ids) in by_store {
+            // Boxed: opening a pool is a deep future, and this sits on every
+            // request's path.
+            let db = Box::pin(self.stores.get(&store)).await?;
+            generations.extend(catalogs::generations(db.executor(), &ids).await?);
+        }
+        for row in rows.iter_mut() {
+            row.generation = generations.get(&row.id).copied().unwrap_or(0);
+        }
+        Ok(())
+    }
+
+    /// [`CatalogDirectory::fill_generations`] for one row.
+    ///
+    /// # Errors
+    /// As [`CatalogDirectory::fill_generations`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn with_generation(
+        &self,
+        row: Option<CatalogRow>,
+    ) -> Result<Option<CatalogRow>, OkfError> {
+        let Some(row) = row else { return Ok(None) };
+        let mut rows = [row];
+        self.fill_generations(&mut rows).await?;
+        let [row] = rows;
+        Ok(Some(row))
     }
 
     /// The row of catalog `name`, read from the database once however many
@@ -234,7 +305,8 @@ impl CatalogDirectory {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn resolve(&self, name: &str) -> Result<Option<Arc<CatalogRow>>, OkfError> {
         self.resolve_by(name, || async {
-            Ok(catalogs::row_by_name(&self.pool, name).await?.map(Arc::new))
+            let row = catalogs::row_by_name(&self.pool, name).await?;
+            Ok(self.with_generation(row).await?.map(Arc::new))
         })
         .await
     }
@@ -337,7 +409,8 @@ impl CatalogDirectory {
             }
         }
         if !missing.is_empty() {
-            let rows = catalogs::rows_by_names(&self.pool, &missing).await?;
+            let mut rows = catalogs::rows_by_names(&self.pool, &missing).await?;
+            self.fill_generations(&mut rows).await?;
             found.extend(rows.into_iter().map(Arc::new));
         }
         found.sort_by(|left, right| left.name.cmp(&right.name));
@@ -447,9 +520,11 @@ impl CatalogDirectory {
                 };
                 let teams: Vec<String> = gates.teams.iter().cloned().collect();
                 let entitled: Vec<i64> = gates.entitled.keys().copied().collect();
-                catalogs::ceiling_page(&self.pool, &teams, &entitled, after.as_deref(), fetch)
-                    .await?
-                    .into_iter()
+                let mut rows =
+                    catalogs::ceiling_page(&self.pool, &teams, &entitled, after.as_deref(), fetch)
+                        .await?;
+                self.fill_generations(&mut rows).await?;
+                rows.into_iter()
                     .map(Arc::new)
                     // Each row checked as every access check does: the
                     // query and `level_on` agree, and this keeps it so.
@@ -457,11 +532,9 @@ impl CatalogDirectory {
                     .collect()
             }
             (None, Reach::All | Reach::Catalogs(_)) => {
-                catalogs::page(&self.pool, after.as_deref(), fetch)
-                    .await?
-                    .into_iter()
-                    .map(Arc::new)
-                    .collect()
+                let mut rows = catalogs::page(&self.pool, after.as_deref(), fetch).await?;
+                self.fill_generations(&mut rows).await?;
+                rows.into_iter().map(Arc::new).collect()
             }
         };
         // A `u32` always fits a `usize` on the 64-bit targets this builds for.
@@ -551,7 +624,7 @@ mod tests {
     const LONG: Duration = Duration::from_secs(3600);
 
     fn directory(pool: &PgPool) -> CatalogDirectory {
-        CatalogDirectory::new(pool.clone(), 100, LONG, Metrics::global())
+        CatalogDirectory::for_tests(pool.clone(), 100, LONG, Metrics::global())
     }
 
     async fn seed(pool: &PgPool, name: &str) -> i64 {
@@ -708,7 +781,7 @@ mod tests {
         let db = test_db().await;
         seed(&db.pool, "pg").await;
         let (_provider, metrics, registry) = local_metrics();
-        let directory = CatalogDirectory::new(db.pool.clone(), 100, LONG, metrics);
+        let directory = CatalogDirectory::for_tests(db.pool.clone(), 100, LONG, metrics);
 
         let first = directory.resolve("pg").await.unwrap().unwrap();
         // Changed behind the directory's back: only a read would see it.
@@ -754,6 +827,10 @@ mod tests {
         let db = test_db().await;
         let directory = CatalogDirectory::with_absent_ttl(
             db.pool.clone(),
+            Stores::new(
+                db.pool.clone(),
+                crate::stores::PoolSettings::from_config(&crate::config::Config::default()),
+            ),
             100,
             LONG,
             Duration::from_millis(100),

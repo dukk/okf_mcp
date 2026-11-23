@@ -141,7 +141,7 @@ async fn state_of(test: &TestApp, handle: &str) -> ChangesetState {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_publish_holding_its_changeset_finishes_before_its_users_deletion() {
-    // Arrange: alice's changeset, and a holder of the catalog row, so the
+    // Arrange: alice's changeset, and a holder of the catalog state row, so the
     // publish stops at its generation bump, after its changeset lock.
     let test = pg().await;
     let alice = Arc::new(user_context(&test, "alice", Access::Write, false).await);
@@ -156,12 +156,12 @@ async fn a_publish_holding_its_changeset_finishes_before_its_users_deletion() {
         .id();
     let mut holder = test
         .app
-        .accounts()
-        .executor()
+        .main_db()
+        .await
         .begin()
         .await
         .expect("begin the holder");
-    sqlx::query("SELECT id FROM catalogs WHERE id = $1 FOR NO KEY UPDATE")
+    sqlx::query("SELECT id FROM catalog_state WHERE id = $1 FOR NO KEY UPDATE")
         .bind(catalog_id)
         .execute(&mut *holder)
         .await
@@ -260,12 +260,12 @@ async fn a_publish_holding_its_changeset_finishes_before_its_users_own_deletion(
         .id();
     let mut holder = test
         .app
-        .accounts()
-        .executor()
+        .main_db()
+        .await
         .begin()
         .await
         .expect("begin the holder");
-    sqlx::query("SELECT id FROM catalogs WHERE id = $1 FOR NO KEY UPDATE")
+    sqlx::query("SELECT id FROM catalog_state WHERE id = $1 FOR NO KEY UPDATE")
         .bind(catalog_id)
         .execute(&mut *holder)
         .await
@@ -302,12 +302,12 @@ async fn an_admins_discard_holding_a_changeset_finishes_before_its_owners_deleti
     let changeset_id = changeset_row(&test, &handle).await.id;
     let mut holder = test
         .app
-        .accounts()
-        .executor()
+        .main_db()
+        .await
         .begin()
         .await
         .expect("begin the holder");
-    sqlx::query("SELECT path FROM changeset_entries WHERE changeset_id = $1 FOR UPDATE")
+    sqlx::query("SELECT path FROM catalog.changeset_entries WHERE changeset_id = $1 FOR UPDATE")
         .bind(changeset_id)
         .execute(&mut *holder)
         .await
@@ -346,12 +346,12 @@ async fn a_revert_holding_its_changeset_finishes_before_its_users_deletion() {
     let changeset_id = changeset_row(&test, &handle).await.id;
     let mut holder = test
         .app
-        .accounts()
-        .executor()
+        .main_db()
+        .await
         .begin()
         .await
         .expect("begin the holder");
-    sqlx::query("SELECT path FROM changeset_entries WHERE changeset_id = $1 FOR UPDATE")
+    sqlx::query("SELECT path FROM catalog.changeset_entries WHERE changeset_id = $1 FOR UPDATE")
         .bind(changeset_id)
         .execute(&mut *holder)
         .await
@@ -380,6 +380,146 @@ async fn a_revert_holding_its_changeset_finishes_before_its_users_deletion() {
     assert!(reverted.is_ok(), "{reverted:?}");
     assert_eq!(deleted.expect("the deletion").discarded, 1);
     assert_eq!(state_of(&test, &handle).await, ChangesetState::Discarded);
+}
+
+/// Issue #970, Brooke's review of #1001: a change that audits holds an
+/// account transaction and a store transaction, and a user deletion holds
+/// the user's rows and then needs a store connection. If the change took the
+/// store's only connection BEFORE it locked the users, the deletion (holding
+/// the rows) and the change (holding the connection) would wait on each
+/// other with one edge a pool wait, which PostgreSQL's deadlock detector
+/// does not see. Account locks first, store connection second, removes it.
+///
+/// The order is forced, not raced: a holder keeps alice's row, the deletion
+/// queues for it first, the revert queues second, and the holder lets go. The
+/// store pool has ONE connection, the account pool several, and both sides
+/// use the app's own registry.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_audited_revert_and_its_users_deletion_share_one_store_connection() {
+    // Arrange
+    let config = Config {
+        store_max_connections: 1,
+        ..Config::default()
+    };
+    let test = app_with(&[("pg", &[("a.md", NOTE)])], config).await;
+    let alice = Arc::new(user_context(&test, "alice", Access::Write, false).await);
+    let handle = open(&alice).await;
+    body(&alice, &handle, "# A\n\nAlice.\n").await;
+    let store = test.app.main_db().await;
+    assert!(
+        test.app
+            .accounts()
+            .executor()
+            .options()
+            .get_max_connections()
+            >= 3,
+        "the account pool must have connections to spare"
+    );
+    assert_eq!(store.executor().options().get_max_connections(), 1);
+    let mut holder = test.app.accounts().begin().await.expect("begin the holder");
+    sqlx::query("SELECT id FROM users WHERE name = 'alice' FOR UPDATE")
+        .execute(&mut *holder)
+        .await
+        .expect("hold alice's row");
+    let pool = test.app.accounts().executor().clone();
+    let deleting = tokio::spawn(async move {
+        users::delete_on(
+            &pool,
+            &store,
+            "alice",
+            users::DeleteOptions::default(),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+    });
+    lock_waiters(&test, 1).await;
+    let reverter = Arc::clone(&alice);
+    let to_revert = handle.clone();
+    let reverting = tokio::spawn(async move {
+        let params = RevertParams {
+            path: "/a.md".to_string(),
+            revision: 1,
+            changeset: to_revert,
+        };
+        revert(&reverter, params).await
+    });
+    lock_waiters(&test, 2).await;
+
+    // Act: the deletion is first in the queue, so it gets the rows first.
+    holder.rollback().await.expect("release alice's row");
+
+    // Assert: both finish (a hang here is the invisible cycle). The deletion
+    // wins; the revert then finds its user gone and is refused, or, if it
+    // got in first, commits.
+    let deleted = finish(deleting, "the deletion").await;
+    let _ = finish(reverting, "the revert").await;
+    deleted.expect("the deletion");
+}
+
+/// Issue #970, Brooke's review of #1001 (the `catalogs.rs` comment): a forced
+/// catalog deletion locks the open changesets on its store transaction and
+/// then clears the default of the keys that name the catalog on its account
+/// transaction; a user deletion locks its key and then waits for its
+/// changeset. Taken in that order the two wait on each other across the two
+/// databases. The catalog deletion now locks those keys before its store
+/// transaction. Forced order: a holder keeps the changeset, the catalog
+/// deletion queues first, the user deletion second, the holder lets go.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_forced_catalog_deletion_and_a_users_deletion_never_wait_on_each_other() {
+    // Arrange
+    let config = Config {
+        store_max_connections: 3,
+        ..Config::default()
+    };
+    let test = app_with(&[("pg", &[("a.md", NOTE)])], config).await;
+    let bob = Arc::new(user_context(&test, "bob", Access::Write, false).await);
+    let handle = open(&bob).await;
+    body(&bob, &handle, "# A\n\nBob.\n").await;
+    let changeset_id = changeset_row(&test, &handle).await.id;
+    let store = test.app.main_db().await;
+    let mut holder = store.begin().await.expect("begin the holder");
+    sqlx::query("SELECT id FROM changesets WHERE id = $1 FOR UPDATE")
+        .bind(changeset_id)
+        .execute(&mut *holder)
+        .await
+        .expect("hold the changeset");
+    let catalog_store = store.clone();
+    let dropping = tokio::spawn(async move {
+        crate::store::catalogs::delete_on(
+            &catalog_store,
+            "pg",
+            true,
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+    });
+    lock_waiters(&test, 1).await;
+    let pool = test.app.accounts().executor().clone();
+    let user_store = store.clone();
+    let deleting = tokio::spawn(async move {
+        users::delete_on(
+            &pool,
+            &user_store,
+            "bob",
+            users::DeleteOptions::default(),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+    });
+    lock_waiters(&test, 2).await;
+
+    // Act
+    holder.rollback().await.expect("release the changeset");
+
+    // Assert: both finish, and neither is the victim of a deadlock.
+    finish(dropping, "the catalog deletion")
+        .await
+        .expect("the catalog deletion");
+    let deleted = finish(deleting, "the user deletion").await;
+    deleted.expect("the user deletion");
 }
 
 #[tokio::test(flavor = "multi_thread")]

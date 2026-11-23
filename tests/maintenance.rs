@@ -108,7 +108,7 @@ async fn maintenance_http_lease_uses_credential_identity() {
         .key_id
         .clone();
     let stored: String =
-        sqlx::query_scalar("SELECT credential_id FROM maintenance_runs WHERE id=$1")
+        sqlx::query_scalar("SELECT credential_id FROM catalog.maintenance_runs WHERE id=$1")
             .bind(claimed["run_id"].as_str().unwrap())
             .fetch_one(&server.db.pool)
             .await
@@ -346,15 +346,16 @@ async fn canonical(server: &TestServer, key: &str, client: &Client) -> Value {
     }
     entries.sort();
     let documents: Vec<Value> =
-        sqlx::query_scalar("SELECT to_jsonb(d) FROM documents d ORDER BY catalog_id,path")
+        sqlx::query_scalar("SELECT to_jsonb(d) FROM catalog.documents d ORDER BY catalog_id,path")
             .fetch_all(&server.db.pool)
             .await
             .unwrap();
-    let revisions: Vec<Value> =
-        sqlx::query_scalar("SELECT to_jsonb(r) FROM revisions r ORDER BY catalog_id,path,revision")
-            .fetch_all(&server.db.pool)
-            .await
-            .unwrap();
+    let revisions: Vec<Value> = sqlx::query_scalar(
+        "SELECT to_jsonb(r) FROM catalog.revisions r ORDER BY catalog_id,path,revision",
+    )
+    .fetch_all(&server.db.pool)
+    .await
+    .unwrap();
     let mut reads = Vec::new();
     for (tool, args) in [
         ("search", json!({"catalogs":["pg"],"query":""})),
@@ -369,7 +370,7 @@ async fn canonical(server: &TestServer, key: &str, client: &Client) -> Value {
         .await
         .unwrap();
     let changesets: Vec<Value> =
-        sqlx::query_scalar("SELECT to_jsonb(c) FROM changesets c ORDER BY id")
+        sqlx::query_scalar("SELECT to_jsonb(c) FROM catalog.changesets c ORDER BY id")
             .fetch_all(&server.db.pool)
             .await
             .unwrap();
@@ -802,7 +803,7 @@ async fn maintenance_http_reauthorizes_successful_replays_and_allows_plain_reads
         );
     }
     let stored_paths: Vec<String> = sqlx::query_scalar(
-        "SELECT path FROM maintenance_work UNION ALL SELECT path FROM maintenance_evidence",
+        "SELECT path FROM catalog.maintenance_work UNION ALL SELECT path FROM catalog.maintenance_evidence",
     )
     .fetch_all(&server.db.pool)
     .await

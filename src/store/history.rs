@@ -435,7 +435,7 @@ mod tests {
         .await
         .unwrap()
         .id;
-        sqlx::query("DELETE FROM revisions WHERE catalog_id = $1")
+        sqlx::query("DELETE FROM catalog.revisions WHERE catalog_id = $1")
             .bind(id)
             .execute(pool)
             .await
@@ -453,7 +453,7 @@ mod tests {
     ) {
         let content: Option<&[u8]> = (op != "delete").then_some(b"# Text\n");
         sqlx::query(
-            "INSERT INTO revisions (catalog_id, path, revision, op, content, executable, \
+            "INSERT INTO catalog.revisions (catalog_id, path, revision, op, content, executable, \
              actor, message, created_at) VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8)",
         )
         .bind(catalog_id)
@@ -686,7 +686,7 @@ mod tests {
         let other = catalog(&db.pool, "other").await;
         // A long history in two catalogs: a page must not read either whole.
         sqlx::query(
-            "INSERT INTO revisions (catalog_id, path, revision, op, content, executable, \
+            "INSERT INTO catalog.revisions (catalog_id, path, revision, op, content, executable, \
              actor, message, created_at) \
              SELECT c, 'p' || (n % 500) || '.md', n / 500 + 1, 'update', NULL, false, 'a', 'm', \
              $3 + n * interval '1 second' FROM generate_series(0, 19999) AS n, \
@@ -698,7 +698,7 @@ mod tests {
         .execute(&db.pool)
         .await
         .unwrap();
-        sqlx::query("ANALYZE revisions")
+        sqlx::query("ANALYZE catalog.revisions")
             .execute(&db.pool)
             .await
             .unwrap();
@@ -710,7 +710,7 @@ mod tests {
             sqlx::query_scalar(sqlx::AssertSqlSafe(format!("EXPLAIN {RECENT_SQL}")))
                 .bind(pg)
                 .bind(51_i64)
-                .fetch_all(&db.pool)
+                .fetch_all(&db.store())
                 .await
                 .unwrap();
         let later: Vec<String> =
@@ -720,7 +720,7 @@ mod tests {
                 .bind("p0.md")
                 .bind(21_i32)
                 .bind(51_i64)
-                .fetch_all(&db.pool)
+                .fetch_all(&db.store())
                 .await
                 .unwrap();
 

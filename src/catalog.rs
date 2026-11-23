@@ -23,8 +23,9 @@ use crate::store::documents;
 use crate::store::documents::DocumentRow;
 use crate::stores::{CatalogDb, StoreName};
 
-/// The catalog's current generation, or `None` if the row is gone.
-const GENERATION: &str = "SELECT generation FROM catalogs WHERE id = $1";
+/// The catalog's current generation on its store, or `None` if the row is
+/// gone.
+const GENERATION: &str = "SELECT generation FROM catalog_state WHERE id = $1";
 
 /// One loaded state of a catalog. Immutable.
 #[derive(Debug)]
@@ -640,6 +641,15 @@ mod tests {
         let small = PgPoolOptions::new()
             .max_connections(2)
             .acquire_timeout(Duration::from_secs(8))
+            // A store's pool: its connections see only schema `catalog`.
+            .after_connect(|connection, _meta| {
+                Box::pin(async move {
+                    sqlx::query("SET search_path = catalog")
+                        .execute(connection)
+                        .await
+                        .map(|_| ())
+                })
+            })
             .connect_with((*db.pool.connect_options()).clone())
             .await
             .unwrap();
@@ -656,13 +666,23 @@ mod tests {
         let refresher = {
             let (state, small, rebuilds) =
                 (Arc::clone(&state), small.clone(), Arc::clone(&rebuilds));
+            let db_pool = db.pool.clone();
             tokio::spawn(async move {
                 let (id, name) = (state.id(), state.name().to_string());
                 state
                     .refresh_to(&rebuilds, generation, || async {
                         // Runs under the lock, before the build's connection.
                         locked_tx.send(()).expect("the test waits for the signal");
-                        build(&crate::stores::CatalogDb::main_of(&small), id, &name).await
+                        build(
+                            &crate::stores::CatalogDb::new(
+                                crate::stores::StoreName::main(),
+                                small,
+                                crate::stores::AccountDb::of(&db_pool),
+                            ),
+                            id,
+                            &name,
+                        )
+                        .await
                     })
                     .await
             })
@@ -731,7 +751,7 @@ mod tests {
         .await
         .unwrap();
         import_into(&db.pool, &[("a.md", b"# A\n")], false).await;
-        let mut conn = db.pool.acquire().await.unwrap();
+        let mut conn = db.store().acquire().await.unwrap();
         assert!(state.refresh_locked(&mut conn).await.unwrap());
         let newer = state.current().generation();
 
@@ -819,7 +839,7 @@ mod tests {
         };
         let entries = files(&[("a.md", b"# A\n"), ("b.txt", b"b\n")]);
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             entries,
             &options,
@@ -1178,7 +1198,7 @@ mod tests {
             ("earlier.md", earlier.as_bytes()),
         ]);
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             entries,
             &options,

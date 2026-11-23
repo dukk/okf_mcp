@@ -134,7 +134,9 @@ mod tests {
             description: "",
             owner_team: TEST_TEAM,
         };
-        catalogs::create(pool, &new, &AuditActor::cli(), Utc::now())
+        // Step 1 only: where the row lands is what these tests read, and a
+        // host store has no data side to create until Task 20.
+        catalogs::register(pool, &new, &AuditActor::cli(), Utc::now())
             .await
             .unwrap();
         sqlx::query_scalar("SELECT store FROM catalogs WHERE name = $1")

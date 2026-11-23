@@ -16,6 +16,7 @@ use crate::store::catalogs::{is_unique_violation, is_valid_name};
 use crate::store::changesets::{self, ChangesetState};
 use crate::store::passwords::PasswordStamp;
 use crate::store::user_sessions;
+use crate::stores::CatalogDb;
 
 /// A user to create.
 // `<'a>` is a lifetime parameter: the struct borrows its strings from the
@@ -333,12 +334,12 @@ pub async fn find<'e>(
 /// The id of the user called `name`, inside a caller's transaction.
 ///
 /// The row is held `FOR KEY SHARE` until that transaction ends, so a
-/// concurrent [`delete`] (which locks the user `FOR UPDATE`) waits for the
+/// concurrent [`delete_on`] (which locks the user `FOR UPDATE`) waits for the
 /// caller and then sees what it wrote (a key or code naming the user); one
 /// that got there first leaves no row, which is `UnknownName` here rather
 /// than a foreign-key failure at the caller's write.
 ///
-/// Lock order: call this before locking any team row. [`delete`] locks the
+/// Lock order: call this before locking any team row. [`delete_on`] locks the
 /// user and then its personal team, so a caller holding a team while it
 /// waits here could deadlock with it (`teams::set_member` resolves the user
 /// first for this reason).
@@ -990,7 +991,7 @@ const SOLE_OWNED_TEAMS: &str = "\
 /// be deleted`), so a client matches on this prefix.
 pub const SHARED_MEMBER_REFUSAL: &str = "the user is a member of shared team(s)";
 
-/// What [`delete`] allows and requires of the user it deletes.
+/// What [`delete_on`] allows and requires of the user it deletes.
 ///
 /// The `Default` is the API's: the last admin user stays, and shared-team
 /// memberships go with the user.
@@ -1015,7 +1016,7 @@ impl DeleteOptions {
 }
 
 /// How the person deleting their own account proved it is them, moments
-/// before ([`delete_own`]). Checked again under the user's row lock, so a
+/// before ([`delete_own_on`]). Checked again under the user's row lock, so a
 /// change that commits in between refuses the deletion.
 // `Copy`: two borrowed values, cheap to pass by value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1064,7 +1065,7 @@ impl std::fmt::Debug for OwnDeletion<'_> {
 }
 
 /// Deletes the signed-in person's own account (issue #355): exactly
-/// [`delete`] with the API's [`DeleteOptions`] (so the last admin user
+/// [`delete_on`] with the API's [`DeleteOptions`] (so the last admin user
 /// stays, and every other refusal of `delete` applies), the person as the
 /// actor, and, under the user's row lock, three more checks:
 /// - the name still names `own.user_id`;
@@ -1090,16 +1091,18 @@ impl std::fmt::Debug for OwnDeletion<'_> {
 /// # Errors
 /// [`OkfError::Unauthenticated`] once the session has ended or the user is
 /// gone; [`OkfError::Forbidden`] when the password changed or the passkey
-/// was removed since it was checked; otherwise as [`delete`].
+/// was removed since it was checked; otherwise as [`delete_on`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete_own"))]
-pub async fn delete_own(
+pub async fn delete_own_on(
     pool: &PgPool,
+    store: &CatalogDb,
     own: &OwnDeletion<'_>,
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<DeletedUser, OkfError> {
-    match delete_checked(
+    match delete_in(
         pool,
+        store,
         own.name,
         DeleteOptions::default(),
         Some(own),
@@ -1112,6 +1115,25 @@ pub async fn delete_own(
         Err(OkfError::UnknownName { noun: "user", .. }) => Err(session_ended()),
         other => other,
     }
+}
+
+/// [`delete_own_on`] on the `main` store inside the account database, on a
+/// pool of its own: for the tests, which hold only the account pool.
+///
+/// # Errors
+/// As [`delete_own_on`].
+#[cfg(test)]
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) async fn delete_own(
+    pool: &PgPool,
+    own: &OwnDeletion<'_>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<DeletedUser, OkfError> {
+    let main = CatalogDb::main_in(pool);
+    let deleted = delete_own_on(pool, &main, own, actor, now).await;
+    main.executor().close().await;
+    deleted
 }
 
 /// The 401 for a deletion whose session (or user) is gone.
@@ -1128,7 +1150,7 @@ fn session_ended() -> OkfError {
     }
 }
 
-/// [`delete_own`]'s checks, run under the user's row lock (which every
+/// [`delete_own_on`]'s checks, run under the user's row lock (which every
 /// writer of the password, a passkey or a session's user takes first, or
 /// which, for a session revoke, never follows a session row lock).
 ///
@@ -1139,7 +1161,7 @@ fn session_ended() -> OkfError {
 /// * `now` - the server clock.
 ///
 /// # Errors
-/// As [`delete_own`]; [`OkfError::Database`].
+/// As [`delete_own_on`]; [`OkfError::Database`].
 #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.check_own_deletion"))]
 async fn check_own_deletion(
     conn: &mut PgConnection,
@@ -1198,7 +1220,7 @@ async fn check_own_deletion(
 /// Lock order: every admin row in id order, then the user with every other
 /// user its entries resolve (the actor, its credential's owner, the people
 /// of its open changesets' personal owner teams), in id order
-/// ([`audit::lock_people`], as [`set_admin`]), then (for [`delete_own`]
+/// ([`audit::lock_people`], as [`set_admin`]), then (for [`delete_own_on`]
 /// only) the asking session's row `FOR SHARE`, then its personal team, then
 /// its shared teams in id order, then its keys and grants in id order, then
 /// their open changesets in id order. A key or code being created for the
@@ -1228,30 +1250,55 @@ async fn check_own_deletion(
 /// team owns, the shared teams it is the only owner of, or that it is the
 /// last admin user; [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete"))]
-pub async fn delete(
+pub async fn delete_on(
+    pool: &PgPool,
+    store: &CatalogDb,
+    name: &str,
+    options: DeleteOptions,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<DeletedUser, OkfError> {
+    delete_in(pool, store, name, options, None, actor, now).await
+}
+
+/// [`delete_on`] on the `main` store inside the account database, on a pool
+/// of its own: for the tests, which hold only the account pool.
+///
+/// # Errors
+/// As [`delete_on`].
+#[cfg(test)]
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) async fn delete(
     pool: &PgPool,
     name: &str,
     options: DeleteOptions,
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<DeletedUser, OkfError> {
-    delete_checked(pool, name, options, None, actor, now).await
+    let main = CatalogDb::main_in(pool);
+    let deleted = delete_on(pool, &main, name, options, actor, now).await;
+    // Closes the connections now rather than when the last handle drops.
+    main.executor().close().await;
+    deleted
 }
 
-/// The one deletion path: [`delete`], plus [`delete_own`]'s checks when
-/// `own` is given, run right after the user's row is locked.
+/// The one deletion path: [`delete_on`], plus [`delete_own_on`]'s checks when
+/// `own` is given, run right after the user's row is locked. The store half
+/// (the open changesets of the user's keys) is on `store`: until Task 13
+/// fans it out over every store, the caller passes the `main` store.
 ///
 /// # Arguments
-/// As [`delete`]; `own` - a self-service deletion's request, if it is one.
+/// As [`delete_on`]; `own` - a self-service deletion's request, if it is one.
 ///
 /// # Returns
 /// What went.
 ///
 /// # Errors
-/// As [`delete`] and [`delete_own`].
-#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete_checked"))]
-async fn delete_checked(
+/// As [`delete_on`] and [`delete_own_on`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete_in"))]
+async fn delete_in(
     pool: &PgPool,
+    store: &CatalogDb,
     name: &str,
     options: DeleteOptions,
     own: Option<&OwnDeletion<'_>>,
@@ -1272,7 +1319,7 @@ async fn delete_checked(
             .await?;
     // The catalogs of its keys' open changesets, read without a lock: the
     // discard entries resolve their personal owner teams' people.
-    let open_catalogs = open_changeset_catalogs(&mut tx, name).await?;
+    let open_catalogs = open_changeset_catalogs(&mut tx, store, name).await?;
     let open_catalogs: Vec<&str> = open_catalogs.iter().map(String::as_str).collect();
     // Then the user `FOR UPDATE`, so a credential or membership created
     // concurrently (its foreign-key check takes `FOR KEY SHARE`) waits, with
@@ -1378,7 +1425,8 @@ async fn delete_checked(
         .bind(&user_id)
         .fetch_one(&mut *tx)
         .await?;
-    let discarded = discard_open_changesets(&mut tx, &user_id, &keys, actor, now).await?;
+    let (discarded, store_tx) =
+        discard_open_changesets(&mut tx, store, &user_id, &keys, actor, now).await?;
     let deleted = DeletedUser {
         keys: count_of(keys.len()),
         codes,
@@ -1446,6 +1494,11 @@ async fn delete_checked(
         .chain(member_of.iter().map(|team| Invalidation::team(team)))
         .collect();
     invalidate(&mut tx, &invalidations).await?;
+    // The store's discards commit first (until Task 13): a failure of the
+    // account commit then leaves changesets discarded for a user who stays.
+    if let Some(store_tx) = store_tx {
+        store_tx.commit().await?;
+    }
     tx.commit().await?;
     Ok(deleted)
 }
@@ -1491,9 +1544,9 @@ fn count_of(rows: usize) -> i64 {
 /// order (`catalogs`).
 ///
 /// # Arguments
-/// * `conn` - the deletion's transaction. In release 1 the store is the
-///   account database, so one connection reaches both sides; Task 13 makes
-///   the store half a fan-out over every store.
+/// * `conn` - the deletion's account transaction.
+/// * `store` - the store holding the changesets (Task 13 makes this half a
+///   fan-out over every store).
 /// * `name` - the user's name, already checked.
 ///
 /// # Returns
@@ -1504,6 +1557,7 @@ fn count_of(rows: usize) -> i64 {
 #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.open_changeset_catalogs"))]
 async fn open_changeset_catalogs(
     conn: &mut PgConnection,
+    store: &CatalogDb,
     name: &str,
 ) -> Result<Vec<String>, OkfError> {
     let key_ids: Vec<String> = sqlx::query_scalar(
@@ -1520,8 +1574,9 @@ async fn open_changeset_catalogs(
          WHERE key_id = ANY($1) AND state = 'open'",
     )
     .bind(&key_ids)
-    .fetch_all(&mut *conn)
-    .await?;
+    .fetch_all(store.executor())
+    .await
+    .map_err(|error| store.classify(error))?;
     if catalog_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -1548,27 +1603,31 @@ async fn open_changeset_catalogs(
 /// that lock.
 ///
 /// # Arguments
-/// * `conn` - the deletion's transaction, holding the user's keys. In
-///   release 1 the store is the account database, so one connection reaches
-///   both sides; Task 13 makes the store half a fan-out over every store.
+/// * `conn` - the deletion's account transaction, holding the user's keys.
+/// * `store` - the store holding the changesets (Task 13 makes this half a
+///   fan-out over every store).
 /// * `user_id` - the user being deleted.
 /// * `key_ids` - its keys and grants, locked by the caller.
 /// * `actor` - who, for the entries.
 /// * `now` - the server clock.
 ///
 /// # Returns
-/// How many were discarded.
+/// How many were discarded, and the store transaction that holds the
+/// discards (`None` when there were none): the caller commits it before its
+/// own, so the two databases agree unless the second commit fails.
 ///
 /// # Errors
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.discard_open_changesets"))]
 async fn discard_open_changesets(
     conn: &mut PgConnection,
+    store: &CatalogDb,
     user_id: &str,
     key_ids: &[String],
     actor: &AuditActor,
     now: DateTime<Utc>,
-) -> Result<i64, OkfError> {
+) -> Result<(i64, Option<sqlx::Transaction<'static, sqlx::Postgres>>), OkfError> {
+    let mut store_tx = store.begin().await?;
     // Each row: id, handle, catalog id, entry count.
     let open: Vec<(i64, String, i64, i64)> = sqlx::query_as(
         "SELECT c.id, c.handle, c.catalog_id, \
@@ -1577,10 +1636,10 @@ async fn discard_open_changesets(
          WHERE c.key_id = ANY($1) AND c.state = 'open' ORDER BY c.id FOR UPDATE",
     )
     .bind(key_ids)
-    .fetch_all(&mut *conn)
+    .fetch_all(&mut *store_tx)
     .await?;
     if open.is_empty() {
-        return Ok(0);
+        return Ok((0, None));
     }
     let mut catalog_ids: Vec<i64> = open
         .iter()
@@ -1603,7 +1662,7 @@ async fn discard_open_changesets(
         let Some(catalog) = names.get(catalog_id) else {
             continue;
         };
-        changesets::set_state(conn, *id, ChangesetState::Discarded, now).await?;
+        changesets::set_state(&mut store_tx, *id, ChangesetState::Discarded, now).await?;
         let teams = audit::catalog_teams(conn, *catalog_id).await?;
         audit::record(
             conn,
@@ -1624,7 +1683,7 @@ async fn discard_open_changesets(
         .await?;
         discarded += 1;
     }
-    Ok(discarded)
+    Ok((discarded, Some(store_tx)))
 }
 
 #[cfg(test)]
@@ -2640,7 +2699,7 @@ pub(crate) mod tests {
     async fn a_feedback_submit_that_waited_on_the_users_deletion_is_refused() {
         let db = test_db().await;
         seed_user(&db.pool, "alice", None).await;
-        // The deletion's lock, held `FOR UPDATE` as `delete_checked` does.
+        // The deletion's lock, held `FOR UPDATE` as `delete_in` does.
         let mut deleting = db.pool.begin().await.unwrap();
         let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
             .fetch_one(&mut *deleting)
@@ -2837,7 +2896,7 @@ pub(crate) mod tests {
         .unwrap();
         // A revision alice's key wrote: history keeps its actor text.
         sqlx::query(
-            "INSERT INTO revisions (catalog_id, path, revision, op, content, executable, actor, \
+            "INSERT INTO catalog.revisions (catalog_id, path, revision, op, content, executable, actor, \
                                     message, created_at) \
              SELECT id, 'a.md', 1, 'create', 'x', false, 'alice-laptop', 'm', $1 \
              FROM catalogs WHERE name = 'shared'",
@@ -2893,7 +2952,7 @@ pub(crate) mod tests {
         assert_eq!(
             count(
                 &db.pool,
-                "SELECT count(*) FROM revisions WHERE actor = 'alice-laptop'"
+                "SELECT count(*) FROM catalog.revisions WHERE actor = 'alice-laptop'"
             )
             .await,
             1
@@ -2933,7 +2992,7 @@ pub(crate) mod tests {
             .fetch_one(&db.pool)
             .await
             .unwrap();
-        let mut tx = db.pool.begin().await.unwrap();
+        let mut tx = CatalogDb::main_of(&db.pool).begin().await.unwrap();
         let changeset = changesets::open(&mut tx, catalog_id, &key, "alice-laptop", now())
             .await
             .unwrap();
@@ -2950,11 +3009,12 @@ pub(crate) mod tests {
         .unwrap();
 
         assert_eq!(deleted.discarded, 1);
-        let state: String = sqlx::query_scalar("SELECT state FROM changesets WHERE id = $1")
-            .bind(changeset.id)
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
+        let state: String =
+            sqlx::query_scalar("SELECT state FROM catalog.changesets WHERE id = $1")
+                .bind(changeset.id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
         assert_eq!(state, "discarded");
         let (target, teams, details): (Option<String>, Vec<i64>, serde_json::Value) =
             sqlx::query_as(
@@ -3009,7 +3069,7 @@ pub(crate) mod tests {
         let alice_two = key_for(pool, "alice", "alice-two", false).await;
         let alice_gone = key_for(pool, "alice", "alice-gone", false).await;
         let bob_key = key_for(pool, "bob", "bob-one", false).await;
-        let mut tx = pool.begin().await.unwrap();
+        let mut tx = CatalogDb::main_of(pool).begin().await.unwrap();
         let first = changesets::open(&mut tx, shared, &alice_one, "alice-one", now())
             .await
             .unwrap();
@@ -3054,17 +3114,28 @@ pub(crate) mod tests {
         let [first, ..] = split_fixture(&db.pool).await;
         seed_user(&db.pool, "carol", None).await;
         let mut conn = db.pool.acquire().await.unwrap();
+        let store = CatalogDb::main_of(&db.pool);
 
-        let alice = open_changeset_catalogs(&mut conn, "alice").await.unwrap();
-        let bob = open_changeset_catalogs(&mut conn, "bob").await.unwrap();
-        let carol = open_changeset_catalogs(&mut conn, "carol").await.unwrap();
-        let nobody = open_changeset_catalogs(&mut conn, "nobody").await.unwrap();
-        sqlx::query("UPDATE changesets SET state = 'discarded' WHERE id = $1")
+        let alice = open_changeset_catalogs(&mut conn, &store, "alice")
+            .await
+            .unwrap();
+        let bob = open_changeset_catalogs(&mut conn, &store, "bob")
+            .await
+            .unwrap();
+        let carol = open_changeset_catalogs(&mut conn, &store, "carol")
+            .await
+            .unwrap();
+        let nobody = open_changeset_catalogs(&mut conn, &store, "nobody")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE catalog.changesets SET state = 'discarded' WHERE id = $1")
             .bind(first)
             .execute(&mut *conn)
             .await
             .unwrap();
-        let alice_after = open_changeset_catalogs(&mut conn, "alice").await.unwrap();
+        let alice_after = open_changeset_catalogs(&mut conn, &store, "alice")
+            .await
+            .unwrap();
 
         assert_eq!(alice, ["other", "shared"]);
         assert_eq!(bob, ["shared"]);
@@ -3094,7 +3165,7 @@ pub(crate) mod tests {
 
         assert_eq!(deleted.discarded, 2);
         let states: Vec<(i64, String)> =
-            sqlx::query_as("SELECT id, state FROM changesets ORDER BY id")
+            sqlx::query_as("SELECT id, state FROM catalog.changesets ORDER BY id")
                 .fetch_all(&db.pool)
                 .await
                 .unwrap();
@@ -3603,8 +3674,15 @@ pub(crate) mod tests {
         assert_eq!(count(&db.pool, "SELECT count(*) FROM api_keys").await, 0);
     }
 
+    /// The foreign key from `changesets.key_id` to `api_keys` is gone (0041,
+    /// spec Decision 9), and with it the lock an open in flight held on its
+    /// key: a deletion no longer waits for the open, so the changeset the
+    /// open then commits is left open under a key that does not exist. Task 13
+    /// closes this with the store cleanup (`store_cleanups`, plan P13); until
+    /// then the changeset is harmless, since nothing can act as the deleted
+    /// key, and its readers see a deleted key (a `None` key name).
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_changeset_opened_while_deletion_waits_is_discarded_with_the_user() {
+    async fn a_changeset_opened_while_a_deletion_runs_is_left_open_under_a_deleted_key() {
         let db = test_db().await;
         seed_user(&db.pool, "alice", None).await;
         seed_catalog_owned_by(&db.pool, crate::db::TEST_TEAM).await;
@@ -3613,45 +3691,38 @@ pub(crate) mod tests {
             .fetch_one(&db.pool)
             .await
             .unwrap();
-        // An open in flight holds the key `FOR KEY SHARE` (its foreign-key
-        // check) until it commits.
-        let mut opening = db.pool.begin().await.unwrap();
+        let mut opening = CatalogDb::main_of(&db.pool).begin().await.unwrap();
         let changeset = changesets::open(&mut opening, catalog_id, &key, "alice-laptop", now())
             .await
             .unwrap();
-        let pool = db.pool.clone();
-        let deletion = tokio::spawn(async move {
+
+        let deleted = tokio::time::timeout(
+            LOCK_WAIT,
             delete(
-                &pool,
+                &db.pool,
                 "alice",
                 DeleteOptions::default(),
                 &AuditActor::cli(),
                 now(),
-            )
-            .await
-        });
-        until_a_lock_is_awaited(&db.pool).await;
+            ),
+        )
+        .await
+        .expect("the deletion does not wait for an open in flight")
+        .unwrap();
         opening.commit().await.unwrap();
 
-        let deleted = tokio::time::timeout(LOCK_WAIT, deletion)
-            .await
-            .expect("the delete waited for the open for too long")
-            .unwrap()
-            .unwrap();
-
+        assert_eq!(deleted.discarded, 0, "the deletion could not see the open");
+        let (state, key_id): (String, Option<String>) =
+            sqlx::query_as("SELECT state, key_id FROM catalog.changesets WHERE id = $1")
+                .bind(changeset.id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
         assert_eq!(
-            deleted.discarded, 1,
-            "the waiting deletion saw the changeset"
+            (state.as_str(), key_id.as_deref()),
+            ("open", Some(key.as_str()))
         );
-        let state: String = sqlx::query_scalar("SELECT state FROM changesets WHERE id = $1")
-            .bind(changeset.id)
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
-        assert_eq!(
-            state, "discarded",
-            "no changeset is left open without a key"
-        );
+        assert_eq!(count(&db.pool, "SELECT count(*) FROM api_keys").await, 0);
     }
 
     /// How the deletion's actor names the non-admin user the writer holds.

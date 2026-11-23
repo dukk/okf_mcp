@@ -224,27 +224,30 @@ fn no_longer_open(changeset_id: i64) -> OkfError {
     }
 }
 
-/// Takes the catalog row `FOR KEY SHARE` for the rest of the transaction:
-/// the first lock of every write to changesets or entries (Decision 3).
+/// Takes the catalog's `catalog_state` row `FOR KEY SHARE` for the rest of
+/// the transaction: the first lock of every write to changesets or entries
+/// (Decision 3). The row is on the catalog's store, so `conn` is a store
+/// transaction.
 ///
 /// `FOR KEY SHARE` lets other writers and publishes (whose `UPDATE` of
-/// `generation` takes `FOR NO KEY UPDATE`) through, and holds off only
-/// `catalogs::delete`'s `FOR UPDATE`.
+/// `generation` takes `FOR NO KEY UPDATE`) through, and holds off only a
+/// delete's `FOR UPDATE`.
 ///
 /// # Arguments
-/// * `conn` - the transaction's connection (pass `&mut tx`).
+/// * `conn` - the store transaction's connection (pass `&mut tx`).
 /// * `catalog_id` - the catalog.
 ///
 /// # Errors
-/// [`OkfError::Refused`] with [`CATALOG_GONE`] if the row is gone (a delete
-/// committed while this waited); [`OkfError::Database`].
+/// [`OkfError::Refused`] with [`CATALOG_GONE`] if the row is gone or marked
+/// deleted (a delete committed while this waited); [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.lock_catalog", catalog_id = catalog_id))]
 pub async fn lock_catalog(conn: &mut PgConnection, catalog_id: i64) -> Result<(), OkfError> {
-    let locked: Option<i64> =
-        sqlx::query_scalar("SELECT id FROM catalogs WHERE id = $1 FOR KEY SHARE")
-            .bind(catalog_id)
-            .fetch_optional(&mut *conn)
-            .await?;
+    let locked: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM catalog_state WHERE id = $1 AND deleted_at IS NULL FOR KEY SHARE",
+    )
+    .bind(catalog_id)
+    .fetch_optional(&mut *conn)
+    .await?;
     if locked.is_none() {
         return Err(OkfError::Refused {
             reason: CATALOG_GONE.to_string(),
@@ -936,7 +939,7 @@ mod tests {
     async fn open_returns_a_fresh_handle_each_time_and_by_handle_finds_it() {
         let db = test_db().await;
         let pg = setup(&db.pool).await;
-        let mut tx = db.pool.begin().await.unwrap();
+        let mut tx = db.store().begin().await.unwrap();
         lock_catalog(&mut tx, pg).await.unwrap();
 
         let first = open(&mut tx, pg, "alice", "agent:a", now()).await.unwrap();
@@ -950,34 +953,49 @@ mod tests {
             (ChangesetState::Open, Some("alice"), "agent:a")
         );
         assert_eq!(
-            by_handle(&db.pool, &first.handle).await.unwrap(),
+            by_handle(&db.store(), &first.handle).await.unwrap(),
             Some(first)
         );
-        assert_eq!(by_handle(&db.pool, "no-such-handle").await.unwrap(), None);
+        assert_eq!(
+            by_handle(&db.store(), "no-such-handle").await.unwrap(),
+            None
+        );
         // A NUL is no handle, not a database error (issue #339).
-        assert_eq!(by_handle(&db.pool, "a\0b").await.unwrap(), None);
+        assert_eq!(by_handle(&db.store(), "a\0b").await.unwrap(), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn upsert_replaces_the_entry_and_bumps_the_version() {
         let db = test_db().await;
         let pg = setup(&db.pool).await;
-        let changeset = opened(&db.pool, pg, "alice", now()).await;
+        let changeset = opened(&db.store(), pg, "alice", now()).await;
         let later = now() + TimeDelta::minutes(1);
         let mut replayed = entry("log.md", Some("# Log\n"));
         replayed.replay = Some(serde_json::json!([{"op": "log", "date": "2026-11-03"}]));
 
-        put(&db.pool, &changeset, &entry("a.md", Some("one\n")), now())
+        put(
+            &db.store(),
+            &changeset,
+            &entry("a.md", Some("one\n")),
+            now(),
+        )
+        .await
+        .unwrap();
+        put(
+            &db.store(),
+            &changeset,
+            &entry("a.md", Some("two\n")),
+            later,
+        )
+        .await
+        .unwrap();
+        put(&db.store(), &changeset, &replayed, later)
             .await
             .unwrap();
-        put(&db.pool, &changeset, &entry("a.md", Some("two\n")), later)
-            .await
-            .unwrap();
-        put(&db.pool, &changeset, &replayed, later).await.unwrap();
 
-        let stored = entries(&db.pool, changeset.id).await.unwrap();
+        let stored = entries(&db.store(), changeset.id).await.unwrap();
         assert_eq!(stored, [entry("a.md", Some("two\n")), replayed]);
-        let after = by_id(&db.pool, changeset.id).await.unwrap().unwrap();
+        let after = by_id(&db.store(), changeset.id).await.unwrap().unwrap();
         assert_eq!((after.version, after.updated_at), (3, later));
     }
 
@@ -985,27 +1003,27 @@ mod tests {
     async fn remove_entries_drops_the_named_paths_or_all_of_them() {
         let db = test_db().await;
         let pg = setup(&db.pool).await;
-        let changeset = opened(&db.pool, pg, "alice", now()).await;
+        let changeset = opened(&db.store(), pg, "alice", now()).await;
         for path in ["a.md", "b.md", "c.md"] {
-            put(&db.pool, &changeset, &entry(path, Some("x\n")), now())
+            put(&db.store(), &changeset, &entry(path, Some("x\n")), now())
                 .await
                 .unwrap();
         }
         let named = ["b.md".to_string(), "nope.md".to_string()];
 
-        let mut tx = db.pool.begin().await.unwrap();
+        let mut tx = db.store().begin().await.unwrap();
         lock_catalog(&mut tx, pg).await.unwrap();
         let one = remove_entries(&mut tx, changeset.id, Some(&named), now())
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        let left: Vec<String> = entries(&db.pool, changeset.id)
+        let left: Vec<String> = entries(&db.store(), changeset.id)
             .await
             .unwrap()
             .into_iter()
             .map(|entry| entry.path)
             .collect();
-        let mut tx = db.pool.begin().await.unwrap();
+        let mut tx = db.store().begin().await.unwrap();
         lock_catalog(&mut tx, pg).await.unwrap();
         let rest = remove_entries(&mut tx, changeset.id, None, now())
             .await
@@ -1015,10 +1033,10 @@ mod tests {
         assert_eq!(one, 1);
         assert_eq!(left, ["a.md", "c.md"]);
         assert_eq!(rest, 2);
-        assert!(entries(&db.pool, changeset.id).await.unwrap().is_empty());
+        assert!(entries(&db.store(), changeset.id).await.unwrap().is_empty());
         // Three puts and two removals.
         assert_eq!(
-            by_id(&db.pool, changeset.id)
+            by_id(&db.store(), changeset.id)
                 .await
                 .unwrap()
                 .unwrap()
@@ -1031,20 +1049,20 @@ mod tests {
     async fn set_state_closes_a_changeset_once_and_refuses_a_late_write() {
         let db = test_db().await;
         let pg = setup(&db.pool).await;
-        let changeset = opened(&db.pool, pg, "alice", now()).await;
+        let changeset = opened(&db.store(), pg, "alice", now()).await;
 
-        let mut tx = db.pool.begin().await.unwrap();
+        let mut tx = db.store().begin().await.unwrap();
         lock_catalog(&mut tx, pg).await.unwrap();
         set_state(&mut tx, changeset.id, ChangesetState::Published, now())
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        let mut tx = db.pool.begin().await.unwrap();
+        let mut tx = db.store().begin().await.unwrap();
         let twice = set_state(&mut tx, changeset.id, ChangesetState::Discarded, now()).await;
         drop(tx);
-        let late_write = put(&db.pool, &changeset, &entry("a.md", Some("x\n")), now()).await;
+        let late_write = put(&db.store(), &changeset, &entry("a.md", Some("x\n")), now()).await;
 
-        let closed = by_id(&db.pool, changeset.id).await.unwrap().unwrap();
+        let closed = by_id(&db.store(), changeset.id).await.unwrap().unwrap();
         assert_eq!(closed.state, ChangesetState::Published);
         assert!(matches!(twice, Err(OkfError::Refused { .. })));
         assert!(matches!(late_write, Err(OkfError::Busy { .. })));
@@ -1055,19 +1073,19 @@ mod tests {
         let db = test_db().await;
         let pg = setup(&db.pool).await;
         let old = now() - TimeDelta::hours(3);
-        let edited = opened(&db.pool, pg, "alice", old).await;
-        put(&db.pool, &edited, &entry("b.md", Some("b\n")), old)
+        let edited = opened(&db.store(), pg, "alice", old).await;
+        put(&db.store(), &edited, &entry("b.md", Some("b\n")), old)
             .await
             .unwrap();
-        put(&db.pool, &edited, &entry("a.md", None), old)
+        put(&db.store(), &edited, &entry("a.md", None), old)
             .await
             .unwrap();
-        let empty = opened(&db.pool, pg, "alice", now()).await;
-        let published = opened(&db.pool, pg, "alice", old).await;
-        put(&db.pool, &published, &entry("a.md", Some("a\n")), old)
+        let empty = opened(&db.store(), pg, "alice", now()).await;
+        let published = opened(&db.store(), pg, "alice", old).await;
+        put(&db.store(), &published, &entry("a.md", Some("a\n")), old)
             .await
             .unwrap();
-        let mut tx = db.pool.begin().await.unwrap();
+        let mut tx = db.store().begin().await.unwrap();
         lock_catalog(&mut tx, pg).await.unwrap();
         set_state(&mut tx, published.id, ChangesetState::Published, old)
             .await
@@ -1132,8 +1150,8 @@ mod tests {
     async fn open_for_catalogs_narrows_by_name_or_lists_every_catalog() {
         let db = test_db().await;
         let pg = setup(&db.pool).await;
-        let first = opened(&db.pool, pg, "alice", now() - TimeDelta::hours(1)).await;
-        let second = opened(&db.pool, pg, "alice", now()).await;
+        let first = opened(&db.store(), pg, "alice", now() - TimeDelta::hours(1)).await;
+        let second = opened(&db.store(), pg, "alice", now()).await;
         let names =
             |list: &[&str]| -> Vec<String> { list.iter().map(|name| (*name).to_owned()).collect() };
 
@@ -1225,26 +1243,37 @@ mod tests {
         assert!(alpha > pg);
         let hour = |hours: i64| now() - TimeDelta::hours(hours);
         // Two changesets tie on `updated_at` in `pg`: the id breaks the tie.
-        let pg_bob_old = opened(&db.pool, pg, "bob", hour(2)).await;
-        let pg_alice_tie = opened(&db.pool, pg, "alice", hour(1)).await;
-        let pg_bob_tie = opened(&db.pool, pg, "bob", hour(1)).await;
+        let pg_bob_old = opened(&db.store(), pg, "bob", hour(2)).await;
+        let pg_alice_tie = opened(&db.store(), pg, "alice", hour(1)).await;
+        let pg_bob_tie = opened(&db.store(), pg, "bob", hour(1)).await;
         // The newest change, so only the catalog name puts it first.
-        let alpha_alice = opened(&db.pool, alpha, "alice", hour(0)).await;
-        put(&db.pool, &alpha_alice, &entry("z.md", Some("z\n")), hour(0))
-            .await
-            .unwrap();
-        put(&db.pool, &alpha_alice, &entry("m.md", Some("m\n")), hour(0))
-            .await
-            .unwrap();
+        let alpha_alice = opened(&db.store(), alpha, "alice", hour(0)).await;
+        put(
+            &db.store(),
+            &alpha_alice,
+            &entry("z.md", Some("z\n")),
+            hour(0),
+        )
+        .await
+        .unwrap();
+        put(
+            &db.store(),
+            &alpha_alice,
+            &entry("m.md", Some("m\n")),
+            hour(0),
+        )
+        .await
+        .unwrap();
         // A published changeset is not listed.
-        let closed = opened(&db.pool, pg, "alice", hour(4)).await;
-        let mut tx = db.pool.begin().await.unwrap();
+        let closed = opened(&db.store(), pg, "alice", hour(4)).await;
+        let mut tx = db.store().begin().await.unwrap();
         lock_catalog(&mut tx, pg).await.unwrap();
         set_state(&mut tx, closed.id, ChangesetState::Published, hour(4))
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        // The key row goes (its changesets keep `key_id` NULL).
+        // The key row goes. No foreign key nulls the id its changesets keep
+        // (0041): they are listed with no key name, a deleted key's.
         sqlx::query("DELETE FROM api_keys WHERE id = 'bob'")
             .execute(&db.pool)
             .await
@@ -1290,6 +1319,7 @@ mod tests {
             ]
         );
         assert_eq!(by_name, by_id);
+        assert_eq!(by_id[1].changeset.key_id.as_deref(), Some("bob"));
         let alpha_ids: Vec<i64> = both.iter().map(|row| row.changeset.id).collect();
         assert_eq!(alpha_ids, [alpha_alice.id]);
         assert!(disjoint.is_empty());
@@ -1302,29 +1332,29 @@ mod tests {
         let db = test_db().await;
         let pg = setup(&db.pool).await;
         let old = now() - TimeDelta::hours(25);
-        let empty_old = opened(&db.pool, pg, "alice", old).await;
-        let empty_new = opened(&db.pool, pg, "alice", now()).await;
-        let full_old = opened(&db.pool, pg, "alice", old).await;
-        put(&db.pool, &full_old, &entry("a.md", Some("a\n")), old)
+        let empty_old = opened(&db.store(), pg, "alice", old).await;
+        let empty_new = opened(&db.store(), pg, "alice", now()).await;
+        let full_old = opened(&db.store(), pg, "alice", old).await;
+        put(&db.store(), &full_old, &entry("a.md", Some("a\n")), old)
             .await
             .unwrap();
 
-        let pruned = prune_empty(&db.pool, now() - TimeDelta::hours(24), now())
+        let pruned = prune_empty(&db.store(), now() - TimeDelta::hours(24), now())
             .await
             .unwrap();
 
         let state = |row: Option<ChangesetRow>| row.unwrap().state;
         assert_eq!(pruned, 1);
         assert_eq!(
-            state(by_id(&db.pool, empty_old.id).await.unwrap()),
+            state(by_id(&db.store(), empty_old.id).await.unwrap()),
             ChangesetState::Discarded
         );
         assert_eq!(
-            state(by_id(&db.pool, empty_new.id).await.unwrap()),
+            state(by_id(&db.store(), empty_new.id).await.unwrap()),
             ChangesetState::Open
         );
         assert_eq!(
-            state(by_id(&db.pool, full_old.id).await.unwrap()),
+            state(by_id(&db.store(), full_old.id).await.unwrap()),
             ChangesetState::Open
         );
     }
@@ -1333,8 +1363,8 @@ mod tests {
     async fn the_prune_passes_by_a_changeset_a_write_holds() {
         let db = test_db().await;
         let pg = setup(&db.pool).await;
-        let existing = opened(&db.pool, pg, "alice", now()).await;
-        let mut writer = db.pool.begin().await.unwrap();
+        let existing = opened(&db.store(), pg, "alice", now()).await;
+        let mut writer = db.store().begin().await.unwrap();
         lock_catalog(&mut writer, pg).await.unwrap();
         // As a write takes it: the row stays locked until `writer` ends.
         let found = lock(&mut writer, existing.id)
@@ -1345,13 +1375,17 @@ mod tests {
 
         // `SKIP LOCKED`: the prune neither waits for `writer` nor discards
         // the changeset it holds, though it is empty and idle past the cutoff.
-        let while_held = tokio::time::timeout(PATIENCE, prune_empty(&db.pool, cutoff, now()))
+        let while_held = tokio::time::timeout(PATIENCE, prune_empty(&db.store(), cutoff, now()))
             .await
             .expect("the prune must skip the held row, not wait for it")
             .unwrap();
-        let state_while_held = by_id(&db.pool, existing.id).await.unwrap().unwrap().state;
+        let state_while_held = by_id(&db.store(), existing.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state;
         writer.rollback().await.unwrap();
-        let after = prune_empty(&db.pool, cutoff, now()).await.unwrap();
+        let after = prune_empty(&db.store(), cutoff, now()).await.unwrap();
 
         assert_eq!(found.id, existing.id);
         assert_eq!((while_held, state_while_held), (0, ChangesetState::Open));
@@ -1383,7 +1417,7 @@ mod tests {
         // the writer commits.
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
         let (commit_tx, commit_rx) = tokio::sync::oneshot::channel::<()>();
-        let pool = db.pool.clone();
+        let pool = db.store();
         let writer = tokio::spawn(async move {
             let mut tx = pool.begin().await?;
             lock_catalog(&mut tx, pg).await?;
@@ -1422,15 +1456,15 @@ mod tests {
     async fn a_write_waits_for_a_delete_then_sees_the_catalog_gone() {
         let db = test_db().await;
         let pg = setup(&db.pool).await;
-        // The first two steps of `catalogs::delete`, held open: the catalog
-        // row `FOR UPDATE`, then its open changesets.
-        let mut deleter = db.pool.begin().await.unwrap();
-        sqlx::query("SELECT id FROM catalogs WHERE id = $1 FOR UPDATE")
+        // The store half of `catalogs::delete`, held open: the catalog's
+        // state row `FOR UPDATE`, then its removal.
+        let mut deleter = db.store().begin().await.unwrap();
+        sqlx::query("SELECT id FROM catalog_state WHERE id = $1 FOR UPDATE")
             .bind(pg)
             .execute(&mut *deleter)
             .await
             .unwrap();
-        let pool = db.pool.clone();
+        let pool = db.store();
         let writer = tokio::spawn(async move {
             let mut tx = pool.begin().await?;
             lock_catalog(&mut tx, pg).await?;
@@ -1440,7 +1474,7 @@ mod tests {
         });
         until_a_lock_is_awaited(&db.pool).await;
 
-        sqlx::query("DELETE FROM catalogs WHERE id = $1")
+        sqlx::query("DELETE FROM catalog_state WHERE id = $1")
             .bind(pg)
             .execute(&mut *deleter)
             .await
@@ -1452,7 +1486,7 @@ mod tests {
             .unwrap();
 
         assert!(matches!(written, Err(OkfError::Refused { reason }) if reason == CATALOG_GONE));
-        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM changesets")
+        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.changesets")
             .fetch_one(&db.pool)
             .await
             .unwrap();
@@ -1484,10 +1518,10 @@ mod tests {
             now(),
         )
         .await;
-        let row = opened(&db.pool, catalog.id, "writer", now()).await;
-        let mut holder = db.pool.begin().await.unwrap();
+        let row = opened(&db.store(), catalog.id, "writer", now()).await;
+        let mut holder = db.store().begin().await.unwrap();
         lock(&mut holder, row.id).await.unwrap();
-        let pool = db.pool.clone();
+        let pool = db.store();
         // The second locker blocks until `holder` commits.
         let waiting = tokio::spawn(async move {
             let mut tx = pool.begin().await.unwrap();
@@ -1508,7 +1542,7 @@ mod tests {
             .expect("the row still exists");
 
         assert_eq!(seen.state, ChangesetState::Discarded);
-        let mut tx = db.pool.begin().await.unwrap();
+        let mut tx = db.store().begin().await.unwrap();
         assert!(lock(&mut tx, i64::MAX).await.unwrap().is_none());
     }
 
@@ -1518,7 +1552,7 @@ mod tests {
         let catalog_id = setup(&db.pool).await;
         // A long history of closed changesets, and two open ones.
         sqlx::query(
-            "INSERT INTO changesets (catalog_id, actor, state, created_at, updated_at) \
+            "INSERT INTO catalog.changesets (catalog_id, actor, state, created_at, updated_at) \
              SELECT $1, 'alice', 'published', $2, $2 FROM generate_series(1, 20000)",
         )
         .bind(catalog_id)
@@ -1526,18 +1560,18 @@ mod tests {
         .execute(&db.pool)
         .await
         .unwrap();
-        opened(&db.pool, catalog_id, "alice", now()).await;
-        opened(&db.pool, catalog_id, "bob", now()).await;
-        sqlx::query("ANALYZE changesets")
+        opened(&db.store(), catalog_id, "alice", now()).await;
+        opened(&db.store(), catalog_id, "bob", now()).await;
+        sqlx::query("ANALYZE catalog.changesets")
             .execute(&db.pool)
             .await
             .unwrap();
 
-        let total = open_total(&db.pool).await.unwrap();
+        let total = open_total(&db.store()).await.unwrap();
         // The statement `open_total` runs, planned.
         let plan: Vec<String> = // `AssertSqlSafe`: the text is a constant of this module.
         sqlx::query_scalar(sqlx::AssertSqlSafe(format!("EXPLAIN {OPEN_TOTAL_SQL}")))
-            .fetch_all(&db.pool)
+            .fetch_all(&db.store())
             .await
             .unwrap();
 
@@ -1554,16 +1588,16 @@ mod tests {
     async fn a_corrupt_state_is_a_database_error_from_each_reader() {
         let db = test_db().await;
         let pg = setup(&db.pool).await;
-        let row = opened(&db.pool, pg, "alice", now()).await;
-        crate::store::drop_check_constraints(&db.pool, "changesets").await;
-        sqlx::query("UPDATE changesets SET state = 'bogus-state' WHERE id = $1")
+        let row = opened(&db.store(), pg, "alice", now()).await;
+        crate::store::drop_check_constraints(&db.pool, "catalog.changesets").await;
+        sqlx::query("UPDATE catalog.changesets SET state = 'bogus-state' WHERE id = $1")
             .bind(row.id)
             .execute(&db.pool)
             .await
             .unwrap();
 
-        let by_id = by_id(&db.pool, row.id).await;
-        let by_handle = by_handle(&db.pool, &row.handle).await;
+        let by_id = by_id(&db.store(), row.id).await;
+        let by_handle = by_handle(&db.store(), &row.handle).await;
 
         crate::store::assert_decode_error(by_id, "changesets.state", "bogus-state");
         crate::store::assert_decode_error(by_handle, "changesets.state", "bogus-state");

@@ -296,8 +296,8 @@ async fn create_catalog(
     // Validated before the store sees it: a refused name is a 422 that
     // writes nothing.
     let display_name = DisplayName::parse(&new.display_name)?;
-    let row = catalog_rows::create(
-        app.accounts().executor(),
+    let row = catalog_rows::create_in(
+        app.stores(),
         &catalog_rows::NewCatalog {
             name: &new.name,
             display_name: &display_name,
@@ -917,8 +917,8 @@ async fn delete_catalog(
             .require_in(app.directory(), Access::Admin, &catalog)
             .await?;
     }
-    catalog_rows::delete(
-        app.accounts().executor(),
+    catalog_rows::delete_in(
+        app.stores(),
         &catalog,
         query.force,
         &actor,
@@ -1232,10 +1232,8 @@ mod tests {
     async fn the_list_shows_reachable_catalogs_with_counts_and_generation() {
         let test = app().await;
         let keys = keys(&test).await;
-        let generation = catalog_rows::find(test.app.accounts().executor(), "main")
-            .await
-            .expect("main")
-            .generation;
+        let generation =
+            catalog_rows::test_generation(test.app.accounts().executor(), "main").await;
 
         let (status, body) = send(&test, "GET", "/api/v1/catalogs", Some(&keys.read), None).await;
 
@@ -1602,10 +1600,8 @@ mod tests {
         assert_eq!(report["updated"], json!(["AGENTS.md"]));
         assert_eq!(report["deleted"], json!([]));
 
-        let generation = catalog_rows::find(test.app.accounts().executor(), "main")
-            .await
-            .expect("main")
-            .generation;
+        let generation =
+            catalog_rows::test_generation(test.app.accounts().executor(), "main").await;
         let archive = || tarball_of(&[("index.md", "# Main\n\nImported.\n")]);
         let stale = format!(
             "/api/v1/catalogs/main/import?replace=true&expect_generation={}",

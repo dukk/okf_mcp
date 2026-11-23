@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use chrono::Utc;
 use okf_mcp::config::Config;
-use okf_mcp::store::catalogs;
 use okf_mcp::store::ceiling;
 use okf_mcp::store::keys::{self, Access, Grants, NewKey};
 use okf_mcp::store::sign_in_events::{self, Method, Outcome};
@@ -261,7 +260,7 @@ async fn a_last_owner_or_an_owned_catalog_refuses_the_delete_until_cleared() {
     .await
     .expect("add carol");
     crate::support::server::applied(&server.app, async {
-        catalogs::create(
+        crate::support::stores::create_catalog(
             pool,
             &okf_mcp::store::catalogs::NewCatalog {
                 name: "bobs",

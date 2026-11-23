@@ -1071,9 +1071,10 @@ async fn dispatch(
         }
         Command::User(command) => {
             let pool = connect(cli.database_url.as_deref(), &config).await?;
+            let stores = Stores::new(pool.clone(), PoolSettings::from_config(&config));
             print!(
                 "{}",
-                people::user(&pool, &config, command, clock.now()).await?
+                people::user(&pool, &stores, &config, command, clock.now()).await?
             );
         }
         Command::Team(command) => {
@@ -1397,7 +1398,8 @@ async fn run_catalog(
                 description: &description,
                 owner_team: &owner,
             };
-            let catalog = catalogs::create(pool, &new, &AuditActor::cli(), clock.now()).await?;
+            let catalog =
+                catalogs::create_in(stores, &new, &AuditActor::cli(), clock.now()).await?;
             println!("created catalog {}", catalog.name);
         }
         CatalogCommand::Update {
@@ -1423,7 +1425,7 @@ async fn run_catalog(
             );
         }
         CatalogCommand::List => {
-            for catalog in catalogs::list(pool).await? {
+            for catalog in catalogs::list_in(stores).await? {
                 println!("{}", format_catalog(&catalog));
             }
         }
@@ -1446,7 +1448,7 @@ async fn run_catalog(
             );
         }
         CatalogCommand::Delete { name, force } => {
-            catalogs::delete(pool, &name, force, &AuditActor::cli(), clock.now()).await?;
+            catalogs::delete_in(stores, &name, force, &AuditActor::cli(), clock.now()).await?;
             println!("deleted catalog {name}");
         }
         CatalogCommand::RepairIndexes {
@@ -3013,7 +3015,7 @@ mod tests {
         .unwrap();
         let mut changed = Vec::new();
         let dry = repair_catalogs(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             &targets,
             &options(true),
             &mut changed,
@@ -3033,7 +3035,7 @@ mod tests {
         let batch = ["old".to_string(), "nope".to_string(), "other".to_string()];
         let dry_changed = std::mem::take(&mut changed);
         let mixed = repair_catalogs(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             &batch,
             &options(false),
             &mut changed,
@@ -3155,11 +3157,12 @@ mod tests {
             .unwrap();
 
         // Live documents: the starter log.md the import dropped is a tombstone.
-        let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT path, updated_by FROM documents WHERE deleted_at IS NULL")
-                .fetch_all(&db.pool)
-                .await
-                .unwrap();
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT path, updated_by FROM catalog.documents WHERE deleted_at IS NULL",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
         assert_eq!(rows, [("index.md".to_string(), "test".to_string())]);
     }
 
@@ -3212,11 +3215,12 @@ mod tests {
         .unwrap_err();
 
         // Live documents: the starter files the import dropped are tombstones.
-        let rows: Vec<(String, bool)> =
-            sqlx::query_as("SELECT path, executable FROM documents WHERE deleted_at IS NULL")
-                .fetch_all(&db.pool)
-                .await
-                .unwrap();
+        let rows: Vec<(String, bool)> = sqlx::query_as(
+            "SELECT path, executable FROM catalog.documents WHERE deleted_at IS NULL",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
         assert_eq!(rows, [("tools/run.sh".to_string(), true)]);
         assert!(error
             .to_string()

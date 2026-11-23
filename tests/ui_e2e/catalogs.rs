@@ -777,7 +777,7 @@ async fn member_access_read_makes_a_team_catalog_read_only_for_its_members() {
     .await
     .expect("add alice");
     crate::support::server::applied(&server.app, async {
-        okf_mcp::store::catalogs::create(
+        crate::support::stores::create_catalog(
             pool,
             &okf_mcp::store::catalogs::NewCatalog {
                 name: "shared",

@@ -176,11 +176,25 @@ where
     app.catalog_cache().refreshed_if_moved(&state, before).await;
     // Dropping `tx` without `commit()` (any `?` below) rolls everything back:
     // a refused edit leaves no entry behind.
-    let mut tx = db.begin().await?;
-    if audit.is_some() {
+    //
+    // An audited edit records its entry on the account database: an account
+    // transaction wraps the store's (the store commits first, until Task 12
+    // moves the entry into the store transaction).
+    let mut account_tx = match audit {
+        Some(_) => Some(app.accounts().begin().await?),
+        None => None,
+    };
+    if let Some(account_tx) = account_tx.as_mut() {
         // The entry's users before the changeset, as publish (issue #418).
-        crate::store::publish::lock_people(&mut tx, &ctx.audit_actor(), state.name()).await?;
+        crate::store::publish::lock_people(account_tx, &ctx.audit_actor(), state.name()).await?;
     }
+    // Acquisition order (plan Task 11, issue #970): the account transaction
+    // and every account row lock (`lock_people`) come BEFORE the store
+    // connection. A change that held the store's connection while it waited
+    // for a user row would block a user deletion (which holds those rows and
+    // then needs a store connection) in a cycle PostgreSQL cannot see,
+    // because one edge is a pool wait.
+    let mut tx = db.begin().await?;
     changesets::lock_catalog(&mut tx, state.id()).await?;
     // The row was read unlocked; `lock` reads it again once the lock is
     // granted, so a publish, discard or prune that held it is seen here.
@@ -254,16 +268,19 @@ where
         }
     }
     // `if let Some(..)`: only an audited edit records an entry.
-    if let Some(OpAudit {
-        action,
-        mut details,
-    }) = audit
+    if let (
+        Some(OpAudit {
+            action,
+            mut details,
+        }),
+        Some(account_tx),
+    ) = (audit, account_tx.as_mut())
     {
         details.insert(
             "changeset".to_string(),
             changeset_row.handle.as_str().into(),
         );
-        let teams = audit::catalog_teams(&mut tx, state.id()).await?;
+        let teams = audit::catalog_teams(account_tx, state.id()).await?;
         let entry = Entry {
             action,
             target: Target::Catalog(state.name()),
@@ -271,9 +288,12 @@ where
             teams: &teams,
             details: serde_json::Value::Object(details),
         };
-        audit::record(&mut tx, &ctx.audit_actor(), &entry, now).await?;
+        audit::record(account_tx, &ctx.audit_actor(), &entry, now).await?;
     }
     tx.commit().await?;
+    if let Some(account_tx) = account_tx {
+        account_tx.commit().await?;
+    }
     // The version moved, so the cached overlay is stale; dropping it now
     // also frees its memory before the next read rebuilds it.
     app.overlays().forget(changeset_row.id).await;
@@ -500,7 +520,7 @@ mod tests {
     /// The entries of the changeset `handle` names.
     async fn entries(test: &TestApp, handle: &str) -> Vec<EntryRow> {
         let row = changeset_row(test, handle).await;
-        changesets::entries(test.app.accounts().executor(), row.id)
+        changesets::entries(test.app.main_db().await.executor(), row.id)
             .await
             .unwrap()
     }
@@ -572,7 +592,7 @@ mod tests {
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
         let row = changeset_row(&test, &handle).await;
-        let mut tx = test.app.accounts().executor().begin().await.unwrap();
+        let mut tx = test.app.main_db().await.begin().await.unwrap();
         changesets::set_state(&mut tx, row.id, ChangesetState::Discarded, Utc::now())
             .await
             .unwrap();
@@ -589,7 +609,7 @@ mod tests {
             "{message}"
         );
         assert_eq!(
-            count(&test, "SELECT count(*) FROM changeset_entries").await,
+            count(&test, "SELECT count(*) FROM catalog.changeset_entries").await,
             0
         );
     }
@@ -613,7 +633,7 @@ mod tests {
         assert_eq!(by_other.kind(), "UnknownChangeset");
         assert_eq!(by_reader.kind(), "UnknownChangeset");
         assert_eq!(
-            count(&test, "SELECT count(*) FROM changeset_entries").await,
+            count(&test, "SELECT count(*) FROM catalog.changeset_entries").await,
             0
         );
     }
@@ -633,7 +653,7 @@ mod tests {
         };
         let handle = open(&connection()).await;
         let row = changeset_row(&test, &handle).await;
-        let mut holder = test.app.accounts().executor().begin().await.unwrap();
+        let mut holder = test.app.main_db().await.begin().await.unwrap();
         changesets::lock(&mut holder, row.id).await.unwrap();
 
         // Act: three writers on that changeset at once.
@@ -673,7 +693,7 @@ mod tests {
         let handle = open(&connection()).await;
         let row = changeset_row(&test, &handle).await;
         // Stands in for a prune or a discard holding the changeset's row.
-        let mut holder = test.app.accounts().executor().begin().await.unwrap();
+        let mut holder = test.app.main_db().await.begin().await.unwrap();
         changesets::lock(&mut holder, row.id).await.unwrap();
         let (ctx, waiting_on) = (connection(), handle.clone());
         // `tokio::spawn` runs the write concurrently, like a thread; it
@@ -772,7 +792,7 @@ mod tests {
             "{leaked:?}"
         );
         assert_eq!(
-            count(&test, "SELECT count(*) FROM changeset_entries").await,
+            count(&test, "SELECT count(*) FROM catalog.changeset_entries").await,
             0
         );
     }

@@ -89,7 +89,7 @@ async fn seed(pool: &PgPool, name: &str, count: usize) {
         description: "",
         owner_team: support::server::OWNER,
     };
-    catalogs::create(pool, &new, &AuditActor::cli(), Utc::now())
+    support::stores::create_catalog(pool, &new, &AuditActor::cli(), Utc::now())
         .await
         .unwrap();
     let files: Files = (0..count)
@@ -110,14 +110,9 @@ async fn seed(pool: &PgPool, name: &str, count: usize) {
         audit: &AuditActor::cli(),
         now: Utc::now(),
     };
-    import(
-        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), pool.clone()),
-        name,
-        files,
-        &options,
-    )
-    .await
-    .unwrap();
+    import(&support::stores::main_store(pool), name, files, &options)
+        .await
+        .unwrap();
 }
 
 /// Creates catalog `name` holding `count` empty documents at paths shaped
@@ -129,7 +124,7 @@ async fn seed_empty(pool: &PgPool, name: &str, count: usize) {
         description: "",
         owner_team: support::server::OWNER,
     };
-    catalogs::create(pool, &new, &AuditActor::cli(), Utc::now())
+    support::stores::create_catalog(pool, &new, &AuditActor::cli(), Utc::now())
         .await
         .unwrap();
     let files: Files = (0..count)
@@ -153,26 +148,18 @@ async fn seed_empty(pool: &PgPool, name: &str, count: usize) {
         audit: &AuditActor::cli(),
         now: Utc::now(),
     };
-    import(
-        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), pool.clone()),
-        name,
-        files,
-        &options,
-    )
-    .await
-    .unwrap();
+    import(&support::stores::main_store(pool), name, files, &options)
+        .await
+        .unwrap();
 }
 
 /// Loads catalog `name` and returns `(resident bytes, stored bytes)`.
 async fn weigh(pool: &PgPool, name: &str) -> (i64, u64) {
     let row = catalogs::row_by_name(pool, name).await.unwrap().unwrap();
     let before = LIVE.load(Ordering::SeqCst);
-    let state = CatalogState::load(
-        &okf_mcp::stores::CatalogDb::new(okf_mcp::stores::StoreName::main(), pool.clone()),
-        &row,
-    )
-    .await
-    .unwrap();
+    let state = CatalogState::load(&support::stores::main_store(pool), &row)
+        .await
+        .unwrap();
     let resident = LIVE.load(Ordering::SeqCst) - before;
     let stored = state.current().stored_bytes();
     drop(state);

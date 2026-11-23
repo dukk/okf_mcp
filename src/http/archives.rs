@@ -716,14 +716,15 @@ mod tests {
         let catalog = catalogs::find(test.app.accounts().executor(), "pg")
             .await
             .unwrap();
+        let generation = catalogs::test_generation(test.app.accounts().executor(), "pg").await;
         let live: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM documents WHERE catalog_id = $1 AND deleted_at IS NULL",
+            "SELECT count(*) FROM catalog.documents WHERE catalog_id = $1 AND deleted_at IS NULL",
         )
         .bind(catalog.id)
         .fetch_one(test.app.accounts().executor())
         .await
         .unwrap();
-        (catalog.generation, live)
+        (generation, live)
     }
 
     /// An import of `size` zero bytes into `pg` by `caller`, through the
@@ -904,12 +905,12 @@ mod tests {
         sqlx::raw_sql(
             "CREATE FUNCTION break_the_refresh() RETURNS trigger LANGUAGE plpgsql AS $$ \
              BEGIN \
-                 INSERT INTO documents (catalog_id, path, content, executable, revision, \
+                 INSERT INTO catalog.documents (catalog_id, path, content, executable, revision, \
                                         updated_at, updated_by) \
                  VALUES (NEW.id, '../escape.md', '', false, 1, now(), 'test'); \
                  RETURN NULL; \
              END $$; \
-             CREATE TRIGGER break_the_refresh AFTER UPDATE OF generation ON catalogs \
+             CREATE TRIGGER break_the_refresh AFTER UPDATE OF generation ON catalog.catalog_state \
                  FOR EACH ROW EXECUTE FUNCTION break_the_refresh();",
         )
         .execute(test.app.accounts().executor())
@@ -931,8 +932,8 @@ mod tests {
         // (here marked stale, as the import's change message would) and
         // retries the refresh.
         sqlx::raw_sql(
-            "DROP TRIGGER break_the_refresh ON catalogs; \
-             DELETE FROM documents WHERE path = '../escape.md';",
+            "DROP TRIGGER break_the_refresh ON catalog.catalog_state; \
+             DELETE FROM catalog.documents WHERE path = '../escape.md';",
         )
         .execute(test.app.accounts().executor())
         .await
@@ -970,7 +971,7 @@ mod tests {
         let id = test.app.catalog_row("pg").await.unwrap().expect("pg").id;
         // A row no workspace accepts, at a new generation.
         sqlx::query(
-            "INSERT INTO documents (catalog_id, path, content, executable, revision, \
+            "INSERT INTO catalog.documents (catalog_id, path, content, executable, revision, \
                                     updated_at, updated_by) \
              VALUES ($1, '../escape.md', '', false, 1, now(), 'test')",
         )
@@ -978,7 +979,7 @@ mod tests {
         .execute(test.app.accounts().executor())
         .await
         .unwrap();
-        sqlx::query("UPDATE catalogs SET generation = generation + 1 WHERE id = $1")
+        sqlx::query("UPDATE catalog.catalog_state SET generation = generation + 1 WHERE id = $1")
             .bind(id)
             .execute(test.app.accounts().executor())
             .await
@@ -1037,7 +1038,7 @@ mod tests {
         let (status, report) =
             import_with(&test, "?replace=true&only_machinery=true", archive).await;
         let kept: Vec<u8> = sqlx::query_scalar(
-            "SELECT content FROM documents WHERE path = 'a.md' \
+            "SELECT content FROM catalog.documents WHERE path = 'a.md' \
              AND catalog_id = (SELECT id FROM catalogs WHERE name = 'pg')",
         )
         .fetch_one(test.app.accounts().executor())

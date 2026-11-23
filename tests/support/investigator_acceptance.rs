@@ -289,10 +289,7 @@ async fn server(aging: bool) -> TestServer {
     );
     crate::support::server::applied(&server.app, async {
         import(
-            &okf_mcp::stores::CatalogDb::new(
-                okf_mcp::stores::StoreName::main(),
-                server.db.pool.clone(),
-            ),
+            &crate::support::stores::main_store(&server.db.pool),
             "pg",
             data,
             &ImportOptions {
@@ -361,11 +358,11 @@ async fn canonical(server: &TestServer, key: &str, peer: &Client) -> Value {
         .any(|s| !s["hits"].as_array().unwrap().is_empty()));
     let mut rows = Vec::new();
     for query in [
-        "SELECT to_jsonb(d) FROM documents d ORDER BY catalog_id,path",
-        "SELECT to_jsonb(r) FROM revisions r ORDER BY catalog_id,path,revision",
+        "SELECT to_jsonb(d) FROM catalog.documents d ORDER BY catalog_id,path",
+        "SELECT to_jsonb(r) FROM catalog.revisions r ORDER BY catalog_id,path,revision",
         "SELECT to_jsonb(c) FROM catalogs c ORDER BY id",
-        "SELECT to_jsonb(c) FROM changesets c ORDER BY id",
-        "SELECT to_jsonb(c) FROM changeset_entries c ORDER BY changeset_id,path",
+        "SELECT to_jsonb(c) FROM catalog.changesets c ORDER BY id",
+        "SELECT to_jsonb(c) FROM catalog.changeset_entries c ORDER BY changeset_id,path",
     ] {
         rows.push(
             sqlx::query_scalar::<_, Value>(query)
@@ -377,11 +374,13 @@ async fn canonical(server: &TestServer, key: &str, peer: &Client) -> Value {
     json!({"rows":rows,"archives":archives,"search":searches})
 }
 async fn work(server: &TestServer, run: &str) -> Vec<Value> {
-    sqlx::query_scalar("SELECT to_jsonb(w) FROM maintenance_work w WHERE run_id=$1 ORDER BY id")
-        .bind(run)
-        .fetch_all(&server.db.pool)
-        .await
-        .unwrap()
+    sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM catalog.maintenance_work w WHERE run_id=$1 ORDER BY id",
+    )
+    .bind(run)
+    .fetch_all(&server.db.pool)
+    .await
+    .unwrap()
 }
 fn allowlist(client: &WireClient, all_nine: bool) {
     let allowed: BTreeSet<_> = [
@@ -443,16 +442,17 @@ async fn investigator_end_to_end_is_report_only() {
         .collect();
     assert_eq!(submits.len(), 2);
     assert!(submits[0].args == submits[1].args && submits[0].response == submits[1].response);
-    let findings: i64 = sqlx::query_scalar("SELECT count(*) FROM maintenance_findings")
+    let findings: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_findings")
         .fetch_one(&server.db.pool)
         .await
         .unwrap();
     assert_eq!(findings, 1);
-    let reports: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM maintenance_requests WHERE operation='submit'")
-            .fetch_one(&server.db.pool)
-            .await
-            .unwrap();
+    let reports: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM catalog.maintenance_requests WHERE operation='submit'",
+    )
+    .fetch_one(&server.db.pool)
+    .await
+    .unwrap();
     assert_eq!(reports, 1);
     // Real traffic after inference is only report/close; source/model instructions
     // cannot introduce discovery calls. This replaces the unchanged-local-vector test.
@@ -512,10 +512,11 @@ async fn investigator_aging_cancel_and_failed_validation_preserve_canonical() {
             assert_eq!(result.exit_code(), 4);
             assert_eq!(rows[0]["outcome"], "failed");
             assert_eq!(rows[0]["assessment"], "not_assessed");
-            let findings: i64 = sqlx::query_scalar("SELECT count(*) FROM maintenance_findings")
-                .fetch_one(&server.db.pool)
-                .await
-                .unwrap();
+            let findings: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_findings")
+                    .fetch_one(&server.db.pool)
+                    .await
+                    .unwrap();
             assert_eq!(findings, 0);
             // A rejected proposal fails only its item; the run itself completes.
             assert_eq!(
@@ -577,10 +578,7 @@ async fn investigator_lost_response_replay_and_historical_superseded() {
                     .to_vec();
             crate::support::server::applied(&server.app, async {
                 import(
-                    &okf_mcp::stores::CatalogDb::new(
-                        okf_mcp::stores::StoreName::main(),
-                        server.db.pool.clone(),
-                    ),
+                    &crate::support::stores::main_store(&server.db.pool),
                     "pg",
                     data,
                     &ImportOptions {
@@ -658,13 +656,13 @@ async fn investigator_lost_response_replay_and_historical_superseded() {
         assert!(submits
             .iter()
             .all(|c| c.args == pending.args && c.response == submits[0].response));
-        let findings: i64 = sqlx::query_scalar("SELECT count(*) FROM maintenance_findings")
+        let findings: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_findings")
             .fetch_one(&server.db.pool)
             .await
             .unwrap();
         assert_eq!(findings, 1);
         let reports: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM maintenance_requests WHERE operation='submit'",
+            "SELECT count(*) FROM catalog.maintenance_requests WHERE operation='submit'",
         )
         .fetch_one(&server.db.pool)
         .await
@@ -686,7 +684,7 @@ async fn investigator_authoritative_terminal_and_expired_runs_release_journal() 
         let run_id = journal.run_id.clone().unwrap();
         if matches!(mode, "lease" | "completed") {
             let expiry = chrono::Utc::now() - chrono::Duration::seconds(1);
-            sqlx::query("UPDATE maintenance_work SET lease_expires_at=$2 WHERE run_id=$1")
+            sqlx::query("UPDATE catalog.maintenance_work SET lease_expires_at=$2 WHERE run_id=$1")
                 .bind(&run_id)
                 .bind(expiry)
                 .execute(&server.db.pool)
@@ -696,7 +694,7 @@ async fn investigator_authoritative_terminal_and_expired_runs_release_journal() 
             f.store.save(&journal).unwrap();
         }
         if mode == "deadline" {
-            sqlx::query("UPDATE maintenance_runs SET deadline=$2 WHERE id=$1")
+            sqlx::query("UPDATE catalog.maintenance_runs SET deadline=$2 WHERE id=$1")
                 .bind(&run_id)
                 .bind(chrono::Utc::now() - chrono::Duration::seconds(1))
                 .execute(&server.db.pool)
@@ -751,12 +749,13 @@ async fn investigator_authoritative_terminal_and_expired_runs_release_journal() 
             assert_eq!(recovery[1].response["state"], "completed");
         }
         if matches!(mode, "completed" | "cancelled" | "failed") {
-            let history: Value =
-                sqlx::query_scalar("SELECT to_jsonb(r) FROM maintenance_runs r WHERE id=$1")
-                    .bind(&run_id)
-                    .fetch_one(&server.db.pool)
-                    .await
-                    .unwrap();
+            let history: Value = sqlx::query_scalar(
+                "SELECT to_jsonb(r) FROM catalog.maintenance_runs r WHERE id=$1",
+            )
+            .bind(&run_id)
+            .fetch_one(&server.db.pool)
+            .await
+            .unwrap();
             let work_history = work(&server, &run_id).await;
             let args = json!({"catalog":"pg","run_id":run_id,"state":"failed","rationale":"synthetic terminal acknowledgment","idempotency_key":"terminal-ack"});
             let ack = call(&observer, "maintenance_close", args.clone()).await;
@@ -764,12 +763,13 @@ async fn investigator_authoritative_terminal_and_expired_runs_release_journal() 
             assert_eq!(structured(&ack)["state"], mode);
             let replay = call(&observer, "maintenance_close", args.clone()).await;
             assert_eq!(structured(&ack), structured(&replay));
-            let recorded: Value =
-                sqlx::query_scalar("SELECT to_jsonb(r) FROM maintenance_runs r WHERE id=$1")
-                    .bind(&run_id)
-                    .fetch_one(&server.db.pool)
-                    .await
-                    .unwrap();
+            let recorded: Value = sqlx::query_scalar(
+                "SELECT to_jsonb(r) FROM catalog.maintenance_runs r WHERE id=$1",
+            )
+            .bind(&run_id)
+            .fetch_one(&server.db.pool)
+            .await
+            .unwrap();
             assert_eq!(recorded, history);
             assert_eq!(work(&server, &run_id).await, work_history);
             let foreign_key = server.reporter_key("foreign", &["pg"]).await;
@@ -799,14 +799,14 @@ async fn investigator_expired_close_lost_ack_replays_after_restart() {
         let run_id = j.run_id.clone().unwrap();
         let expiry = chrono::Utc::now() - chrono::Duration::seconds(1);
         if deadline {
-            sqlx::query("UPDATE maintenance_runs SET deadline=$2 WHERE id=$1")
+            sqlx::query("UPDATE catalog.maintenance_runs SET deadline=$2 WHERE id=$1")
                 .bind(&run_id)
                 .bind(expiry)
                 .execute(&server.db.pool)
                 .await
                 .unwrap();
         } else {
-            sqlx::query("UPDATE maintenance_work SET lease_expires_at=$2 WHERE run_id=$1")
+            sqlx::query("UPDATE catalog.maintenance_work SET lease_expires_at=$2 WHERE run_id=$1")
                 .bind(&run_id)
                 .bind(expiry)
                 .execute(&server.db.pool)
@@ -855,11 +855,12 @@ async fn investigator_expired_close_lost_ack_replays_after_restart() {
         assert_eq!(client.calls.len(), calls + 1);
         assert_eq!(client.calls[calls].args, pending.args);
         assert_eq!(model.calls.load(Ordering::SeqCst), 0);
-        let requests: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM maintenance_requests WHERE operation='close'")
-                .fetch_one(&server.db.pool)
-                .await
-                .unwrap();
+        let requests: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM catalog.maintenance_requests WHERE operation='close'",
+        )
+        .fetch_one(&server.db.pool)
+        .await
+        .unwrap();
         assert_eq!(requests, 1, "close replay must acknowledge once");
         let rows = work(&server, &run_id).await;
         assert_eq!(rows[0]["outcome"], "failed");
@@ -941,12 +942,13 @@ async fn investigator_terminalization_after_lookup_acknowledges_exact_failure_cl
                     call(&observer, "maintenance_close", json!({"catalog":"pg","run_id":run_id,"state":state,"rationale":"Independent terminalization","idempotency_key":"external-close"})).await
                 };
                 assert_ne!(result.is_error, Some(true));
-                let history: Value =
-                    sqlx::query_scalar("SELECT to_jsonb(r) FROM maintenance_runs r WHERE id=$1")
-                        .bind(&run_id)
-                        .fetch_one(&server.db.pool)
-                        .await
-                        .unwrap();
+                let history: Value = sqlx::query_scalar(
+                    "SELECT to_jsonb(r) FROM catalog.maintenance_runs r WHERE id=$1",
+                )
+                .bind(&run_id)
+                .fetch_one(&server.db.pool)
+                .await
+                .unwrap();
                 assert_eq!(history["state"], state);
                 let work_history = work(&server, &run_id).await;
                 resume.notify_one();
@@ -1008,18 +1010,19 @@ async fn investigator_terminalization_after_lookup_acknowledges_exact_failure_cl
                 .iter()
                 .skip(1)
                 .all(|c| matches!(c.name, "maintenance_get_run" | "maintenance_close")));
-            let recorded: Value =
-                sqlx::query_scalar("SELECT to_jsonb(r) FROM maintenance_runs r WHERE id=$1")
-                    .bind(&run_id)
-                    .fetch_one(&server.db.pool)
-                    .await
-                    .unwrap();
+            let recorded: Value = sqlx::query_scalar(
+                "SELECT to_jsonb(r) FROM catalog.maintenance_runs r WHERE id=$1",
+            )
+            .bind(&run_id)
+            .fetch_one(&server.db.pool)
+            .await
+            .unwrap();
             assert_eq!(
                 recorded, history.0,
                 "terminal metadata must remain immutable"
             );
             assert_eq!(work(&server, &run_id).await, history.1);
-            let acknowledgments: i64 = sqlx::query_scalar("SELECT count(*) FROM maintenance_requests WHERE operation='close' AND idempotency_key=$1").bind(pending.args["idempotency_key"].as_str().unwrap()).fetch_one(&server.db.pool).await.unwrap();
+            let acknowledgments: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_requests WHERE operation='close' AND idempotency_key=$1").bind(pending.args["idempotency_key"].as_str().unwrap()).fetch_one(&server.db.pool).await.unwrap();
             assert_eq!(acknowledgments, 1);
             drop(store);
             let confirmed =

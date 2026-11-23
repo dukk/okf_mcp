@@ -288,8 +288,10 @@ impl App {
         .with_metrics(metrics.clone());
         // Shared with the credential cache, which resolves self-issued
         // credentials' ceilings against its rows (issue #728).
+        let stores = Stores::new(pool.clone(), PoolSettings::from_config(&config));
         let directory = Arc::new(CatalogDirectory::new(
             pool.clone(),
+            stores.clone(),
             config.catalog_directory_entries,
             config.catalog_ttl,
             metrics.clone(),
@@ -339,7 +341,6 @@ impl App {
                 tracing::warn!(catalog = %name, "default_catalog does not exist (yet)");
             }
         }
-        let stores = Stores::new(pool.clone(), PoolSettings::from_config(&config));
         let catalog_cache = CatalogCache::new(
             stores.clone(),
             config.catalog_cache_bytes.as_u64(),
@@ -1579,7 +1580,7 @@ mod tests {
             now: Utc::now(),
         };
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+            &crate::stores::CatalogDb::main_in(pool),
             catalog,
             files,
             &options,
@@ -1640,7 +1641,7 @@ mod tests {
 
         // Written on the pool directly, as another replica would.
         import_files(&db.pool, "pg", &[("a.md", "# A\n")], false).await;
-        let generation = catalogs::list(&db.pool).await.unwrap()[0].generation;
+        let generation = catalogs::test_generation(&db.pool, "pg").await;
         assert!(generation > before);
         assert_eq!(
             app.catalog("pg")
@@ -2048,7 +2049,7 @@ mod tests {
             let again = create(&db.pool, "pg").await;
             // A row no workspace accepts (a path escaping the catalog).
             sqlx::query(
-                "INSERT INTO documents (catalog_id, path, content, executable, revision, \
+                "INSERT INTO catalog.documents (catalog_id, path, content, executable, revision, \
                                         updated_at, updated_by) \
                  VALUES ($1, '../escape.md', '', false, 1, now(), 'test')",
             )

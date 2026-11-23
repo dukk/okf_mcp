@@ -18,3 +18,5 @@
 - Only `env` credentials open a `host` store; the user, TLS settings and other connection options are the account pool's. Task 9 adds the other kinds.
 - No crossings were added to or removed from the release-1 inventory: the registry opens pools only on the store side.
 - Review round 1: `CatalogDb::begin` turns a failure to get a connection from an open pool (pool exhausted, or a reconnect that cannot reach the store) into `StoreUnavailable` through the new `CatalogDb::classify`. Plain reads that pass `executor()` to a store-layer function still return the driver error as `Database`; follow-up issue filed.
+
+> **Done in #970 (2026-11-23).** `STORE_SEARCH_PATH` is `catalog` now (migration 0041); the "`public` until Task 11" above is superseded.

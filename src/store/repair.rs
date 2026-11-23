@@ -94,9 +94,10 @@ pub async fn repair(
     options: &RepairOptions<'_>,
 ) -> Result<RepairReport, OkfError> {
     // Dropping `tx` without `commit()` (any `?`, or a dry run) rolls back.
-    let mut tx = db.begin().await?;
+    // The account transaction wraps the store's; the store commits first.
+    let mut account_tx = db.accounts().begin().await?;
     audit::lock_people(
-        &mut tx,
+        &mut account_tx,
         options.audit,
         &People {
             catalogs: &[catalog],
@@ -104,7 +105,14 @@ pub async fn repair(
         },
     )
     .await?;
-    let found = catalogs::lock_by_name(&mut tx, catalog).await?;
+    // Acquisition order (plan Task 11, issue #970): the account transaction
+    // and every account row lock (`lock_people`) come BEFORE the store
+    // connection. A change that held the store's connection while it waited
+    // for a user row would block a user deletion (which holds those rows and
+    // then needs a store connection) in a cycle PostgreSQL cannot see,
+    // because one edge is a pool wait.
+    let mut tx = db.begin().await?;
+    let found = catalogs::lock_by_name(&mut account_tx, &mut tx, catalog).await?;
     let existing = existing_rows(&mut tx, found.id).await?;
     let live: Vec<(String, StoredFile)> = existing
         .values()
@@ -146,14 +154,9 @@ pub async fn repair(
         return Ok(report);
     }
     write_files(&mut tx, found.id, &existing, &files, options).await?;
-    let generation: i64 = sqlx::query_scalar(
-        "UPDATE catalogs SET generation = generation + 1 WHERE id = $1 RETURNING generation",
-    )
-    .bind(found.id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let generation = catalogs::bump_generation(&mut tx, found.id).await?;
     catalogs::record_catalog(
-        &mut tx,
+        &mut account_tx,
         options.audit,
         CatalogEvent {
             action: Action::CatalogRepaired,
@@ -168,7 +171,7 @@ pub async fn repair(
     )
     .await?;
     invalidate(
-        &mut tx,
+        &mut account_tx,
         &[Invalidation::Catalog {
             id: found.id,
             generation,
@@ -176,6 +179,7 @@ pub async fn repair(
     )
     .await?;
     tx.commit().await?;
+    account_tx.commit().await?;
     report.generation = Some(generation);
     report.changed = Some(CatalogGeneration {
         catalog_id: found.id,
@@ -352,7 +356,7 @@ mod tests {
             now: at(1),
         };
         import(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+            &crate::stores::CatalogDb::main_in(pool),
             name,
             crate::archive::files(files),
             &options,
@@ -372,7 +376,7 @@ mod tests {
 
     async fn live_text(pool: &PgPool, path: &str) -> Option<String> {
         sqlx::query_scalar::<_, Vec<u8>>(
-            "SELECT content FROM documents WHERE path = $1 AND deleted_at IS NULL",
+            "SELECT content FROM catalog.documents WHERE path = $1 AND deleted_at IS NULL",
         )
         .bind(path)
         .fetch_optional(pool)
@@ -394,14 +398,14 @@ mod tests {
         let audit = AuditActor::cli();
 
         let report = repair(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             &options(&audit, false),
         )
         .await
         .unwrap();
         let again = repair(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             &options(&audit, false),
         )
@@ -432,7 +436,7 @@ mod tests {
         );
         // The starter files' tombstones (revision 2) continue their numbers.
         let history: Vec<(String, i32, String, String, String)> = sqlx::query_as(
-            "SELECT path, revision, op, actor, message FROM revisions \
+            "SELECT path, revision, op, actor, message FROM catalog.revisions \
              WHERE message = $1 ORDER BY path",
         )
         .bind(REPAIR_MESSAGE)
@@ -457,7 +461,7 @@ mod tests {
             ]
         );
         let kind: Option<String> =
-            sqlx::query_scalar("SELECT kind FROM documents WHERE path = 'infra/index.md'")
+            sqlx::query_scalar("SELECT kind FROM catalog.documents WHERE path = 'infra/index.md'")
                 .fetch_one(&db.pool)
                 .await
                 .unwrap();
@@ -475,7 +479,7 @@ mod tests {
             recorded[0].details,
             serde_json::json!({"files": ["/index.md", "/log.md", "/infra/index.md"], "generation": 2})
         );
-        assert_eq!(catalogs::find(&db.pool, "pg").await.unwrap().generation, 2);
+        assert_eq!(catalogs::test_generation(&db.pool, "pg").await, 2);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -485,13 +489,13 @@ mod tests {
         let catalog = catalogs::find(&db.pool, "pg").await.unwrap();
         // Hold the catalog's lock, as a publish in progress does, and write
         // a curated root index.md under it.
-        let mut holder = db.pool.begin().await.unwrap();
+        let mut holder = db.store().begin().await.unwrap();
         catalogs::lock(&mut holder, catalog.id).await.unwrap();
         let pool = db.pool.clone();
         let waiting = tokio::spawn(async move {
             let audit = AuditActor::cli();
             repair(
-                &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), pool.clone()),
+                &crate::stores::CatalogDb::main_in(&pool),
                 "pg",
                 &options(&audit, false),
             )
@@ -529,7 +533,7 @@ mod tests {
         assert!(root.starts_with(curated), "{root}");
         assert!(root.contains("* [A](a.md) - A note."), "{root}");
         let revision: i32 =
-            sqlx::query_scalar("SELECT revision FROM documents WHERE path = 'index.md'")
+            sqlx::query_scalar("SELECT revision FROM catalog.documents WHERE path = 'index.md'")
                 .fetch_one(&db.pool)
                 .await
                 .unwrap();
@@ -543,7 +547,7 @@ mod tests {
         let audit = AuditActor::cli();
 
         let dry = repair(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             &options(&audit, true),
         )
@@ -559,7 +563,7 @@ mod tests {
             .any(|note| note.contains("no description, so replace its TODO line")));
         assert_eq!(live_text(&db.pool, "index.md").await, None);
         assert!(entries(&db.pool, "catalog.repaired").await.is_empty());
-        assert_eq!(catalogs::find(&db.pool, "pg").await.unwrap().generation, 1);
+        assert_eq!(catalogs::test_generation(&db.pool, "pg").await, 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -581,7 +585,7 @@ mod tests {
             .await
             .unwrap();
         repair(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "old",
             &options(&audit, false),
         )
@@ -591,7 +595,7 @@ mod tests {
             .await
             .unwrap();
         let unknown = repair(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "nope",
             &options(&audit, false),
         )
@@ -628,7 +632,7 @@ mod tests {
         let before = missing_root_index(&accounts, &store).await.unwrap();
         // `mid`'s root index is deleted (a tombstone row stays).
         let deleted = sqlx::query(
-            "UPDATE documents SET deleted_at = now() WHERE path = 'index.md' AND catalog_id = \
+            "UPDATE catalog.documents SET deleted_at = now() WHERE path = 'index.md' AND catalog_id = \
              (SELECT id FROM catalogs WHERE name = 'mid')",
         )
         .execute(&db.pool)
@@ -651,7 +655,7 @@ mod tests {
         let audit = AuditActor::cli();
 
         let refused = repair(
-            &crate::stores::CatalogDb::new(crate::stores::StoreName::main(), db.pool.clone()),
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "pg",
             &options(&audit, false),
         )
@@ -659,6 +663,6 @@ mod tests {
 
         assert!(refused.is_err());
         assert_eq!(live_text(&db.pool, "index.md").await, None);
-        assert_eq!(catalogs::find(&db.pool, "pg").await.unwrap().generation, 1);
+        assert_eq!(catalogs::test_generation(&db.pool, "pg").await, 1);
     }
 }

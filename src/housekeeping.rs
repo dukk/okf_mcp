@@ -1370,7 +1370,10 @@ mod tests {
         at: DateTime<Utc>,
         path: Option<&str>,
     ) -> i64 {
-        let mut tx = pool.begin().await.unwrap();
+        let mut tx = crate::stores::CatalogDb::main_of(pool)
+            .begin()
+            .await
+            .unwrap();
         changesets::lock_catalog(&mut tx, catalog_id).await.unwrap();
         let changeset = changesets::open(&mut tx, catalog_id, "writer", "writer", at)
             .await
@@ -1404,9 +1407,16 @@ mod tests {
 
         run(Task::PruneChangesets, &test.app).await.unwrap();
 
+        let store = test.app.main_db().await;
         let state = |id| {
-            let pool = pool.clone();
-            async move { changesets::by_id(&pool, id).await.unwrap().unwrap().state }
+            let store = store.clone();
+            async move {
+                changesets::by_id(store.executor(), id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .state
+            }
         };
         assert_eq!(state(empty_old).await, ChangesetState::Discarded);
         assert_eq!(state(empty_new).await, ChangesetState::Open);
@@ -1451,7 +1461,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "DELETE FROM documents WHERE catalog_id IN \
+            "DELETE FROM catalog.catalog_state WHERE id IN \
              (SELECT id FROM catalogs WHERE name IN ('lost', 'young'))",
         )
         .execute(&pool)

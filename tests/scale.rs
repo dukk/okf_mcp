@@ -74,7 +74,7 @@ async fn seed(pool: &PgPool) {
          SELECT 'c' || lpad(n::text, 7, '0'), '', now(), \
                 (SELECT id FROM teams WHERE name = $2) \
          FROM generate_series(1, $1) AS n",
-        "INSERT INTO documents (catalog_id, path, content, executable, revision, updated_at, \
+        "INSERT INTO catalog.documents (catalog_id, path, content, executable, revision, updated_at, \
                                 updated_by, kind, concept_type, title) \
          SELECT id, 'note.md', convert_to($2::text, 'UTF8'), false, 1, now(), 'scale', 'concept', \
                 'Note', 'Note' \

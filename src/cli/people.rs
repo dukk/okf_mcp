@@ -31,11 +31,13 @@ use crate::store::teams::{self, MemberChange, Membership, NewTeam, Role, TeamRec
 use crate::store::unassigned;
 use crate::store::user_sessions::{self, SessionInfo};
 use crate::store::users::{self, AdminChange, NewUser, UserRecord};
+use crate::stores::{StoreName, Stores};
 
 /// Runs `okf-mcp user ...`.
 ///
 /// # Arguments
 /// * `pool` - the migrated database.
+/// * `stores` - the registry of stores (a user deletion reaches the `main` store).
 /// * `config` - for `user invite`: `public_url` (the link's origin) and the
 ///   `[auth]` defaults under the stored settings (`setup_link_ttl`).
 /// * `command` - which user subcommand.
@@ -55,6 +57,7 @@ use crate::store::users::{self, AdminChange, NewUser, UserRecord};
 #[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn user(
     pool: &PgPool,
+    stores: &Stores,
     config: &Config,
     command: UserCommand,
     now: DateTime<Utc>,
@@ -96,8 +99,12 @@ pub(super) async fn user(
         UserCommand::Delete { name } => {
             // `allow_last_admin: true`: operator access may delete the last
             // admin user, as it may clear the last admin flag.
-            let deleted = users::delete(
+            // The store half of the deletion runs on the `main` store, from the
+            // registry (one pool per store, as in the server).
+            let main = stores.get(&StoreName::main()).await?;
+            let deleted = users::delete_on(
                 pool,
+                &main,
                 &name,
                 users::DeleteOptions::OPERATOR,
                 &AuditActor::cli(),
@@ -633,7 +640,13 @@ mod tests {
         let pool = &db.pool;
         let config = test_config();
         match parsed.command.expect("a subcommand") {
-            Command::User(command) => user(pool, &config, command, now).await,
+            Command::User(command) => {
+                let stores = Stores::new(
+                    pool.clone(),
+                    crate::stores::PoolSettings::from_config(&config),
+                );
+                user(pool, &stores, &config, command, now).await
+            }
             Command::Team(command) => team(pool, command, now).await,
             Command::Unassigned => unassigned(pool).await,
             Command::Settings(command) => {

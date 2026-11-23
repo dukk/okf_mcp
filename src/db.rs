@@ -254,29 +254,19 @@ mod tests {
                 "audit_people",
                 "audit_teams",
                 "catalogs",
-                "changeset_entries",
-                "changesets",
                 "cluster_stats",
-                "documents",
                 "email_tokens",
                 "feedback",
                 "key_catalogs",
-                "maintenance_dispositions",
-                "maintenance_evidence",
-                "maintenance_findings",
-                "maintenance_requests",
-                "maintenance_runs",
-                "maintenance_state",
-                "maintenance_work",
                 "oauth_clients",
                 "oauth_tokens",
-                "revisions",
                 "server_keys",
                 "server_settings",
                 "server_state",
                 "sign_in_code_catalogs",
                 "sign_in_codes",
                 "sign_in_events",
+                "store_cleanups",
                 "stores",
                 "team_members",
                 "teams",
@@ -286,6 +276,31 @@ mod tests {
                 "user_passkeys",
                 "user_sessions",
                 "users",
+            ]
+        );
+        // The catalog's own tables live in schema `catalog` (0041).
+        let catalog_tables: Vec<String> = sqlx::query_scalar(
+            "SELECT table_name::text FROM information_schema.tables \
+             WHERE table_schema = 'catalog' ORDER BY table_name COLLATE \"C\"",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            catalog_tables,
+            [
+                "catalog_state",
+                "changeset_entries",
+                "changesets",
+                "documents",
+                "maintenance_dispositions",
+                "maintenance_evidence",
+                "maintenance_findings",
+                "maintenance_requests",
+                "maintenance_runs",
+                "maintenance_state",
+                "maintenance_work",
+                "revisions",
             ]
         );
         // apalis keeps everything in its own schema, with its own history.
@@ -1397,8 +1412,13 @@ mod tests {
         .await
         .unwrap();
         for catalog in [first, second] {
+            sqlx::query("INSERT INTO catalog.catalog_state (id) VALUES ($1)")
+                .bind(catalog)
+                .execute(&db.pool)
+                .await
+                .unwrap();
             sqlx::query(
-                "INSERT INTO revisions (catalog_id, path, revision, op, content, executable, actor, message, created_at) \
+                "INSERT INTO catalog.revisions (catalog_id, path, revision, op, content, executable, actor, message, created_at) \
                  VALUES ($1, 'a.md', 1, 'import', $2, false, 'a', 'm', $3)",
             )
             .bind(catalog)
@@ -1408,7 +1428,7 @@ mod tests {
             .await
             .unwrap();
             sqlx::query(
-                "INSERT INTO maintenance_runs (id, catalog_id, credential_id, actor, state, deadline, created_at, primary_count) \
+                "INSERT INTO catalog.maintenance_runs (id, catalog_id, credential_id, actor, state, deadline, created_at, primary_count) \
                  VALUES ($1, $2, 'holder', 'a', 'running', $3, $3, 1)",
             )
             .bind(format!("run-{catalog}"))
@@ -1418,7 +1438,7 @@ mod tests {
             .await
             .unwrap();
         }
-        let insert_work = "INSERT INTO maintenance_work (id, run_id, catalog_id, path, revision, lanes, lease_token, lease_expires_at, attempted_at) \
+        let insert_work = "INSERT INTO catalog.maintenance_work (id, run_id, catalog_id, path, revision, lanes, lease_token, lease_expires_at, attempted_at) \
                            VALUES ($1, $2, $3, 'a.md', 1, ARRAY['changed'], $4, $5, $5)";
         sqlx::query(insert_work)
             .bind("work-one")
@@ -1457,7 +1477,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO maintenance_findings (id, run_id, work_id, catalog_id, category, assertion, follow_up, uncertainty, relationship, external, created_at) \
+            "INSERT INTO catalog.maintenance_findings (id, run_id, work_id, catalog_id, category, assertion, follow_up, uncertainty, relationship, external, created_at) \
              VALUES ('finding-one', $1, 'work-one', $2, 'suggested_link', 'a', 'follow', 'unknown', 'direct_statement', '[]', $3)",
         )
         .bind(format!("run-{first}"))
@@ -1467,7 +1487,7 @@ mod tests {
         .await
         .unwrap();
         let cross_catalog_evidence_insert = sqlx::query(
-            "INSERT INTO maintenance_evidence (catalog_id, work_id, finding_id, ordinal, path, revision, excerpt) \
+            "INSERT INTO catalog.maintenance_evidence (catalog_id, work_id, finding_id, ordinal, path, revision, excerpt) \
              VALUES ($1, 'work-one', 'finding-one', 0, 'a.md', 1, 'a')",
         )
         .bind(second)
@@ -1475,7 +1495,7 @@ mod tests {
         .await;
         assert!(cross_catalog_evidence_insert.is_err());
         sqlx::query(
-            "INSERT INTO revisions (catalog_id, path, revision, op, content, executable, actor, message, created_at) \
+            "INSERT INTO catalog.revisions (catalog_id, path, revision, op, content, executable, actor, message, created_at) \
              VALUES ($1, 'only-second.md', 1, 'import', $2, false, 'a', 'm', $3)",
         )
         .bind(second)
@@ -1485,7 +1505,7 @@ mod tests {
         .await
         .unwrap();
         let cross_catalog_pin_insert = sqlx::query(
-            "INSERT INTO maintenance_evidence (catalog_id, work_id, ordinal, path, revision, excerpt) \
+            "INSERT INTO catalog.maintenance_evidence (catalog_id, work_id, ordinal, path, revision, excerpt) \
              VALUES ($1, 'work-one', 0, 'only-second.md', 1, 'a')",
         )
         .bind(first)
@@ -1493,7 +1513,7 @@ mod tests {
         .await;
         assert!(cross_catalog_pin_insert.is_err());
         let cross_work_finding_insert = sqlx::query(
-            "INSERT INTO maintenance_evidence (catalog_id, work_id, finding_id, ordinal, path, revision, excerpt) \
+            "INSERT INTO catalog.maintenance_evidence (catalog_id, work_id, finding_id, ordinal, path, revision, excerpt) \
              VALUES ($1, $2, 'finding-one', 0, 'a.md', 1, 'a')",
         )
         .bind(second)
@@ -1502,7 +1522,7 @@ mod tests {
         .await;
         assert!(cross_work_finding_insert.is_err());
         let cross_catalog_finding_insert = sqlx::query(
-            "INSERT INTO maintenance_findings (id, run_id, work_id, catalog_id, category, assertion, follow_up, uncertainty, relationship, external, created_at) \
+            "INSERT INTO catalog.maintenance_findings (id, run_id, work_id, catalog_id, category, assertion, follow_up, uncertainty, relationship, external, created_at) \
              VALUES ('bad-finding', $1, 'work-one', $2, 'suggested_link', 'a', 'follow', 'unknown', 'direct_statement', '[]', $3)",
         )
         .bind(format!("run-{second}"))
@@ -1512,7 +1532,7 @@ mod tests {
         .await;
         assert!(cross_catalog_finding_insert.is_err());
         let cross_catalog_disposition_insert = sqlx::query(
-            "INSERT INTO maintenance_dispositions (catalog_id, finding_id, disposition, rationale, credential_id, actor, created_at) \
+            "INSERT INTO catalog.maintenance_dispositions (catalog_id, finding_id, disposition, rationale, credential_id, actor, created_at) \
              VALUES ($1, 'finding-one', 'dismissed', 'reason', 'holder', 'a', $2)",
         )
         .bind(second)
@@ -1520,7 +1540,7 @@ mod tests {
         .execute(&db.pool)
         .await;
         assert!(cross_catalog_disposition_insert.is_err());
-        sqlx::query("UPDATE maintenance_work SET outcome = 'completed', ended_at = $1 WHERE id = 'work-one'")
+        sqlx::query("UPDATE catalog.maintenance_work SET outcome = 'completed', ended_at = $1 WHERE id = 'work-one'")
             .bind(now)
             .execute(&db.pool)
             .await
@@ -1535,7 +1555,7 @@ mod tests {
             .await;
         assert!(second_attempt_after_terminal_insert.is_ok());
         sqlx::query(
-            "INSERT INTO maintenance_evidence (catalog_id, work_id, finding_id, ordinal, path, revision, excerpt) \
+            "INSERT INTO catalog.maintenance_evidence (catalog_id, work_id, finding_id, ordinal, path, revision, excerpt) \
              VALUES ($1, 'work-one', 'finding-one', 0, 'a.md', 1, 'a')",
         )
         .bind(first)
@@ -1543,21 +1563,23 @@ mod tests {
         .await
         .unwrap();
         let duplicate_ordinal = sqlx::query(
-            "INSERT INTO maintenance_evidence (catalog_id, work_id, finding_id, ordinal, path, revision, excerpt) \
+            "INSERT INTO catalog.maintenance_evidence (catalog_id, work_id, finding_id, ordinal, path, revision, excerpt) \
              VALUES ($1, 'work-one', 'finding-one', 0, 'a.md', 1, 'a')",
         )
         .bind(first)
         .execute(&db.pool)
         .await;
         assert!(duplicate_ordinal.is_err());
-        sqlx::query("INSERT INTO maintenance_state (catalog_id, updated_at) VALUES ($1, $2)")
-            .bind(first)
-            .bind(now)
-            .execute(&db.pool)
-            .await
-            .unwrap();
         sqlx::query(
-            "INSERT INTO maintenance_requests (catalog_id, credential_id, operation, idempotency_key, request, response) \
+            "INSERT INTO catalog.maintenance_state (catalog_id, updated_at) VALUES ($1, $2)",
+        )
+        .bind(first)
+        .bind(now)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO catalog.maintenance_requests (catalog_id, credential_id, operation, idempotency_key, request, response) \
              VALUES ($1, 'holder', 'submit', 'request-one', $2, $3)",
         )
         .bind(first)
@@ -1567,7 +1589,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO maintenance_dispositions (catalog_id, finding_id, disposition, rationale, credential_id, actor, created_at) \
+            "INSERT INTO catalog.maintenance_dispositions (catalog_id, finding_id, disposition, rationale, credential_id, actor, created_at) \
              VALUES ($1, 'finding-one', 'dismissed', 'reason', 'holder', 'a', $2)",
         )
         .bind(first)
@@ -1576,13 +1598,13 @@ mod tests {
         .await
         .unwrap();
         let populated: (i64, i64, i64, i64, i64, i64, i64) = sqlx::query_as(
-            "SELECT (SELECT count(*) FROM maintenance_runs WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_work WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_findings WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_evidence WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_dispositions WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_requests WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_state WHERE catalog_id = $1)",
+            "SELECT (SELECT count(*) FROM catalog.maintenance_runs WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_work WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_findings WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_evidence WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_dispositions WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_state WHERE catalog_id = $1)",
         )
         .bind(first)
         .fetch_one(&db.pool)
@@ -1590,7 +1612,7 @@ mod tests {
         .unwrap();
         assert_eq!(populated, (1, 2, 1, 1, 1, 1, 1));
         let revision_delete = sqlx::query(
-            "DELETE FROM revisions WHERE catalog_id = $1 AND path = 'a.md' AND revision = 1",
+            "DELETE FROM catalog.revisions WHERE catalog_id = $1 AND path = 'a.md' AND revision = 1",
         )
         .bind(first)
         .execute(&db.pool)
@@ -1600,10 +1622,10 @@ mod tests {
             "referenced revision must be retained"
         );
         let retained: (i64, i64, i64, i64) = sqlx::query_as(
-            "SELECT (SELECT count(*) FROM revisions WHERE catalog_id = $1 AND path = 'a.md'), \
-             (SELECT count(*) FROM maintenance_work WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_findings WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_evidence WHERE catalog_id = $1)",
+            "SELECT (SELECT count(*) FROM catalog.revisions WHERE catalog_id = $1 AND path = 'a.md'), \
+             (SELECT count(*) FROM catalog.maintenance_work WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_findings WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_evidence WHERE catalog_id = $1)",
         )
         .bind(first)
         .fetch_one(&db.pool)
@@ -1611,28 +1633,35 @@ mod tests {
         .unwrap();
         assert_eq!(retained, (1, 2, 1, 1));
         let retained_history: (i64, i64, i64) = sqlx::query_as(
-            "SELECT (SELECT count(*) FROM maintenance_dispositions WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_requests WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_state WHERE catalog_id = $1)",
+            "SELECT (SELECT count(*) FROM catalog.maintenance_dispositions WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_state WHERE catalog_id = $1)",
         )
         .bind(first)
         .fetch_one(&db.pool)
         .await
         .unwrap();
         assert_eq!(retained_history, (1, 1, 1));
+        // The registry row, then the catalog's own state row (and with it
+        // the data): the account side and the store side delete separately.
+        sqlx::query("DELETE FROM catalog.catalog_state WHERE id = $1")
+            .bind(first)
+            .execute(&db.pool)
+            .await
+            .unwrap();
         sqlx::query("DELETE FROM catalogs WHERE id = $1")
             .bind(first)
             .execute(&db.pool)
             .await
             .unwrap();
         let remaining: (i64, i64, i64, i64, i64, i64, i64) = sqlx::query_as(
-            "SELECT (SELECT count(*) FROM maintenance_runs WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_work WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_findings WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_evidence WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_dispositions WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_requests WHERE catalog_id = $1), \
-             (SELECT count(*) FROM maintenance_state WHERE catalog_id = $1)",
+            "SELECT (SELECT count(*) FROM catalog.maintenance_runs WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_work WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_findings WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_evidence WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_dispositions WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id = $1), \
+             (SELECT count(*) FROM catalog.maintenance_state WHERE catalog_id = $1)",
         )
         .bind(first)
         .fetch_one(&db.pool)
@@ -1651,6 +1680,11 @@ mod tests {
         .fetch_one(&db.pool)
         .await
         .unwrap();
+        sqlx::query("INSERT INTO catalog.catalog_state (id) VALUES ($1)")
+            .bind(catalog)
+            .execute(&db.pool)
+            .await
+            .unwrap();
 
         let bad_name =
             sqlx::query("INSERT INTO catalogs (name, created_at) VALUES ('Bad Name', $1)")
@@ -1673,7 +1707,7 @@ mod tests {
         .unwrap();
         // One key may hold several open changesets in a catalog (M8
         // Decision 7), but no two changesets share a handle.
-        let open = "INSERT INTO changesets (catalog_id, handle, key_id, actor, state, created_at, \
+        let open = "INSERT INTO catalog.changesets (catalog_id, handle, key_id, actor, state, created_at, \
                     updated_at) VALUES ($1, $2, 'k1', 'a', 'open', $3, $3)";
         for handle in ["h1", "h2"] {
             sqlx::query(open)
@@ -1695,7 +1729,7 @@ mod tests {
         assert!(second.is_unique_violation());
         assert_eq!(second.constraint(), Some("changesets_handle_key"));
 
-        let revision = "INSERT INTO revisions (catalog_id, path, revision, op, content, \
+        let revision = "INSERT INTO catalog.revisions (catalog_id, path, revision, op, content, \
                         executable, actor, message, created_at) \
                         VALUES ($1, 'a.md', 1, 'import', $2, false, 'a', 'm', $3)";
         sqlx::query(revision)
@@ -1721,7 +1755,7 @@ mod tests {
 
         // One row in every other table that refers to the catalog.
         sqlx::query(
-            "INSERT INTO documents (catalog_id, path, content, executable, revision, \
+            "INSERT INTO catalog.documents (catalog_id, path, content, executable, revision, \
              updated_at, updated_by) VALUES ($1, 'a.md', $2, false, 1, $3, 'a')",
         )
         .bind(catalog)
@@ -1736,8 +1770,8 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO changeset_entries (changeset_id, path, content) \
-             SELECT id, 'a.md', $1 FROM changesets",
+            "INSERT INTO catalog.changeset_entries (changeset_id, path, content) \
+             SELECT id, 'a.md', $1 FROM catalog.changesets",
         )
         .bind(b"z".to_vec())
         .execute(&db.pool)
@@ -1746,15 +1780,22 @@ mod tests {
 
         // Deleting the catalog cascades to every row that refers to it, and
         // clears the key's default instead of deleting the key.
+        // The registry row, then the catalog's own state row (and with it
+        // the data): the account side and the store side delete separately.
+        sqlx::query("DELETE FROM catalog.catalog_state WHERE id = $1")
+            .bind(catalog)
+            .execute(&db.pool)
+            .await
+            .unwrap();
         sqlx::query("DELETE FROM catalogs WHERE id = $1")
             .bind(catalog)
             .execute(&db.pool)
             .await
             .unwrap();
         let left: (i64, i64, i64, i64, i64) = sqlx::query_as(
-            "SELECT (SELECT count(*) FROM documents), (SELECT count(*) FROM key_catalogs), \
-             (SELECT count(*) FROM changesets), (SELECT count(*) FROM changeset_entries), \
-             (SELECT count(*) FROM revisions)",
+            "SELECT (SELECT count(*) FROM catalog.documents), (SELECT count(*) FROM key_catalogs), \
+             (SELECT count(*) FROM catalog.changesets), (SELECT count(*) FROM catalog.changeset_entries), \
+             (SELECT count(*) FROM catalog.revisions)",
         )
         .fetch_one(&db.pool)
         .await
@@ -2142,6 +2183,208 @@ mod tests {
         assert_eq!(pinned, 0);
     }
 
+    /// No foreign key joins schema `catalog` to `public` in either direction
+    /// (plan Task 11): the two halves can move to separate databases. It
+    /// reads `pg_constraint`, so a constraint the migration missed fails it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn no_foreign_key_crosses_between_schemas() {
+        let db = pg_support::TestDb::start_migrated().await;
+        let foreign_keys = |crossing: bool| {
+            let pool = db.pool.clone();
+            async move {
+                let sql = format!(
+                    "SELECT c.conname::text, src.nspname::text, dst.nspname::text \
+                     FROM pg_constraint c \
+                     JOIN pg_class sc ON sc.oid = c.conrelid \
+                     JOIN pg_namespace src ON src.oid = sc.relnamespace \
+                     JOIN pg_class dc ON dc.oid = c.confrelid \
+                     JOIN pg_namespace dst ON dst.oid = dc.relnamespace \
+                     WHERE c.contype = 'f' AND src.nspname IN ('public', 'catalog') \
+                       AND dst.nspname IN ('public', 'catalog') AND (src.nspname {} dst.nspname) \
+                     ORDER BY 1",
+                    if crossing { "<>" } else { "=" }
+                );
+                // `AssertSqlSafe`: the text is assembled from constants above.
+                sqlx::query_as::<_, (String, String, String)>(sqlx::AssertSqlSafe(sql))
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+
+        let crossing = foreign_keys(true).await;
+        let within = foreign_keys(false).await;
+
+        assert_eq!(crossing, [], "a foreign key joins the two schemas");
+        // The query sees the catalog schema's own keys, so an empty answer
+        // above is not an empty database.
+        assert!(
+            within.iter().any(
+                |(name, schema, _)| name == "changesets_catalog_id_fkey" && schema == "catalog"
+            ),
+            "{within:?}"
+        );
+    }
+
+    /// Migration 0041 on a populated database (it runs against production
+    /// data, not an empty one): every row of the moved tables survives, the
+    /// state rows are seeded as the plan's rules say, and a key id left on
+    /// a changeset after its key is deleted stays (no foreign key to null it).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn migration_0041_keeps_every_row_and_seeds_the_state_rows() {
+        // Arrange: a database at 0040 with a published catalog, a half-made
+        // one that has starter files, a half-made one without, and an empty
+        // provisioned one; the first has a document, a revision, a changeset
+        // and a run.
+        let db = pg_support::TestDb::start().await;
+        MIGRATOR.run_to(40, &db.pool).await.unwrap();
+        let now = chrono::Utc::now();
+        let mut ids = std::collections::HashMap::new();
+        for (name, generation, provisioned) in [
+            ("whole", 7_i64, true),
+            ("half", 0, false),
+            ("lost", 0, false),
+            ("empty", 3, true),
+        ] {
+            let id: i64 = sqlx::query_scalar(
+                "INSERT INTO catalogs (name, created_at, generation, provisioned_at) \
+                 VALUES ($1, $2, $3, CASE WHEN $4 THEN $2 END) RETURNING id",
+            )
+            .bind(name)
+            .bind(now)
+            .bind(generation)
+            .bind(provisioned)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+            ids.insert(name, id);
+        }
+        for name in ["whole", "half"] {
+            sqlx::query(
+                "INSERT INTO documents (catalog_id, path, content, executable, revision, \
+                 updated_at, updated_by) VALUES ($1, 'a.md', 'a', false, 1, $2, 'author')",
+            )
+            .bind(ids[name])
+            .bind(now)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO revisions (catalog_id, path, revision, op, content, executable, \
+             actor, message, created_at) VALUES ($1, 'a.md', 1, 'import', 'a', false, 'a', 'm', $2)",
+        )
+        .bind(ids["whole"])
+        .bind(now)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO api_keys (id, name, sha256, access, all_catalogs, actor, created_at) \
+             VALUES ('k1', 'k1', $1, 'read', true, 'a', $2)",
+        )
+        .bind(vec![0u8; 32])
+        .bind(now)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO changesets (catalog_id, handle, key_id, actor, state, created_at, \
+             updated_at) VALUES ($1, 'h1', 'k1', 'a', 'open', $2, $2)",
+        )
+        .bind(ids["whole"])
+        .bind(now)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO maintenance_runs (id, catalog_id, key_id, credential_id, actor, state, \
+             deadline, created_at, primary_count) \
+             VALUES ('run', $1, 'k1', 'k1', 'a', 'running', $2, $2, 1)",
+        )
+        .bind(ids["whole"])
+        .bind(now)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        // Act
+        MIGRATOR.run_to(41, &db.pool).await.unwrap();
+
+        // Assert: the state rows are every provisioned catalog and every
+        // half-made one with documents, at their generation; `lost` has none.
+        let states: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT c.name, s.generation FROM catalog.catalog_state s \
+             JOIN catalogs c ON c.id = s.id ORDER BY c.name",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            states,
+            [
+                ("empty".to_string(), 3),
+                ("half".to_string(), 0),
+                ("whole".to_string(), 7),
+            ]
+        );
+        // Every row moved: nothing is left in `public`, and the counts match.
+        let left_behind: Option<String> =
+            sqlx::query_scalar("SELECT to_regclass('public.documents')::text")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(left_behind, None);
+        for (table, expected) in [
+            ("documents", 2_i64),
+            ("revisions", 1),
+            ("changesets", 1),
+            ("maintenance_runs", 1),
+        ] {
+            let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT count(*) FROM catalog.{table}"
+            )))
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+            assert_eq!(count, expected, "{table}");
+        }
+        // The registry lost its generation and gained `deleted_at`.
+        let columns: Vec<String> = sqlx::query_scalar(
+            "SELECT column_name::text FROM information_schema.columns \
+             WHERE table_schema = 'public' AND table_name = 'catalogs' \
+               AND column_name IN ('generation', 'deleted_at') ORDER BY 1",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(columns, ["deleted_at"]);
+        // The key's deletion no longer nulls the ids kept beside it.
+        sqlx::query("DELETE FROM api_keys WHERE id = 'k1'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let kept: (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT (SELECT key_id FROM catalog.changesets), \
+                    (SELECT key_id FROM catalog.maintenance_runs)",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(kept, (Some("k1".to_string()), Some("k1".to_string())));
+        // Deleting a state row removes the catalog's data with it.
+        sqlx::query("DELETE FROM catalog.catalog_state WHERE id = $1")
+            .bind(ids["whole"])
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.changesets")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 0);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_release_one_create_after_0036_lands_on_main_provisioned() {
         // Arrange: a fully migrated database.
@@ -2150,8 +2393,8 @@ mod tests {
         // Act: the insert a release-1 replica runs, naming only the
         // columns that existed before 0036.
         sqlx::query(
-            "INSERT INTO catalogs (name, description, generation, created_at) \
-             VALUES ('legacy', '', 0, now())",
+            "INSERT INTO catalogs (name, description, created_at) \
+             VALUES ('legacy', '', now())",
         )
         .execute(&db.pool)
         .await
