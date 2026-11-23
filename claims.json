@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 624,
+  "next_claim_seq": 625,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "965f878e17cb419f36d6154142782a0d6df4573dd3a937dbc41f1bb9cf8d5968"
+    "mac": "079cdeaf6f2191fd3fb78709aae04d4eb9d40168b59db7c35f16a55d1c3f99f6"
   },
-  "next_evidence_seq": 789,
+  "next_evidence_seq": 790,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "38a8de7454b2d0cf7eeb8686f01e6ec0a6d862ad0a6ec0018d4c9f59d39b6ca4"
+    "mac": "c1f27788ba0f614d5e8e7eaacbdc57f8ef0ebc97c2321f2698fd5ea248759dcc"
   },
   "claims": [
     {
@@ -48174,7 +48174,9 @@
         "from-issue:639"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Superseded: the helper's timeout is now 5 s (shorter than the callers' 10 s deadlines) after review of PR #937.",
+        "retired_at": "2026-11-23T04:50:36.142465070Z"
       },
       "evidence": [
         {
@@ -48216,10 +48218,10 @@
         }
       ],
       "created_at": "2026-11-23T04:41:59.820125113Z",
-      "updated_at": "2026-11-23T04:43:01.317125588Z",
+      "updated_at": "2026-11-23T04:50:36.142465070Z",
       "seal": {
         "by": "server",
-        "mac": "78640e0cd2045a30a533514da2e8aae5823df91efc0591463f7620c43327d07b"
+        "mac": "8f4ab90f34458796f9259713def3643b88444654f215be96fe2a219fb79e4431"
       }
     },
     {
@@ -48723,6 +48725,77 @@
       "seal": {
         "by": "server",
         "mac": "0e109067bb0b8b2d67113cef5545b11b90233ffcfb3f14a762d69262b61ce5cb"
+      }
+    },
+    {
+      "id": "CLM-0624",
+      "statement": "blocked_in_lock_people has its own tokio-bounded 5 s wait, shorter than its callers' 10 s outer deadlines, and panics with a message naming the users row and holder it waited for; lock_people_wait returns that message for a wait that does not exist",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "source_anchor": {
+        "path": "src/store/keys/audit_tests.rs",
+        "lines": {
+          "start": 296,
+          "end": 340
+        },
+        "commit": "0fac7e82540d87e128fc7528dfdc538c77947760"
+      },
+      "derived_from": [
+        "CLM-0610"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:639",
+        "pr-review"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0789",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- lock_people_wait keys::audit_tests (12 passed, 3 runs)",
+          "summary": "LOCK_PEOPLE_WAIT is 5 s; blocked_in_lock_people panics with the lock_people/users message; the test lock_people_wait_matches_users_and_names_a_missing_wait shows a real queued revoke is found on users and a wait on teams returns the exact diagnostic.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/keys/audit_tests.rs",
+              "lines": {
+                "start": 296,
+                "end": 395
+              },
+              "commit": "0fac7e82540d87e128fc7528dfdc538c77947760"
+            }
+          },
+          "recorded_at": "2026-11-23T04:50:41.100409521Z",
+          "seal": {
+            "by": "server",
+            "mac": "5ce8ad82041a644f34b2714a8a5eff308cd8fe0b81190beead8ca48873e33c80"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code shows the 5 s limit below the callers' 10 s; the new test exercises the diagnostic path. Recorded by the implementer for a review fix, not by the independent auditor.",
+          "auditor": "claude-sonnet-5-5 (implementer)",
+          "evidence_ids": [
+            "EVD-0789"
+          ],
+          "recorded_at": "2026-11-23T04:50:48.062201506Z",
+          "seal": {
+            "by": "server",
+            "mac": "c1008509447f981f98232b7f4ef18de9f3e949c5037ea0a322a82e2cc8980cc9"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:50:36.183058680Z",
+      "updated_at": "2026-11-23T04:50:48.062201506Z",
+      "seal": {
+        "by": "server",
+        "mac": "85b6e8f60492700f021491c5debd01c6279e59bad6918067266fa6a279475c71"
       }
     }
   ]
