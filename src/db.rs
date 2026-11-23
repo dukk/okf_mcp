@@ -46,12 +46,13 @@ pub async fn connect(url: &str, max_connections: u32) -> Result<PgPool, OkfError
 /// migrations). A build that fails part-way leaves the index behind,
 /// marked INVALID, and its migration unrecorded; `CREATE INDEX ... IF NOT
 /// EXISTS` on the retry would then keep the invalid index for good.
-const CONCURRENT_INDEXES: [&str; 5] = [
+const CONCURRENT_INDEXES: [&str; 6] = [
     "catalogs_member_reach",
     "catalogs_member_write",
     "catalogs_member_reach_bytes",
     "feedback_finished",
     "feedback_undelivered_user",
+    "catalogs_unprovisioned",
 ];
 
 /// The advisory lock [`migrate`] holds around the cleanup and the
@@ -2097,12 +2098,15 @@ mod tests {
         .await
         .unwrap();
 
-        // Act
-        MIGRATOR.run_to(36, &db.pool).await.unwrap();
+        // Act: 0036 creates the stores, 0037 places the catalogs (the two
+        // migrations of the registry change that existing rows see).
+        MIGRATOR.run_to(37, &db.pool).await.unwrap();
 
-        // Assert: each catalog is on main and was provisioned when created.
+        // Assert: each catalog is on main and provisioned. The column's
+        // default gives existing rows the time the migration ran, with no
+        // row rewritten.
         let rows: Vec<(String, String, bool)> = sqlx::query_as(
-            "SELECT name, store, provisioned_at = created_at FROM catalogs ORDER BY name",
+            "SELECT name, store, provisioned_at IS NOT NULL FROM catalogs ORDER BY name",
         )
         .fetch_all(&db.pool)
         .await
@@ -2300,6 +2304,68 @@ mod tests {
         assert_eq!(broken(removal).as_deref(), Some("catalogs_store_fkey"));
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_cannot_be_removed_while_only_a_team_pins_it() {
+        // Arrange: a second store, a team pinned to it, no catalog on it.
+        let db = pg_support::TestDb::start_migrated().await;
+        insert_host_store(&db.pool, "shared-1", "catalogs", Some(("env", "X")))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO teams (id, name, display_name, created_at, store) \
+             VALUES ('team-1', 'acme', '', now(), 'shared-1')",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        // Act and assert: the pin alone refuses the removal.
+        let removal = sqlx::query("DELETE FROM stores WHERE name = 'shared-1'")
+            .execute(&db.pool)
+            .await;
+        assert_eq!(broken(removal).as_deref(), Some("teams_store_fkey"));
+
+        // Clearing the pin lets the store go.
+        sqlx::query("UPDATE teams SET store = NULL WHERE id = 'team-1'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let removed = sqlx::query("DELETE FROM stores WHERE name = 'shared-1'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(removed.rows_affected(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_registry_constraints_are_validated_and_the_index_is_built_concurrently() {
+        let db = pg_support::TestDb::start_migrated().await;
+
+        let constraints: Vec<(String, bool)> = sqlx::query_as(
+            "SELECT conname, convalidated FROM pg_constraint \
+             WHERE conname IN ('teams_store_fkey', 'catalogs_store_fkey') ORDER BY 1",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        let index: Vec<(bool, bool)> = sqlx::query_as(
+            "SELECT i.indisvalid, i.indpred IS NOT NULL FROM pg_index i \
+             JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = 'catalogs_unprovisioned'",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            constraints,
+            vec![
+                ("catalogs_store_fkey".to_string(), true),
+                ("teams_store_fkey".to_string(), true),
+            ]
+        );
+        assert_eq!(index, vec![(true, true)], "valid and partial");
+    }
+
     /// Inserts a system audit entry about `kind` with the given target
     /// columns (a name, and a person reference).
     async fn insert_audit(
@@ -2350,7 +2416,7 @@ mod tests {
             broken(unknown_kind).as_deref(),
             Some("audit_entries_target_kind_check")
         );
-        // 0036 adds the checks NOT VALID and 0037 validates them.
+        // 0038 adds the checks NOT VALID and 0039 validates them.
         let validated: Vec<(String, bool)> = sqlx::query_as(
             "SELECT conname, convalidated FROM pg_constraint WHERE conrelid = \
              'audit_entries'::regclass AND conname IN \

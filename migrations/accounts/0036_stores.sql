@@ -2,32 +2,19 @@
 -- 2026-11-23-okf-catalog-stores-design.md, Decisions 1-4, 6, 11).
 --
 -- Additive, and compatible with release-1 replicas during a rolling deploy
--- (plan decision P11): an older replica's `INSERT INTO catalogs` names
--- neither new column, and lands on `main`, provisioned. Nothing here is
--- credential material: a `host` row holds a reference to a credential
--- (an environment variable name, a secret ARN, or an IAM identity), never
--- the credential.
+-- (plan decision P11). Nothing here is credential material: a `host` row
+-- holds a reference to a credential (an environment variable name, a secret
+-- ARN, or an IAM identity), never the credential.
 --
--- Locks. sqlx runs a migration in one transaction, so each lock is held
--- until it commits.
---   * `stores` is new, so its statements wait for nobody.
---   * `ALTER TABLE teams ADD COLUMN store ... REFERENCES` takes ACCESS
---     EXCLUSIVE on `teams` for a moment: a nullable column with no default
---     is metadata-only, and the foreign key finds only NULLs.
---   * `ALTER TABLE catalogs ADD COLUMN` takes ACCESS EXCLUSIVE on
---     `catalogs`. Both columns have a default that is not volatile
---     (`'main'`, and `now()`, which is STABLE), so Postgres 11 and later
---     store the default in the catalog and rewrite no row. The new foreign
---     key checks the one value `'main'` against `stores`. `teams` is locked
---     before `catalogs`, the order every writer takes them in.
---   * The `UPDATE catalogs` rewrites each row once, under the same
---     transaction, so a registry row is never visible without its
---     `provisioned_at`. The registry has one row per catalog, so the
---     rewrite is small.
---   * The two audit CHECKs are added NOT VALID, which skips the scan of the
---     whole audit log under the ACCESS EXCLUSIVE lock; the next migration
---     (0037) validates them in a transaction of its own, as 0031 and 0032
---     did.
+-- The registry changes are split over 0036 to 0040 so that no statement
+-- rewrites or scans a big table while holding ACCESS EXCLUSIVE on it. This
+-- file creates `stores` (new, nobody waits on it) and then does the one
+-- statement that locks an existing table, last, so the lock is held only
+-- until this file commits:
+--   * `ALTER TABLE teams ADD COLUMN store ...`: ACCESS EXCLUSIVE on `teams`,
+--     metadata-only (a nullable column with no default). The foreign key is
+--     added NOT VALID, which skips the scan of `teams`; 0039 validates it
+--     under a weaker lock.
 CREATE TABLE stores (
     name            text PRIMARY KEY CHECK (name ~ '^[a-z0-9-]+$'),
     location_kind   text NOT NULL CHECK (location_kind IN ('account-database', 'host')),
@@ -61,39 +48,7 @@ INSERT INTO server_settings (key, value, updated_at, updated_by)
     ON CONFLICT (key) DO NOTHING;
 
 -- A team's pin (spec Decision 6). RESTRICT: a pinned store cannot be removed.
-ALTER TABLE teams ADD COLUMN store text REFERENCES stores (name) ON DELETE RESTRICT;
-
--- The registry's placement and provisioning (spec Decisions 6, 11).
--- Both defaults keep release-1 replicas working during the rollout (P11):
--- their creates name neither column, and land on main, provisioned.
--- New code always passes both explicitly.
-ALTER TABLE catalogs
-    ADD COLUMN store text NOT NULL DEFAULT 'main'
-        REFERENCES stores (name) ON DELETE RESTRICT,
-    ADD COLUMN provisioned_at timestamptz DEFAULT now();
-UPDATE catalogs SET provisioned_at = created_at;
--- The provisioning job finds half-created catalogs by this.
-CREATE INDEX catalogs_unprovisioned ON catalogs (created_at) WHERE provisioned_at IS NULL;
-
--- Audit entries about a store (`store.added`, ...): target_kind gains
--- 'store', whose target is its name and nothing else. Both supersets of the
--- old checks (no stored row has the new kind), added NOT VALID; 0037
--- validates them. The shape CHECK's text is 0012's, with one new arm.
-ALTER TABLE audit_entries DROP CONSTRAINT audit_entries_target_kind_check;
-ALTER TABLE audit_entries ADD CONSTRAINT audit_entries_target_kind_check CHECK (
-    target_kind IN ('user', 'team', 'catalog', 'key', 'grant', 'code', 'setting', 'unlock',
-                    'route', 'store')
-) NOT VALID;
-ALTER TABLE audit_entries DROP CONSTRAINT audit_entries_target_shape;
-ALTER TABLE audit_entries ADD CONSTRAINT audit_entries_target_shape CHECK (
-    CASE target_kind
-        WHEN 'user' THEN target_person_id IS NOT NULL AND target_name IS NULL
-        WHEN 'team' THEN target_team_ref IS NOT NULL AND target_name IS NULL
-        WHEN 'key' THEN target_credential_ref IS NOT NULL AND target_name IS NULL
-        WHEN 'grant' THEN target_credential_ref IS NOT NULL AND target_name IS NULL
-        WHEN 'code' THEN target_credential_ref IS NOT NULL AND target_name IS NULL
-        WHEN 'store' THEN target_name IS NOT NULL AND target_team_ref IS NULL
-                          AND target_credential_ref IS NULL AND target_person_id IS NULL
-        ELSE target_name IS NOT NULL
-    END
-) NOT VALID;
+ALTER TABLE teams
+    ADD COLUMN store text,
+    ADD CONSTRAINT teams_store_fkey FOREIGN KEY (store) REFERENCES stores (name)
+        ON DELETE RESTRICT NOT VALID;
