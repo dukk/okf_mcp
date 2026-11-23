@@ -73,17 +73,23 @@ a second store.
    no column a password could be written to.
 5. **Pool size is server config, not a store property.** One setting, the
    maximum pool size per store, the same on every replica. Pools open on
-   first use and close idle connections. Two stores with the same location
-   share one pool.
+   first use and close idle connections. Pools are never shared, not even
+   between the account database and a store inside it: each pool sets its
+   own `search_path` (`public` for the account pool, `catalog` for a store
+   pool), so a query sent to the wrong one fails instead of quietly
+   working. A single-database install therefore opens two pools to one
+   database.
 6. **Placement.** A new catalog goes to its owner team's pinned store if
    the team has one, else to the current default store. Both live in the
    account database and change at runtime through the admin API or CLI,
    with an audit entry. Changing the default affects new catalogs only;
    each catalog's store is recorded on its registry row at creation.
 7. **Account database and stores are distinct types.** `AccountDb` and
-   `CatalogDb` wrap the pool. Store-layer functions take the one they need,
-   so a catalog query on the account pool (or the reverse) does not
-   compile.
+   `CatalogDb` wrap the pool. Store-layer entry points take the one they
+   need, so a route, tool, CLI command or job that picks the wrong database
+   does not compile. Helpers below the entry points still take a plain
+   connection; the per-pool `search_path` (Decision 5) catches a wrong one
+   in tests.
 8. **One write, one store transaction.** An edit, publish, revert, import
    or delete of a document runs in one transaction on the catalog's store,
    including its catalog audit entry. Account reads a write needs (access
@@ -119,8 +125,12 @@ a second store.
     A call reading several catalogs (for example `search` over the
     selection) queries their stores concurrently and merges as today. If a
     store cannot be reached, the call returns the rest and an `unavailable`
-    list naming the catalogs it skipped. A write to an unreachable store
-    fails with an error that says so.
+    list naming the catalogs it skipped. A call that answers from the
+    first selected catalog holding a path (`get_concept`, `history`,
+    `read_document` without `catalog`) fails instead when an earlier
+    catalog's store is unreachable, since that catalog might have held the
+    answer. A write to an unreachable store fails with an error that says
+    so.
 14. **One central job queue, in the account database.** Stores hold no job
     tables and run no workers. Per-store housekeeping (empty-changeset
     pruning, catalog audit pruning, open-changeset counts) is scheduled as
@@ -133,6 +143,18 @@ a second store.
     this way, `src/db.rs:96`). Account tables stay in `public` with the
     existing history. A store that shares the account database has both
     schemas; a separate store has only `catalog`.
+16. **Which audit actions live on a store.** Those recorded inside a
+    catalog-store transaction: `catalog.published`, `catalog.imported`,
+    `catalog.repaired`, `catalog.reverted`, `catalog.changeset_discarded`,
+    `catalog.maintenance_run`. All others, including `catalog.created`,
+    `catalog.deleted`, `catalog.exported`, `catalog.admin_read` and the
+    unlock actions, stay in the account database.
+17. **Catalog audit outlives the catalog.** Deleting a catalog's store data
+    leaves its `catalog.audit_entries` rows; they are pruned by the audit
+    retention setting, per store, like account audit.
+18. **A deleted catalog's name stays reserved until its store data is
+    gone.** The registry row is marked deleted at once and removed only
+    after the store side is cleaned up; only then can the name be reused.
 
 ## Architecture
 
@@ -273,8 +295,9 @@ upgrade.
   database and two stores.
 - **Jobs.** Per-store housekeeping runs once per store and slot across
   replicas, and one store failing does not hold up the others.
-- **Compiler.** The type split is itself the routing test: the build fails
-  if a query uses the wrong database.
+- **Wrong database.** The type split makes an entry point that picks the
+  wrong database fail to build; the per-pool `search_path` makes a helper
+  query sent to the wrong database fail in tests, in both harness modes.
 
 ## Docs
 
