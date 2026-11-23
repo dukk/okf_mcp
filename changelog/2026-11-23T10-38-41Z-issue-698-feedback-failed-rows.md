@@ -14,9 +14,14 @@
 - `feedback::prune` deletes `failed` rows after the same `[feedback]
   retention` as `sent` rows (it kept them forever).
 - `store::users::delete` deletes the user's `pending` and `failed` feedback
-  in its transaction, so a deleted user's undelivered feedback is not
-  forwarded with their name. `sent` rows are left: they are delivered, and
-  the prune removes them.
+  in its transaction, so no try that starts after the deletion commits
+  forwards it: the job finds no row and ends as skipped. A post the worker
+  claimed before the deletion is not cancelled and can still reach Forminit
+  with the user's name; the deletion does not wait for it (that would hold
+  the user and admin locks across a call bounded only by its 30 s timeout).
+  Whatever that post's answer, it updates no row, so it is not posted
+  again. `sent` rows are left: they are delivered, and the prune removes
+  them.
 - Migration `0035_feedback_undelivered_user_index.sql` (`no-transaction`): partial index
   `feedback_undelivered_user` on `feedback (user_slug) WHERE status IN
   ('pending', 'failed')`, built `CONCURRENTLY` and listed in

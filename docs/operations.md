@@ -2798,7 +2798,11 @@ code as `reason`). Deleting a user deletes that user's `pending` and
 `failed` feedback in the same transaction, and a submission racing the
 deletion either lands before it (and goes with it) or is refused because
 the user is gone; `sent` rows, already delivered,
-are left for the prune. For anything else, read the table:
+are left for the prune. No try that starts after the deletion commits
+sends the deleted rows. A post the worker had already started is not
+cancelled and can still reach Forminit with the user's name (the deletion
+does not wait up to 30 seconds for it); its answer then updates nothing,
+so it is not sent again. For anything else, read the table:
 
 ```sql
 SELECT id, status, attempts, last_error, created_at

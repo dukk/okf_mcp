@@ -1423,10 +1423,15 @@ async fn delete_checked(
     // retry it for) must not outlive its sender: a pending row would still
     // be forwarded with the name as `sender.userId`. `feedback` has no
     // foreign key by design (migration 0022), so it goes here. `sent` rows
-    // are delivered already and the hourly prune removes them. A queued
-    // job for a deleted row finds nothing and ends as skipped. The rows
-    // are taken in no order relative to other writers: nothing else locks
-    // a feedback row together with a user.
+    // are delivered already and the hourly prune removes them. A try that
+    // claims its row (`feedback::take`) after this commits finds nothing
+    // and the job ends as skipped. A post already claimed before it is not
+    // cancelled and can still reach Forminit: waiting for it would hold
+    // these locks across an outside call bounded only by its 30 s timeout.
+    // Settling that try then finds no row, so it is not posted again
+    // (review of PR #951). The rows are taken in no order relative to
+    // other writers: nothing else locks a feedback row together with a
+    // user.
     sqlx::query(DELETE_UNDELIVERED_FEEDBACK)
         .bind(name)
         .execute(&mut *tx)

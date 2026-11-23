@@ -22,6 +22,11 @@
 //!    `[feedback] retention`, and the finished jobs that named them. An
 //!    operator sees failed rows with [`list_failed`] and queues one again
 //!    with [`retry`] (`okf-mcp feedback list` and `retry`).
+//! 5. Deleting the user (`store::users::delete`) deletes its `pending` and
+//!    `failed` rows. A try that claims its row after the deletion commits
+//!    finds none and ends as skipped; a post claimed before it is not
+//!    cancelled and can still reach Forminit, but its outcome updates no
+//!    row, so it is never posted again.
 //!
 //! Delivery is at-least-once. Fetching a job is exclusive in normal
 //! operation (apalis takes it `FOR UPDATE SKIP LOCKED`), but a try whose
@@ -1302,6 +1307,19 @@ pub(crate) mod tests {
     pub(crate) struct MockForminit {
         pub seen: Arc<Mutex<Vec<Seen>>>,
         answers: Arc<Mutex<VecDeque<(u16, Value)>>>,
+        /// When set, each post is recorded, then held unanswered until
+        /// [`Hold::release`] is notified (a delivery in flight).
+        hold: Option<Arc<Hold>>,
+    }
+
+    /// The two signals of a held post. `Notify::notify_one` keeps a permit
+    /// when no one is waiting yet, so neither side can miss the other.
+    #[derive(Default)]
+    pub(crate) struct Hold {
+        /// Notified once a post has been recorded (and is being held).
+        pub arrived: tokio::sync::Notify,
+        /// Notify to let the held post be answered.
+        pub release: tokio::sync::Notify,
     }
 
     impl MockForminit {
@@ -1330,6 +1348,10 @@ pub(crate) mod tests {
         body: axum::Json<Value>,
     ) -> (axum::http::StatusCode, axum::Json<Value>) {
         mock.seen.lock().unwrap().push((form, headers, body.0));
+        if let Some(hold) = &mock.hold {
+            hold.arrived.notify_one();
+            hold.release.notified().await;
+        }
         let (status, reply) = mock.answers.lock().unwrap().pop_front().unwrap_or((
             200,
             json!({"success": true, "submission": {"hashId": "hash0001", "date": "2026-11-18"}}),
@@ -1345,10 +1367,28 @@ pub(crate) mod tests {
     /// # Returns
     /// Its origin (`http://127.0.0.1:<port>`) and the mock.
     pub(crate) async fn mock_forminit(answers: Vec<(u16, Value)>) -> (String, MockForminit) {
-        let mock = MockForminit {
+        serve_mock(MockForminit {
             seen: Arc::default(),
             answers: Arc::new(Mutex::new(answers.into())),
-        };
+            hold: None,
+        })
+        .await
+    }
+
+    /// As [`mock_forminit`], but every post is held until its [`Hold`] is
+    /// released.
+    async fn held_forminit(answers: Vec<(u16, Value)>) -> (String, MockForminit, Arc<Hold>) {
+        let hold = Arc::new(Hold::default());
+        let (origin, mock) = serve_mock(MockForminit {
+            seen: Arc::default(),
+            answers: Arc::new(Mutex::new(answers.into())),
+            hold: Some(Arc::clone(&hold)),
+        })
+        .await;
+        (origin, mock, hold)
+    }
+
+    async fn serve_mock(mock: MockForminit) -> (String, MockForminit) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let router = Router::new()
@@ -1945,5 +1985,72 @@ pub(crate) mod tests {
                 ..
             })
         ));
+    }
+
+    /// Review of PR #951: user deletion does not wait for, or cancel, a
+    /// delivery the worker already started. The post is held after `take`
+    /// claimed the row; the deletion completes meanwhile (no lock is held
+    /// across the post), the held post still reaches Forminit, and whether
+    /// it then succeeds or asks for a retry, the deleted row is not
+    /// recreated and a later try of the job posts nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_delivery_in_flight_is_not_cancelled_by_user_deletion_and_never_retried() {
+        use crate::store::audit::AuditActor;
+        use crate::store::users::{delete, tests::seed_user, DeleteOptions};
+
+        for (answer, outcome) in [
+            ((200, json!({"success": true})), "sent"),
+            ((503, json!({})), "retry"),
+        ] {
+            // Arrange: alice's feedback, its post held after the claim.
+            let db = test_db().await;
+            seed_user(&db.pool, "alice", None).await;
+            let new = NewFeedback {
+                registered: true,
+                ..sample("key-1")
+            };
+            let id = submit(&db.pool, &new, 10, now()).await.unwrap();
+            let (origin, mock, hold) = held_forminit(vec![answer]).await;
+            let context = FeedbackContext {
+                pool: db.pool.clone(),
+                forminit: Arc::new(client_on(&origin, None)),
+                clock: Arc::new(FixedClock(now())),
+            };
+            let in_flight = {
+                let (context, id) = (context.clone(), id.clone());
+                tokio::spawn(async move { forward(&id, &context, "job-1").await.1 })
+            };
+            hold.arrived.notified().await;
+
+            // Act: delete alice while the post is held, then answer it.
+            tokio::time::timeout(
+                Duration::from_secs(30),
+                delete(
+                    &db.pool,
+                    "alice",
+                    DeleteOptions::default(),
+                    &AuditActor::cli(),
+                    now(),
+                ),
+            )
+            .await
+            .expect("the deletion does not wait for the delivery in flight")
+            .unwrap();
+            hold.release.notify_one();
+            let first = in_flight.await.unwrap();
+            // The job's next try, after the deletion.
+            let later = forward(&id, &context, "job-1").await.1;
+
+            // Assert
+            assert_eq!(first, outcome);
+            assert_eq!(mock.seen().len(), 1, "the in-flight post went out, once");
+            let left: i64 = sqlx::query_scalar("SELECT count(*) FROM feedback")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+            assert_eq!(left, 0, "settling the try did not recreate the row");
+            assert_eq!(later, "skipped");
+            assert_eq!(mock.seen().len(), 1, "nothing posted after the deletion");
+        }
     }
 }
