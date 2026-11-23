@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 625,
+  "next_claim_seq": 640,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "079cdeaf6f2191fd3fb78709aae04d4eb9d40168b59db7c35f16a55d1c3f99f6"
+    "mac": "defe5482bf72b00a7bda324a17e178ee71977d6f423b69e44fee24b97fe4e44a"
   },
-  "next_evidence_seq": 790,
+  "next_evidence_seq": 807,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "c1f27788ba0f614d5e8e7eaacbdc57f8ef0ebc97c2321f2698fd5ea248759dcc"
+    "mac": "d6cd98a3d85a8dfcbc8b316c01347c97b10a3669940fbe9949e2b63ae86c6169"
   },
   "claims": [
     {
@@ -48796,6 +48796,1035 @@
       "seal": {
         "by": "server",
         "mac": "85b6e8f60492700f021491c5debd01c6279e59bad6918067266fa6a279475c71"
+      }
+    },
+    {
+      "id": "CLM-0625",
+      "statement": "Issue #642 is resolved: the store readers return OkfError::Database (ColumnDecode) instead of panicking on an unrecognised stored column value.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/642",
+      "derived_from": [],
+      "artifacts": [
+        "src/store"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0802",
+          "kind": "analysis",
+          "locator": "children of CLM-0625",
+          "summary": "Code behavior fully meets the issue (all children supported except one). One child, CLM-0633, is refuted only for PR description wording ('every other site is a read' omits changesets::open); no code defect.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-23T05:21:19.937913061Z",
+          "seal": {
+            "by": "server",
+            "mac": "1f7a1e1097b2e972ec5ff252999e4b074c5ce761c97f7e0902f72bc7810c4410"
+          }
+        },
+        {
+          "id": "EVD-0804",
+          "kind": "analysis",
+          "locator": "children of CLM-0625",
+          "summary": "Re-audit on 8f9757c: all code-level children remain supported. CLM-0633 was retired as superseded; its replacement CLM-0638 is refuted, again only for the description's 'every other site is a read' wording (unlocks create/revoke and tokens::revoke are also write paths, all commit-safe).",
+          "stance": "refutes",
+          "recorded_at": "2026-11-23T05:22:23.951300447Z",
+          "seal": {
+            "by": "server",
+            "mac": "c4335b2701d8e1702f45f276d472961f63648d81435d64af0c3cc71830408c36"
+          }
+        },
+        {
+          "id": "EVD-0806",
+          "kind": "analysis",
+          "locator": "children of CLM-0625",
+          "summary": "On 9c9aedf, every active child (CLM-0626 to 0632, 0634 to 0637, 0639) is supported. The refuted write-path wording claims (CLM-0633, 0638) were retired as superseded by the corrected description. Together they cover the issue: no panicking parse remains, one shared helper, TryFrom conversions, commit safety, one corrupt-row test per family, no stored text leaked, changelog present.",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T05:23:02.887875415Z",
+          "seal": {
+            "by": "server",
+            "mac": "98704513a48bd80d41cdad92b378c6d251b08085c515078ae9e348cc2f280bf0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Roll-up: every code-level child is supported; the only refuted child (CLM-0633) is a wording error in the PR description, not in the code. Fix: correct the PR body's commit-safety bullet to mention changesets::open (INSERT ... RETURNING on the caller's transaction) and re-audit CLM-0633, then this roll-up.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0802"
+          ],
+          "recorded_at": "2026-11-23T05:21:22.701607725Z",
+          "seal": {
+            "by": "server",
+            "mac": "3c7a62e806c8b1c649a11dbc5e93c26870204f55f7f75db7afa0fad64c20bc87"
+          }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "Roll-up: every code child is supported; the only refuted child, CLM-0638, concerns the PR description's write-path wording, not the code. Fix: reword the PR body and changelog so the write-path list also names unlocks::create/revoke (find_in before commit) and tokens::revoke (parse before commit) instead of saying every other site is a read, then re-audit CLM-0638 and this roll-up.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0804"
+          ],
+          "recorded_at": "2026-11-23T05:22:26.663710412Z",
+          "seal": {
+            "by": "server",
+            "mac": "a4dcc882a3088733306ce70adb2d6b1411edd3afe839999645de19600f886231"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All active children are supported on 9c9aedf; the earlier refutations were of description wording that has been corrected and retired.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0806"
+          ],
+          "recorded_at": "2026-11-23T05:23:05.165267521Z",
+          "seal": {
+            "by": "server",
+            "mac": "331ffea342c5ede78cb1e59630073409187bc8b8e0ce1b639bd42c8e92d80e0b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:20:15.575198238Z",
+      "updated_at": "2026-11-23T05:23:05.165267521Z",
+      "seal": {
+        "by": "server",
+        "mac": "7019c56cb48abf4c6fd6afc7542d441f90014c3f9a1edda22b9c879cff9ef7ad"
+      }
+    },
+    {
+      "id": "CLM-0626",
+      "statement": "No `.expect(` or `.unwrap(` on the result of parsing a stored column remains in non-test code under src/store.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #642: every X::parse(&column).expect(...) on a stored column in src/store must return OkfError::Database",
+      "derived_from": [
+        "CLM-0625"
+      ],
+      "artifacts": [
+        "src/store"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0790",
+          "kind": "analysis",
+          "locator": "git grep -nE \"::parse\\(.*\\)\\s*\\.(expect|unwrap)\\(\" -- src/store (non-test); diff removed 16 expect lines",
+          "summary": "Diff origin/main..HEAD removes 16 `X::parse(..).expect(\"the schema checks ...\")` lines in src/store. Remaining `::parse(` in non-test src/store code are all non-panicking: catalogs.rs:972 and gates.rs:107 fall back (unwrap_or MemberAccess::None / filter_map), settings.rs:755 let-else skips, audit.rs:1588 ok_or_else, user_sessions.rs:573 and sign_in_events.rs:259 ip `.parse().ok()`. Other unwrap/expect hits are in #[cfg(test)] code or are not parses of columns (teams.rs `expect(\"one team row gives one record\")`). Zero-hit search below shows no single-line parse+expect/unwrap remains.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "parse\\([^)]*\\)\\)?\\.(expect|unwrap)\\(\"(the schema|sign_in_events)",
+              "case_insensitive": true,
+              "scope": [
+                "src/store"
+              ],
+              "hits": 0,
+              "commit": "5c88ca9029350e0c1287beef63eb1d8da4e31233"
+            }
+          },
+          "recorded_at": "2026-11-23T05:20:36.723303137Z",
+          "seal": {
+            "by": "server",
+            "mac": "7af939de24cfa6b232bd0e77dc3e33c0af30fb22d8e8d1253a32185d4fdaa09a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All 16 removed expects are gone; remaining parse calls in non-test store code fall back or skip without panicking.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0790"
+          ],
+          "recorded_at": "2026-11-23T05:21:16.126252661Z",
+          "seal": {
+            "by": "server",
+            "mac": "262beafd325328ee419227d3eb6406528015863e5b25d51ff49315214dd6be7b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:20:15.575198238Z",
+      "updated_at": "2026-11-23T05:21:16.126252661Z",
+      "seal": {
+        "by": "server",
+        "mac": "55aa488aeb67df8d37e1deaa5253f1d14fc96c99e3d1377e2d6407ed355e9cb4"
+      }
+    },
+    {
+      "id": "CLM-0627",
+      "statement": "One shared helper, store::decode_column, turns a failed parse into OkfError::Database { source: sqlx::Error::ColumnDecode }, and all 16 converted sites use it (ceiling 5, sign_in_events 2, keys 3, teams 2, changesets 1, unlocks 1, oauth/clients 1, oauth/codes 1).",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #642: 'via ONE shared helper'; PR body: 'Sixteen store readers ... through one shared helper' and 'Sites: ceiling.rs (5 ...), changesets.rs (1), teams.rs (2), unlocks.rs (1), keys.rs (3), oauth/clients.rs (1), oauth/codes.rs (1), sign_in_events.rs (2)'",
+      "derived_from": [
+        "CLM-0625"
+      ],
+      "artifacts": [
+        "src/store/mod.rs"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0791",
+          "kind": "inspection",
+          "locator": "src/store/mod.rs:57-72 (decode_column); grep decode_column src",
+          "summary": "decode_column returns OkfError::Database{source: sqlx::Error::ColumnDecode{..}} on None. It is called at 16 sites in the 8 listed files with the stated per-file counts (ceiling.rs 681,728,837,963,1379; sign_in_events 257,258; keys 971,979,990; teams 214,1029; changesets 190; unlocks 337; clients 130; codes 202), plus tokens.rs:203. Helper is the only construction of this error for parsed columns.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/mod.rs",
+              "lines": {
+                "start": 57,
+                "end": 72
+              },
+              "commit": "5c88ca9029350e0c1287beef63eb1d8da4e31233"
+            }
+          },
+          "recorded_at": "2026-11-23T05:20:36.804438596Z",
+          "seal": {
+            "by": "server",
+            "mac": "6c93ea49e0a068ce2624f0edbec3936e063587a863b925ca734ad22d7177f3de"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Helper at mod.rs and 16 call sites with the stated per-file counts.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0791"
+          ],
+          "recorded_at": "2026-11-23T05:21:16.162911088Z",
+          "seal": {
+            "by": "server",
+            "mac": "76aa04d97f79b0a4183dc73036f92b82820cb2378dc22db62e78ef0a998a8981"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:20:15.575198238Z",
+      "updated_at": "2026-11-23T05:21:16.162911088Z",
+      "seal": {
+        "by": "server",
+        "mac": "2902dc7ab96c36b576f68a03fc659de9f64e4983c9efd7b77d531c6721beea0c"
+      }
+    },
+    {
+      "id": "CLM-0628",
+      "statement": "ceiling.rs has 5 converted sites (member_access x3, user_catalogs.access x2) where the issue listed 3.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "PR body: 'ceiling.rs (5: member_access x3, user_catalogs.access x2) ... The issue listed 14; ceiling.rs has two more than it listed.'",
+      "derived_from": [
+        "CLM-0625"
+      ],
+      "artifacts": [
+        "src/store/ceiling.rs"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0792",
+          "kind": "inspection",
+          "locator": "git diff origin/main..HEAD -- src/store/ceiling.rs; ceiling.rs:681,728,837,963,1379",
+          "summary": "origin/main ceiling.rs had 5 expect sites (681, 728, 838 all catalogs.member_access; 960, 1375 user_catalogs.access); HEAD converts all 5 (3 member_access, 2 user_catalogs.access). Issue's count of 3 versus 5 is consistent with the PR's 'two more than it listed' (14 + 2 = 16). I could not read the issue's text itself; the 3 comes from the task brief.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "decode_column\\(",
+              "scope": [
+                "src/store/ceiling.rs"
+              ],
+              "hits": 5,
+              "commit": "5c88ca9029350e0c1287beef63eb1d8da4e31233"
+            }
+          },
+          "recorded_at": "2026-11-23T05:20:36.845938123Z",
+          "seal": {
+            "by": "server",
+            "mac": "7c1784010e448c11b9989716d39a44439d52b61e613ef51f3fd9d59f4ce8eaa9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "origin/main had 5 expect sites in ceiling.rs; head has 5 decode_column calls (hit count 5).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0792"
+          ],
+          "recorded_at": "2026-11-23T05:21:16.200088798Z",
+          "seal": {
+            "by": "server",
+            "mac": "fbf67ae57722e5df72c2b01df4379386f076455582e84a27c1d63580d3b5606d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:20:15.575198238Z",
+      "updated_at": "2026-11-23T05:21:16.200088798Z",
+      "seal": {
+        "by": "server",
+        "mac": "e1d83b610ca5f7b92844fb4532e4fa8538259b79fecb6158aeb3badb306edc44"
+      }
+    },
+    {
+      "id": "CLM-0629",
+      "statement": "The error names the column and never contains the stored text.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #642 / PR body: 'Its error names the column and never the stored text'",
+      "derived_from": [
+        "CLM-0625"
+      ],
+      "artifacts": [
+        "src/store/mod.rs"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0793",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- corrupt (11 passed, 0 failed)",
+          "summary": "decode_column's message is only \"unrecognised value in {column}\". The shared assert_decode_error asserts the text contains the column and does not contain the stored bogus value; all eight family tests call it and pass on head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/mod.rs",
+              "lines": {
+                "start": 100,
+                "end": 113
+              },
+              "commit": "5c88ca9029350e0c1287beef63eb1d8da4e31233"
+            }
+          },
+          "recorded_at": "2026-11-23T05:20:36.881554078Z",
+          "seal": {
+            "by": "server",
+            "mac": "2376910e4fdb5b48d6d1b71813e05768d667113b034688fa31ab427c2a8571f2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Message holds the column only; tests assert the stored text is absent and pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0793"
+          ],
+          "recorded_at": "2026-11-23T05:21:16.236004113Z",
+          "seal": {
+            "by": "server",
+            "mac": "4e627790ca0dd59e232088a38570bb8d389577749b78b24737dae985e61e410e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:20:15.575198238Z",
+      "updated_at": "2026-11-23T05:21:16.236004113Z",
+      "seal": {
+        "by": "server",
+        "mac": "71ee35d0df2a0b9b8a9af9bf473606b01c3ecc8ad60471488145e1f7212538e2"
+      }
+    },
+    {
+      "id": "CLM-0630",
+      "statement": "The From impls for RawChangeset, KeyRow, CredentialRow, CodeRow and ClientRow became TryFrom, and UnlockRow::into_record and teams::assemble return Result.",
+      "kind": "interface",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: 'From<RawChangeset>, From<KeyRow>, From<CredentialRow>, From<CodeRow>, From<ClientRow> became TryFrom; UnlockRow::into_record and teams::assemble return Result.'",
+      "derived_from": [
+        "CLM-0625"
+      ],
+      "artifacts": [
+        "src/store"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0794",
+          "kind": "inspection",
+          "locator": "changesets.rs:172, keys.rs:952,1045, codes.rs:188, clients.rs:117, unlocks.rs:330, teams.rs:208",
+          "summary": "`impl TryFrom<..>` with Error = OkfError exists for RawChangeset, KeyRow, CredentialRow, CodeRow, ClientRow; UnlockRow::into_record returns Result<UnlockRecord, OkfError>; teams::assemble returns Result<Vec<TeamRecord>, OkfError>. No `impl From<...Row>` for these remain at those sites.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "impl TryFrom<(RawChangeset|KeyRow|CredentialRow|CodeRow|ClientRow)>",
+              "scope": [
+                "src/store"
+              ],
+              "hits": 5,
+              "commit": "5c88ca9029350e0c1287beef63eb1d8da4e31233"
+            }
+          },
+          "recorded_at": "2026-11-23T05:20:36.925145164Z",
+          "seal": {
+            "by": "server",
+            "mac": "483ed4c527d7eae1342bfad15e490fa88ecd45afbd5a96b8a198b6e1868b8534"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Five TryFrom impls and two Result-returning fns found.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0794"
+          ],
+          "recorded_at": "2026-11-23T05:21:16.272960461Z",
+          "seal": {
+            "by": "server",
+            "mac": "7351967c05b8d6facc9a816e4d48e5f58329bce0435e251d80786806547e7f79"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:20:15.575198238Z",
+      "updated_at": "2026-11-23T05:21:16.272960461Z",
+      "seal": {
+        "by": "server",
+        "mac": "68f89bf74528f7d5e3ecfa4182fc2859236c572ab9c618de287318d35fa31223"
+      }
+    },
+    {
+      "id": "CLM-0631",
+      "statement": "ceiling::change_member_access parses the replaced value before commit, so a corrupt value rolls the transaction back and the stored value is unchanged, and a test checks that.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "PR body: 'ceiling::change_member_access parses the replaced value before commit (the error drops the transaction, which rolls back; a test checks the stored value is unchanged)'",
+      "derived_from": [
+        "CLM-0625"
+      ],
+      "artifacts": [
+        "src/store/ceiling.rs"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0795",
+          "kind": "test",
+          "locator": "src/store/ceiling.rs:681-702 and test a_corrupt_member_access_or_entitlement_is_a_database_error (ceiling.rs:2862-2924); gate.sh narrow corrupt: ok",
+          "summary": "decode_column at line 681 runs before tx.commit() at line 702 inside the same tx, so the error drops tx (rollback). The test calls change_member_access on a 'bogus-member' row, asserts Database error, then reads member_access and asserts it still equals 'bogus-member' (stored == replaced value not overwritten by the 'read' the change set). Test passes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/ceiling.rs",
+              "lines": {
+                "start": 676,
+                "end": 704
+              },
+              "commit": "5c88ca9029350e0c1287beef63eb1d8da4e31233"
+            }
+          },
+          "recorded_at": "2026-11-23T05:20:54.350280483Z",
+          "seal": {
+            "by": "server",
+            "mac": "bd6553193e421c8610f4d3733dc7cae04311c492210f64cdaec1f5f88dcfd30b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Parse precedes commit in the same tx; the test asserts the error and the unchanged stored value, and passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0795"
+          ],
+          "recorded_at": "2026-11-23T05:21:16.309758119Z",
+          "seal": {
+            "by": "server",
+            "mac": "eee2e7bab17a49cd3ffddeba93aa3e933a8b9f33f34e5690fffed7c94028b314"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:20:15.575198238Z",
+      "updated_at": "2026-11-23T05:21:16.309758119Z",
+      "seal": {
+        "by": "server",
+        "mac": "7f8246b0459522c143acb3090d6c2fa8bf79adeb24cad91accdffa981f97295a"
+      }
+    },
+    {
+      "id": "CLM-0632",
+      "statement": "oauth::clients::insert_dcr converts the inserted row before commit.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "PR body: 'oauth::clients::insert_dcr converts before commit'",
+      "derived_from": [
+        "CLM-0625"
+      ],
+      "artifacts": [
+        "src/store/oauth/clients.rs"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0796",
+          "kind": "inspection",
+          "locator": "src/store/oauth/clients.rs:262-281",
+          "summary": "Line 278 `row.map(ClientRecord::try_from).transpose()?` precedes `tx.commit()` at 279; an error returns early and drops tx. No test covers the insert_dcr rollback path (the clients test only exercises find), so this is read from code.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/oauth/clients.rs",
+              "lines": {
+                "start": 262,
+                "end": 281
+              },
+              "commit": "5c88ca9029350e0c1287beef63eb1d8da4e31233"
+            }
+          },
+          "recorded_at": "2026-11-23T05:20:54.407621721Z",
+          "seal": {
+            "by": "server",
+            "mac": "e0c9abb64198b7514076993c262bb825cf67f0a21b14218b6cf5060f98e077f0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "try_from at clients.rs:278 precedes commit at 279. Supported by code reading only; no test exercises the insert_dcr rollback.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0796"
+          ],
+          "recorded_at": "2026-11-23T05:21:16.345705654Z",
+          "seal": {
+            "by": "server",
+            "mac": "8338ba5098d461b99cc248e0c3a22be7cbdfa229056fee3749b86a1d2e223638"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:20:15.575198238Z",
+      "updated_at": "2026-11-23T05:21:16.345705654Z",
+      "seal": {
+        "by": "server",
+        "mac": "7094f1bff6428b5787ff625e3a455f36498f2b2f8f7d503180e4696b1daf34fa"
+      }
+    },
+    {
+      "id": "CLM-0633",
+      "statement": "ceiling::read_catalog_locked, teams::current_role and changesets::by_id/lock run inside the caller's transaction and propagate the error with `?`, and every other converted site is a read.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "PR body: 'ceiling::read_catalog_locked, teams::current_role and changesets::by_id/lock run inside the caller's transaction and propagate with ?, so the caller rolls back. Every other site is a read.'",
+      "derived_from": [
+        "CLM-0625"
+      ],
+      "artifacts": [
+        "src/store"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Superseded by CLM-0638: the PR description was reworded to name changesets::open, so the audited text no longer exists.",
+        "retired_at": "2026-11-23T05:22:21.152287302Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0797",
+          "kind": "inspection",
+          "locator": "src/store/changesets.rs:303-318 (open), 395-407 (lock); ceiling.rs:862-864; teams.rs:1017-1030",
+          "summary": "The three named paths are inside the caller's tx/conn and propagate with `?` before any commit (member_access_as_owner begins tx, calls read_catalog_locked with `?`, then commits). But `changesets::open` (changesets.rs:306-318) is an INSERT ... RETURNING that also ends in `ChangesetRow::try_from`, so the PR's 'Every other site is a read' is inexact: a write path reaches the changesets.state site. It stays commit-safe, since it runs on the caller's tx connection with `?` and the inserted state is the literal 'open', which always parses. The commit-safety substance holds; the description wording omits `open`.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 303,
+                "end": 318
+              },
+              "commit": "5c88ca9029350e0c1287beef63eb1d8da4e31233"
+            }
+          },
+          "recorded_at": "2026-11-23T05:20:54.445677536Z",
+          "seal": {
+            "by": "server",
+            "mac": "0963e61dc6ab1eb785a8a0ffcff1236bfeafaa2fce90f30778e4e0f1d054b5f5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The three named paths do propagate inside the caller's transaction, but 'every other site is a read' is false: changesets::open is an INSERT ... RETURNING that converts through the changesets.state site. It is commit-safe (caller's tx, literal 'open' always parses), so only the description wording is wrong. Fix: change the PR body to say changesets::open also converts an INSERT ... RETURNING row on the caller's transaction with `?`, so the caller rolls back, and that every other site is a read.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0797"
+          ],
+          "recorded_at": "2026-11-23T05:21:16.378737146Z",
+          "seal": {
+            "by": "server",
+            "mac": "11ed0f071638879cacfdbaf81083be87072964d8b35385aad12c6d9d712dee25"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:20:15.575198238Z",
+      "updated_at": "2026-11-23T05:22:21.152287302Z",
+      "seal": {
+        "by": "server",
+        "mac": "7e93c295bcb618e8b353bbd22e086f6f6a0e6031b79fd6e4bf61b0a70e75c030"
+      }
+    },
+    {
+      "id": "CLM-0634",
+      "statement": "There is one corrupt-row test per reader family (ceiling, changesets, sign_in_events, teams, unlocks, keys, oauth clients, oauth codes) that drops the CHECK constraints, stores a bad value and asserts OkfError::Database naming the column and not the stored text.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #642; PR body 'New tests, one per reader family'",
+      "derived_from": [
+        "CLM-0625"
+      ],
+      "artifacts": [
+        "src/store"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0801",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- corrupt (11 passed, 0 failed)",
+          "summary": "Eight family tests pass (ceiling, changesets, sign_in_events, teams, unlocks, keys, oauth::clients, oauth::codes), plus the tokens::revoke test. Each calls drop_check_constraints on its table, writes a bogus value and calls assert_decode_error. Gaps inside families: key_catalogs.access (keys.rs:971) and the insert_dcr rollback path have no corrupt-row assertion.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "drop_check_constraints\\(",
+              "scope": [
+                "src/store"
+              ],
+              "hits": 10,
+              "commit": "5c88ca9029350e0c1287beef63eb1d8da4e31233"
+            }
+          },
+          "recorded_at": "2026-11-23T05:20:58.718793929Z",
+          "seal": {
+            "by": "server",
+            "mac": "da760bb4d1d88ec53a4a4187cb03c21ef783c55e3edde01d53db0beeb1a26591"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All eight family tests exist and pass in the narrow run (11 passed). Intra-family gaps (key_catalogs.access, insert_dcr rollback) are not required by the one-per-family rule.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0801"
+          ],
+          "recorded_at": "2026-11-23T05:21:16.413101084Z",
+          "seal": {
+            "by": "server",
+            "mac": "f19ba456ccdb0469f19f8ac077a00055c54782d2c24d51476af32099b97994a3"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:20:15.575198238Z",
+      "updated_at": "2026-11-23T05:21:16.413101084Z",
+      "seal": {
+        "by": "server",
+        "mac": "76cfbd291c99391732b01c9afa0a5b143692ab265da514df8c482332a6822640"
+      }
+    },
+    {
+      "id": "CLM-0635",
+      "statement": "tokens::revoke uses decode_column and its error no longer includes the stored kind text.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: 'tokens::revoke uses it too (its error no longer includes the stored kind text)'",
+      "derived_from": [
+        "CLM-0625"
+      ],
+      "artifacts": [
+        "src/store/oauth/tokens.rs"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0798",
+          "kind": "test",
+          "locator": "src/store/oauth/tokens.rs:203; test store::oauth::tokens::tests::revoke_answers_an_error_and_revokes_nothing_for_a_corrupt_kind (passed)",
+          "summary": "Diff replaces the hand-built ColumnDecode (which interpolated {kind:?}) with decode_column(TokenKind::parse(&kind), \"oauth_tokens.kind\")?. The existing test passes on head in the narrow run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/oauth/tokens.rs",
+              "lines": {
+                "start": 198,
+                "end": 206
+              },
+              "commit": "5c88ca9029350e0c1287beef63eb1d8da4e31233"
+            }
+          },
+          "recorded_at": "2026-11-23T05:20:54.505098282Z",
+          "seal": {
+            "by": "server",
+            "mac": "c81126c57ce7a8be5c516e8a8d20e735a267f8639cad4abd8b7fb93fdbf6eb20"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code uses the helper; test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0798"
+          ],
+          "recorded_at": "2026-11-23T05:21:16.449960573Z",
+          "seal": {
+            "by": "server",
+            "mac": "395ee4f27d08ee0d3cf630a222f9cab1c7c3287fa4d071568b96ded2f240c651"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:20:15.575198238Z",
+      "updated_at": "2026-11-23T05:21:16.449960573Z",
+      "seal": {
+        "by": "server",
+        "mac": "0fa13ff59d71acbc8fe1bc91ab34ef6021c46f9ebd6b436163c8b2f5eade4f43"
+      }
+    },
+    {
+      "id": "CLM-0636",
+      "statement": "changesets::listed selects only open rows, so a bad state never reaches it and it has no corrupt-row test.",
+      "kind": "documentation",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "PR body: 'changesets::listed selects only open rows, so a bad state never reaches it and it has no corrupt-row test.'",
+      "derived_from": [
+        "CLM-0625"
+      ],
+      "artifacts": [
+        "src/store/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0799",
+          "kind": "inspection",
+          "locator": "src/store/changesets.rs:355-372 (listed query: WHERE c.state = 'open')",
+          "summary": "The listed query filters `c.state = 'open'` and its rows go through ChangesetRow::try_from; no test of listed with a corrupt row was added. A bad state value is excluded by the filter. Note listed can still fail via the shared helper only for an 'open' row, which parses.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 355,
+                "end": 372
+              },
+              "commit": "5c88ca9029350e0c1287beef63eb1d8da4e31233"
+            }
+          },
+          "recorded_at": "2026-11-23T05:20:54.540455656Z",
+          "seal": {
+            "by": "server",
+            "mac": "11bfc30e265c3f77bea3b873064ab6e1de0ba130e3793a89c8523c22a0c94cad"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The query filters state = 'open'.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0799"
+          ],
+          "recorded_at": "2026-11-23T05:21:16.487655635Z",
+          "seal": {
+            "by": "server",
+            "mac": "3269149ce50e55d90cd90812ee611eb7dd518a4f3e458b4507e71a855df3ab3f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:20:15.575198238Z",
+      "updated_at": "2026-11-23T05:21:16.487655635Z",
+      "seal": {
+        "by": "server",
+        "mac": "758453ccd110747fbce0042a4540c123fb4d7ae9cb327904805dc72b2cb66022"
+      }
+    },
+    {
+      "id": "CLM-0637",
+      "statement": "A dated changelog/ entry for issue #642 exists.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Task requirement: dated changelog/ entry",
+      "derived_from": [
+        "CLM-0625"
+      ],
+      "artifacts": [
+        "changelog"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0800",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T05-10-00Z-issue-642-store-parse-errors.md",
+          "summary": "The file exists, is timestamped 2026-11-23T05-10-00Z (matches today), added in commit 5c88ca9, and describes the change (helper, TryFrom changes, tests, write-path notes).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T05-10-00Z-issue-642-store-parse-errors.md",
+              "commit": "5c88ca9029350e0c1287beef63eb1d8da4e31233"
+            }
+          },
+          "recorded_at": "2026-11-23T05:20:54.575589430Z",
+          "seal": {
+            "by": "server",
+            "mac": "33c1c09f4b73de1324d3c2705948d85858fcfa3f2a5d288596489d3b080da8c8"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "File exists with a dated, timestamped name.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0800"
+          ],
+          "recorded_at": "2026-11-23T05:21:16.524357572Z",
+          "seal": {
+            "by": "server",
+            "mac": "4f9bb579a33a07ab43ec4525e432f5bb576ab4ce13475a76cafbf8a2197ae85e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:20:15.575198238Z",
+      "updated_at": "2026-11-23T05:21:16.524357572Z",
+      "seal": {
+        "by": "server",
+        "mac": "5d0570cb6ff8205b48529fb3dd2d1a0c414bfe8decd508de0657d770aa580eb1"
+      }
+    },
+    {
+      "id": "CLM-0638",
+      "statement": "ceiling::read_catalog_locked, teams::current_role, changesets::by_id/lock and changesets::open (an INSERT ... RETURNING that always stores 'open') run inside the caller's transaction and propagate the error with `?`, and every other converted site is a read.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "PR body (corrected): 'ceiling::read_catalog_locked, teams::current_role, changesets::by_id/lock and changesets::open (an INSERT ... RETURNING that always stores open) run inside the caller's transaction and propagate with ?, so the caller rolls back. Every other site is a read.'",
+      "derived_from": [
+        "CLM-0625"
+      ],
+      "artifacts": [
+        "src/store"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Superseded by CLM-0639: the PR description and changelog were reworded to list every write path.",
+        "retired_at": "2026-11-23T05:23:02.851153965Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0803",
+          "kind": "inspection",
+          "locator": "src/store/unlocks.rs:533-537 (create) and 705-708 (revoke); src/store/oauth/tokens.rs:183-211 (revoke)",
+          "summary": "Corrected text now names changesets::open correctly (changesets.rs:306-318, INSERT RETURNING on caller's conn, literal 'open'). But two more write paths reach converted sites and are not covered by 'every other site is a read': unlocks::create and unlocks::revoke each call find_in(&mut tx, id)? (which parses unlocks.category) just before tx.commit(); and tokens::revoke is an UPDATE ... RETURNING whose kind parse runs before tx.commit(). All are commit-safe (error returns before commit, tx dropped), so the safety substance is right and only the 'every other site is a read' wording is wrong. The other converted sites (sign_in_events::recent, keys list/record_by_*, codes list/find_live, clients::find, teams list/find, ceiling member_access/team_access/entitlements_in) are SELECTs; entitlements_in is also called inside a provisioner read tx (http/api/people.rs:649) with `?` before commit.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/store/unlocks.rs",
+              "lines": {
+                "start": 533,
+                "end": 537
+              },
+              "commit": "8f9757c0f416838aba5adf455a91aa5ee3bebb04"
+            }
+          },
+          "recorded_at": "2026-11-23T05:22:15.740103869Z",
+          "seal": {
+            "by": "server",
+            "mac": "c6a2350873ea4e5eabf7b39157020f9a509510061f0707e9881449b01f13764f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "changesets::open is now correctly described, but 'every other converted site is a read' is still false: unlocks::create and unlocks::revoke (find_in before commit) and tokens::revoke (UPDATE RETURNING, parse before commit) are write paths too. All are commit-safe; only the wording is wrong. Fix: in the PR body and changelog, replace 'Every other site is a read' with a list that adds unlocks::create/revoke (find_in runs before tx.commit()) and tokens::revoke (parses before commit) to the write paths, or reword to 'every other site is a read or parses before its commit'.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0803"
+          ],
+          "recorded_at": "2026-11-23T05:22:21.114334097Z",
+          "seal": {
+            "by": "server",
+            "mac": "7e96918f82c122f978607c6709b3dee6fd1c03c5397d8093dbd05ce014c55494"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:21:57.163644925Z",
+      "updated_at": "2026-11-23T05:23:02.851153965Z",
+      "seal": {
+        "by": "server",
+        "mac": "fb9ef45dbde02a7cbed930dc8b01af2fe3ae2392e528b623e88bf757382f62fa"
+      }
+    },
+    {
+      "id": "CLM-0639",
+      "statement": "Every converted site on a write path (change_member_access, insert_dcr, tokens::revoke, unlocks::create, unlocks::revoke) converts before commit, the readers inside a caller's transaction (read_catalog_locked, current_role, changesets::by_id/lock/open) propagate with `?`, and every other converted site is a plain read.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "PR body (corrected again): 'each converts its row before commit and propagates with ?, so the transaction is dropped and rolls back. They are ceiling::change_member_access ..., oauth::clients::insert_dcr, oauth::tokens::revoke, unlocks::create and unlocks::revoke (find_in runs before tx.commit()), and the readers inside a caller's transaction ... Every other converted site is a plain read.'",
+      "derived_from": [
+        "CLM-0625"
+      ],
+      "artifacts": [
+        "src/store"
+      ],
+      "tags": [
+        "from-issue:642"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0805",
+          "kind": "inspection",
+          "locator": "ceiling.rs:681-702; clients.rs:278-279; tokens.rs:183-211; unlocks.rs:535-536,705-707; changesets.rs:306-318,395-407; teams.rs:1017-1030; ceiling.rs:862-864",
+          "summary": "Each listed write path converts (via decode_column / try_from / find_in with `?`) before tx.commit(): change_member_access 681 vs 702, insert_dcr 278 vs 279, tokens::revoke before commit, unlocks::create 535 vs 536 and revoke 705 vs 706. Caller-transaction readers use `?` on the caller's connection. All other converted readers (sign_in_events::recent, unlocks find/list, teams list/find, clients::find, codes list/find_live, keys list/record_by_*, changesets::by_handle/listed, ceiling member_access/team_access) take &PgPool and are plain SELECTs; entitlements_in runs on a conn from read-only callers. I checked the pool-taking signatures; I did not trace every call site of the conn-taking readers.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/unlocks.rs",
+              "lines": {
+                "start": 533,
+                "end": 537
+              },
+              "commit": "9c9aedfc1a5ca8c4cfca0831bc499cfc783a21f1"
+            }
+          },
+          "recorded_at": "2026-11-23T05:22:57.763180247Z",
+          "seal": {
+            "by": "server",
+            "mac": "22a0f5bd49f03fe8885a7b68c1fa7b729220eb0665f5dc16b43e18552e0fbae6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All five write paths convert before commit; caller-transaction readers propagate with `?`; the remaining readers take a pool and only SELECT.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0805"
+          ],
+          "recorded_at": "2026-11-23T05:23:02.806580715Z",
+          "seal": {
+            "by": "server",
+            "mac": "00d2317af88d3f51d649eaa1be37d51647941ed16b863669afc1a23345674e2f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T05:22:49.686264141Z",
+      "updated_at": "2026-11-23T05:23:02.806580715Z",
+      "seal": {
+        "by": "server",
+        "mac": "2c111d69877ba24c23827adcbde053265a5ab9f0ccd8beaefd43b78752c3ad77"
       }
     }
   ]
