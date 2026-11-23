@@ -392,32 +392,40 @@ mod tests {
     async fn a_provisioner_key_reaches_none_of_the_store_routes() {
         let test = app().await;
         let root = every_catalog_admin(&test).await;
-        let (_, created) = send(
+        let (created_status, created) = send(
             &test,
             "POST",
             "/api/v1/keys",
             Some(&root),
-            Some(json!({"name": "prov", "access": "admin", "provisioner": true})),
+            Some(json!({"name": "prov", "provisioner": true, "user": crate::db::TEST_USER})),
         )
         .await;
-        let Some(secret) = created["key"].as_str() else {
-            // The key body's shape is another area's; without it there is
-            // nothing to check here.
-            return;
-        };
+        assert_eq!(created_status.as_u16(), 200, "{created}");
+        let secret = created["secret"].as_str().expect("a bearer secret");
 
-        let (listing, _) = send(&test, "GET", "/api/v1/stores", Some(secret), None).await;
-        let (put, _) = send(
-            &test,
-            "PUT",
-            "/api/v1/settings/default_store",
-            Some(secret),
-            Some(json!({"value": "main"})),
-        )
-        .await;
-
-        assert_eq!(listing.as_u16(), 403);
-        assert_eq!(put.as_u16(), 403);
+        let shared = json!({
+            "name": "shared-1", "host": "db.example.internal", "port": 5432,
+            "database": "okf", "credential_kind": "env", "credential_ref": "SHARED_1_PASSWORD",
+        });
+        let routes = [
+            ("GET", "/api/v1/stores", None),
+            ("POST", "/api/v1/stores", Some(shared)),
+            (
+                "PUT",
+                "/api/v1/settings/default_store",
+                Some(json!({"value": "main"})),
+            ),
+            (
+                "PUT",
+                "/api/v1/teams/main/store",
+                Some(json!({"store": "main"})),
+            ),
+            ("DELETE", "/api/v1/teams/main/store", None),
+        ];
+        for (method, uri, body) in routes {
+            let (status, _) = send(&test, method, uri, Some(secret), body).await;
+            assert_eq!(status.as_u16(), 403, "{method} {uri}");
+        }
     }
 
     #[tokio::test]
