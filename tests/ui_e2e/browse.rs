@@ -254,6 +254,70 @@ async fn search_past_the_cap_asks_for_a_choice_and_limits_it() {
     .await;
 }
 
+/// The number of `/api/v1/search` requests the page has made.
+const SEARCH_REQUESTS: &str = "() => performance.getEntriesByType('resource') \
+    .filter(entry => entry.name.includes('/api/v1/search')).length";
+
+/// The values of the checked boxes in the chooser, sorted.
+const CHECKED: &str = "() => [...document.querySelectorAll('#search-chooser input:checked')] \
+    .map(box => box.value).sort()";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_empty_choice_is_kept_and_searches_nothing() {
+    let (server, key) = needle_server(2).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/search/needle");
+        ui.wait_text("#search-count", "2 hits");
+        assert_eq!(ui.eval(SEARCH_REQUESTS, json!(null)), json!(1));
+        ui.click("#search-chooser input[value=one]");
+        ui.click("#search-chooser input[value=three]");
+        ui.wait_text("#search-cap", "Choose at least one catalog");
+        assert_eq!(ui.eval(CHECKED, json!(null)), json!([]));
+        // Search is off, and a submit anyway (Enter in the box) does nothing.
+        assert_eq!(
+            ui.eval("() => document.querySelector('#search-form button').disabled", json!(null)),
+            json!(true)
+        );
+        ui.eval("() => document.querySelector('#search-form').requestSubmit()", json!(null));
+        // Opening the search again (a reload of the link) keeps the empty choice
+        // instead of restoring the defaults, and sends no request.
+        ui.eval("() => { location.hash = '#/search/needle%20again'; }", json!(null));
+        ui.wait_text("#search-none", "Choose at least one catalog");
+        assert_eq!(ui.eval(CHECKED, json!(null)), json!([]), "no default is restored");
+        assert_eq!(ui.eval(SEARCH_REQUESTS, json!(null)), json!(1), "no request was sent");
+        // Choosing one again enables Search and searches only that one.
+        ui.click("#search-chooser input[value=two]");
+        ui.click("#search-form button[type=submit]");
+        ui.wait_text("#search-count", "1 hit");
+        assert!(ui.text("#search-results").contains("two /two.md"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_chosen_catalog_that_is_no_longer_reachable_drops_out_of_the_choice() {
+    let (server, key) = needle_server(1).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/search");
+        ui.wait_visible("#search-chooser");
+        assert_eq!(ui.eval(CHECKED, json!(null)), json!(["one"]));
+        // The identity is read again and `one` is gone from it; two remain,
+        // still more than the cap of 1.
+        ui.eval(
+            "async () => { const { store } = await import('/ui/js/core/store.js'); \
+               store.whoami.catalogs = store.whoami.catalogs.filter(name => name !== 'one'); \
+               location.hash = '#/search/needle'; }",
+            json!(null),
+        );
+        ui.wait_text("#search-none", "Choose at least one catalog");
+        assert_eq!(ui.eval(CHECKED, json!(null)), json!([]));
+        assert_eq!(ui.eval(SEARCH_REQUESTS, json!(null)), json!(0));
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn switching_catalogs_while_browsing_opens_the_new_root_once() {
     let server = TestServer::start(

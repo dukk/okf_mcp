@@ -20,6 +20,19 @@ every reachable catalog, so one console search could load and scan them all.
   says why. Its read goes through `core/latest.js`.
 - The spec (Decision 8), `docs/operations.md` and the README are corrected.
 
+## Review round 1
+
+An empty chooser selection was treated as "no choice yet", so the next render
+restored the default catalogs and searched what the user had just deselected.
+Now `chosen === null` is "no choice yet" and `[]` is kept as a choice: Search is
+disabled and a note asks for at least one catalog, a submit does nothing, and a
+route opened with nothing chosen shows that note and sends no request (never an
+empty `catalogs=`, which would reach the server's every-reachable path). A
+chosen name that is no longer reachable drops out of the choice. Journeys cover
+unchecking everything, a reload with nothing chosen, and an unreachable chosen
+catalog; the exactly-at-the-cap and past-the-cap cases are in the earlier
+chooser journey.
+
 ## Not done
 
 The chosen catalogs are kept for the session only, not stored in the URL.

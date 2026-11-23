@@ -14,18 +14,21 @@ import { latest } from '../core/latest.js';
 // open, so a second search keeps the choice.
 let chosen = null;
 
-// The chosen catalogs, still reachable, at most `cap`: the current catalog
-// first, then the first reachable ones, when nothing is chosen yet.
+// The chosen catalogs, still reachable, at most `cap`. `null` means no choice
+// has been made yet: then the current catalog first, then the first reachable
+// ones. An empty list is a choice (nothing selected) and is kept as it is, so
+// a deselected catalog is never searched; names that are no longer reachable
+// drop out of it.
 function initialChoice(catalogs, cap) {
-    const kept = (chosen ?? []).filter(name => catalogs.includes(name)).slice(0, cap);
-    if (kept.length) return kept;
+    if (chosen !== null) return chosen.filter(name => catalogs.includes(name)).slice(0, cap);
     const first = store.catalog && catalogs.includes(store.catalog) ? [store.catalog] : [];
     return first.concat(catalogs.filter(name => name !== store.catalog)).slice(0, cap);
 }
 
 // A checkbox list limited to `cap` names. Once `cap` are checked the others
 // are disabled, so the request never names more than the server accepts.
-function chooser(catalogs, cap) {
+// `submit` is the Search button: it is disabled while nothing is chosen.
+function chooser(catalogs, cap, submit) {
     const picked = new Set(initialChoice(catalogs, cap));
     chosen = [...picked];
     const note = h('p', { class: 'muted small', id: 'search-cap' });
@@ -43,7 +46,10 @@ function chooser(catalogs, cap) {
             const box = label.querySelector('input');
             box.disabled = !box.checked && picked.size >= cap;
         });
-        note.textContent = `${picked.size} of at most ${cap} catalogs chosen.`;
+        submit.disabled = picked.size === 0;
+        note.textContent = picked.size
+            ? `${picked.size} of at most ${cap} catalogs chosen.`
+            : `Choose at least one catalog (at most ${cap}) to search.`;
     };
     refresh();
     return h('details', { id: 'search-chooser', open: true },
@@ -64,15 +70,18 @@ export async function render(main, rest) {
         type: 'search', id: 'search-query', name: 'q', value: query, autocomplete: 'off',
         placeholder: 'Words that must all occur', 'aria-label': 'Search',
     });
+    const submit = h('button', { type: 'submit' }, 'Search');
     const form = h('form', {
         id: 'search-form',
         role: 'search',
         onsubmit: event => {
             event.preventDefault();
+            // Nothing chosen: no search, so no catalog is searched unasked.
+            if (choosing && chosen.length === 0) return;
             const text = input.value.trim();
             go(text ? `#/search/${enc(text)}` : '#/search');
         },
-    }, h('fieldset', { role: 'group' }, input, h('button', { type: 'submit' }, 'Search')));
+    }, h('fieldset', { role: 'group' }, input, submit));
     const results = h('div', { id: 'search-results' });
     main.append(
         h('header', { class: 'page-head' },
@@ -81,10 +90,15 @@ export async function render(main, rest) {
                 h('p', { class: 'muted small' }, choosing ? 'Across the catalogs chosen below.'
                     : catalogs.length ? `Across ${catalogs.join(', ')}` : 'This key reaches no catalog.'))),
         form,
-        ...(choosing ? [chooser(catalogs, cap)] : []),
+        ...(choosing ? [chooser(catalogs, cap, submit)] : []),
         results);
     input.focus();
     if (!query) return;
+    // A reloaded link with nothing chosen: say so, send no request.
+    if (choosing && chosen.length === 0) {
+        results.append(h('p', { class: 'muted', id: 'search-none' }, 'Choose at least one catalog to search.'));
+        return;
+    }
     results.append(h('p', { class: 'muted' }, 'Searching...'));
     // Past the cap, the chosen ones; otherwise none are named and the server
     // searches every catalog the key reaches.
