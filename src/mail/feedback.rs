@@ -219,6 +219,12 @@ pub struct NewFeedback<'a> {
     pub credential: &'a str,
     /// The credential's user slug, forwarded as the sender's `userId`.
     pub user_slug: &'a str,
+    /// Whether `user_slug` names a user. [`submit`] then locks that user's
+    /// row `FOR KEY SHARE` first, so it cannot interleave with
+    /// `store::users::delete` (which holds the row `FOR UPDATE` while it
+    /// deletes the user's undelivered feedback), and refuses when the user
+    /// is gone. `false` for a key with no user (the placeholder slug).
+    pub registered: bool,
     /// The feedback text (1 to [`MAX_MESSAGE_CHARS`] characters, no NUL).
     pub message: &'a str,
     /// What it is about.
@@ -272,7 +278,8 @@ async fn queue_job(tx: &mut sqlx::PgConnection, id: &str) -> Result<(), OkfError
 ///
 /// # Errors
 /// [`OkfError::LimitExceeded`] (`limit: "feedback_rate"`) past the rate
-/// limit; [`OkfError::Io`] if the random source or the queue fails;
+/// limit; [`OkfError::Unauthenticated`] when `registered` and the user is
+/// gone; [`OkfError::Io`] if the random source or the queue fails;
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "feedback.submit"))]
 pub async fn submit(
@@ -283,6 +290,23 @@ pub async fn submit(
 ) -> Result<String, OkfError> {
     let id = crate::maintenance::types::new_id()?;
     let mut tx = pool.begin().await?;
+    // The user row first, as every writer of a user's children does (lock
+    // order: the user, then the rest). `store::users::delete` takes it `FOR
+    // UPDATE` and deletes the user's pending feedback before it commits, so
+    // a submission is either stored before the deletion (and deleted with
+    // the user) or finds the user gone; it cannot slip in after.
+    if feedback.registered {
+        let user: Option<String> =
+            sqlx::query_scalar("SELECT id FROM users WHERE name = $1 FOR KEY SHARE")
+                .bind(feedback.user_slug)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if user.is_none() {
+            return Err(OkfError::Unauthenticated {
+                reason: "the user this credential belongs to no longer exists".to_string(),
+            });
+        }
+    }
     // Serializes one credential's submissions until the commit; no row is
     // locked, so this takes no place in the row lock order. `hashtext`
     // folds the id into the lock's `int4` key; a collision only makes two
@@ -387,6 +411,10 @@ pub(crate) struct Sender<'a> {
     pub credential: &'a str,
     /// The user slug forwarded as the sender's `userId`.
     pub user_slug: &'a str,
+    /// Whether `user_slug` names a user (not the placeholder for a key
+    /// with no user): the submission then takes that user's row lock and
+    /// is refused once the user is gone (see [`NewFeedback::registered`]).
+    pub registered: bool,
     /// The client name forwarded as `client` (already cleaned).
     pub client: &'a str,
     /// `api_key`, `oauth` or `session`.
@@ -520,6 +548,7 @@ pub(crate) async fn check_and_submit(
     let new = NewFeedback {
         credential: sender.credential,
         user_slug: sender.user_slug,
+        registered: sender.registered,
         message,
         kind,
         origin,
@@ -1351,6 +1380,7 @@ pub(crate) mod tests {
         NewFeedback {
             credential,
             user_slug: "alice",
+            registered: false,
             message: "the publish error was hard to read",
             kind: FeedbackKind::Confusing,
             origin: FeedbackOrigin::User,

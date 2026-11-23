@@ -2523,6 +2523,118 @@ pub(crate) mod tests {
         assert!(after > before, "the delete bumps the admin generation");
     }
 
+    /// A feedback submission for `alice`, as the tool and the console make
+    /// it (`registered`: it names a user).
+    async fn submit_feedback_for_alice(pool: &PgPool) -> Result<String, OkfError> {
+        use crate::mail::feedback::{submit, FeedbackKind, FeedbackOrigin, NewFeedback};
+        let new = NewFeedback {
+            credential: "key-1",
+            user_slug: "alice",
+            registered: true,
+            message: "late",
+            kind: FeedbackKind::Other,
+            origin: FeedbackOrigin::User,
+            tool: None,
+            rating: None,
+            client: "test",
+            credential_kind: "api_key",
+        };
+        submit(pool, &new, 10, now()).await
+    }
+
+    /// Review of PR #951: a submission that starts while a deletion holds
+    /// the user row waits for it and then finds the user gone; it stores
+    /// nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_feedback_submit_that_waited_on_the_users_deletion_is_refused() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        // The deletion's lock, held `FOR UPDATE` as `delete_checked` does.
+        let mut deleting = db.pool.begin().await.unwrap();
+        let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *deleting)
+            .await
+            .unwrap();
+        let user_id: String =
+            sqlx::query_scalar("SELECT id FROM users WHERE name = 'alice' FOR UPDATE")
+                .fetch_one(&mut *deleting)
+                .await
+                .unwrap();
+        let pool = db.pool.clone();
+        let submission = tokio::spawn(async move { submit_feedback_for_alice(&pool).await });
+        let mut probe = db.pool.acquire().await.unwrap();
+        crate::test_locks::wait_waiter(&mut probe, holder).await;
+        sqlx::query("DELETE FROM teams WHERE personal_of = $1")
+            .bind(&user_id)
+            .execute(&mut *deleting)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(&user_id)
+            .execute(&mut *deleting)
+            .await
+            .unwrap();
+        deleting.commit().await.unwrap();
+
+        let outcome = tokio::time::timeout(LOCK_WAIT, submission)
+            .await
+            .expect("the submission waited for the deletion for too long")
+            .unwrap();
+
+        assert!(
+            matches!(outcome, Err(OkfError::Unauthenticated { .. })),
+            "{outcome:?}"
+        );
+        assert_eq!(count(&db.pool, "SELECT count(*) FROM feedback").await, 0);
+    }
+
+    /// Review of PR #951: a submission already holding the user row when the
+    /// deletion starts is stored first, so the deletion waits for it and
+    /// deletes the row it committed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_feedback_submit_in_flight_is_deleted_with_the_user() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        // A submission in flight holds alice `FOR KEY SHARE`.
+        let mut submitting = db.pool.begin().await.unwrap();
+        let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *submitting)
+            .await
+            .unwrap();
+        id_of(&mut submitting, "alice").await.unwrap();
+        let pool = db.pool.clone();
+        let deletion = tokio::spawn(async move {
+            delete(
+                &pool,
+                "alice",
+                DeleteOptions::default(),
+                &AuditActor::cli(),
+                now(),
+            )
+            .await
+        });
+        let mut probe = db.pool.acquire().await.unwrap();
+        crate::test_locks::wait_waiter(&mut probe, holder).await;
+        sqlx::query(
+            "INSERT INTO feedback (id, credential, user_slug, message, kind, origin, \
+                 server_version, client, credential_kind, created_at) \
+             VALUES ('late', 'key-1', 'alice', 'm', 'bug', 'user', '0', 'c', 'api_key', $1)",
+        )
+        .bind(now())
+        .execute(&mut *submitting)
+        .await
+        .unwrap();
+        submitting.commit().await.unwrap();
+
+        tokio::time::timeout(LOCK_WAIT, deletion)
+            .await
+            .expect("the delete waited for the submission for too long")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(count(&db.pool, "SELECT count(*) FROM feedback").await, 0);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn deleting_a_user_removes_its_undelivered_feedback_only() {
         let db = test_db().await;

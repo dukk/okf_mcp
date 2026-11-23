@@ -2795,7 +2795,9 @@ submission until the form id or the rating block is fixed, so check
 `[feedback]` before retrying. The worker logs a warning for each row it
 marks `failed` (`feedback not delivered; marked failed`, with the error
 code as `reason`). Deleting a user deletes that user's `pending` and
-`failed` feedback in the same transaction; `sent` rows, already delivered,
+`failed` feedback in the same transaction, and a submission racing the
+deletion either lands before it (and goes with it) or is refused because
+the user is gone; `sent` rows, already delivered,
 are left for the prune. For anything else, read the table:
 
 ```sql

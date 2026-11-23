@@ -46,10 +46,11 @@ pub async fn connect(url: &str, max_connections: u32) -> Result<PgPool, OkfError
 /// migrations). A build that fails part-way leaves the index behind,
 /// marked INVALID, and its migration unrecorded; `CREATE INDEX ... IF NOT
 /// EXISTS` on the retry would then keep the invalid index for good.
-const CONCURRENT_INDEXES: [&str; 3] = [
+const CONCURRENT_INDEXES: [&str; 4] = [
     "catalogs_member_reach",
     "catalogs_member_write",
     "catalogs_member_reach_bytes",
+    "feedback_finished",
 ];
 
 /// The advisory lock [`migrate`] holds around the cleanup and the
