@@ -284,6 +284,25 @@ upgrade.
   reads.
 - Admin API reference: stores and placement endpoints.
 
+## Relation to the revision storage epic
+
+This epic does not depend on the revision storage epic (deltas, content
+addressing, object storage), and goes first: its release 1 moves every
+call site to `AccountDb` or `CatalogDb`, so the storage epic is written
+against those types instead of being converted afterwards. The two touch
+the same history and write code, so they run one after the other, not in
+parallel.
+
+The storage epic inherits three things from this design:
+
+1. Its format migration is a `migrations/catalog/` migration that runs on
+   every store, and stores migrate on first use, so the conversion must be
+   resumable per store.
+2. If content moves to object storage, each store needs its own bucket (or
+   at least its own encryption key) to keep segregation; that is a new
+   field on the `stores` row.
+3. It defines the full-history export a catalog move will use.
+
 ## Later work this design leaves room for
 
 - Moving a catalog between stores, after the revision storage epic.
