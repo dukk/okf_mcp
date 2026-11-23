@@ -62,7 +62,7 @@ pub(crate) struct Keys {
 /// Creates [`Keys`] in the test database (keys load on their first use).
 pub(crate) async fn keys(test: &TestApp) -> Keys {
     let make = |name: &'static str, access: Access, catalog: &'static str| {
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         async move {
             let grants = [catalog.to_owned()];
             let new = NewKey {
@@ -117,7 +117,7 @@ pub(crate) async fn every_catalog_admin(test: &TestApp) -> String {
         levels: &[],
     };
     let key = key_rows::create_with_id(
-        test.app.pool(),
+        test.app.accounts().executor(),
         &new,
         &crate::store::audit::AuditActor::cli(),
         Utc::now(),
@@ -307,7 +307,7 @@ pub(crate) async fn user_with_password(
     email: &str,
     password: Option<&str>,
 ) -> UserAuth {
-    let pool = test.app.pool();
+    let pool = test.app.accounts().executor();
     users::create(
         pool,
         &users::NewUser {
@@ -513,9 +513,10 @@ impl Browser {
     /// # Panics
     /// If the password is refused.
     pub(crate) async fn signed_in(test: &TestApp, email: &str, password: &str) -> Self {
-        let outcome = passwords::verify(test.app.pool(), email, password, Utc::now())
-            .await
-            .expect("check the password");
+        let outcome =
+            passwords::verify(test.app.accounts().executor(), email, password, Utc::now())
+                .await
+                .expect("check the password");
         let passwords::SignInOutcome::Ok(passwords::Verified { user, .. }) = outcome else {
             panic!("the password for {email} was refused");
         };
@@ -530,10 +531,10 @@ impl Browser {
     pub(crate) async fn session_for(test: &TestApp, name: &str) -> Self {
         let id: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
             .bind(name)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("the user exists");
-        let user = users::find_auth(test.app.pool(), &id)
+        let user = users::find_auth(test.app.accounts().executor(), &id)
             .await
             .expect("read the user")
             .expect("the user exists");

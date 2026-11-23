@@ -415,7 +415,7 @@ async fn listen_signalling(
     loop {
         let connected = tokio::select! {
             () = shutdown.cancelled() => return,
-            connected = connect(app.pool()) => connected,
+            connected = connect(app.accounts().executor()) => connected,
         };
         let mut listener = match connected {
             Ok(listener) => listener,
@@ -614,7 +614,7 @@ pub(crate) mod testing {
     /// # Panics
     /// As [`invalidations_of`].
     pub(crate) async fn applied<T>(app: &App, write: impl Future<Output = T>) -> T {
-        let (output, sent) = messages_of(app.pool(), write).await;
+        let (output, sent) = messages_of(app.accounts().executor(), write).await;
         let sent_at_ms = chrono::Utc::now().timestamp_millis();
         for invalidation in sent {
             app.apply(&Message {

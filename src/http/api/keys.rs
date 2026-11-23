@@ -370,7 +370,7 @@ pub(crate) fn parse_access(text: &str) -> Result<Access, OkfError> {
 #[tracing::instrument(level = "debug", skip_all)]
 async fn managed(app: &App, principal: &Principal, id: &str) -> Result<KeyRecord, OkfError> {
     require_admin(principal)?;
-    key_rows::list(app.pool())
+    key_rows::list(app.accounts().executor())
         .await?
         .into_iter()
         .find(|record| record.id == id && manages(principal, record))
@@ -403,7 +403,7 @@ async fn list_keys(
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<KeyList>, AppError> {
     require_admin(&principal)?;
-    let keys = key_rows::list(app.pool())
+    let keys = key_rows::list(app.accounts().executor())
         .await?
         .into_iter()
         .filter(|record| manages(&principal, record))
@@ -449,7 +449,7 @@ async fn create_key(
             .filter(|a| !a.is_empty())
             .unwrap_or(&body.name);
         let created = key_rows::create_provisioner(
-            app.pool(),
+            app.accounts().executor(),
             &key_rows::NewProvisioner {
                 name: &body.name,
                 actor,
@@ -503,7 +503,9 @@ async fn create_key(
         expires_at: None,
         levels: &[],
     };
-    let created = key_rows::create_with_id(app.pool(), &new, &audit, app.clock().now()).await?;
+    let created =
+        key_rows::create_with_id(app.accounts().executor(), &new, &audit, app.clock().now())
+            .await?;
     let Json(key) = changed(&app, &principal, &created.id).await?;
     Ok(Json(CreatedKeyView {
         key,
@@ -526,7 +528,7 @@ async fn update_key(
 ) -> Result<Json<KeyView>, AppError> {
     let target = managed(&app, &principal, &id).await?;
     key_rows::set_maintenance_report_by_id(
-        app.pool(),
+        app.accounts().executor(),
         &target.id,
         body.maintenance_report,
         &audit,
@@ -553,7 +555,7 @@ async fn assign_user(
 ) -> Result<Json<KeyView>, AppError> {
     let target = managed(&app, &principal, &id).await?;
     key_rows::assign_user_by_id(
-        app.pool(),
+        app.accounts().executor(),
         &target.id,
         &body.user,
         &audit,
@@ -577,7 +579,13 @@ async fn revoke_key(
     Path(id): Path<String>,
 ) -> Result<Json<KeyView>, AppError> {
     let target = managed(&app, &principal, &id).await?;
-    key_rows::revoke_by_id(app.pool(), &target.id, &audit, app.clock().now()).await?;
+    key_rows::revoke_by_id(
+        app.accounts().executor(),
+        &target.id,
+        &audit,
+        app.clock().now(),
+    )
+    .await?;
     changed(&app, &principal, &target.id).await
 }
 
@@ -599,7 +607,14 @@ async fn grant_catalog(
     // An admin credential: suspension never refuses it.
     principal.require_level(Access::Admin, &catalog)?;
     let target = managed(&app, &principal, &id).await?;
-    key_rows::grant_by_id(app.pool(), &target.id, &catalog, &audit, app.clock().now()).await?;
+    key_rows::grant_by_id(
+        app.accounts().executor(),
+        &target.id,
+        &catalog,
+        &audit,
+        app.clock().now(),
+    )
+    .await?;
     changed(&app, &principal, &target.id).await
 }
 
@@ -619,7 +634,14 @@ async fn ungrant_catalog(
     // An admin credential: suspension never refuses it.
     principal.require_level(Access::Admin, &catalog)?;
     let target = managed(&app, &principal, &id).await?;
-    key_rows::ungrant_by_id(app.pool(), &target.id, &catalog, &audit, app.clock().now()).await?;
+    key_rows::ungrant_by_id(
+        app.accounts().executor(),
+        &target.id,
+        &catalog,
+        &audit,
+        app.clock().now(),
+    )
+    .await?;
     changed(&app, &principal, &target.id).await
 }
 
@@ -648,7 +670,7 @@ mod tests {
             levels: &[],
         };
         let created = key_rows::create_with_id(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &new,
             &crate::store::audit::AuditActor::cli(),
             Utc::now(),
@@ -1075,7 +1097,7 @@ mod tests {
         let root = stored(&test, "root", Access::Admin, Grants::All).await;
         // A pre-0005 row, id == name, and a newer live key of the same name.
         key_rows::insert_legacy_test_key(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "legacy",
             Access::Write,
             "terminal",
@@ -1095,7 +1117,7 @@ mod tests {
             levels: &[],
         };
         let web = key_rows::create_with_id(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &new,
             &crate::store::audit::AuditActor::cli(),
             Utc::now(),
@@ -1135,7 +1157,7 @@ mod tests {
             ..new
         };
         let replacement = key_rows::create_with_id(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &replacement,
             &crate::store::audit::AuditActor::cli(),
             Utc::now(),
@@ -1209,7 +1231,7 @@ mod tests {
             // A pre-0005 row (id == name), narrowed to the catalog `main`
             // (the helper makes an every-catalog key, which grants refuse).
             key_rows::insert_legacy_test_key(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 name,
                 Access::Write,
                 "terminal",
@@ -1218,7 +1240,7 @@ mod tests {
             .await;
             sqlx::query("UPDATE api_keys SET all_catalogs = false WHERE id = $1")
                 .bind(name)
-                .execute(test.app.pool())
+                .execute(test.app.accounts().executor())
                 .await
                 .expect("narrow the legacy key");
             sqlx::query(
@@ -1226,7 +1248,7 @@ mod tests {
                  SELECT $1, id FROM catalogs WHERE name = 'main'",
             )
             .bind(name)
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .expect("grant the legacy key main");
             // A newer live key with the same name and the same starting state.
@@ -1243,7 +1265,7 @@ mod tests {
                 levels: &[],
             };
             let replacement = key_rows::create_with_id(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 &new,
                 &crate::store::audit::AuditActor::cli(),
                 Utc::now(),
@@ -1329,14 +1351,14 @@ mod tests {
         let test = app().await;
         let keys = keys(&test).await;
         let client = insert_client(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "https://client.example.com/client.json",
             "Example Client",
             Utc::now(),
         )
         .await;
         let grant = insert_grant(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &client,
             Access::Read,
             &["main"],
@@ -1411,7 +1433,7 @@ mod tests {
             levels: &[],
         };
         let mine = key_rows::create_with_id(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &new,
             &crate::store::audit::AuditActor::cli(),
             Utc::now(),

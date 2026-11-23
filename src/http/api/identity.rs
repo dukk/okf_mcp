@@ -168,7 +168,7 @@ async fn whoami(
             // keeps both, as the whole-table read did.
             // `unzip` splits an `Option<(a, b)>` into
             // `(Option<a>, Option<b>)`.
-            let (name, user) = key_rows::record_by_id(app.pool(), &principal.key_id)
+            let (name, user) = key_rows::record_by_id(app.accounts().executor(), &principal.key_id)
                 .await?
                 .map(|credential| (credential.record.name, credential.record.user))
                 .unzip();
@@ -180,11 +180,13 @@ async fn whoami(
     // A console session's levels are its ceiling's, resolved per catalog:
     // its highest is read now, one row (issue #728).
     let access = match (&principal.reach, principal.user_id.as_deref()) {
-        (Reach::Ceiling, Some(user_id)) => ceiling::highest(app.pool(), user_id).await?,
+        (Reach::Ceiling, Some(user_id)) => {
+            ceiling::highest(app.accounts().executor(), user_id).await?
+        }
         _ => principal.access,
     };
     let (teams, user_admin) = match &user {
-        Some(name) => teams_of(app.pool(), name).await?,
+        Some(name) => teams_of(app.accounts().executor(), name).await?,
         None => (Vec::new(), false),
     };
     // The page is sorted by name. Only names are listed, so nothing is
@@ -299,7 +301,7 @@ async fn sign_out(
     session: Option<Extension<ConsoleSession>>,
 ) -> Result<Response, AppError> {
     let (user_id, session) = console(&principal, session)?;
-    user_sessions::revoke(app.pool(), &session.id).await?;
+    user_sessions::revoke(app.accounts().executor(), &session.id).await?;
     tracing::info!(user = %user_id, "console session signed out");
     Ok((StatusCode::NO_CONTENT, console_session::clear_cookie(&app)).into_response())
 }
@@ -350,7 +352,7 @@ mod tests {
             allow_last: true,
         };
         crate::store::users::set_admin(
-            test.app.pool(),
+            test.app.accounts().executor(),
             crate::db::TEST_USER,
             on,
             &crate::store::audit::AuditActor::cli(),
@@ -369,7 +371,7 @@ mod tests {
     async fn whoami_of_an_unassigned_key_has_no_user() {
         let test = app().await;
         let key = crate::store::keys::insert_legacy_test_key(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "legacy",
             crate::store::keys::Access::Read,
             "legacy",
@@ -390,7 +392,7 @@ mod tests {
     async fn a_deleted_user_has_no_teams_not_an_error() {
         let test = app().await;
 
-        let teams = super::teams_of(test.app.pool(), "no-such-user").await;
+        let teams = super::teams_of(test.app.accounts().executor(), "no-such-user").await;
 
         assert_eq!(teams.expect("not an error"), (Vec::<String>::new(), false));
     }
@@ -482,7 +484,7 @@ mod tests {
         let (warm, _) = send(&test, "GET", "/api/v1/whoami", Some(&keys.read), None).await;
         assert_eq!(warm.as_u16(), 200);
         sqlx::query("DELETE FROM api_keys WHERE name = 'reader'")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .expect("delete the key row");
 
@@ -513,11 +515,11 @@ mod tests {
              FROM generate_series(1, $1) AS n",
         )
         .bind(OTHERS)
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .expect("seed keys");
         sqlx::query("ANALYZE api_keys")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .unwrap();
         // Warm the caches, so the measured request is the steady state.

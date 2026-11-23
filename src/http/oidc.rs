@@ -476,7 +476,7 @@ async fn complete_sign_in(
     parts: &Parts,
     request: &OidcSignIn<'_>,
 ) -> Result<Option<HeaderMap>, OkfError> {
-    let mut tx = app.pool().begin().await?;
+    let mut tx = app.accounts().executor().begin().await?;
     // Returning early drops `tx`, which rolls back.
     let (user, linked) = match identities::sign_in_in(&mut tx, request, app.clock().now()).await? {
         OidcOutcome::SignedIn { user, linked } => (user, linked),
@@ -523,7 +523,7 @@ async fn linking_user<'a>(
         return Ok(None);
     }
     let idle = app.settings().console_session_idle;
-    match user_sessions::touch(app.pool(), id, idle, app.clock().now()).await? {
+    match user_sessions::touch(app.accounts().executor(), id, idle, app.clock().now()).await? {
         Some(row) if row.user_id == link.user_id => Ok(session_user(app, &row.user_id)
             .await?
             .map(|user| (user, id))),
@@ -590,7 +590,7 @@ async fn link_in_one_transaction(
     user: &UserAuth,
     request: &SessionLink<'_>,
 ) -> Result<u64, OkfError> {
-    let mut tx = app.pool().begin().await?;
+    let mut tx = app.accounts().executor().begin().await?;
     let ended = identities::link_for_session_in(&mut tx, request, app.clock().now()).await?;
     let method = method_text(app, request.provider);
     notify_method_added(app, &mut tx, user, &method).await?;
@@ -818,14 +818,14 @@ mod tests {
 
     async fn queued_mail(test: &TestApp) -> i64 {
         sqlx::query_scalar("SELECT count(*) FROM apalis.jobs")
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("count")
     }
 
     async fn user_id(test: &TestApp) -> String {
         sqlx::query_scalar("SELECT id FROM users WHERE name = 'alice'")
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("alice's id")
     }
@@ -903,14 +903,14 @@ mod tests {
         assert_eq!(reply.location(), "/ui/#/keys");
         assert!(browser.cookie(COOKIE).is_some());
         assert_eq!(browser.cookie(FLOW_COOKIE), None);
-        let linked = identities::list(test.app.pool(), &alice.id)
+        let linked = identities::list(test.app.accounts().executor(), &alice.id)
             .await
             .expect("list");
         assert_eq!(linked.len(), 1);
         assert_eq!(linked[0].email_at_link, "Alice@Example.com");
         assert!(linked[0].last_used_at.is_some());
         wait_for_mail(&test, 1).await;
-        let events = sign_in_events::recent(test.app.pool(), "alice", 5)
+        let events = sign_in_events::recent(test.app.accounts().executor(), "alice", 5)
             .await
             .expect("events");
         assert!(matches!(
@@ -944,11 +944,11 @@ mod tests {
             assert!(reply.text().contains(NO_ACCOUNT), "{subject}");
             assert_eq!(browser.cookie(COOKIE), None);
         }
-        assert!(identities::list(test.app.pool(), &alice.id)
+        assert!(identities::list(test.app.accounts().executor(), &alice.id)
             .await
             .expect("list")
             .is_empty());
-        let events = sign_in_events::recent(test.app.pool(), "alice", 5)
+        let events = sign_in_events::recent(test.app.accounts().executor(), "alice", 5)
             .await
             .expect("events");
         assert!(events.is_empty(), "refusals name no user");
@@ -978,7 +978,7 @@ mod tests {
                 .await;
             assert_eq!(session.json()["user"], "alice", "{email}");
         }
-        assert!(identities::list(test.app.pool(), &bob.id)
+        assert!(identities::list(test.app.accounts().executor(), &bob.id)
             .await
             .expect("list")
             .is_empty());
@@ -1077,7 +1077,10 @@ mod tests {
             StatusCode::SEE_OTHER,
             "a good token still works"
         );
-        assert_eq!(sessions_of(test.app.pool(), &user_id(&test).await).await, 1);
+        assert_eq!(
+            sessions_of(test.app.accounts().executor(), &user_id(&test).await).await,
+            1
+        );
     }
 
     /// `POST /api/v1/me/identities/example/link` with an empty body.
@@ -1230,7 +1233,7 @@ mod tests {
 
         assert_eq!(done.status, StatusCode::SEE_OTHER, "{}", done.text());
         assert_eq!(done.location(), "/ui/#/account");
-        let linked = identities::list(test.app.pool(), &alice.id)
+        let linked = identities::list(test.app.accounts().executor(), &alice.id)
             .await
             .expect("list");
         assert_eq!(linked[0].email_at_link, "someone@elsewhere.example");
@@ -1314,15 +1317,15 @@ mod tests {
             );
             assert!(reply.text().contains(LINK_RETRY), "{what}");
         }
-        assert!(identities::list(test.app.pool(), &alice.id)
+        assert!(identities::list(test.app.accounts().executor(), &alice.id)
             .await
             .expect("list")
             .is_empty());
-        let bob = users::find_by_email(test.app.pool(), "bob@example.com")
+        let bob = users::find_by_email(test.app.accounts().executor(), "bob@example.com")
             .await
             .expect("find")
             .expect("bob");
-        assert!(identities::list(test.app.pool(), &bob.id)
+        assert!(identities::list(test.app.accounts().executor(), &bob.id)
             .await
             .expect("list")
             .is_empty());
@@ -1335,7 +1338,7 @@ mod tests {
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         let bob = user_with_password(&test, "bob", "bob@example.com", Some(PASSWORD)).await;
         identities::link(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &bob.id,
             "example",
             "sub-1",
@@ -1361,7 +1364,7 @@ mod tests {
         let test = oidc_app(&idp, "OKF_TEST_OIDC_SECRET_SECOND").await;
         let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         identities::link(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &alice.id,
             "example",
             "sub-1",
@@ -1379,7 +1382,7 @@ mod tests {
         assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.text());
         assert_eq!(browser.cookie(COOKIE), None);
         assert_eq!(
-            identities::list(test.app.pool(), &alice.id)
+            identities::list(test.app.accounts().executor(), &alice.id)
                 .await
                 .expect("list")
                 .len(),
@@ -1392,7 +1395,7 @@ mod tests {
         let idp = idp::start().await;
         let test = oidc_app(&idp, "OKF_TEST_OIDC_SECRET_UNLINK").await;
         let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         identities::link(
             pool,
             &alice.id,
@@ -1443,7 +1446,7 @@ mod tests {
         let test = oidc_app(&idp, "OKF_TEST_OIDC_SECRET_COMMIT").await;
         let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         let bob = user_with_password(&test, "bob", "bob@example.com", Some(PASSWORD)).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
 
         // The event table is locked: the sign-in waits inside its
         // transaction, with nothing committed, and finishes once it can.
@@ -1514,7 +1517,7 @@ mod tests {
         let test = oidc_app(&idp, "OKF_TEST_OIDC_SECRET_RESET").await;
         let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         idp.will_issue("sub-1", Some("alice@example.com"), Some(true));
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
 
         let mut first = Browser::default();
         let query = start(&test, &idp, &mut first).await;
@@ -1679,14 +1682,14 @@ mod tests {
         assert_eq!(in_space(&keys, &redis.prefix, "oidc:flow"), 1, "{keys:?}");
         let stale = callback_on(&a.app, &mut first, &first_query["state"]).await;
         assert_eq!(stale.status, StatusCode::BAD_REQUEST, "{}", stale.text());
-        assert!(identities::list(a.app.pool(), &alice.id)
+        assert!(identities::list(a.app.accounts().executor(), &alice.id)
             .await
             .expect("list")
             .is_empty());
         let done = callback_on(&a.app, &mut second, &second_query["state"]).await;
         assert_eq!(done.status, StatusCode::SEE_OTHER, "{}", done.text());
         assert_eq!(
-            identities::list(a.app.pool(), &alice.id)
+            identities::list(a.app.accounts().executor(), &alice.id)
                 .await
                 .expect("list")
                 .len(),
@@ -1755,7 +1758,7 @@ mod tests {
             refused.text()
         );
         assert!(refused.text().contains(LINK_RETRY));
-        assert!(identities::list(test.app.pool(), &alice.id)
+        assert!(identities::list(test.app.accounts().executor(), &alice.id)
             .await
             .expect("list")
             .is_empty());
@@ -1766,7 +1769,7 @@ mod tests {
         assert_eq!(done.status, StatusCode::SEE_OTHER, "{}", done.text());
         assert_eq!(done.location(), "/ui/#/account");
         assert_eq!(
-            identities::list(test.app.pool(), &alice.id)
+            identities::list(test.app.accounts().executor(), &alice.id)
                 .await
                 .expect("list")
                 .len(),
@@ -1780,7 +1783,10 @@ mod tests {
             .await;
         assert_eq!(kept.status, StatusCode::OK, "S1 is the session kept");
         assert_eq!(ended.status, StatusCode::UNAUTHORIZED, "S2 ended");
-        assert_eq!(sessions_of(test.app.pool(), &alice.id).await, 1);
+        assert_eq!(
+            sessions_of(test.app.accounts().executor(), &alice.id).await,
+            1
+        );
     }
 
     async fn a_link_flow_finishes_only_in_its_session_across_replicas(redis: TestRedis) {

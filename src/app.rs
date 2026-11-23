@@ -531,19 +531,6 @@ impl App {
         &self.metrics
     }
 
-    /// The database.
-    #[deprecated(note = "use accounts() or catalog_db()")]
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn pool(&self) -> &PgPool {
-        self.accounts.executor()
-    }
-
     /// The account database: users, teams, keys, sessions and the catalog
     /// registry.
     #[cfg_attr(
@@ -2295,7 +2282,7 @@ mod tests {
         mark: impl FnOnce(&App),
     ) -> (usize, Vec<u32>, usize) {
         // The app's pool, closed: every check fails at once.
-        app.pool().close().await;
+        app.accounts().executor().close().await;
         mark(app);
         let checks_before = app.settings_checks.load(Ordering::Relaxed);
         // Hold the check's lock so all ten queue behind it first.
@@ -2711,7 +2698,13 @@ mod tests {
         let (test, registry) =
             crate::mcp::testing::app_with_metrics(&[("pg", &[])], Config::default()).await;
         // One connection held out of the pool, so `used` is not zero.
-        let _held = test.app.pool().acquire().await.expect("a connection");
+        let _held = test
+            .app
+            .accounts()
+            .executor()
+            .acquire()
+            .await
+            .expect("a connection");
 
         let text = crate::mcp::testing::render(&registry);
 
@@ -2724,7 +2717,11 @@ mod tests {
         };
         let (idle, used) = (sample("idle"), sample("used"));
         assert!(used >= 1.0, "{text}");
-        assert_eq!(idle + used, f64::from(test.app.pool().size()), "{text}");
+        assert_eq!(
+            idle + used,
+            f64::from(test.app.accounts().executor().size()),
+            "{text}"
+        );
     }
 
     #[tokio::test]

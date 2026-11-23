@@ -129,7 +129,7 @@ async fn a_5xx_is_an_error_and_a_4xx_is_not() {
             "{filter}: a 4xx is not an error"
         );
     }
-    test.app.pool().close().await;
+    test.app.accounts().executor().close().await;
     for filter in FILTERS {
         let observed = observed(filter, async {
             let status = fetch(&test, "/healthz", None, &[]).await;
@@ -230,11 +230,11 @@ async fn an_authenticated_request_records_principal_ids() {
     let key = every_catalog_admin(&test).await;
     let user_id: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
         .bind(crate::db::TEST_USER)
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .expect("the key's user");
     let key_id: String = sqlx::query_scalar("SELECT id FROM api_keys")
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .expect("the one key");
     for filter in FILTERS {
@@ -280,7 +280,7 @@ async fn principal_ids_land_on_the_request_span_under_helper_spans() {
     let test = app().await;
     let key = every_catalog_admin(&test).await;
     let key_id: String = sqlx::query_scalar("SELECT id FROM api_keys")
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .expect("the one key");
     // The layers in the production order: the key layer on the route, then
@@ -351,7 +351,7 @@ async fn a_console_session_records_the_user_id_and_never_the_user_name() {
     assert_eq!(created.as_u16(), 201);
     let user_id: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
         .bind(name)
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .expect("the new user");
     let mut browser = Browser::session_for(&test, name).await;
@@ -510,7 +510,7 @@ async fn other_routes_keep_their_completion_line() {
 async fn a_failing_health_probe_is_quiet_but_still_exported_as_an_error() {
     let observer = Observer::start("info", "info", "off", LogFormat::Text);
     let test = app().await;
-    test.app.pool().close().await;
+    test.app.accounts().executor().close().await;
     let status = fetch(&test, "/healthz", None, &[]).await;
     let observed = observer.finish();
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);

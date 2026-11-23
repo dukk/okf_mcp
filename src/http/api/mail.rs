@@ -118,7 +118,7 @@ async fn send_test(
 ) -> Result<(StatusCode, Json<TestMail>), AppError> {
     require_every_catalog(&principal)?;
     queue::enqueue(
-        app.pool(),
+        app.accounts().executor(),
         &body.to,
         &Template::Test,
         app.clock().now(),
@@ -146,7 +146,7 @@ async fn list_queue(
 ) -> Result<Json<MailQueue>, AppError> {
     require_admin(&principal)?;
     Ok(Json(MailQueue {
-        mail: queue::list(app.pool())
+        mail: queue::list(app.accounts().executor())
             .await?
             .into_iter()
             .map(QueuedMailView::from)
@@ -170,7 +170,7 @@ async fn retry_mail(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     require_every_catalog(&principal)?;
-    queue::retry(app.pool(), &id, app.clock().now()).await?;
+    queue::retry(app.accounts().executor(), &id, app.clock().now()).await?;
     split_event!(
         info,
         { mail = %id, },
@@ -195,7 +195,7 @@ async fn delete_mail(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     require_every_catalog(&principal)?;
-    queue::delete(app.pool(), &id).await?;
+    queue::delete(app.accounts().executor(), &id).await?;
     split_event!(
         info,
         { mail = %id, },
@@ -225,7 +225,7 @@ mod tests {
         let test = app().await;
         let keys = keys(&test).await;
         queue::enqueue(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "ops@example.com",
             &Template::Test,
             Utc::now(),
@@ -233,7 +233,9 @@ mod tests {
         )
         .await
         .expect("queue one");
-        let id = queue::list(test.app.pool()).await.expect("list")[0]
+        let id = queue::list(test.app.accounts().executor())
+            .await
+            .expect("list")[0]
             .id
             .clone();
         let write = |method: &'static str, uri: String, body: Option<serde_json::Value>| Row {
@@ -270,7 +272,10 @@ mod tests {
         )
         .await;
         assert_eq!(
-            queue::list(test.app.pool()).await.expect("list").len(),
+            queue::list(test.app.accounts().executor())
+                .await
+                .expect("list")
+                .len(),
             1,
             "no refused write queued or deleted anything"
         );
@@ -309,7 +314,7 @@ mod tests {
         .await;
         sqlx::query("UPDATE apalis.jobs SET status = 'Killed' WHERE id = $1")
             .bind(&id)
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .expect("fail the job");
         let (_, failed) = send(&test, "GET", "/api/v1/mail/queue", Some(&root), None).await;
@@ -362,7 +367,7 @@ mod tests {
     async fn sessions(test: &TestApp) -> (Browser, Browser) {
         for name in ["plain", "boss"] {
             users::create(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 &users::NewUser {
                     name,
                     display_name: &crate::labels::DisplayName::default(),
@@ -374,7 +379,7 @@ mod tests {
             .expect("create the user");
         }
         users::set_admin(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "boss",
             AdminChange {
                 on: true,
@@ -397,7 +402,7 @@ mod tests {
         let (mut plain, mut boss) = sessions(&test).await;
         let to = || Payload::Json(json!({"to": "ops@example.com"}));
         queue::enqueue(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "ops@example.com",
             &Template::Test,
             Utc::now(),
@@ -405,7 +410,9 @@ mod tests {
         )
         .await
         .expect("queue one");
-        let id = queue::list(test.app.pool()).await.expect("list")[0]
+        let id = queue::list(test.app.accounts().executor())
+            .await
+            .expect("list")[0]
             .id
             .clone();
         let one = format!("/api/v1/mail/queue/{id}");

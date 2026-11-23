@@ -380,7 +380,7 @@ mod tests {
             None,
         );
         // A closed pool fails the changeset lookup, as an outage would.
-        test.app.pool().close().await;
+        test.app.accounts().executor().close().await;
         let mut through = params("routes", &[]);
         // Handle-shaped, so the lookup reaches the closed pool: a malformed
         // handle is unknown before any SQL (issue #339).

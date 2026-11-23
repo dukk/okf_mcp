@@ -215,7 +215,7 @@ mod tests {
             "SELECT credential, user_slug, origin, credential_kind, client, kind FROM feedback \
              ORDER BY created_at, id",
         )
-        .fetch_all(test.app.pool())
+        .fetch_all(test.app.accounts().executor())
         .await
         .expect("read the feedback rows")
     }
@@ -224,7 +224,7 @@ mod tests {
     async fn user_id(test: &TestApp, name: &str) -> String {
         sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
             .bind(name)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("the user exists")
     }
@@ -260,7 +260,7 @@ mod tests {
         let (message, rating, status): (String, Option<i16>, String) =
             sqlx::query_as("SELECT message, rating, status FROM feedback WHERE id = $1")
                 .bind(&id)
-                .fetch_one(test.app.pool())
+                .fetch_one(test.app.accounts().executor())
                 .await
                 .expect("the row");
         assert_eq!(
@@ -269,7 +269,7 @@ mod tests {
         );
         let queued: i64 =
             sqlx::query_scalar("SELECT count(*) FROM apalis.jobs WHERE job_type = 'send_feedback'")
-                .fetch_one(test.app.pool())
+                .fetch_one(test.app.accounts().executor())
                 .await
                 .expect("count the jobs");
         assert_eq!(queued, 1);

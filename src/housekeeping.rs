@@ -305,7 +305,7 @@ pub async fn tick_until(app: Arc<App>, shutdown: CancellationToken) {
 async fn tick(app: &App) {
     let now = app.clock().now();
     for task in Task::ALL {
-        if let Err(error) = schedule(app.pool(), task, task.slot_at(now)).await {
+        if let Err(error) = schedule(app.accounts().executor(), task, task.slot_at(now)).await {
             split_event!(
                 warn,
                 { task = task.as_str(), kind = error.kind(), },
@@ -372,7 +372,7 @@ pub async fn read_stats(pool: &PgPool) -> Result<Option<ClusterStats>, OkfError>
 /// * `app` - the shared state (its pool and metrics).
 #[tracing::instrument(level = "debug", skip_all)]
 pub async fn refresh_gauges(app: &App) {
-    match read_stats(app.pool()).await {
+    match read_stats(app.accounts().executor()).await {
         Ok(Some(stats)) => {
             app.metrics().set_open_changesets(stats.open_changesets);
             app.metrics().set_mail_queue_depth(&stats.mail_queue);
@@ -409,7 +409,7 @@ pub async fn run(task: Task, app: &App) -> Result<(), OkfError> {
             let mut steps = Steps::default();
             steps.note(
                 "rows of stopped workers",
-                mail_queue::prune_workers(app.pool(), app.clock().now()).await,
+                mail_queue::prune_workers(app.accounts().executor(), app.clock().now()).await,
             );
             steps.finish()
         }
@@ -477,7 +477,7 @@ async fn prune_changesets(app: &App) -> Result<(), OkfError> {
     let mut steps = Steps::default();
     steps.note(
         "empty changesets a day old",
-        changesets::prune_empty(app.pool(), older_than, now).await,
+        changesets::prune_empty(app.main_store().executor(), older_than, now).await,
     );
     steps.finish()
 }
@@ -496,7 +496,7 @@ async fn prune_changesets(app: &App) -> Result<(), OkfError> {
 /// The first step's failure; every step runs regardless.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn prune_oauth(app: &App) -> Result<(), OkfError> {
-    let pool = app.pool();
+    let pool = app.accounts().executor();
     let now = app.clock().now();
     let mut steps = Steps::default();
     // Before the token prune, which may delete the tokens that date a
@@ -580,7 +580,7 @@ async fn revoke_idle_grants(app: &App, now: DateTime<Utc>) -> Result<(), OkfErro
     else {
         return Ok(());
     };
-    let revoked = keys::revoke_idle_grants(app.pool(), idle_before, now).await?;
+    let revoked = keys::revoke_idle_grants(app.accounts().executor(), idle_before, now).await?;
     if !revoked.is_empty() {
         tracing::info!(
             revoked = revoked.len(),
@@ -606,11 +606,11 @@ async fn prune_audit(app: &App) -> Result<(), OkfError> {
     let mut steps = Steps::default();
     steps.note(
         "audit entries past retention",
-        audit::prune(app.pool(), before).await,
+        audit::prune(app.accounts().executor(), before).await,
     );
     steps.note(
         "provisioner budget counters of past hours",
-        audit::prune_budget_counters(app.pool(), now).await,
+        audit::prune_budget_counters(app.accounts().executor(), now).await,
     );
     steps.finish()
 }
@@ -652,8 +652,9 @@ async fn prune_jobs(pool: &PgPool, now: DateTime<Utc>) -> Result<u64, OkfError> 
 /// [`OkfError::Database`] for a failed count or write.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn cluster_stats(app: &App) -> Result<(), OkfError> {
-    let pool = app.pool();
-    let open_changesets = changesets::open_total(pool).await?;
+    let pool = app.accounts().executor();
+    // Changesets are catalog data: counted on the store, not the account database.
+    let open_changesets = changesets::open_total(app.main_store().executor()).await?;
     let depth = mail_queue::depth(pool).await?;
     // `{"pending": 2, ...}`: one key per status, zero included.
     let mail_queue: serde_json::Map<String, serde_json::Value> = MailStatus::ALL
@@ -966,7 +967,7 @@ mod tests {
     /// Starts `app`'s housekeeping worker with [`FAST`] timing, on a worker
     /// pool of its own named `name`.
     fn start(app: &Arc<App>, name: &str) -> (CancellationToken, JoinHandle<()>, WorkerPool) {
-        let pool = WorkerPool::new(app.pool());
+        let pool = WorkerPool::new(app.accounts().executor());
         let context = HousekeepingContext {
             app: Arc::clone(app),
             pool: pool.pool().clone(),
@@ -1055,9 +1056,9 @@ mod tests {
         let mut pushes = tokio::task::JoinSet::new();
         for turn in 0..16 {
             let pool = if turn % 2 == 0 {
-                test.app.pool().clone()
+                test.app.accounts().executor().clone()
             } else {
-                other.pool().clone()
+                other.accounts().executor().clone()
             };
             pushes.spawn(async move { schedule(&pool, Task::PruneOauth, slot).await });
         }
@@ -1066,7 +1067,7 @@ mod tests {
             .expect("every push returns");
         // The next slot is a job of its own.
         let next = slot + 3600;
-        let next_created = schedule(test.app.pool(), Task::PruneOauth, next).await;
+        let next_created = schedule(test.app.accounts().executor(), Task::PruneOauth, next).await;
 
         let created: Vec<bool> = created
             .into_iter()
@@ -1079,7 +1080,7 @@ mod tests {
         );
         assert!(next_created.unwrap());
         assert_eq!(
-            jobs(test.app.pool()).await,
+            jobs(test.app.accounts().executor()).await,
             [
                 (format!("prune_oauth:{slot}"), "Pending".to_string(), 0),
                 (format!("prune_oauth:{next}"), "Pending".to_string(), 0),
@@ -1092,7 +1093,7 @@ mod tests {
     async fn the_ticker_stops_at_shutdown_while_a_tick_is_blocked() {
         let test = app_with(&[], Config::default()).await;
         // Arrange: another connection holds ACCESS EXCLUSIVE on the queue.
-        let mut blocker = test.app.pool().begin().await.unwrap();
+        let mut blocker = test.app.accounts().executor().begin().await.unwrap();
         sqlx::query("LOCK TABLE apalis.jobs IN ACCESS EXCLUSIVE MODE")
             .execute(&mut *blocker)
             .await
@@ -1115,7 +1116,7 @@ mod tests {
                      AND pg_blocking_pids(pid) @> ARRAY[$1]::int[]",
                 )
                 .bind(holder)
-                .fetch_one(test.app.pool())
+                .fetch_one(test.app.accounts().executor())
                 .await
                 .unwrap();
                 if waiting > 0 {
@@ -1139,7 +1140,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_scheduled_slot_is_not_pushed_again() {
         let test = app_with(&[], Config::default()).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let slot = Task::PruneOauth.slot_at(fixed_now());
         assert!(schedule(&pool, Task::PruneOauth, slot).await.unwrap());
         // From now on any insert into the jobs table fails loudly, so a push
@@ -1172,13 +1173,18 @@ mod tests {
         // Both replicas schedule each slot while both workers poll.
         for slot in &slots {
             let (first, second) = tokio::join!(
-                schedule(test.app.pool(), Task::ClusterStats, *slot),
-                schedule(other.pool(), Task::ClusterStats, *slot),
+                schedule(test.app.accounts().executor(), Task::ClusterStats, *slot),
+                schedule(other.accounts().executor(), Task::ClusterStats, *slot),
             );
             assert!(first.unwrap() ^ second.unwrap(), "one push creates it");
         }
         for slot in &slots {
-            wait_for(test.app.pool(), &format!("cluster_stats:{slot}"), "Done").await;
+            wait_for(
+                test.app.accounts().executor(),
+                &format!("cluster_stats:{slot}"),
+                "Done",
+            )
+            .await;
         }
         // Several polls more, for any second run to show.
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1188,7 +1194,7 @@ mod tests {
         let total = runs(&registry, Task::ClusterStats, "ok")
             + runs(&other_registry, Task::ClusterStats, "ok");
         assert_eq!(total, 4.0, "each slot ran once in the cluster");
-        assert!(jobs(test.app.pool())
+        assert!(jobs(test.app.accounts().executor())
             .await
             .iter()
             .all(|(_, status, attempts)| status == "Done" && *attempts == 1));
@@ -1199,15 +1205,15 @@ mod tests {
         let (test, registry) = app_with_metrics(&[], Config::default()).await;
         // The task's write fails while the table is gone.
         sqlx::query("DROP TABLE cluster_stats")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .unwrap();
         let worker = start(&test.app, "replica-a");
-        schedule(test.app.pool(), Task::ClusterStats, 60)
+        schedule(test.app.accounts().executor(), Task::ClusterStats, 60)
             .await
             .unwrap();
 
-        wait_for(test.app.pool(), "cluster_stats:60", "Failed").await;
+        wait_for(test.app.accounts().executor(), "cluster_stats:60", "Failed").await;
         stop(worker).await;
 
         let (attempts, max_attempts, waits): (i32, i32, f64) = sqlx::query_as(
@@ -1215,7 +1221,7 @@ mod tests {
              FROM apalis.jobs WHERE job_type = $1",
         )
         .bind(QUEUE)
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .unwrap();
         assert_eq!((attempts, max_attempts), (1, 3), "it is tried again");
@@ -1231,12 +1237,14 @@ mod tests {
         let (test, registry) =
             app_with_metrics(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
         let (other, _provider, other_registry) = replica(&test).await;
-        let pg = catalogs::find(test.app.pool(), "pg").await.unwrap();
-        writer_key(test.app.pool()).await;
-        changeset_at(test.app.pool(), pg.id, Utc::now(), None).await;
-        changeset_at(test.app.pool(), pg.id, Utc::now(), None).await;
+        let pg = catalogs::find(test.app.accounts().executor(), "pg")
+            .await
+            .unwrap();
+        writer_key(test.app.accounts().executor()).await;
+        changeset_at(test.app.accounts().executor(), pg.id, Utc::now(), None).await;
+        changeset_at(test.app.accounts().executor(), pg.id, Utc::now(), None).await;
         crate::mail::queue::enqueue(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "alice@example.com",
             &crate::mail::Template::Test,
             Utc::now(),
@@ -1268,7 +1276,10 @@ mod tests {
             assert_eq!(open(registry), Some(2.0), "{}", render(registry));
             assert_eq!(pending(registry), Some(1.0), "{}", render(registry));
         }
-        let stats = read_stats(test.app.pool()).await.unwrap().unwrap();
+        let stats = read_stats(test.app.accounts().executor())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stats.open_changesets, 2);
         assert!(stats.mail_queue.contains(&(MailStatus::Pending, 1)));
         assert!(stats.mail_queue.contains(&(MailStatus::Failed, 0)));
@@ -1312,7 +1323,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn prune_changesets_discards_empty_changesets_a_day_old_and_keeps_the_rest() {
         let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let pg = catalogs::find(&pool, "pg").await.unwrap();
         writer_key(&pool).await;
         let day_old = Utc::now() - TimeDelta::hours(25);
@@ -1336,7 +1347,7 @@ mod tests {
         use crate::store::keys::Access;
         use crate::store::oauth::testing::{insert_client, insert_grant};
         let test = app_with(&[("main", &[])], Config::default()).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let now = Utc::now();
         let client = insert_client(
             &pool,
@@ -1421,7 +1432,7 @@ mod tests {
         let mut config = Config::default();
         config.oauth.idle_grant_revoke_after = Duration::from_secs(10 * 24 * 60 * 60);
         let test = app_with(&[("main", &[])], config).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let now = Utc::now();
         let client = insert_client(
             &pool,
@@ -1476,7 +1487,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn prune_oauth_deletes_old_sign_in_events_and_long_expired_emailed_links() {
         let test = app_with(&[("main", &[])], Config::default()).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let now = Utc::now();
         let user: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
             .bind(crate::db::TEST_USER)
@@ -1525,7 +1536,7 @@ mod tests {
     async fn prune_audit_deletes_entries_past_the_retention_setting() {
         use crate::store::audit::{Action, Entry, Target};
         let test = app_with(&[("main", &[])], Config::default()).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         settings::set(
             &pool,
             settings::SettingKey::AuditRetentionDays,
@@ -1587,7 +1598,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn prune_workers_deletes_a_stale_worker_row_and_keeps_a_live_one() {
         let test = app_with(&[], Config::default()).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         for (id, seen) in [("stale", TimeDelta::hours(1)), ("live", TimeDelta::zero())] {
             sqlx::query(
                 "INSERT INTO apalis.workers (id, worker_type, storage_name, layers, last_seen) \

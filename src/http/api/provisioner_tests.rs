@@ -5,7 +5,7 @@ use serde_json::json;
 /// A provisioner key for TEST_USER.
 async fn provisioner(test: &crate::mcp::testing::TestApp) -> String {
     let created = crate::store::keys::create_provisioner(
-        test.app.pool(),
+        test.app.accounts().executor(),
         &crate::store::keys::NewProvisioner {
             name: "signup",
             actor: "signup",
@@ -90,14 +90,15 @@ async fn a_provisioner_runs_the_signup_and_offboarding_routes() {
         let (status, answer) = send(&test, method, uri, p, body).await;
         assert_eq!(status.as_u16(), want, "{method} {uri}: {answer}");
     }
-    let rows = crate::store::audit::testing::entries(test.app.pool(), "user.created").await;
+    let rows =
+        crate::store::audit::testing::entries(test.app.accounts().executor(), "user.created").await;
     let alice = rows
         .iter()
         .find(|r| r.person.as_deref() == Some("alice"))
         .unwrap();
     assert!(alice.actor_operator);
     assert_eq!(alice.source, "api");
-    let credential: String = sqlx::query_scalar("SELECT c.credential_id FROM audit_entries e JOIN audit_credentials c ON c.id = e.actor_credential_ref WHERE e.action = 'user.invited'").fetch_one(test.app.pool()).await.unwrap();
+    let credential: String = sqlx::query_scalar("SELECT c.credential_id FROM audit_entries e JOIN audit_credentials c ON c.id = e.actor_credential_ref WHERE e.action = 'user.invited'").fetch_one(test.app.accounts().executor()).await.unwrap();
     let cached = crate::mcp::testing::cached_principal(&test, &key).await;
     assert_eq!(credential, cached.key_id);
 }
@@ -281,7 +282,7 @@ async fn a_provisioners_detail_waits_for_a_live_admin_promotion() {
     let test = Arc::new(app().await);
     let key = provisioner(&test).await;
     users::create(
-        test.app.pool(),
+        test.app.accounts().executor(),
         &NewUser {
             name: "staff",
             display_name: &crate::labels::DisplayName::default(),
@@ -291,7 +292,7 @@ async fn a_provisioners_detail_waits_for_a_live_admin_promotion() {
     )
     .await
     .unwrap();
-    let mut tx = test.app.pool().begin().await.unwrap();
+    let mut tx = test.app.accounts().executor().begin().await.unwrap();
     sqlx::query("SELECT id FROM users WHERE name = 'staff' FOR UPDATE")
         .execute(&mut *tx)
         .await
@@ -305,7 +306,7 @@ async fn a_provisioners_detail_waits_for_a_live_admin_promotion() {
         tokio::spawn(
             async move { send(&other, "GET", "/api/v1/users/staff", Some(&key), None).await },
         );
-    crate::http::api::testing::wait_for_lock_waiters(test.app.pool(), 1).await;
+    crate::http::api::testing::wait_for_lock_waiters(test.app.accounts().executor(), 1).await;
     tx.commit().await.unwrap();
     let (status, body) = tokio::time::timeout(Duration::from_secs(10), request)
         .await
@@ -539,7 +540,7 @@ async fn everything_stored(test: &crate::mcp::testing::TestApp) -> String {
         "SELECT COALESCE((SELECT string_agg(to_jsonb(e)::text, ' ') FROM audit_entries e), '') \
          || ' ' || COALESCE((SELECT string_agg(bucket, ' ') FROM audit_access_counts), '')",
     )
-    .fetch_one(test.app.pool())
+    .fetch_one(test.app.accounts().executor())
     .await
     .expect("read what the audit log stores")
 }
@@ -547,7 +548,7 @@ async fn everything_stored(test: &crate::mcp::testing::TestApp) -> String {
 async fn entry_count(test: &crate::mcp::testing::TestApp) -> i64 {
     test.app.settle_access().await;
     sqlx::query_scalar("SELECT count(*) FROM audit_entries")
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .expect("count the entries")
 }
@@ -599,7 +600,8 @@ async fn an_email_lookup_is_audited_with_the_outcome_and_never_the_address() {
     assert!(!stored.contains("nobody"), "{stored}");
     assert!(!stored.contains("example.com"), "{stored}");
     let mut entries =
-        crate::store::audit::testing::entries(test.app.pool(), "user.looked_up").await;
+        crate::store::audit::testing::entries(test.app.accounts().executor(), "user.looked_up")
+            .await;
     assert_eq!(entries.len(), 2);
     // The writes are background tasks, so their ids follow no request
     // order: find each entry by its outcome (`found` sorts before `not_found`).
@@ -622,7 +624,7 @@ async fn an_email_lookup_is_audited_with_the_outcome_and_never_the_address() {
          JOIN audit_credentials c ON c.id = e.actor_credential_ref \
          WHERE e.action = 'user.looked_up' LIMIT 1",
     )
-    .fetch_one(test.app.pool())
+    .fetch_one(test.app.accounts().executor())
     .await
     .unwrap();
     assert_eq!(
@@ -687,7 +689,9 @@ async fn looking_up_an_admin_by_email_is_recorded_as_not_found() {
     .await;
 
     test.app.settle_access().await;
-    let entries = crate::store::audit::testing::entries(test.app.pool(), "user.looked_up").await;
+    let entries =
+        crate::store::audit::testing::entries(test.app.accounts().executor(), "user.looked_up")
+            .await;
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0].details["outcome"], "not_found",
@@ -720,8 +724,11 @@ async fn a_refused_route_is_audited_by_template_method_and_a_stable_code() {
         !stored.contains("/catalogs/main"),
         "no literal path: {stored}"
     );
-    let mut entries =
-        crate::store::audit::testing::entries(test.app.pool(), "provisioner.refused").await;
+    let mut entries = crate::store::audit::testing::entries(
+        test.app.accounts().executor(),
+        "provisioner.refused",
+    )
+    .await;
     assert_eq!(entries.len(), 2);
     // Background writes: find each entry by its reason, not by id order
     // (`forbidden` sorts before `route_not_allowed`).
@@ -781,8 +788,11 @@ async fn a_refusal_on_mcp_or_an_archive_route_is_audited_like_an_api_one() {
         !stored.contains("/catalogs/main"),
         "no literal path: {stored}"
     );
-    let mut entries =
-        crate::store::audit::testing::entries(test.app.pool(), "provisioner.refused").await;
+    let mut entries = crate::store::audit::testing::entries(
+        test.app.accounts().executor(),
+        "provisioner.refused",
+    )
+    .await;
     // Background writes: find each entry by its target, not by id order.
     entries.sort_by_key(|entry| entry.target.clone());
     let targets: Vec<_> = entries
@@ -817,8 +827,11 @@ async fn a_burst_of_identical_refusals_collapses_into_one_counted_entry() {
     }
 
     assert_eq!(entry_count(&test).await, before + 1, "one refusal entry");
-    let entries =
-        crate::store::audit::testing::entries(test.app.pool(), "provisioner.refused").await;
+    let entries = crate::store::audit::testing::entries(
+        test.app.accounts().executor(),
+        "provisioner.refused",
+    )
+    .await;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].requests, Some(25));
 }
@@ -874,7 +887,9 @@ async fn a_successful_change_still_writes_exactly_one_event_and_other_reads_none
         after_changes,
         "reads and no-ops write no entry"
     );
-    let looked_up = crate::store::audit::testing::entries(test.app.pool(), "user.looked_up").await;
+    let looked_up =
+        crate::store::audit::testing::entries(test.app.accounts().executor(), "user.looked_up")
+            .await;
     assert!(looked_up.is_empty());
 }
 
@@ -895,7 +910,7 @@ async fn an_owner_of_the_users_team_never_sees_provisioner_lookups_or_refusals()
     let (team_id, audit_team): (String, i64) =
         sqlx::query_as("SELECT t.id, audit_team_ref(t.id) FROM teams t WHERE t.name = $1")
             .bind(crate::db::TEST_TEAM)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .unwrap();
     let viewer = crate::store::audit::Viewer::Owner {
@@ -904,7 +919,7 @@ async fn an_owner_of_the_users_team_never_sees_provisioner_lookups_or_refusals()
     };
 
     let seen = crate::store::audit::list(
-        test.app.pool(),
+        test.app.accounts().executor(),
         &viewer,
         &crate::store::audit::AuditQuery::default(),
         test.app.labels(),
@@ -944,7 +959,7 @@ async fn a_flood_past_the_pending_write_limit_loses_the_overflow_and_recovers() 
         },
     };
     let requests = |test: &crate::mcp::testing::TestApp| {
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         async move {
             sqlx::query_scalar::<_, Option<i64>>(
                 "SELECT sum(c.requests)::bigint FROM audit_access_counts c \

@@ -640,7 +640,7 @@ mod tests {
             None,
         );
         let state = test.app.catalog("pg").await.unwrap().unwrap();
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         let overlays = test.app.overlays();
         let rebuilds = test.app.rebuild_locks();
         let edit = |text: &'static str| PendingEdit {
@@ -992,7 +992,7 @@ mod tests {
         let row = Arc::new(pending_entry(&test, &handle, &edit).await);
         // Loaded before the pool is full: a catalog loads on demand.
         let state = test.app.catalog("pg").await.unwrap().unwrap();
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         let mut tx = pool.begin().await.unwrap();
         let size = pool.options().get_max_connections();
         let mut held = Vec::with_capacity(size as usize);
@@ -1051,7 +1051,7 @@ mod tests {
         };
         let row = Arc::new(pending_entry(&test, &handle, &edit).await);
         let state = test.app.catalog("pg").await.unwrap().unwrap();
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         let size = pool.options().get_max_connections();
         let mut held = Vec::with_capacity(size as usize);
         for _ in 0..size {
@@ -1106,7 +1106,7 @@ mod tests {
         };
         let row = pending_entry(&test, &handle, &edit("b.md")).await;
         let state = test.app.catalog("pg").await.unwrap().unwrap();
-        let (pool, rebuilds) = (test.app.pool(), test.app.rebuild_locks());
+        let (pool, rebuilds) = (test.app.accounts().executor(), test.app.rebuild_locks());
         let overlays = test.app.overlays();
 
         // Act: a miss that builds, then a hit, then a build that fails (the

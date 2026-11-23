@@ -284,7 +284,7 @@ impl AccessTokens {
         };
         let live = match cached {
             Some(live) => live,
-            None => match tokens::find_access(app.pool(), &sha256, now).await? {
+            None => match tokens::find_access(app.accounts().executor(), &sha256, now).await? {
                 Some(live) => {
                     if use_cache {
                         self.remember(sha256, live.clone(), now, generation);
@@ -391,13 +391,20 @@ mod tests {
         let test = app_with(&[("main", &[])], oauth_config("https://okf.example.com")).await;
         let now = test.app.clock().now();
         let client = insert_client(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "https://client.example.com/client.json",
             "Example Client",
             now,
         )
         .await;
-        let grant = insert_grant(test.app.pool(), &client, Access::Write, &["main"], now).await;
+        let grant = insert_grant(
+            test.app.accounts().executor(),
+            &client,
+            Access::Write,
+            &["main"],
+            now,
+        )
+        .await;
         (test, grant)
     }
 
@@ -445,7 +452,7 @@ mod tests {
         // Seen once (cached), then revoked: `forget` makes it stop at once.
         assert!(authenticate(&test.app, &revoked).await.unwrap().is_some());
         crate::store::oauth::tokens::revoke(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &crate::keys::hash(&revoked),
             test.app.clock().now(),
         )
@@ -472,7 +479,7 @@ mod tests {
 
         crate::invalidate::testing::applied(&test.app, async {
             key_rows::revoke_by_id(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 &grant,
                 &crate::store::audit::AuditActor::cli(),
                 test.app.clock().now(),
@@ -561,12 +568,14 @@ mod tests {
         let hash = crate::keys::hash(&token);
         let now = test.app.clock().now();
         let seen = oauth.access.generation();
-        let stale = tokens::find_access(test.app.pool(), &hash, now)
+        let stale = tokens::find_access(test.app.accounts().executor(), &hash, now)
             .await
             .unwrap()
             .expect("live before the revocation");
 
-        tokens::revoke(test.app.pool(), &hash, now).await.unwrap();
+        tokens::revoke(test.app.accounts().executor(), &hash, now)
+            .await
+            .unwrap();
         oauth.access.forget(&[hash]).await;
         oauth.access.remember(hash, stale, now, seen);
 
@@ -670,9 +679,13 @@ mod tests {
     /// Revokes `token`'s row in Postgres only: no `forget`, no counter bump,
     /// as a crash between the commit and the bump would leave it.
     async fn revoke_row_only(app: &App, token: &str) {
-        tokens::revoke(app.pool(), &keys::hash(token), app.clock().now())
-            .await
-            .expect("revoke the row");
+        tokens::revoke(
+            app.accounts().executor(),
+            &keys::hash(token),
+            app.clock().now(),
+        )
+        .await
+        .expect("revoke the row");
     }
 
     /// The counter's key and a raw connection on `server`.

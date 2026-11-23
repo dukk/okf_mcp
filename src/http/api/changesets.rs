@@ -247,7 +247,7 @@ mod tests {
         )
         .bind(path)
         .bind(revision)
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .expect("the revision exists")
     }
@@ -418,7 +418,7 @@ mod tests {
         let user = crate::db::TEST_USER;
         crate::invalidate::testing::applied(&test.app, async {
             crate::store::users::set_admin(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 user,
                 AdminChange {
                     on: true,
@@ -443,7 +443,11 @@ mod tests {
 
         assert_eq!(by_owner.as_u16(), 200);
         assert_eq!(status.as_u16(), 200, "{body}");
-        let recorded = entries(test.app.pool(), "catalog.changeset_discarded").await;
+        let recorded = entries(
+            test.app.accounts().executor(),
+            "catalog.changeset_discarded",
+        )
+        .await;
         assert_eq!(recorded.len(), 1, "{recorded:?}");
         let entry = &recorded[0];
         assert_eq!(entry.source, "console");
@@ -600,7 +604,7 @@ mod tests {
         let (unknown, refused) = member.send(&test, "POST", &uri, body()).await.parts();
         crate::invalidate::testing::applied(&test.app, async {
             crate::store::users::set_admin(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 user,
                 AdminChange {
                     on: true,
@@ -634,7 +638,7 @@ mod tests {
             revision_of(&test, "systems/delta.md", 1).await,
             (user.to_string(), "Reviewed delta".to_string())
         );
-        let recorded = entries(test.app.pool(), "catalog.published").await;
+        let recorded = entries(test.app.accounts().executor(), "catalog.published").await;
         assert_eq!(recorded.len(), 2, "{recorded:?}");
         let keyed = recorded
             .iter()
@@ -732,7 +736,7 @@ mod tests {
         assert_eq!(unchanged["published"], true);
         assert_eq!(unchanged["revisions"], json!([]));
         assert!(!listed(&test, &keys.admin, &no_op).await, "it is closed");
-        assert!(entries(test.app.pool(), "catalog.published")
+        assert!(entries(test.app.accounts().executor(), "catalog.published")
             .await
             .is_empty());
     }
@@ -865,7 +869,7 @@ mod tests {
         let opted_out = open_as(&test, &runner, "systems/delta.md").await;
         require_unlock(&test).await;
         crate::invalidate::testing::applied(&test.app, async {
-            let mut tx = test.app.pool().begin().await.expect("begin");
+            let mut tx = test.app.accounts().executor().begin().await.expect("begin");
             let id: i64 = sqlx::query_scalar(
                 "UPDATE catalogs SET maintenance = false WHERE name = 'main' RETURNING id",
             )

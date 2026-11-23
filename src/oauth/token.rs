@@ -268,7 +268,8 @@ fn remember(oauth: &OAuth, minted: Minted) -> TokenResponse {
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
 async fn revoke_family(app: &App, oauth: &OAuth, family_id: &str) -> Result<(), OkfError> {
-    let revoked = token_rows::revoke_family(app.pool(), family_id, app.clock().now()).await?;
+    let revoked =
+        token_rows::revoke_family(app.accounts().executor(), family_id, app.clock().now()).await?;
     oauth.access.forget(&revoked).await;
     Ok(())
 }
@@ -440,7 +441,12 @@ async fn exchange_code(
         family_id: &stored.family_id,
         resource: &stored.resource,
     };
-    let mut tx = app.pool().begin().await.map_err(OkfError::from)?;
+    let mut tx = app
+        .accounts()
+        .executor()
+        .begin()
+        .await
+        .map_err(OkfError::from)?;
     // The grant's share lock, then the family's, as a rotation takes them
     // (`use_refresh`): a grant revoked since the key-cache check above is
     // refused here, and a revocation that starts now waits for this commit.
@@ -501,7 +507,12 @@ async fn refresh(
     let presented = required(&form.refresh_token, "refresh_token")?;
     let client_id = required(&form.client_id, "client_id")?;
     let now = app.clock().now();
-    let mut tx = app.pool().begin().await.map_err(OkfError::from)?;
+    let mut tx = app
+        .accounts()
+        .executor()
+        .begin()
+        .await
+        .map_err(OkfError::from)?;
     let grace = oauth.settings.refresh_reuse_grace;
     let found = token_rows::use_refresh(&mut tx, &keys::hash(presented), now, grace).await?;
     span.record("okf.refresh", refresh_label(&found));
@@ -603,7 +614,7 @@ async fn revoke(
     })?;
     let token = required(&form.token, "token")?;
     let hash = keys::hash(token);
-    match token_rows::revoke(app.pool(), &hash, app.clock().now()).await? {
+    match token_rows::revoke(app.accounts().executor(), &hash, app.clock().now()).await? {
         // Revoking twice is harmless, so a family already revoked is fine.
         Some(RevokedToken {
             family_id,
@@ -762,7 +773,7 @@ mod tests {
         assert_eq!(body["error"], "invalid_grant");
         let live: i64 =
             sqlx::query_scalar("SELECT count(*) FROM oauth_tokens WHERE revoked_at IS NULL")
-                .fetch_one(test.app.pool())
+                .fetch_one(test.app.accounts().executor())
                 .await
                 .unwrap();
         assert_eq!(live, 0, "the minted pair is revoked");
@@ -833,12 +844,12 @@ mod tests {
         let test = oauth_app().await;
         let code = authorization_code(&test).await;
         let grant: String = sqlx::query_scalar("SELECT id FROM api_keys WHERE kind = 'oauth'")
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .unwrap();
         crate::invalidate::testing::applied(&test.app, async {
             crate::store::keys::revoke_by_id(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 &grant,
                 &crate::store::audit::AuditActor::cli(),
                 test.app.clock().now(),
@@ -863,7 +874,7 @@ mod tests {
     async fn a_code_exchange_waiting_on_a_revocation_is_refused_and_mints_nothing() {
         let test = oauth_app().await;
         let code = authorization_code(&test).await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         let grant: String = sqlx::query_scalar("SELECT id FROM api_keys WHERE kind = 'oauth'")
             .fetch_one(pool)
             .await
@@ -1513,7 +1524,7 @@ mod tests {
             }
             let live: i64 =
                 sqlx::query_scalar("SELECT count(*) FROM oauth_tokens WHERE revoked_at IS NULL")
-                    .fetch_one(a.app.pool())
+                    .fetch_one(a.app.accounts().executor())
                     .await
                     .expect("count live tokens");
             assert_eq!(live, 0, "no minted token is live");
@@ -1567,7 +1578,13 @@ mod tests {
             assert!(expiring, "the code is stored under that key");
             // Hold the family's lock, so the exchange stops after it marked
             // the code used and before its post-commit replay check.
-            let mut holder = a.app.pool().begin().await.expect("a transaction");
+            let mut holder = a
+                .app
+                .accounts()
+                .executor()
+                .begin()
+                .await
+                .expect("a transaction");
             crate::store::oauth::tokens::lock_family(&mut holder, &family)
                 .await
                 .expect("hold the family's lock");
@@ -1576,7 +1593,7 @@ mod tests {
                 let code = code.clone();
                 tokio::spawn(async move { exchange_on(&app, &code).await })
             };
-            crate::http::api::testing::wait_for_lock_waiters(a.app.pool(), 1).await;
+            crate::http::api::testing::wait_for_lock_waiters(a.app.accounts().executor(), 1).await;
             let marked = stored_on(&a.app, &code).await.expect("still stored");
             assert!(marked.used, "the exchange marked the code used");
             // The marking write kept the code longer than it had left.
@@ -1660,7 +1677,7 @@ mod tests {
             assert_eq!(approve_status, StatusCode::SERVICE_UNAVAILABLE, "{page}");
             assert!(page.contains("The server is busy"), "the busy page: {page}");
             let live: i64 = sqlx::query_scalar("SELECT count(*) FROM oauth_tokens")
-                .fetch_one(a.app.pool())
+                .fetch_one(a.app.accounts().executor())
                 .await
                 .expect("count tokens");
             assert_eq!(live, 0, "nothing was minted, from memory or otherwise");
@@ -1676,7 +1693,13 @@ mod tests {
             // Hold the family's lock, so B's exchange stops after it marked
             // the code used and before it mints; Redis fails while it waits,
             // so only the check after the commit meets the failure.
-            let mut holder = a.app.pool().begin().await.expect("a transaction");
+            let mut holder = a
+                .app
+                .accounts()
+                .executor()
+                .begin()
+                .await
+                .expect("a transaction");
             crate::store::oauth::tokens::lock_family(&mut holder, &family)
                 .await
                 .expect("hold the family's lock");
@@ -1687,7 +1710,7 @@ mod tests {
                 // `asyncio.create_task`); `async move` gives it owned copies.
                 tokio::spawn(async move { exchange_on(&b, &code).await })
             };
-            crate::http::api::testing::wait_for_lock_waiters(a.app.pool(), 1).await;
+            crate::http::api::testing::wait_for_lock_waiters(a.app.accounts().executor(), 1).await;
             let marked = stored_on(&a.app, &code).await.expect("still stored");
             assert!(marked.used, "B marked the code used before the lock");
             if server.stop().await.is_none() {
@@ -1710,7 +1733,7 @@ mod tests {
                    FROM oauth_tokens WHERE family_id = $1",
             )
             .bind(&family)
-            .fetch_one(a.app.pool())
+            .fetch_one(a.app.accounts().executor())
             .await
             .expect("count the family's tokens");
             assert!(minted > 0, "the exchange committed its tokens");

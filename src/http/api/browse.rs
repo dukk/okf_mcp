@@ -1031,7 +1031,7 @@ mod tests {
             .parts();
         crate::invalidate::testing::applied(&test.app, async {
             crate::store::users::set_admin(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 user,
                 AdminChange {
                     on: true,
@@ -1543,7 +1543,7 @@ mod tests {
         // `staff` reaches every catalog as an admin, and `require_unlock`
         // makes it ask for an unlock first; `other` is not suspended.
         crate::store::users::set_admin(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "staff",
             AdminChange {
                 on: true,

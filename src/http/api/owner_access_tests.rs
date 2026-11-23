@@ -97,29 +97,41 @@ async fn key_of(test: &TestApp, user: &str, name: &'static str, scoped_admin: bo
         expires_at: None,
         levels: &[],
     };
-    key_rows::create_with_id(test.app.pool(), &new, &AuditActor::cli(), Utc::now())
-        .await
-        .expect("create a key")
-        .key
+    key_rows::create_with_id(
+        test.app.accounts().executor(),
+        &new,
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("create a key")
+    .key
 }
 
 /// An OAuth grant of `user`, and its access token.
 async fn grant_token_of(test: &TestApp, user: &str) -> String {
     let now = test.app.clock().now();
     let client = insert_client(
-        test.app.pool(),
+        test.app.accounts().executor(),
         "https://client.example.com/client.json",
         "Example Client",
         now,
     )
     .await;
-    let grant = insert_grant(test.app.pool(), &client, Access::Write, &["docs"], now).await;
+    let grant = insert_grant(
+        test.app.accounts().executor(),
+        &client,
+        Access::Write,
+        &["docs"],
+        now,
+    )
+    .await;
     sqlx::query(
         "UPDATE api_keys SET user_id = (SELECT id FROM users WHERE name = $1) WHERE id = $2",
     )
     .bind(user)
     .bind(&grant)
-    .execute(test.app.pool())
+    .execute(test.app.accounts().executor())
     .await
     .expect("assign the grant to its user");
     mint_access(&test.app, &grant, RESOURCE, chrono::TimeDelta::hours(1)).await
@@ -158,7 +170,7 @@ fn controls() -> Vec<(&'static str, &'static str, Option<Value>)> {
 /// The stored member access of `docs`.
 async fn stored_member_access(world: &World) -> String {
     sqlx::query_scalar("SELECT member_access FROM catalogs WHERE name = 'docs'")
-        .fetch_one(world.test.app.pool())
+        .fetch_one(world.test.app.accounts().executor())
         .await
         .expect("read the member access")
 }
@@ -169,7 +181,7 @@ async fn docs_entitlements(world: &World) -> i64 {
         "SELECT count(*) FROM user_catalogs e JOIN catalogs c ON c.id = e.catalog_id \
          WHERE c.name = 'docs'",
     )
-    .fetch_one(world.test.app.pool())
+    .fetch_one(world.test.app.accounts().executor())
     .await
     .expect("count the entitlements")
 }
@@ -179,7 +191,7 @@ async fn an_owner_session_sets_member_access_and_it_is_audited_with_the_owner_as
     // Arrange
     let world = world().await;
     let mut olive = Browser::session_for(&world.test, "olive").await;
-    let generation = crate::store::catalogs::admin_generation(world.test.app.pool())
+    let generation = crate::store::catalogs::admin_generation(world.test.app.accounts().executor())
         .await
         .unwrap();
 
@@ -214,13 +226,13 @@ async fn an_owner_session_sets_member_access_and_it_is_audited_with_the_owner_as
     assert_eq!(after["member_access"], "read");
     assert_eq!(bad, StatusCode::BAD_REQUEST);
     assert!(
-        crate::store::catalogs::admin_generation(world.test.app.pool())
+        crate::store::catalogs::admin_generation(world.test.app.accounts().executor())
             .await
             .unwrap()
             > generation
     );
     let changes = crate::store::audit::testing::entries(
-        world.test.app.pool(),
+        world.test.app.accounts().executor(),
         "catalog.member_access_changed",
     )
     .await;
@@ -295,8 +307,11 @@ async fn an_owner_session_entitles_a_team_member_and_sees_only_that_catalog() {
         json!([]),
         "only docs, and it is gone"
     );
-    let events =
-        crate::store::audit::testing::entries(world.test.app.pool(), "user.entitlement_set").await;
+    let events = crate::store::audit::testing::entries(
+        world.test.app.accounts().executor(),
+        "user.entitlement_set",
+    )
+    .await;
     // The admin's entitlement of `main` and the owner's of `docs`.
     assert_eq!(events.len(), 2, "{events:?}");
     assert_eq!(events[1].actor_person.as_deref(), Some("olive"));
@@ -390,7 +405,7 @@ async fn a_non_owner_another_teams_owner_a_stranger_and_a_personal_owner_are_ref
     }
     let main_member_access: String =
         sqlx::query_scalar("SELECT member_access FROM catalogs WHERE name = 'main'")
-            .fetch_one(world.test.app.pool())
+            .fetch_one(world.test.app.accounts().executor())
             .await
             .unwrap();
     assert_eq!(

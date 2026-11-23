@@ -707,12 +707,14 @@ mod tests {
 
     /// `pg`'s generation and live document count in the database.
     async fn stored(test: &TestApp) -> (i64, i64) {
-        let catalog = catalogs::find(test.app.pool(), "pg").await.unwrap();
+        let catalog = catalogs::find(test.app.accounts().executor(), "pg")
+            .await
+            .unwrap();
         let live: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM documents WHERE catalog_id = $1 AND deleted_at IS NULL",
         )
         .bind(catalog.id)
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .unwrap();
         (catalog.generation, live)
@@ -904,7 +906,7 @@ mod tests {
              CREATE TRIGGER break_the_refresh AFTER UPDATE OF generation ON catalogs \
                  FOR EACH ROW EXECUTE FUNCTION break_the_refresh();",
         )
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .unwrap();
         let import = || {
@@ -926,7 +928,7 @@ mod tests {
             "DROP TRIGGER break_the_refresh ON catalogs; \
              DELETE FROM documents WHERE path = '../escape.md';",
         )
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .unwrap();
         test.app.catch_up_catalogs().await;
@@ -967,12 +969,12 @@ mod tests {
              VALUES ($1, '../escape.md', '', false, 1, now(), 'test')",
         )
         .bind(id)
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .unwrap();
         sqlx::query("UPDATE catalogs SET generation = generation + 1 WHERE id = $1")
             .bind(id)
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .unwrap();
         test.app.catch_up_catalogs().await;
@@ -1032,7 +1034,7 @@ mod tests {
             "SELECT content FROM documents WHERE path = 'a.md' \
              AND catalog_id = (SELECT id FROM catalogs WHERE name = 'pg')",
         )
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .unwrap();
 
@@ -1173,7 +1175,7 @@ mod tests {
             owner: None,
         };
         catalogs::update_details(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &change,
             &AuditActor::cli(),
             test.app.clock().now(),
@@ -1407,7 +1409,7 @@ mod tests {
         use crate::telemetry::subscriber::capture::{attribute, Observer};
         let (test, registry) =
             crate::mcp::testing::app_with_metrics(&[("pg", &[])], Config::default()).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         // The catalog's directory row is cached first, as for any catalog in
         // use: the wait below is the export's own.
         test.app.directory().resolve("pg").await.unwrap();

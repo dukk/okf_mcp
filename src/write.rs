@@ -499,13 +499,15 @@ mod tests {
     /// The entries of the changeset `handle` names.
     async fn entries(test: &TestApp, handle: &str) -> Vec<EntryRow> {
         let row = changeset_row(test, handle).await;
-        changesets::entries(test.app.pool(), row.id).await.unwrap()
+        changesets::entries(test.app.accounts().executor(), row.id)
+            .await
+            .unwrap()
     }
 
     /// A `SELECT count(*)` query's answer (sqlx 0.9 takes only literal SQL).
     async fn count(test: &TestApp, sql: &'static str) -> i64 {
         sqlx::query_scalar(sql)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .unwrap()
     }
@@ -569,7 +571,7 @@ mod tests {
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
         let row = changeset_row(&test, &handle).await;
-        let mut tx = test.app.pool().begin().await.unwrap();
+        let mut tx = test.app.accounts().executor().begin().await.unwrap();
         changesets::set_state(&mut tx, row.id, ChangesetState::Discarded, Utc::now())
             .await
             .unwrap();
@@ -630,7 +632,7 @@ mod tests {
         };
         let handle = open(&connection()).await;
         let row = changeset_row(&test, &handle).await;
-        let mut holder = test.app.pool().begin().await.unwrap();
+        let mut holder = test.app.accounts().executor().begin().await.unwrap();
         changesets::lock(&mut holder, row.id).await.unwrap();
 
         // Act: three writers on that changeset at once.
@@ -641,7 +643,7 @@ mod tests {
                 tokio::spawn(async move { write(&ctx, &handle, path, "# X\n".to_string()).await })
             })
             .collect();
-        until_a_lock_is_awaited(test.app.pool()).await;
+        until_a_lock_is_awaited(test.app.accounts().executor()).await;
         // Time for the other two to reach the database, if they were going to.
         tokio::time::sleep(Duration::from_millis(300)).await;
         let blocked = count(&test, AWAITED_LOCKS).await;
@@ -670,7 +672,7 @@ mod tests {
         let handle = open(&connection()).await;
         let row = changeset_row(&test, &handle).await;
         // Stands in for a prune or a discard holding the changeset's row.
-        let mut holder = test.app.pool().begin().await.unwrap();
+        let mut holder = test.app.accounts().executor().begin().await.unwrap();
         changesets::lock(&mut holder, row.id).await.unwrap();
         let (ctx, waiting_on) = (connection(), handle.clone());
         // `tokio::spawn` runs the write concurrently, like a thread; it
@@ -679,7 +681,7 @@ mod tests {
         let writing = tokio::spawn(async move {
             write(&ctx, &waiting_on, "a.md", format!("{NOTE}Late.\n")).await
         });
-        until_a_lock_is_awaited(test.app.pool()).await;
+        until_a_lock_is_awaited(test.app.accounts().executor()).await;
 
         changesets::set_state(&mut holder, row.id, ChangesetState::Discarded, Utc::now())
             .await

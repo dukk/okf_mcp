@@ -654,9 +654,14 @@ mod catch_up_tests {
             .expect("cached")
             .key_id
             .clone();
-        crate::store::keys::revoke_by_id(a.pool(), &id, &AuditActor::cli(), chrono::Utc::now())
-            .await
-            .expect("revoke");
+        crate::store::keys::revoke_by_id(
+            a.accounts().executor(),
+            &id,
+            &AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("revoke");
 
         let holder = b.clone();
         let source = Outage {
@@ -721,9 +726,14 @@ mod catch_up_tests {
             .expect("cached")
             .key_id
             .clone();
-        crate::store::keys::revoke_by_id(a.pool(), &id, &AuditActor::cli(), chrono::Utc::now())
-            .await
-            .expect("revoke");
+        crate::store::keys::revoke_by_id(
+            a.accounts().executor(),
+            &id,
+            &AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("revoke");
         // Heard by nobody: B runs no change-feed listener (a lib test) and
         // has no subscription yet.
         assert!(
@@ -785,7 +795,7 @@ mod catch_up_tests {
         let found = b.find_key(&key).await.unwrap().expect("B finds the key");
         assert!(!found.facts.require_unlock);
         crate::store::keys::revoke_by_id(
-            first.app.pool(),
+            first.app.accounts().executor(),
             &found.key_id,
             &AuditActor::cli(),
             chrono::Utc::now(),
@@ -793,7 +803,7 @@ mod catch_up_tests {
         .await
         .expect("revoke");
         crate::store::settings::set(
-            first.app.pool(),
+            first.app.accounts().executor(),
             crate::store::settings::SettingKey::RequireUnlock,
             "on",
             &AuditActor::cli(),

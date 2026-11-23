@@ -981,7 +981,7 @@ impl ToolContext {
         // By the changeset's `catalogs.id`: that incarnation, never one
         // created since under its name. A catalog deleted since, or one
         // whose data does not build, resolves no handle.
-        let catalog = catalogs::row_by_id(self.app.pool(), row.catalog_id)
+        let catalog = catalogs::row_by_id(self.app.accounts().executor(), row.catalog_id)
             .await?
             .ok_or_else(unknown)?;
         let state = match self.held_state(&catalog).await {
@@ -1264,7 +1264,7 @@ mod tests {
             .await
             .unwrap()
             .changeset;
-        let mut tx = test.app.pool().begin().await.unwrap();
+        let mut tx = test.app.accounts().executor().begin().await.unwrap();
         for (handle, closed) in [
             (&discarded, ChangesetState::Discarded),
             (&published, ChangesetState::Published),

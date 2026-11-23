@@ -575,7 +575,7 @@ mod tests {
         // A Settings override retitles the next session; the name stays.
         crate::invalidate::testing::applied(&test.app, async {
             settings::set(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 SettingKey::ProductName,
                 "Other",
                 &AuditActor::cli(),

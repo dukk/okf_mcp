@@ -15,7 +15,7 @@ fn lines(text: &str) -> Vec<Value> {
 /// A provisioner key `signup` of TEST_USER.
 async fn provisioner(test: &TestApp) -> String {
     let created = crate::store::keys::create_provisioner(
-        test.app.pool(),
+        test.app.accounts().executor(),
         &crate::store::keys::NewProvisioner {
             name: "signup",
             actor: "signup",
@@ -314,7 +314,7 @@ async fn the_export_pages_through_every_entry_once_newest_first_from_any_cursor(
          SELECT now(), 'setting.changed', 'cli', 'cli:test', true, 'setting', 's' || n \
          FROM generate_series(1, 1203) AS n RETURNING id",
     )
-    .fetch_all(test.app.pool())
+    .fetch_all(test.app.accounts().executor())
     .await
     .unwrap();
     expected.sort_unstable_by(|a, b| b.cmp(a));
@@ -642,7 +642,7 @@ async fn a_team_or_catalog_recreated_under_an_old_name_never_lends_its_label_to_
 /// in a payload.
 async fn interleaved(test: &TestApp, root: &str, rounds: usize) {
     sqlx::query("SELECT setval(pg_get_serial_sequence('audit_entries', 'id'), 7000000)")
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .unwrap();
     family(test, root).await;
@@ -671,7 +671,7 @@ async fn interleaved(test: &TestApp, root: &str, rounds: usize) {
 /// written before it, have small ids that could match any digit).
 async fn every_id(test: &TestApp) -> Vec<i64> {
     sqlx::query_scalar("SELECT id FROM audit_entries WHERE id > 7000000 ORDER BY id")
-        .fetch_all(test.app.pool())
+        .fetch_all(test.app.accounts().executor())
         .await
         .unwrap()
 }
@@ -873,7 +873,7 @@ async fn a_rotated_key_refuses_the_cursors_it_sealed() {
     let cursor = page["next_after"].as_str().unwrap().to_string();
 
     sqlx::query("DELETE FROM server_keys")
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .unwrap();
     let (stale, _) = owner_get(

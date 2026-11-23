@@ -140,7 +140,9 @@ async fn until_read(ctx: &ToolContext, path: &str, text: &str) -> bool {
 
 /// The catalog's generation in the database.
 async fn stored_generation(app: &App, name: &str) -> CatalogGeneration {
-    let row = catalogs::find(app.pool(), name).await.expect("the catalog");
+    let row = catalogs::find(app.accounts().executor(), name)
+        .await
+        .expect("the catalog");
     CatalogGeneration {
         catalog_id: row.id,
         generation: row.generation,
@@ -481,7 +483,7 @@ async fn pending_changes_refuses_a_snapshot_behind_a_base_it_cannot_catch_up_to(
     let handle = open(&on_a).await;
     edit(&on_a, &handle, "/index.md", "- systems", "- the systems").await;
     sqlx::query("UPDATE changeset_entries SET base_revision = base_revision + 5")
-        .execute(a.app.pool())
+        .execute(a.app.accounts().executor())
         .await
         .expect("move the base ahead");
 
@@ -534,7 +536,7 @@ async fn an_edit_on_a_lagging_replica_records_the_fresh_base_and_publishes_clean
          JOIN changesets c ON c.id = e.changeset_id WHERE c.handle = $1",
     )
     .bind(&handle)
-    .fetch_one(a.app.pool())
+    .fetch_one(a.app.accounts().executor())
     .await
     .expect("the entry");
     assert_eq!(
@@ -659,7 +661,7 @@ async fn an_announcement_of_a_catalog_not_loaded_or_deleted_loads_nothing() {
     let (a, b, _redis) = pair().await;
     let pg = stored_generation(&a.app, "pg").await;
     let created = catalogs::create(
-        a.app.pool(),
+        a.app.accounts().executor(),
         &catalogs::NewCatalog {
             name: "work",
             display_name: &crate::labels::DisplayName::default(),
@@ -681,7 +683,7 @@ async fn an_announcement_of_a_catalog_not_loaded_or_deleted_loads_nothing() {
     let none = b.apply_catalog_announcement(unknown).await;
     let new = b.apply_catalog_announcement(work).await;
     catalogs::delete(
-        a.app.pool(),
+        a.app.accounts().executor(),
         "pg",
         true,
         &AuditActor::cli(),

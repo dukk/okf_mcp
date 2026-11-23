@@ -209,7 +209,7 @@ async fn managed_code(
     id: &str,
 ) -> Result<SignInCodeRecord, OkfError> {
     require_admin(principal)?;
-    codes::list(app.pool())
+    codes::list(app.accounts().executor())
         .await?
         .into_iter()
         .find(|code| code.id == id && manages_grants(principal, code.all_catalogs, &code.catalogs))
@@ -229,7 +229,7 @@ async fn list_codes(
 ) -> Result<Json<SignInCodeList>, AppError> {
     require_admin(&principal)?;
     let now = app.clock().now();
-    let codes = codes::list(app.pool())
+    let codes = codes::list(app.accounts().executor())
         .await?
         .into_iter()
         .filter(|code| manages_grants(&principal, code.all_catalogs, &code.catalogs))
@@ -291,7 +291,7 @@ async fn create_code(
         expires_at,
         user: &body.user,
     };
-    let created = codes::create(app.pool(), &new, &audit, now).await?;
+    let created = codes::create(app.accounts().executor(), &new, &audit, now).await?;
     let record = managed_code(&app, &principal, &created.id).await?;
     Ok(Json(CreatedSignInCodeView {
         code: SignInCodeView::new(record, now),
@@ -313,7 +313,7 @@ async fn revoke_code(
 ) -> Result<Json<SignInCodeView>, AppError> {
     let target = managed_code(&app, &principal, &id).await?;
     let now = app.clock().now();
-    codes::revoke(app.pool(), &target.id, &audit, now).await?;
+    codes::revoke(app.accounts().executor(), &target.id, &audit, now).await?;
     let record = managed_code(&app, &principal, &target.id).await?;
     Ok(Json(SignInCodeView::new(record, now)))
 }
@@ -336,7 +336,7 @@ async fn assign_code_user(
 ) -> Result<Json<SignInCodeView>, AppError> {
     let target = managed_code(&app, &principal, &id).await?;
     codes::assign_user(
-        app.pool(),
+        app.accounts().executor(),
         &target.id,
         &body.user,
         &audit,
@@ -371,7 +371,7 @@ mod tests {
             user: crate::db::TEST_USER,
         };
         codes::create(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &new,
             &crate::store::audit::AuditActor::cli(),
             Utc::now(),
@@ -478,7 +478,7 @@ mod tests {
         );
         assert!(listed["max_expiry_secs"].as_u64().unwrap() > 0);
         // The code works on the consent page's lookup.
-        let live = codes::find_live(test.app.pool(), &secret, Utc::now())
+        let live = codes::find_live(test.app.accounts().executor(), &secret, Utc::now())
             .await
             .unwrap();
         assert_eq!(live.map(|record| record.name), Some("laptop".to_string()));
@@ -530,7 +530,10 @@ mod tests {
         assert_eq!(post(with("catalogs", json!(["other"]))).await, 404);
         assert_eq!(post(with("default_catalog", json!("other"))).await, 404);
         assert_eq!(post(with("surprise", json!(1))).await, 422);
-        assert!(codes::list(test.app.pool()).await.unwrap().is_empty());
+        assert!(codes::list(test.app.accounts().executor())
+            .await
+            .unwrap()
+            .is_empty());
         // An empty `expires_in` means the default.
         assert_eq!(post(with("expires_in", json!(""))).await, 200);
     }
@@ -590,7 +593,7 @@ mod tests {
         let test = app().await;
         let keys = keys(&test).await;
         crate::store::users::create(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &crate::store::users::NewUser {
                 name: "alice",
                 display_name: &crate::labels::DisplayName::default(),

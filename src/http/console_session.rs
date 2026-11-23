@@ -410,7 +410,7 @@ pub(crate) async fn signed_in_user(
         return Ok(None);
     };
     let idle = app.settings().console_session_idle;
-    match user_sessions::touch(app.pool(), id, idle, app.clock().now()).await? {
+    match user_sessions::touch(app.accounts().executor(), id, idle, app.clock().now()).await? {
         Some(row) => session_user(app, &row.user_id).await,
         None => Ok(None),
     }
@@ -497,11 +497,12 @@ pub async fn require_principal(
         return unauthorized(&app);
     };
     let idle = app.settings().console_session_idle;
-    let row = match user_sessions::touch(app.pool(), &id, idle, app.clock().now()).await {
-        Ok(Some(row)) => row,
-        Ok(None) => return unauthorized_clearing(&app),
-        Err(error) => return AppError(error).into_response(),
-    };
+    let row =
+        match user_sessions::touch(app.accounts().executor(), &id, idle, app.clock().now()).await {
+            Ok(Some(row)) => row,
+            Ok(None) => return unauthorized_clearing(&app),
+            Err(error) => return AppError(error).into_response(),
+        };
     if !is_safe_method(request.method()) && !csrf_matches(request.headers(), &row.csrf) {
         return AppError(OkfError::Forbidden {
             reason: "a console write needs its session's X-OKF-CSRF header; reload the console"
@@ -597,7 +598,7 @@ pub async fn start_session_with(
         now: app.clock().now(),
         password,
     };
-    let session = user_sessions::start(app.pool(), &request).await?;
+    let session = user_sessions::start(app.accounts().executor(), &request).await?;
     Ok((session_cookie(app, &user.id, &session, absolute), session))
 }
 
@@ -849,7 +850,7 @@ mod http_tests {
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         crate::invalidate::testing::applied(&test.app, async {
             ceiling::entitle(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 &NewEntitlement {
                     user: "alice",
                     catalog: "main",
@@ -917,7 +918,7 @@ mod http_tests {
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         let now = Utc::now();
         ceiling::entitle(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &NewEntitlement {
                 user: "alice",
                 catalog: "main",
@@ -929,7 +930,7 @@ mod http_tests {
         .await
         .expect("entitle main");
         ceiling::entitle(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &NewEntitlement {
                 user: "alice",
                 catalog: "other",
@@ -973,7 +974,7 @@ mod http_tests {
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         crate::invalidate::testing::applied(&test.app, async {
             users::set_admin(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 "alice",
                 AdminChange {
                     on: true,
@@ -1016,7 +1017,7 @@ mod http_tests {
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         crate::invalidate::testing::applied(&test.app, async {
             users::set_admin(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 "alice",
                 AdminChange {
                     on: true,
@@ -1030,16 +1031,21 @@ mod http_tests {
         })
         .await;
         let passwords::SignInOutcome::Ok(passwords::Verified { user: checked, .. }) =
-            passwords::verify(test.app.pool(), "alice@example.com", PASSWORD, Utc::now())
-                .await
-                .expect("check the password")
+            passwords::verify(
+                test.app.accounts().executor(),
+                "alice@example.com",
+                PASSWORD,
+                Utc::now(),
+            )
+            .await
+            .expect("check the password")
         else {
             panic!("the password was refused");
         };
         assert!(checked.is_admin, "admin when the password was checked");
         crate::invalidate::testing::applied(&test.app, async {
             users::set_admin(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 "alice",
                 AdminChange {
                     on: false,
@@ -1087,7 +1093,7 @@ mod http_tests {
             .json();
 
         users::set_admin(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "alice",
             AdminChange {
                 on: true,
@@ -1229,7 +1235,7 @@ mod http_tests {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         users::set_admin(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "alice",
             AdminChange {
                 on: true,
@@ -1272,7 +1278,7 @@ mod http_tests {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         ceiling::entitle(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &NewEntitlement {
                 user: "alice",
                 catalog: "main",
@@ -1332,7 +1338,7 @@ mod http_tests {
             .send(&test, "GET", "/api/v1/session", Payload::Empty)
             .await;
 
-        user_sessions::revoke_all(test.app.pool(), &alice.id, None)
+        user_sessions::revoke_all(test.app.accounts().executor(), &alice.id, None)
             .await
             .expect("revoke");
         let after = browser
@@ -1352,7 +1358,7 @@ mod http_tests {
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
         let mut idle = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
         sqlx::query("UPDATE user_sessions SET last_seen_at = now() - interval '13 hours'")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .expect("age the session");
 
@@ -1362,7 +1368,7 @@ mod http_tests {
 
         let mut expired = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
         sqlx::query("UPDATE user_sessions SET expires_at = now() - interval '1 second'")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .expect("expire the session");
         let expired_reply = expired
@@ -1427,7 +1433,7 @@ mod http_tests {
         )
         .bind(first.id.as_bytes())
         .bind(&first.csrf)
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .expect("count");
         assert_eq!(stored, 0, "neither raw value is stored");
@@ -1459,7 +1465,7 @@ mod http_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_user_is_read_from_the_database_on_first_use() {
         let test = login_app().await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         // Created and entitled with no poll: the user cache reads bob on
         // his first request.
         users::create(

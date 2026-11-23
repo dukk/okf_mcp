@@ -568,7 +568,7 @@ mod tests {
         let before = served().await;
         assert!(before[1].contains("okf Reader"));
         settings::set(
-            test.app.pool(),
+            test.app.accounts().executor(),
             SettingKey::ProductName,
             "Acme Notes",
             &AuditActor::cli(),

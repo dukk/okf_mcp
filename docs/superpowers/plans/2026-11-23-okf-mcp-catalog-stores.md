@@ -285,6 +285,8 @@ Each release ends deployable: after Task 6 (types only, rolling), after Task 10 
 - [ ] Account-side callers use `app.accounts()`. Remove `App::pool()` and the deprecation allowance. `grep -rn '\.pool()' src` finds only `AccountDb`/`CatalogDb` internals and tests.
 - [ ] Tests: existing tests pass. The release is deployable: no schema change, no behaviour change.
 
+> **Corrected (issue #964, 2026-11-23).** Shipped: `App::pool()` and the crate-wide `#![allow(deprecated)]` are gone. Every account-side caller passes `app.accounts().executor()` to the store-layer functions that take an executor (they take `&PgPool`, P2); `AccountDb` has no deref to the pool. Two catalog-data callers use `app.main_store().executor()`: housekeeping's `changesets::prune_empty` and the `changesets::open_total` count in `cluster_stats`. `catalogs::row_by_id` in `ToolContext::resolve_changeset` is the registry, so it is an account read. The tests were moved the same way (`test.app.accounts().executor()`), so `grep -rn '\.pool()' src` also finds the test-only `Test*::pool()` accessors. No new crossing; the inventory is unchanged from Tasks 2 to 5.
+
 ## Release 2: registry, stores and placement
 
 ### Task 7: migration 0036 (stores, placement, registry columns) and the folder move
