@@ -727,8 +727,9 @@ two). What `[redis]` does not share:
   minutes), `prune_oauth` (idle OAuth grants, expired tokens and codes,
   unbound registered clients, sign-in events, emailed-link tokens, console
   sessions, mail jobs, finished housekeeping jobs and forwarded feedback,
-  hourly), `prune_audit` (the audit log, daily), `prune_workers` (hourly)
-  and `cluster_stats` (every minute). Every replica's ticker pushes each
+  hourly), `prune_audit` (the audit log, daily), `prune_workers` (hourly),
+  `cluster_stats` (every minute) and `provision_catalogs` (every minute; see
+  [Half-created catalogs](#half-created-catalogs)). Every replica's ticker pushes each
   task's current slot once a minute; a unique key per slot makes the other
   replicas' pushes no-ops, so each slot runs once, on whichever replica's
   worker takes it. A failed job is retried twice with a backoff; a slot
@@ -740,6 +741,25 @@ two). What `[redis]` does not share:
   unique index: the Postgres log then shows one `duplicate key value
   violates unique constraint "idx_jobs_idempotency_key"` error, which the
   server ignores.
+- <a id="half-created-catalogs"></a>**Half-created catalogs.** Creating a
+  catalog takes three steps: the registry row is inserted with
+  `provisioned_at` empty, the store side (the starter files) is written under
+  the catalog's lock on its store, and `provisioned_at` is set. Until the
+  last step the catalog does not exist for any lookup, listing or
+  permission check, and its name is taken. A create that stops between the
+  steps (a crash, a failed store connection) leaves a row that the
+  `provision_catalogs` task, which looks at rows older than a minute, takes
+  the same lock for: if the store side is there it sets `provisioned_at`; if
+  not it records `catalog.deleted` with `failed_create: true` in the details
+  and removes the row, freeing the name. A create that was only slow is never
+  removed, because both sides take the lock, not because of the age: the
+  create either commits first (and the task finishes the catalog) or waits
+  behind the task, finds its row gone and fails with a retryable `Busy`.
+  The first release that writes unprovisioned rows must run only after every
+  replica runs one that hides them (plan decision P11). Rows stuck for long
+  show up as `SELECT id, name, created_at FROM catalogs WHERE provisioned_at
+  IS NULL`; a failed job is logged as `recovering a half-created catalog
+  failed`.
 - **Cluster gauges.** `okf_changesets_open` and `okf_mail_queue_depth` come
   from the `cluster_stats` row, which every replica reads once a minute, so
   all replicas report the same value: use `max()` across replicas.
@@ -1401,7 +1421,7 @@ the dotted originals.
 | `okf_ratelimit_fallbacks_total` | counter | `limiter` | Decisions this replica's own bucket made because the shared (Redis) bucket failed, by the same `limiter` values. Any rate above 0 means the effective limit is the configured one times the replica count; alert on it. Only with `[redis]` |
 | `okf_mail_jobs_total` | counter | `provider`, `outcome` | Mail tries. `provider` is the configured one; `outcome` is `sent`, `retry` or `failed` |
 | `okf_mail_queue_depth` | gauge | `status` | Mail not yet sent, as of the last `cluster_stats` housekeeping job (the same on every replica): `pending`, `sending`, `retrying` or `failed` |
-| `okf_housekeeping_runs_total` | counter | `task`, `outcome` | Housekeeping jobs run on this replica. `task` is `prune_changesets`, `prune_oauth`, `prune_audit`, `prune_workers` or `cluster_stats`; `outcome` is `ok` or `error` (an error is retried) |
+| `okf_housekeeping_runs_total` | counter | `task`, `outcome` | Housekeeping jobs run on this replica. `task` is `prune_changesets`, `prune_oauth`, `prune_audit`, `prune_workers`, `cluster_stats` or `provision_catalogs`; `outcome` is `ok` or `error` (an error is retried) |
 | `okf_housekeeping_duration_seconds` | histogram | `task` | Housekeeping job duration |
 | `db_client_connection_count` | gauge | `state` | Postgres pool connections: `idle` and `used` sum to the pool's size |
 | `okf_clock_checks_total` | counter | `outcome` | Clock checks against `time_server` |

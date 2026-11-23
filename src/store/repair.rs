@@ -287,10 +287,11 @@ pub async fn missing_root_index(
     accounts: &AccountDb,
     db: &CatalogDb,
 ) -> Result<Vec<String>, OkfError> {
-    let catalogs: Vec<(i64, String)> =
-        sqlx::query_as("SELECT id, name FROM catalogs ORDER BY name")
-            .fetch_all(accounts.executor())
-            .await?;
+    let catalogs: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, name FROM catalogs WHERE provisioned_at IS NOT NULL ORDER BY name",
+    )
+    .fetch_all(accounts.executor())
+    .await?;
     if catalogs.is_empty() {
         return Ok(Vec::new());
     }
