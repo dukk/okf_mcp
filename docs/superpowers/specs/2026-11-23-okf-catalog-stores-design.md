@@ -284,7 +284,7 @@ upgrade.
   reads.
 - Admin API reference: stores and placement endpoints.
 
-## Relation to the revision storage epic
+## Relation to the revision storage epic (#954)
 
 This epic does not depend on the revision storage epic (deltas, content
 addressing, object storage), and goes first: its release 1 moves every
