@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 601,
+  "next_claim_seq": 610,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "8f7cf5238a869737082a495f1876d4454e6f1ad2721cae34c51b524d700cff89"
+    "mac": "e264447984b64ce153eea4fea4304e6d60e0a7d6ac551dd2477b966b41701402"
   },
-  "next_evidence_seq": 767,
+  "next_evidence_seq": 775,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "4d8810006973c852852d62e1617514e04f639856906989407edd9cf5907fea0b"
+    "mac": "d0e8cdb74a21547ade322cca982db7ff71b70d532e7b9c07966980d850718f0e"
   },
   "claims": [
     {
@@ -47301,6 +47301,548 @@
       "seal": {
         "by": "server",
         "mac": "c36911362d5485762c287433af13e00a4dfb73845cbf9562cab69475bffb68db"
+      }
+    },
+    {
+      "id": "CLM-0601",
+      "statement": "The change adds a property test that every concept file name the server accepts round-trips through encode_link_path, find_links and resolve_link.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/634",
+      "derived_from": [],
+      "artifacts": [
+        "src/okf/markdown.rs"
+      ],
+      "tags": [
+        "from-issue:634"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [],
+      "verdicts": [],
+      "created_at": "2026-11-23T04:13:44.233373827Z",
+      "updated_at": "2026-11-23T04:13:44.233373827Z",
+      "seal": {
+        "by": "server",
+        "mac": "a610183764b455708b39b242ded4c67765813e95ae0134436434599347524559"
+      }
+    },
+    {
+      "id": "CLM-0602",
+      "statement": "The property is a Hegel test in src/okf/markdown.rs named an_encoded_concept_name_round_trips_through_find_links_and_resolve_link, with 200 cases and derandomize on, and it passes.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"property `an_encoded_concept_name_round_trips_through_find_links_and_resolve_link` (200 cases, derandomized)\"",
+      "derived_from": [
+        "CLM-0601"
+      ],
+      "artifacts": [
+        "src/okf/markdown.rs"
+      ],
+      "tags": [
+        "from-issue:634"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0767",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- an_encoded_concept",
+          "summary": "Test okf::markdown::tests::an_encoded_concept_name_round_trips_through_find_links_and_resolve_link: 1 passed, 0 failed at 5f5a811. Attribute at line 889 is #[hegel::test(test_cases = 200, derandomize = true)].",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/markdown.rs",
+              "lines": {
+                "start": 885,
+                "end": 891
+              },
+              "commit": "5f5a8118936b8008cada6ba8e5e849b007f346e5"
+            }
+          },
+          "recorded_at": "2026-11-23T04:14:01.404032933Z",
+          "seal": {
+            "by": "server",
+            "mac": "f974095fac9a5a14e28d9fb552634fd4041b1057b77e6e0f123ea5ef4391e381"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Attribute and name read at the head; the test ran and passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0767"
+          ],
+          "recorded_at": "2026-11-23T04:14:15.542519941Z",
+          "seal": {
+            "by": "server",
+            "mac": "bdab60e5f53ead63d86e50265f711247ed33ed49af6729dbd4fbeb46bd7ba439"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:13:44.233373827Z",
+      "updated_at": "2026-11-23T04:14:15.542519941Z",
+      "seal": {
+        "by": "server",
+        "mac": "a075fad89f8748cd6aeaf2ea5bfb3a37e9dfe556f7be8b770696b62300751eba"
+      }
+    },
+    {
+      "id": "CLM-0603",
+      "statement": "The test asserts, for both the plain form [x](ENCODED) and the angle form [x](<ENCODED>), that find_links returns exactly one link whose target is the encoded name and that resolve_link returns the original path.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"For each name, both forms must parse as exactly one link whose target is the encoded name, and `resolve_link` must return the original path.\"",
+      "derived_from": [
+        "CLM-0601"
+      ],
+      "artifacts": [
+        "src/okf/markdown.rs"
+      ],
+      "tags": [
+        "from-issue:634"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0768",
+          "kind": "inspection",
+          "locator": "src/okf/markdown.rs:951-961",
+          "summary": "Loop over [encoded, \"<encoded>\"] builds \"[x](dest)\", asserts find_links len == 1, found[0].target == encoded, and resolve_link(&ws, target, \"d/index.md\").map(path) == Some(original path). Workspace holds the file d/<name>.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/markdown.rs",
+              "lines": {
+                "start": 951,
+                "end": 961
+              },
+              "commit": "5f5a8118936b8008cada6ba8e5e849b007f346e5"
+            }
+          },
+          "recorded_at": "2026-11-23T04:14:01.445716353Z",
+          "seal": {
+            "by": "server",
+            "mac": "23f994c96bb4120a6fa75063e6448d10af3caee4ba791662fea0f894d3f35411"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both destination forms are looped, with the three assertions as claimed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0768"
+          ],
+          "recorded_at": "2026-11-23T04:14:15.574468270Z",
+          "seal": {
+            "by": "server",
+            "mac": "555efc44b95472ee9240c77475e8d35dd4b3b23e53ba66de18b1f5522ac91d7e"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:13:44.233373827Z",
+      "updated_at": "2026-11-23T04:14:15.574468270Z",
+      "seal": {
+        "by": "server",
+        "mac": "a9f8a5c7341ae2f3f69db96ef5a1d6e1871331c916912309cff9cb9e230bf9c8"
+      }
+    },
+    {
+      "id": "CLM-0604",
+      "statement": "The generator draws names from random text and a list of pieces including Unicode whitespace, controls, %, fake escapes, ':', '<', '>', '(', ')', '[', ']', backslash, quotes, '#', '?', and non-ASCII characters.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"Names are built from random text and a list of reserved pieces (Unicode whitespace, controls, `%` and fake escapes, `:`, `<`, `>`, `(`, `)`, `[`, `]`, `\\`, quotes, `#`, `?`)\"",
+      "derived_from": [
+        "CLM-0601"
+      ],
+      "artifacts": [
+        "src/okf/markdown.rs"
+      ],
+      "tags": [
+        "from-issue:634"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0769",
+          "kind": "inspection",
+          "locator": "src/okf/markdown.rs:897-943",
+          "summary": "specials list includes space, tab, U+00A0/2003/3000/0085/2028, \\n \\r, C0 controls, DEL, NUL, %, %20, %2, %zz, ':', 'http:', < > ( ) [ ] \\ \" ' # ? & + .. . U+00E9, U+1F600, U+202E; each draw also mixes in generators::text().max_size(4) (arbitrary Unicode).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/markdown.rs",
+              "lines": {
+                "start": 897,
+                "end": 943
+              },
+              "commit": "5f5a8118936b8008cada6ba8e5e849b007f346e5"
+            }
+          },
+          "recorded_at": "2026-11-23T04:14:01.486446328Z",
+          "seal": {
+            "by": "server",
+            "mac": "02d8f1a26202361b60c33174acc8b18c9bdb973bbf0722d6f4939091b60e3e60"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every listed class appears in the specials list or generated text.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0769"
+          ],
+          "recorded_at": "2026-11-23T04:14:15.610980496Z",
+          "seal": {
+            "by": "server",
+            "mac": "62017281ce85dbb388f8c11f95553423c35b0814b46de74360beea192765aaca"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:13:44.233373827Z",
+      "updated_at": "2026-11-23T04:14:15.610980496Z",
+      "seal": {
+        "by": "server",
+        "mac": "e5ebb6eb8a96028a6e711836b2d95dc5425c0562030613783add9fcfbd4b4100"
+      }
+    },
+    {
+      "id": "CLM-0605",
+      "statement": "Generated names end in .md, contain no '/', and are kept only when rules::check_path(\"d/<name>\") returns the path unchanged.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"end in `.md`, contain no `/`, and are kept only when `rules::check_path(\\\"d/<name>\\\")` returns the path unchanged\"",
+      "derived_from": [
+        "CLM-0601"
+      ],
+      "artifacts": [
+        "src/okf/markdown.rs"
+      ],
+      "tags": [
+        "from-issue:634"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0770",
+          "kind": "inspection",
+          "locator": "src/okf/markdown.rs:944-950",
+          "summary": "name.push_str(\".md\"); tc.assume(!name.contains('/')); path = \"d/{name}\"; tc.assume(rules::check_path(&path).is_ok_and(|checked| checked == path)). check_path (src/okf/rules.rs:77) is the write tools' path validator (normalizes, refuses root escape and machinery).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/markdown.rs",
+              "lines": {
+                "start": 944,
+                "end": 950
+              },
+              "commit": "5f5a8118936b8008cada6ba8e5e849b007f346e5"
+            }
+          },
+          "recorded_at": "2026-11-23T04:14:01.528901761Z",
+          "seal": {
+            "by": "server",
+            "mac": "e8ccff3a9837f27793d4502d3248df3a7c62d03368ba7c1acc6529ca4935975b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The code appends .md, assumes no '/', and assumes check_path returns the path unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0770"
+          ],
+          "recorded_at": "2026-11-23T04:14:15.647966284Z",
+          "seal": {
+            "by": "server",
+            "mac": "99443992210bbadcee4b56820b72368278433296a426e13da7df31be737c1e48"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:13:44.233373827Z",
+      "updated_at": "2026-11-23T04:14:15.647966284Z",
+      "seal": {
+        "by": "server",
+        "mac": "0d1a34e3e08b91538ac05b80ab7b90008e6921ae9b5b1b3026bed5a324c0eb2c"
+      }
+    },
+    {
+      "id": "CLM-0606",
+      "statement": "The PR changes only test code in src/okf/markdown.rs plus one changelog file; no production code changes.",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"The property found no bug, so no production code changes.\"",
+      "derived_from": [
+        "CLM-0601"
+      ],
+      "artifacts": [
+        "src/okf/markdown.rs",
+        "changelog/"
+      ],
+      "tags": [
+        "from-issue:634"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0771",
+          "kind": "analysis",
+          "locator": "git diff --stat origin/main..HEAD",
+          "summary": "Two files: changelog/2026-11-23T04-00-58Z-issue-634-link-roundtrip-property.md (+17) and src/okf/markdown.rs (+79). The single hunk at line 882 sits inside mod tests (starts line 579), after the existing test; encode_link_path at 548-577 is untouched.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/okf/markdown.rs",
+              "lines": {
+                "start": 548,
+                "end": 584
+              },
+              "commit": "5f5a8118936b8008cada6ba8e5e849b007f346e5"
+            }
+          },
+          "recorded_at": "2026-11-23T04:14:01.565761571Z",
+          "seal": {
+            "by": "server",
+            "mac": "9253bc1c966d68138a9a2928b8ae1bb982027ddec84804e878a8a710e54b228f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The diff touches only a test inside mod tests and a changelog file.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0771"
+          ],
+          "recorded_at": "2026-11-23T04:14:15.685694836Z",
+          "seal": {
+            "by": "server",
+            "mac": "4def892e70eb7129133a81aecc975ad579028b1d8254b9e686124a7d1b60b942"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:13:44.233373827Z",
+      "updated_at": "2026-11-23T04:14:15.685694836Z",
+      "seal": {
+        "by": "server",
+        "mac": "3a1b42d29d1dbd7a266d49b4273c584bc18599a89c49726da26eafded4507786"
+      }
+    },
+    {
+      "id": "CLM-0607",
+      "statement": "A changelog entry for the change exists under changelog/.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"Changelog entry under `changelog/`.\"",
+      "derived_from": [
+        "CLM-0601"
+      ],
+      "artifacts": [
+        "changelog/"
+      ],
+      "tags": [
+        "from-issue:634"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0772",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-23T04-00-58Z-issue-634-link-roundtrip-property.md",
+          "summary": "File exists, dated and timestamped, describing the property, its cases and notes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-23T04-00-58Z-issue-634-link-roundtrip-property.md",
+              "commit": "5f5a8118936b8008cada6ba8e5e849b007f346e5"
+            }
+          },
+          "recorded_at": "2026-11-23T04:14:01.599817449Z",
+          "seal": {
+            "by": "server",
+            "mac": "715f1e84889434bc9257f682eec6e0882f9d2c429e026b600c19f33b882c08ab"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The changelog file exists in the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0772"
+          ],
+          "recorded_at": "2026-11-23T04:14:15.721586840Z",
+          "seal": {
+            "by": "server",
+            "mac": "13997d6fb62c3c9938109880acee954ae845d4df0eb322554c7057b3fdd3b0d4"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:13:44.233373827Z",
+      "updated_at": "2026-11-23T04:14:15.721586840Z",
+      "seal": {
+        "by": "server",
+        "mac": "49e337bfb652b97548a101c0215939ac17eb716c55184955ef8eb31dacf0dfe3"
+      }
+    },
+    {
+      "id": "CLM-0608",
+      "statement": "Removing ':' from the encoded set, narrowing whitespace to a plain space, or removing '>' from encode_link_path each makes the property fail.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"Mutation check: removing `:` from the encoded set, narrowing whitespace to a plain space, or removing `>` from `encode_link_path` each makes the property fail (reverted afterwards).\"",
+      "derived_from": [
+        "CLM-0601"
+      ],
+      "artifacts": [
+        "src/okf/markdown.rs"
+      ],
+      "tags": [
+        "from-issue:634"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0773",
+          "kind": "analysis",
+          "locator": "src/okf/markdown.rs:550-557 (encode_link_path needs set) vs 897-943 (specials)",
+          "summary": "Not rerun (would require editing source, forbidden). By reading: the specials list contains ':' / 'http:', U+00A0/2003/3000 whitespace and '>' , and each is in the needs set, so each described mutation would leave a raw character that the property's generator can produce; failure is plausible but unobserved by me.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/okf/markdown.rs",
+              "lines": {
+                "start": 550,
+                "end": 557
+              },
+              "commit": "5f5a8118936b8008cada6ba8e5e849b007f346e5"
+            }
+          },
+          "recorded_at": "2026-11-23T04:14:01.635803525Z",
+          "seal": {
+            "by": "server",
+            "mac": "7a65a00b6890403b9bc28b6e3df4a6853b6fb315cbc33fd14cfc88996b07cd26"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The auditor may not edit source, so the mutations were not rerun; reading makes failure plausible but not observed. Fix: have the author paste the failing test output for each of the three mutations, or add the three mutated encoders as fixed cases.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0773"
+          ],
+          "recorded_at": "2026-11-23T04:14:15.763596418Z",
+          "seal": {
+            "by": "server",
+            "mac": "4bec240c30749792af3526b2598b4a71ccbab9c5ee63e704ddce615da14ac861"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:13:44.233373827Z",
+      "updated_at": "2026-11-23T04:14:15.763596418Z",
+      "seal": {
+        "by": "server",
+        "mac": "cdc8c3b6876bdacd96daae265333d33fcc32bf03d78d20c4153b9d734a8e1824"
+      }
+    },
+    {
+      "id": "CLM-0609",
+      "statement": "fmt, lint, dylint and test gates all pass on the pushed head.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"`tools/agentic/gate.sh fmt`, `lint`, `dylint`, `test` all pass on the pushed head.\"",
+      "derived_from": [
+        "CLM-0601"
+      ],
+      "artifacts": [
+        "src/okf/markdown.rs"
+      ],
+      "tags": [
+        "from-issue:634"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0774",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- an_encoded_concept",
+          "summary": "Only the narrow test gate was rerun (1 passed); fmt, lint, dylint and the full test gate were not rerun per instructions, so the all-gates statement is not independently confirmed.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-23T04:14:01.666720201Z",
+          "seal": {
+            "by": "server",
+            "mac": "a0ec3306aeaac717ba649b162562674649cb89808f836367182a30d8d8458c25"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Only the narrow test was rerun; the full gates were out of scope. Fix: run tools/agentic/gate.sh fmt, lint, dylint and test on the head commit and record the counts.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0774"
+          ],
+          "recorded_at": "2026-11-23T04:14:15.799727023Z",
+          "seal": {
+            "by": "server",
+            "mac": "e53643d1f3784805cbdca657964982143ebcc2fde4bed5ebcc889763e3fd8e9d"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T04:13:44.233373827Z",
+      "updated_at": "2026-11-23T04:14:15.799727023Z",
+      "seal": {
+        "by": "server",
+        "mac": "44a38d0ae683e94bb6dad6b82b5697160246bf5ff2bf2f4c032712071f9c802a"
       }
     }
   ]
