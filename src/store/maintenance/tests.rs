@@ -2743,3 +2743,38 @@ async fn maintenance_run_records_a_missing_key_as_null() {
         ]
     );
 }
+
+/// Review of PR #987: `claim` never holds its store transaction while it waits
+/// for another connection. In release 1 both handles share one pool, so on a
+/// pool of one connection a key lookup made inside the transaction would wait
+/// for a connection that the transaction itself holds.
+#[tokio::test(flavor = "multi_thread")]
+async fn claim_needs_only_one_connection() {
+    let db = test_db().await;
+    let catalog = setup(&db.pool, &["a.md"]).await;
+    let one = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect_with((*db.pool.connect_options()).clone())
+        .await
+        .unwrap();
+
+    let claimed = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        runs::claim(
+            &AccountDb::of(&one),
+            &CatalogDb::main_of(&one),
+            catalog,
+            &actor("one"),
+            "claim-one-connection",
+            1,
+            Duration::days(30),
+            t0(),
+        ),
+    )
+    .await
+    .expect("claim timed out on a pool of one connection")
+    .expect("claim failed on a pool of one connection");
+
+    assert_eq!(claimed.leases.len(), 1);
+}
