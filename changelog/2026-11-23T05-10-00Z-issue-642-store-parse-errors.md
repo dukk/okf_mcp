@@ -27,6 +27,7 @@
 - Write paths: `ceiling::change_member_access` and `oauth::clients::insert_dcr`
   convert the row before `commit`, so the error drops the transaction and
   rolls back. Readers called inside a caller's transaction
-  (`ceiling::read_catalog_locked`, `teams::current_role`, `changesets::lock`)
-  propagate with `?` before that transaction commits.
+  (`ceiling::read_catalog_locked`, `teams::current_role`, `changesets::lock`,
+  and `changesets::open`, an `INSERT ... RETURNING` whose state is the literal
+  `open`) propagate with `?` before that transaction commits.
 - `OkfError::Database` is internal: clients see only the kind, never the text.
