@@ -288,10 +288,7 @@ async fn an_empty_choice_is_kept_and_searches_nothing() {
         );
         // Opening the search again (a reload of the link) keeps the empty choice
         // instead of restoring the defaults, and sends no request.
-        ui.eval(
-            "() => { location.hash = '#/search/needle%20again'; }",
-            json!(null),
-        );
+        ui.eval("() => { location.hash = '#/search/Needle'; }", json!(null));
         ui.wait_text("#search-none", "Choose at least one catalog");
         assert_eq!(
             ui.eval(CHECKED, json!(null)),
