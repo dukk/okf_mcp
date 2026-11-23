@@ -5,10 +5,10 @@
     "by": "server",
     "mac": "d6b7cc165cbc01843e32338b6291fae2d45b4923b632548395dfb41ab4250192"
   },
-  "next_evidence_seq": 891,
+  "next_evidence_seq": 893,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "5a712a1c72ffd25173a5f7d9fe02d6d88225fab0ea97c2f1d32810d3915d542b"
+    "mac": "39c1f06f127b950ca2966d0ffe2c4b8c4f2c314fcd4b3bdb8a19638f0605f75c"
   },
   "claims": [
     {
@@ -54015,6 +54015,28 @@
             "by": "server",
             "mac": "b509e411a45d9bec2ad195bc4a633d2425c8fd953dbfa10ad6d030c2727d745c"
           }
+        },
+        {
+          "id": "EVD-0892",
+          "kind": "test",
+          "locator": "tools/agentic/tests/run.sh: test_watchdog_skips_the_pass_when_only_the_third_scan_fails, test_watchdog_loop_skips_the_pass_when_only_the_third_scan_fails",
+          "summary": "A stub ps that finds an over-limit process in the first scan and hangs only the third scan gives a warning, no WATCHDOG alert, exit 0 with --once and a still-running loop. Both tests fail against the previous watchdog.sh and pass now (82 passed, 3 runs in a row).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/watchdog.sh",
+              "lines": {
+                "start": 170,
+                "end": 182
+              },
+              "commit": "5e07135227a4f7f38778be8bce5664473c0b5b95"
+            }
+          },
+          "recorded_at": "2026-11-23T08:45:06.031281594Z",
+          "seal": {
+            "by": "server",
+            "mac": "561a1ba2b6be46b8259572a34ea0445ecbfb2385ea1305dae6f87648b8c63051"
+          }
         }
       ],
       "verdicts": [
@@ -54031,13 +54053,26 @@
             "by": "server",
             "mac": "4bdaa573f868fd11f371bf7ded126fcfc48d058179f064cbe0f91f9f35a3cde6"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "A failing scan skips the pass even after an earlier scan found an alert; tested for --once and the loop.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0892"
+          ],
+          "recorded_at": "2026-11-23T08:45:12.523768972Z",
+          "seal": {
+            "by": "server",
+            "mac": "0e82a1a2803029c136caba35cc9583f7f85eb252af3ef42544cafe4fe3e0221f"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T08:37:59.907606733Z",
+      "updated_at": "2026-11-23T08:45:12.523768972Z",
       "seal": {
         "by": "server",
-        "mac": "9ceb5eab3279307944046f10ee538ed863799afb3383c434b3009e25f6e7db9d"
+        "mac": "70d3e92160be5ebd08b8b303e282a08bcece04b2985844913a6736b169ad0783"
       }
     },
     {
@@ -54243,7 +54278,7 @@
     },
     {
       "id": "CLM-0700",
-      "statement": "Apart from the watchdog's ps scans, the only unbounded external call in tools/agentic/*.sh is pgrep -c -g in lib.sh.",
+      "statement": "Among process-table commands (ps, pgrep) in tools/agentic/*.sh, apart from the watchdog's ps scans the only unbounded one is pgrep -c -g in lib.sh:56. Local reads such as readlink and getconf in watchdog.sh were not part of the survey.",
       "kind": "functional",
       "level": "artifact",
       "integrity_level": 2,
@@ -54284,6 +54319,28 @@
             "by": "server",
             "mac": "5bd0ea983310091dbcf7e60e1f616a9058c9dc0858d4b0e72ab81affe5093819"
           }
+        },
+        {
+          "id": "EVD-0891",
+          "kind": "analysis",
+          "locator": "git grep -nE \"\\bpgrep\\b|\\bps\\b\" tools/agentic/*.sh",
+          "summary": "Re-run after the review fix: every ps in watchdog.sh goes through scan_ps or agentic_bounded_call; the only other process-table command is the unbounded pgrep -c -g at lib.sh:56. readlink and getconf are local reads, outside the narrowed claim.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tools/agentic/lib.sh",
+              "lines": {
+                "start": 56,
+                "end": 56
+              },
+              "commit": "5e07135227a4f7f38778be8bce5664473c0b5b95"
+            }
+          },
+          "recorded_at": "2026-11-23T08:45:05.986235359Z",
+          "seal": {
+            "by": "server",
+            "mac": "dbd2c68d4b5777db173349be8f799b2a92e2e55c26c9198038c9d0d658e907e7"
+          }
         }
       ],
       "verdicts": [
@@ -54299,13 +54356,26 @@
             "by": "server",
             "mac": "126553776f532225133e168677750172b0a1df20256fefad0bbef2470e118b97"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The narrowed statement holds: only lib.sh:56 pgrep is an unbounded process-table command outside the bounded scans.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0891"
+          ],
+          "recorded_at": "2026-11-23T08:45:12.482326250Z",
+          "seal": {
+            "by": "server",
+            "mac": "82abdfb490578848406bb46e0f371e4121f40e20f4c55e13cf679bc8c2d63624"
+          }
         }
       ],
       "created_at": "2026-11-23T08:37:18.948193469Z",
-      "updated_at": "2026-11-23T08:38:00.068341545Z",
+      "updated_at": "2026-11-23T08:45:12.482326250Z",
       "seal": {
         "by": "server",
-        "mac": "15e5981373f3add3d371a954d91d169304714acee22deb80d7669d0b219434aa"
+        "mac": "87d7846794f9a652d77da2b3c44a86a92788ef323bc7d6e7135b93625b95323f"
       }
     },
     {
