@@ -2416,6 +2416,49 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn an_owner_cannot_act_on_a_catalog_that_is_not_provisioned_yet() {
+        // Arrange: alice owns `shared`, bob is a member; the registry row
+        // has not been provisioned (plan Task 10b, decision P11).
+        let db = test_db().await;
+        family(&db.pool).await;
+        let (alice, bob) = (id(&db.pool, "alice").await, id(&db.pool, "bob").await);
+        sqlx::query("UPDATE catalogs SET provisioned_at = NULL WHERE name = 'shared'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        // Act
+        let entitled = owner_entitles(&db.pool, &alice, "bob", "shared", Access::Read).await;
+        let access = owner_sets(&db.pool, &alice, "shared", MemberAccess::None).await;
+
+        // Assert: the owner checks refuse it as they refuse an unknown
+        // catalog, and nothing was written.
+        assert!(
+            matches!(entitled, Err(OkfError::Forbidden { .. })),
+            "{entitled:?}"
+        );
+        assert!(
+            matches!(access, Err(OkfError::Forbidden { .. })),
+            "{access:?}"
+        );
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM user_catalogs WHERE user_id = $1")
+            .bind(&bob)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 0);
+
+        // Once provisioned, the same owner request succeeds.
+        sqlx::query("UPDATE catalogs SET provisioned_at = now() WHERE name = 'shared'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        owner_entitles(&db.pool, &alice, "bob", "shared", Access::Read)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn an_owner_is_refused_member_access_where_it_does_not_own_a_shared_team() {
         // Arrange: bob is only a member of `family`; `solo` is alice's
         // personal catalog; `other` belongs to the fixture user's team.

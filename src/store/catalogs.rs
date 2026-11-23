@@ -1570,6 +1570,9 @@ pub async fn ceiling_page<'e>(
 #[cfg(test)]
 #[path = "catalogs_rows_tests.rs"]
 mod rows_tests;
+#[cfg(test)]
+#[path = "catalogs_unprovisioned_tests.rs"]
+mod unprovisioned_tests;
 
 // Two-step creation and its recovery, tested away from `tests` below.
 #[cfg(test)]
