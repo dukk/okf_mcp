@@ -35,6 +35,7 @@ use crate::store::audit::{self, AccessKind, AccessRecord, ProvisionerUse};
 use crate::store::catalogs::{CatalogGeneration, CatalogRow};
 use crate::store::settings::{self, Settings};
 use crate::store::{catalogs, unlocks};
+use crate::stores::{AccountDb, CatalogDb, StoreName};
 use crate::telemetry::metrics::{AnnouncementResult, Metrics, Outcome};
 use crate::telemetry::subscriber::split_event;
 
@@ -67,7 +68,11 @@ struct LoadedSettings {
 /// The state every route and tool shares. Built once by [`App::load`] and
 /// shared as an `Arc<App>`.
 pub struct App {
-    pool: PgPool,
+    // The account database. Release 1 of the catalog stores milestone keeps the
+    // one pool here; `pool()` and `main_store()` hand out the same one.
+    accounts: AccountDb,
+    // The store every catalog is on in release 1: the same pool as `accounts`.
+    main_store: CatalogDb,
     config: Config,
     // `Arc<dyn Clock>`: any clock (the real one, or a fixed one in tests),
     // shared between threads. `dyn Clock` is a trait object: Python's duck
@@ -340,7 +345,8 @@ impl App {
         );
         let sign_in_limits = SignInLimits::new(redis.as_ref());
         let app = Arc::new(Self {
-            pool,
+            accounts: AccountDb::new(pool.clone()),
+            main_store: CatalogDb::new(StoreName::main(), pool),
             config,
             clock,
             credentials,
@@ -403,7 +409,7 @@ impl App {
     /// * `admission` - how it was let in.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn note_access(&self, record: AccessRecord, kind: AccessKind, admission: Admission) {
-        let pool = self.pool.clone();
+        let pool = self.accounts.executor().clone();
         #[cfg(test)]
         let hold = Arc::clone(&self.access_hold);
         let mut writes = self
@@ -449,7 +455,7 @@ impl App {
             tracing::debug!("a provisioner use was not recorded: too many writes pending");
             return;
         };
-        let pool = self.pool.clone();
+        let pool = self.accounts.executor().clone();
         #[cfg(test)]
         let hold = Arc::clone(&self.access_hold);
         let mut writes = self
@@ -525,6 +531,7 @@ impl App {
     }
 
     /// The database.
+    #[deprecated(note = "use accounts() or catalog_db()")]
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -533,7 +540,28 @@ impl App {
         )
     )]
     pub fn pool(&self) -> &PgPool {
-        &self.pool
+        self.accounts.executor()
+    }
+
+    /// The account database: users, teams, keys, sessions and the catalog
+    /// registry.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn accounts(&self) -> &AccountDb {
+        &self.accounts
+    }
+
+    /// The store every catalog is on in release 1 (`main`): the same pool as
+    /// [`App::accounts`]. Temporary: a catalog's own store replaces it
+    /// (`App::catalog_db`, a later task).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn main_store(&self) -> &CatalogDb {
+        &self.main_store
     }
 
     /// The server's settings.
@@ -865,7 +893,7 @@ impl App {
             .expect("settings lock poisoned")
             .generation;
         let checking = async {
-            let generation = catalogs::admin_generation(&self.pool).await?;
+            let generation = catalogs::admin_generation(self.accounts.executor()).await?;
             if generation == loaded_generation {
                 return Ok(None);
             }
@@ -875,7 +903,7 @@ impl App {
             // `settings::load` falls back to the default.
             // The span and metric keep the key cache's name
             // (`okf.keycache.*`), which dashboards know them by.
-            let loaded = settings::load(&self.pool, &self.config.auth)
+            let loaded = settings::load(self.accounts.executor(), &self.config.auth)
                 .instrument(tracing::info_span!("okf.keycache.reload"))
                 .await;
             self.metrics.keycache_reload(if loaded.is_ok() {

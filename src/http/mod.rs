@@ -155,7 +155,9 @@ impl AppError {
             OkfError::LintFailed { .. } | OkfError::LimitExceeded { .. } => {
                 StatusCode::UNPROCESSABLE_ENTITY
             }
-            OkfError::Busy { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            OkfError::Busy { .. } | OkfError::StoreUnavailable { .. } => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             OkfError::InvalidPath { .. }
             | OkfError::FrontmatterParse { .. }
             | OkfError::SecretDetected { .. }
@@ -1279,6 +1281,26 @@ mod tests {
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body["error"], "Busy");
         assert!(body["message"].as_str().unwrap().ends_with("retry"));
+    }
+
+    #[test]
+    fn store_unavailable_is_503_and_hides_the_store_name() {
+        let store = crate::stores::StoreName::parse("shared-1").unwrap();
+        let error = AppError(OkfError::store_unavailable(&store));
+
+        let status = error.status();
+        let body = error.0.to_json();
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"], "StoreUnavailable");
+        assert!(!error.0.is_internal());
+        assert!(!body.to_string().contains("shared-1"));
+        assert_eq!(
+            body["message"],
+            "the catalog's data is temporarily unavailable; retry later"
+        );
+        // The Display text (what a tool error shows) hides it too.
+        assert!(!error.0.to_string().contains("shared-1"));
     }
 
     #[test]

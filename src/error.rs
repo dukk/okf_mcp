@@ -236,6 +236,16 @@ pub enum OkfError {
         reason: String,
     },
 
+    /// The store holding the catalog's data cannot be reached. Retry later.
+    /// The message never names the store (it is operator detail); the name
+    /// goes to the local log when the error is made, see
+    /// [`OkfError::store_unavailable`].
+    #[error("the catalog's data is temporarily unavailable; retry later")]
+    StoreUnavailable {
+        /// The store's name. Read only by the local log, never by a caller.
+        store: String,
+    },
+
     /// Publish was refused: lint errors in the files the changeset changes,
     /// or links from other documents into paths it deletes.
     #[error(
@@ -317,6 +327,28 @@ pub struct LinkSource {
 }
 
 impl OkfError {
+    /// A [`OkfError::StoreUnavailable`] for `store`, logging the store's name
+    /// in the local half of the event only (a store's name is operator
+    /// detail: it stays out of the response and out of OTLP).
+    ///
+    /// # Arguments
+    /// * `store` - the store that could not be reached.
+    ///
+    /// # Returns
+    /// The error.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn store_unavailable(store: &crate::stores::StoreName) -> Self {
+        split_event!(
+            warn,
+            {},
+            { store = %store, },
+            "a catalog store is unavailable"
+        );
+        OkfError::StoreUnavailable {
+            store: store.as_str().to_string(),
+        }
+    }
+
     /// The variant's name, as clients see it in a tool error's `error` field.
     ///
     /// # Returns
@@ -357,6 +389,7 @@ impl OkfError {
             OkfError::Gone { .. } => "Gone",
             OkfError::LimitExceeded { .. } => "LimitExceeded",
             OkfError::Busy { .. } => "Busy",
+            OkfError::StoreUnavailable { .. } => "StoreUnavailable",
             OkfError::LintFailed { .. } => "LintFailed",
             OkfError::Conflict { .. } => "Conflict",
             OkfError::StillLinked { .. } => "StillLinked",
@@ -481,7 +514,8 @@ impl OkfError {
             | OkfError::Refused { .. }
             | OkfError::Unauthenticated { .. }
             | OkfError::Gone { .. }
-            | OkfError::Busy { .. } => {}
+            | OkfError::Busy { .. }
+            | OkfError::StoreUnavailable { .. } => {}
         }
         body
     }

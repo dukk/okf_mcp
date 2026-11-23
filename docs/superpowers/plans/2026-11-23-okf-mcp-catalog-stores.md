@@ -28,7 +28,7 @@
 - **Code style.** Comments explain Rust-specific constructs for a Python-expert, Rust-novice reader, as in the existing code.
   - Every public item gets a doc comment with `# Arguments`, `# Returns` and `# Errors`.
   - No `.unwrap()` outside tests.
-  - Errors are existing `OkfError` variants where one fits; a new `OkfError::StoreUnavailable { store }` (503) is added in Task 6.
+  - Errors are existing `OkfError` variants where one fits; a new `OkfError::StoreUnavailable { store }` (503) is added in Task 1.
   - Every new function has `#[tracing::instrument(.., skip_all)]` or a reason-bearing `uninstrumented_fn` allow.
 - **Privacy rules** (review checklist items for every task):
   - the `stores` table never holds a credential, and no code path logs one (a connection URL is logged with its password removed, or not at all);
@@ -198,6 +198,8 @@ impl App {
 }
 ```
 
+> **Corrected (issue #959, 2026-11-23).** Shipped in Task 1: `CatalogDb::new(store, pool)` is `pub(crate)` (only `Stores` and `App` build one), `StoreName` also implements `Display` and refuses names over 63 characters, `AccountDb::new` is `pub`, and `OkfError::store_unavailable(&StoreName)` is the constructor that logs the store name (local half only); build the error through it, not the bare variant. `App::main_store()` returns `&CatalogDb`, not an owned `CatalogDb`; clone it where an owned handle is needed.
+
 Config keys (`src/config.rs`): `store_max_connections` (u32, default 8, must be > 0), `store_idle_timeout` (humantime, default `10m`), and `store_connect_timeout` (humantime, default `5s`, the time after which `Stores::get` returns `StoreUnavailable`).
 
 ## Task dependencies
@@ -220,7 +222,7 @@ Each release ends deployable: after Task 6 (types only, rolling), after Task 10 
 
 **Files:** create `src/stores/mod.rs`; modify `src/lib.rs`, `src/app.rs`, `src/error.rs`.
 
-- [ ] Add the types of "Shared interfaces" (not `Stores` yet). For release 1, `App` gets `accounts()` and a temporary `App::main_store() -> CatalogDb` that wraps the same pool with store name `main`. `App::pool()` stays and is marked `#[deprecated(note = "use accounts() or catalog_db()")]`, with the deprecation allowed crate-wide until Task 6.
+- [ ] Add the types of "Shared interfaces" (not `Stores` yet). For release 1, `App` gets `accounts()` and a temporary `App::main_store() -> &CatalogDb` that wraps the same pool with store name `main`. `App::pool()` stays and is marked `#[deprecated(note = "use accounts() or catalog_db()")]`, with the deprecation allowed crate-wide until Task 6.
 - [ ] Add `OkfError::StoreUnavailable { store: String }`, mapped to 503 in HTTP and to a tool error saying the catalog's data is temporarily unavailable. The message names the store only in the local log half (`split_event!`), never to the caller.
 - [ ] Tests: `store_name_parse_accepts_slugs_and_refuses_the_rest`; `main_store_and_accounts_reach_the_same_database_in_release_one`; `store_unavailable_is_503_and_hides_the_store_name`.
 

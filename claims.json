@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 743,
+  "next_claim_seq": 754,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "a3104be1c0f3239cbc2e6734aa9bdc549b07ada2f632a789db221b2ce3ead07f"
+    "mac": "fe873e1d854610a8856e135260a05526f1059490e4f03b045de5e57e74c876a4"
   },
-  "next_evidence_seq": 994,
+  "next_evidence_seq": 1006,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "fd20b6222a1148c7aac64b1dc28020f617cb040b1d5231f5646b6c94a0b12092"
+    "mac": "f60c77eba4e5b01fc0e03eb4858056d86ec9335a0103a2a77ce417614c676d3d"
   },
   "claims": [
     {
@@ -36604,6 +36604,28 @@
             "by": "server",
             "mac": "0ba5cffa6bf0167f345d5db3c5cc46e97a92b4ee742704d996cc4f902eba62bb"
           }
+        },
+        {
+          "id": "EVD-1004",
+          "kind": "inspection",
+          "locator": "src/app.rs:451-475 at fd5d2d0",
+          "summary": "Re-read at head: the semaphore (32), try_acquire_owned with debug-event early return and permit moved into the task are unchanged; this change's only edit in the function is pool = self.accounts.executor().clone() instead of self.pool.clone().",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/app.rs",
+              "lines": {
+                "start": 451,
+                "end": 475
+              },
+              "commit": "fd5d2d0248c357b44a02fe20e1ff7850c1049598"
+            }
+          },
+          "recorded_at": "2026-11-23T12:27:46.598441316Z",
+          "seal": {
+            "by": "server",
+            "mac": "39ec491762b30281a1d7d1333f1e7fffb38960c6ab1f04fa02e622ca5035a442"
+          }
         }
       ],
       "verdicts": [
@@ -36632,13 +36654,26 @@
             "by": "server",
             "mac": "aad0a9d2202c2341bacf64f7a0b83797fee41b5d92f9b4571512bfcdebb8f5f1"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Limit logic unchanged at head; only the pool accessor in the function changed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1004"
+          ],
+          "recorded_at": "2026-11-23T12:27:50.679416036Z",
+          "seal": {
+            "by": "server",
+            "mac": "0c01ffe8fd3975edebec961555d96d623113603aa683fa3f41cc4f0c34aae5dc"
+          }
         }
       ],
       "created_at": "2026-11-22T19:44:34.392205800Z",
-      "updated_at": "2026-11-22T20:26:44.324395835Z",
+      "updated_at": "2026-11-23T12:27:50.679416036Z",
       "seal": {
         "by": "server",
-        "mac": "055ad44fdd7eaf7aa8cd304d7bc88fe5792f8ce66fe633a236c0b78ccb40669a"
+        "mac": "687c667387b8fa73d4067bb88e16d1b6a46f2a9122492bdd26ff2bf3227cf41d"
       }
     },
     {
@@ -58753,6 +58788,726 @@
       "seal": {
         "by": "server",
         "mac": "e4ff6f895fdbff95d4ff7e91152f637e81d0e21708412f038d16b48a14400cb1"
+      }
+    },
+    {
+      "id": "CLM-0743",
+      "statement": "Issue #959 (M21.01) is delivered: AccountDb, CatalogDb, StoreName, App::accounts()/main_store(), deprecated App::pool(), and OkfError::StoreUnavailable exist as the issue specifies, with no call-site migration and no Stores type.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/959",
+      "derived_from": [],
+      "artifacts": [
+        "src/stores/mod.rs",
+        "src/app.rs",
+        "src/error.rs"
+      ],
+      "tags": [
+        "from-issue:959"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1005",
+          "kind": "analysis",
+          "locator": "children of CLM-0743",
+          "summary": "Children cover each required item: types and StoreName rules, accessors and same-pool wiring, deprecation and allow, StoreUnavailable mapping and hidden name, tests/plan edits, and the scope limit. All are supported by reading; the named tests were not seen to run (gate in progress).",
+          "stance": "supports",
+          "recorded_at": "2026-11-23T12:27:46.802343722Z",
+          "seal": {
+            "by": "server",
+            "mac": "576875abfa62e2ff71af84ff65d8670f2288e0c4d69814530ef028ecd177f668"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All active children supported; see roll-up evidence.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1005"
+          ],
+          "recorded_at": "2026-11-23T12:27:50.735922157Z",
+          "seal": {
+            "by": "server",
+            "mac": "dccd7efbed357327d559f581ef1917d08d82d2e79cf432af157cd448048969d4"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:26:36.728383559Z",
+      "updated_at": "2026-11-23T12:27:50.735922157Z",
+      "seal": {
+        "by": "server",
+        "mac": "c0548f8a78206d953723437cac0cbf346b08bfcc2d6f0dbc0a28e8639083d020"
+      }
+    },
+    {
+      "id": "CLM-0744",
+      "statement": "StoreName::parse accepts only names matching ^[a-z0-9-]+$ of 1 to 63 characters and refuses everything else with OkfError::Refused that does not echo the input.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "issue #959; PR body: \"`StoreName` (`^[a-z0-9-]+$`, 1 to 63 characters, `parse`/`as_str`/`main`/`Display`)\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/stores/mod.rs"
+      ],
+      "tags": [
+        "from-issue:959"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0994",
+          "kind": "analysis",
+          "locator": "src/stores/mod.rs:44-60, 194-227",
+          "summary": "parse requires non-empty, len<=63, all bytes in a-z, 0-9, '-'; else Refused with a fixed message. Test store_name_parse_accepts_slugs_and_refuses_the_rest asserts accept for 63 a's, '-', '0' etc. and Refused for empty, 'Main', '_', space, '.', '/', non-ASCII, NUL, 64 chars, and that the message never contains the rejected text.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 44,
+                "end": 60
+              },
+              "commit": "fd5d2d0248c357b44a02fe20e1ff7850c1049598"
+            }
+          },
+          "recorded_at": "2026-11-23T12:27:05.071750477Z",
+          "seal": {
+            "by": "server",
+            "mac": "107218e040bf6ea071e1e0974331659fae9ab813956287868c0d69a4b129c4da"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and test assertions read directly cover the rule, both bounds and non-echo.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0994"
+          ],
+          "recorded_at": "2026-11-23T12:27:28.390145235Z",
+          "seal": {
+            "by": "server",
+            "mac": "2383d1750d43fb6d7dd76a1d58b9b9136e31289b4d72ed097369c51315590fab"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:26:36.728383559Z",
+      "updated_at": "2026-11-23T12:27:28.390145235Z",
+      "seal": {
+        "by": "server",
+        "mac": "84b8e17aaad75433839d65bc8538ed5f4a266d9e13f12c57b1ca52324e8478fb"
+      }
+    },
+    {
+      "id": "CLM-0745",
+      "statement": "StoreName::main() returns the name main, and StoreName implements Display and as_str.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"`parse`/`as_str`/`main`/`Display`\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/stores/mod.rs"
+      ],
+      "tags": [
+        "from-issue:959"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0995",
+          "kind": "inspection",
+          "locator": "src/stores/mod.rs:67-92, 225-226",
+          "summary": "as_str, main (constant \"main\") and Display impl exist; the test asserts main().as_str()==\"main\" and to_string()==\"main\".",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 62,
+                "end": 92
+              },
+              "commit": "fd5d2d0248c357b44a02fe20e1ff7850c1049598"
+            }
+          },
+          "recorded_at": "2026-11-23T12:27:10.740231442Z",
+          "seal": {
+            "by": "server",
+            "mac": "b23f136c02d0cfbd1ef7ebcabec8f76a36a2d317288ae6dc4a324d8c2b2f5f40"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Items and assertions present.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0995"
+          ],
+          "recorded_at": "2026-11-23T12:27:28.447146036Z",
+          "seal": {
+            "by": "server",
+            "mac": "345ffa8b6a5b2b71f31ccf53cdc73ba8b203a24d1542a78f2852a0d9f999e786"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:26:36.728383559Z",
+      "updated_at": "2026-11-23T12:27:28.447146036Z",
+      "seal": {
+        "by": "server",
+        "mac": "1b2f0903f09087a0fcda44d0b156cd1c3484d21312edfd249a46df871e877f31"
+      }
+    },
+    {
+      "id": "CLM-0746",
+      "statement": "AccountDb has new, begin and executor, and CatalogDb has new, begin, executor and store(), each wrapping a PgPool.",
+      "kind": "interface",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"`AccountDb` and `CatalogDb` (`new`, `begin`, `executor`; `CatalogDb::store`)\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/stores/mod.rs"
+      ],
+      "tags": [
+        "from-issue:959"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0996",
+          "kind": "inspection",
+          "locator": "src/stores/mod.rs:94-187",
+          "summary": "AccountDb: new (pub), begin, executor. CatalogDb: new (pub(crate)), store, begin, executor; each holds a PgPool. Matches the plan's Shared interfaces plus the recorded correction.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 94,
+                "end": 187
+              },
+              "commit": "fd5d2d0248c357b44a02fe20e1ff7850c1049598"
+            }
+          },
+          "recorded_at": "2026-11-23T12:27:11.251351950Z",
+          "seal": {
+            "by": "server",
+            "mac": "532022c5ac3770807bfdb80c80897a96bd07f621d1ff588bfd6e095e8279e2d9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All listed methods exist on the right types.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0996"
+          ],
+          "recorded_at": "2026-11-23T12:27:28.503530805Z",
+          "seal": {
+            "by": "server",
+            "mac": "516d6aafb9ce7812ef82a20f8660f60721c2c6da4dd5a11ecac6f02ced57e7fa"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:26:36.728383559Z",
+      "updated_at": "2026-11-23T12:27:28.503530805Z",
+      "seal": {
+        "by": "server",
+        "mac": "c62fd269bda6330b5bfdf70f14969572d81a1b4442463544f23b82a359ee0bd1"
+      }
+    },
+    {
+      "id": "CLM-0747",
+      "statement": "App::accounts() returns the AccountDb and a temporary App::main_store() returns a CatalogDb named main wrapping the same pool; a test shows both reach the same database.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "issue #959; PR body: \"`App::accounts()` and a temporary `App::main_store()` (store `main`, same pool as the accounts in release 1).\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/app.rs",
+        "src/stores/mod.rs"
+      ],
+      "tags": [
+        "from-issue:959"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0997",
+          "kind": "analysis",
+          "locator": "src/app.rs:345-350, 543-565; src/stores/mod.rs:229-250",
+          "summary": "App::load builds accounts from pool.clone() and main_store as CatalogDb::new(StoreName::main(), pool): same pool. accounts() and main_store() accessors exist. Test main_store_and_accounts_reach_the_same_database_in_release_one asserts equal current_database() through both and store()==main (assertion read; not seen to run).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/app.rs",
+              "lines": {
+                "start": 543,
+                "end": 565
+              },
+              "commit": "fd5d2d0248c357b44a02fe20e1ff7850c1049598"
+            }
+          },
+          "recorded_at": "2026-11-23T12:27:11.307123822Z",
+          "seal": {
+            "by": "server",
+            "mac": "9a7663c76e433c39e59afbddc7a803ff65d95f37aee2d6d12c8e2aaceef72563"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Construction shares one pool; test assertion is sound. The test run was still in progress when audited (test.log had no exit line), so execution is not independently confirmed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0997"
+          ],
+          "recorded_at": "2026-11-23T12:27:28.557365962Z",
+          "seal": {
+            "by": "server",
+            "mac": "1bdba6996dec983556d52a9ec0eaace8423094af98d3e4ba9fa3b507d04fc921"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:26:36.728383559Z",
+      "updated_at": "2026-11-23T12:27:28.557365962Z",
+      "seal": {
+        "by": "server",
+        "mac": "5e7245e8860800540dfcb7315679c96e02e1b0f43d3aa30de5a54c870de2afb9"
+      }
+    },
+    {
+      "id": "CLM-0748",
+      "statement": "App::pool() is marked #[deprecated(note = \"use accounts() or catalog_db()\")] and src/lib.rs has #![allow(deprecated)] with a comment saying Task 6 removes it.",
+      "kind": "constraint",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "issue #959; PR body: \"`App::pool()` is `#[deprecated]`; `#![allow(deprecated)]` in `src/lib.rs` until Task 6.\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/app.rs",
+        "src/lib.rs"
+      ],
+      "tags": [
+        "from-issue:959"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0998",
+          "kind": "inspection",
+          "locator": "src/app.rs:533-545; src/lib.rs:23-26",
+          "summary": "pool() carries #[deprecated(note = \"use accounts() or catalog_db()\")]; lib.rs has #![allow(deprecated)] under a comment saying task 6 removes it with the method.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/app.rs",
+              "lines": {
+                "start": 533,
+                "end": 545
+              },
+              "commit": "fd5d2d0248c357b44a02fe20e1ff7850c1049598"
+            }
+          },
+          "recorded_at": "2026-11-23T12:27:11.778070497Z",
+          "seal": {
+            "by": "server",
+            "mac": "3624ef4ae512a7d760abb698de3011e41ba10b02a398c138b71a4cc4fb6638f2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Attribute text and crate-wide allow are exactly as specified.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0998"
+          ],
+          "recorded_at": "2026-11-23T12:27:28.610672567Z",
+          "seal": {
+            "by": "server",
+            "mac": "e0e1f12f53d4a5d9c06702693cd7b48c0d20ef4a6e05ca03d9607d37b99b9b8f"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:26:36.728383559Z",
+      "updated_at": "2026-11-23T12:27:28.610672567Z",
+      "seal": {
+        "by": "server",
+        "mac": "9d914ae38bf78ddbf5fa3ce3f31fe7888eaea52316019ec505fe36849dea3539"
+      }
+    },
+    {
+      "id": "CLM-0749",
+      "statement": "OkfError::StoreUnavailable { store: String } maps to HTTP 503, has kind StoreUnavailable, is not internal, and its message (JSON and Display) is \"the catalog's data is temporarily unavailable; retry later\" without the store name.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "issue #959; PR body: \"HTTP 503, kind `StoreUnavailable`, message \\\"the catalog's data is temporarily unavailable; retry later\\\".\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/error.rs",
+        "src/http/mod.rs"
+      ],
+      "tags": [
+        "from-issue:959"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-0999",
+          "kind": "analysis",
+          "locator": "src/error.rs:239-248,392; src/http/mod.rs:155-160,1286-1304",
+          "summary": "Variant has #[error(\"the catalog's data is temporarily unavailable; retry later\")], kind \"StoreUnavailable\", not in is_internal (error.rs:412-420), so to_json message is the Display text; the tool error path uses the same to_json/Display. HTTP status arm maps it to SERVICE_UNAVAILABLE. Test store_unavailable_is_503_and_hides_the_store_name asserts 503, kind, !is_internal, exact message, and no \"shared-1\" in body or Display (read; not seen to run).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/mod.rs",
+              "lines": {
+                "start": 1286,
+                "end": 1304
+              },
+              "commit": "fd5d2d0248c357b44a02fe20e1ff7850c1049598"
+            }
+          },
+          "recorded_at": "2026-11-23T12:27:12.079633665Z",
+          "seal": {
+            "by": "server",
+            "mac": "3409c018a9ec34471e1092e3f7ca0d50a753cd29ef84960bcf47a604cbc672f2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code path and test assertions cover 503, kind, message and name hiding. Test execution not confirmed (gate still running at audit time).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-0999"
+          ],
+          "recorded_at": "2026-11-23T12:27:28.668741874Z",
+          "seal": {
+            "by": "server",
+            "mac": "698ff21b96697663bdf71f2f7da3f19421f67a68b17c78f6eaed54881b6c064b"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:26:36.728383559Z",
+      "updated_at": "2026-11-23T12:27:28.668741874Z",
+      "seal": {
+        "by": "server",
+        "mac": "abceb643dcf7115965b9f28c6d12f9bfd2f35713f669be55a4345a4200efaa7f"
+      }
+    },
+    {
+      "id": "CLM-0750",
+      "statement": "OkfError::store_unavailable(&StoreName) writes the store name only in the local half of a split_event! (never the exported half).",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "PR body: \"`OkfError::store_unavailable(&StoreName)` logs the store name in the local half of a `split_event!` only.\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/error.rs"
+      ],
+      "tags": [
+        "from-issue:959"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1000",
+          "kind": "analysis",
+          "locator": "src/error.rs:339-350; src/telemetry/subscriber.rs:70-79",
+          "summary": "store_unavailable calls split_event!(warn, {}, { store = %store, }, msg). The macro puts the first brace group on the exported event (empty here) and the second on a LOCAL_ONLY target event, which is_exportable_target excludes from OTLP. No test asserts the log routing; the only test hides the name from the response.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/error.rs",
+              "lines": {
+                "start": 339,
+                "end": 351
+              },
+              "commit": "fd5d2d0248c357b44a02fe20e1ff7850c1049598"
+            }
+          },
+          "recorded_at": "2026-11-23T12:27:12.165597573Z",
+          "seal": {
+            "by": "server",
+            "mac": "619bcfb43ee44e781e45c5ebd2c25b4a4b43b6e5616070de1f2ca204edebf670"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The name appears only in the local-only branch of split_event!, which the exporter filter excludes. Note: no test covers the log routing.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1000"
+          ],
+          "recorded_at": "2026-11-23T12:27:28.744786833Z",
+          "seal": {
+            "by": "server",
+            "mac": "29bcd7e4fee444093ccff4b37966e1af7c5f05a5693c54c5ab295ee8213e23a4"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:26:36.728383559Z",
+      "updated_at": "2026-11-23T12:27:28.744786833Z",
+      "seal": {
+        "by": "server",
+        "mac": "f0d8c5b5227b166b9eddcaae2c9d0bac7afeb4d674bc12d2144197dbdc553b47"
+      }
+    },
+    {
+      "id": "CLM-0751",
+      "statement": "No existing app.pool() call site in tests/ remains other than the two in tests/ui_e2e (login.rs, users.rs), which now use app.accounts().executor().",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"The two `tests/ui_e2e` call sites of `app.pool()` use `app.accounts().executor()` (a separate crate, so the crate-wide allow does not reach them).\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "tests/ui_e2e/login.rs",
+        "tests/ui_e2e/users.rs"
+      ],
+      "tags": [
+        "from-issue:959"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1001",
+          "kind": "analysis",
+          "locator": "git grep -nE \"\\.pool\\(\\)\" -- tests",
+          "summary": "Zero remaining app.pool() calls under tests/ at head; the diff shows login.rs:168 and users.rs:822 now use accounts().executor().",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "\\.pool\\(\\)",
+              "scope": [
+                "tests"
+              ],
+              "hits": 0,
+              "commit": "fd5d2d0248c357b44a02fe20e1ff7850c1049598"
+            }
+          },
+          "recorded_at": "2026-11-23T12:27:12.273992086Z",
+          "seal": {
+            "by": "server",
+            "mac": "8e971b428df0ac9ddfb037c2d90fdf98a18aab1a3312670e22b1a703dededa6f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Zero-hit search of tests/ plus the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1001"
+          ],
+          "recorded_at": "2026-11-23T12:27:28.810271273Z",
+          "seal": {
+            "by": "server",
+            "mac": "9ea446c956a3cac5c8ccb6852ad1773763448327084c3fcdb11965fa39dde099"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:26:36.728383559Z",
+      "updated_at": "2026-11-23T12:27:28.810271273Z",
+      "seal": {
+        "by": "server",
+        "mac": "54281249ad685f84563c83c04387cd8d4b896aa5e6f8ef908208d3e192331751"
+      }
+    },
+    {
+      "id": "CLM-0752",
+      "statement": "The plan now assigns StoreUnavailable to Task 1 (not Task 6) and carries a dated Corrected (issue #959) note recording the shipped shapes, and no later task in the plan uses a changed symbol in a conflicting way.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"Plan: Task 1 now owns `StoreUnavailable` ... and a dated `Corrected (issue #959)` note records the shipped shapes. No later task used a changed symbol in a conflicting way.\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:959"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1002",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:31, 201, 225-233, 343, 639",
+          "summary": "Line 31 now says Task 1; line 201 has the dated Corrected (issue #959, 2026-11-23) note. Later tasks only use main_store() as a source of &CatalogDb (233, 257), its replacement (343), and the shared names (639): no conflict. Residual: Task 1 bullet 225 and Shared interfaces still print main_store() -> CatalogDb (owned), covered by the correction note.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 199,
+                "end": 202
+              },
+              "commit": "fd5d2d0248c357b44a02fe20e1ff7850c1049598"
+            }
+          },
+          "recorded_at": "2026-11-23T12:27:12.371207356Z",
+          "seal": {
+            "by": "server",
+            "mac": "611b6b6ce58fa452f003ee75da7f5a9ec2ac6d3730abe09c28883fadfb643c58"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Plan edits present; no conflicting later usage found.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1002"
+          ],
+          "recorded_at": "2026-11-23T12:27:28.903191890Z",
+          "seal": {
+            "by": "server",
+            "mac": "ddce6c4f19f2371992b64928a8240c3f028ae448b7aa4297e8eee4d48b30d452"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:26:36.728383559Z",
+      "updated_at": "2026-11-23T12:27:28.903191890Z",
+      "seal": {
+        "by": "server",
+        "mac": "2d05968cf4264b9eeb5872a388ed657eb6e93329942bbabf824e1673be5e5789"
+      }
+    },
+    {
+      "id": "CLM-0753",
+      "statement": "The change migrates no call sites of App::pool() (outside the two tests/ui_e2e uses) and adds no Stores type.",
+      "kind": "constraint",
+      "level": "software",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "issue #959: scope is Task 1 only; PR body: \"No call site is migrated here.\"",
+      "derived_from": [
+        "CLM-0743"
+      ],
+      "artifacts": [
+        "src/"
+      ],
+      "tags": [
+        "from-issue:959"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1003",
+          "kind": "analysis",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD -- src",
+          "summary": "The diff's src changes touching pool: App's field replaced by accounts/main_store, and three internal uses (note_access, provisioner use, settings reload) switched from self.pool to accounts.executor(), which are the field's own uses, not callers of pool(). No outside caller of pool() changed (773 remain). No Stores type or registry module exists.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "struct Stores|mod registry",
+              "scope": [
+                "src"
+              ],
+              "hits": 0,
+              "commit": "fd5d2d0248c357b44a02fe20e1ff7850c1049598"
+            }
+          },
+          "recorded_at": "2026-11-23T12:27:12.465890577Z",
+          "seal": {
+            "by": "server",
+            "mac": "a08ebbbb366cc06bd905567384faef6c60cb70fd85d43cb7bb3d350882a20256"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Diff shows no caller migration and zero Stores matches.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1003"
+          ],
+          "recorded_at": "2026-11-23T12:27:28.968676771Z",
+          "seal": {
+            "by": "server",
+            "mac": "28c3d273243d0a84245096e14da15c747eb54d8c20b114cb2ad52ddef1d9a547"
+          }
+        }
+      ],
+      "created_at": "2026-11-23T12:26:36.728383559Z",
+      "updated_at": "2026-11-23T12:27:28.968676771Z",
+      "seal": {
+        "by": "server",
+        "mac": "c0f4399058d5ff979eac036ffb7f21623b0dd195202ae73ecaa1b56b88018cd1"
       }
     }
   ]

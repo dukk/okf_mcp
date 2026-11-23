@@ -819,7 +819,7 @@ async fn a_write_that_settles_after_its_user_was_reopened_updates_the_new_drawer
 async fn the_users_filter_matches_names_and_emails() {
     let server = server().await;
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
-    let pool = server.app.pool();
+    let pool = server.app.accounts().executor();
     for (name, display_name) in [("alice", ""), ("bob", "Robert Example")] {
         users::create(
             pool,

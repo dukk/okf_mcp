@@ -165,7 +165,7 @@ async fn a_failed_start_with_a_stored_key_shows_the_login_card() {
         ui.wait_text("#whoami", "read");
         // The key stays stored, but the next /whoami fails with a 500: the
         // key cache is in memory, and listing key names needs the database.
-        runtime.block_on(app.pool().close());
+        runtime.block_on(app.accounts().executor().close());
         ui.page.reload(GotoOptions::default()).expect("reload");
         ui.wait_visible("#login");
         ui.wait_text("#login-error", "could not load");
