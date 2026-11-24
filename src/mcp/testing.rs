@@ -46,6 +46,123 @@ impl TestApp {
     }
 }
 
+impl TestApp {
+    /// Registers a store of its own, a second database on the test's
+    /// server, and places the catalog `name` on it, holding `entries`: the
+    /// catalog is created through the app's registry, so its rows are on the
+    /// new store and its directory row names it. The default placement goes
+    /// back to `main` afterwards, so catalogs made later land there.
+    ///
+    /// # Arguments
+    /// * `store` - the new store's name (a slug).
+    /// * `name` - the catalog's name.
+    /// * `entries` - its files.
+    ///
+    /// # Returns
+    /// The store's name.
+    ///
+    /// # Panics
+    /// If the database, the registration or the import fails: a broken test
+    /// setup.
+    pub(crate) async fn catalog_on_new_store(
+        &self,
+        store: &str,
+        name: &str,
+        entries: &[(&str, &str)],
+    ) -> crate::stores::StoreName {
+        use crate::stores::StoreName;
+
+        let pool = self.app.accounts().executor();
+        let database = self._db.extra_store_database(&store.replace('-', "")).await;
+        let options = pool.connect_options();
+        sqlx::query(
+            "INSERT INTO stores (name, location_kind, host, port, database, \
+             credential_kind, credential_ref, created_at) \
+             VALUES ($1, 'host', $2, $3, $4, 'env', $5, now())",
+        )
+        .bind(store)
+        .bind(options.get_host())
+        .bind(i32::from(options.get_port()))
+        .bind(&database)
+        .bind(crate::db::pg::STORE_PASSWORD_VAR)
+        .execute(pool)
+        .await
+        .expect("register the store");
+        let store = StoreName::parse(store).expect("a valid store name");
+        crate::store::teams::set_store(
+            pool,
+            crate::db::TEST_TEAM,
+            Some(&store),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("place the team on the store");
+        let new = catalogs::NewCatalog {
+            name,
+            display_name: &crate::labels::DisplayName::default(),
+            description: "",
+            owner_team: crate::db::TEST_TEAM,
+        };
+        catalogs::create_in(self.app.stores(), &new, &AuditActor::cli(), Utc::now())
+            .await
+            .expect("create the catalog on the store");
+        crate::store::teams::set_store(
+            pool,
+            crate::db::TEST_TEAM,
+            None,
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("place the team back on the default store");
+        let options = ImportOptions {
+            replace: false,
+            scope: ImportScope::Everything,
+            expect_generation: None,
+            expect_catalog_id: None,
+            actor: "tester",
+            audit: &AuditActor::cli(),
+            now: Utc::now(),
+        };
+        import(
+            &self.app.stores().get(&store).await.expect("open the store"),
+            name,
+            files(entries),
+            &options,
+        )
+        .await
+        .expect("import the files");
+        store
+    }
+
+    /// Makes `store` really unreachable: its row now points at a port nothing
+    /// listens on, and its open pool is dropped, so the next connect is
+    /// refused. A new connection, not a flag: what an operator's outage
+    /// looks like to the registry.
+    ///
+    /// # Arguments
+    /// * `store` - a store registered by [`TestApp::catalog_on_new_store`].
+    ///
+    /// # Panics
+    /// If the row cannot be changed.
+    pub(crate) async fn make_unreachable(&self, store: &crate::stores::StoreName) {
+        // A port that was free a moment ago and is closed again now.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind a free port")
+            .local_addr()
+            .expect("its address")
+            .port();
+        sqlx::query("UPDATE stores SET host = '127.0.0.1', port = $2 WHERE name = $1")
+            .bind(store.as_str())
+            .bind(i32::from(closed))
+            .execute(self.app.accounts().executor())
+            .await
+            .expect("repoint the store");
+        self.app.stores().forget(store).await;
+    }
+}
+
 /// Creates each catalog, imports its files now, and loads the app with the
 /// system clock.
 ///

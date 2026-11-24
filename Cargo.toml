@@ -153,7 +153,7 @@ tar = "0.4.46"
 # tokio connection manager, Lua scripts and rustls TLS (`rediss://`).
 redis = { version = "=1.8.2", default-features = false, features = ["tokio-comp", "connection-manager", "cluster-async", "script", "tokio-rustls-comp"] }
 # `StreamExt::next` on the pub/sub message stream (already in the lock via redis).
-futures-util = { version = "0.3", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 # Only to install ring as the process CryptoProvider before a `rediss://`
 # connect: the lock builds rustls with both ring and aws-lc-rs, and rustls then
 # refuses to guess (rustls 0.23 `crypto/mod.rs`).

@@ -149,6 +149,10 @@ pub(crate) struct CatalogListing {
     /// The `after` of the next page; absent on the last page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    /// The ids of catalogs on this page left out because the store holding
+    /// them could not be reached (sorted); absent when every store answered.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unavailable: Vec<String>,
 }
 
 /// `POST /catalogs`' body.
@@ -245,6 +249,8 @@ pub(crate) struct CatalogDeleted {
 ///
 /// # Errors
 /// 400 for a malformed `after`; 500 if the directory read or a load fails.
+/// A catalog whose store cannot be reached is left out and named in
+/// `unavailable`.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn list_catalogs(
     State(app): State<Arc<App>>,
@@ -260,14 +266,24 @@ async fn list_catalogs(
     }
     let labels = app.labels().labels_for(&wanted).await?;
     let mut catalogs = Vec::with_capacity(page.items.len());
+    let mut unavailable = page.unavailable;
     for row in &page.items {
-        if let Some(state) = app.listed_state(row).await? {
-            catalogs.push(CatalogSummary::of(row, &state, &principal, &labels));
+        if unavailable.contains(&row.name) {
+            continue;
+        }
+        match app.listed_state(row).await {
+            Ok(Some(state)) => catalogs.push(CatalogSummary::of(row, &state, &principal, &labels)),
+            Ok(None) => {}
+            // The store went away since the page was read.
+            Err(OkfError::StoreUnavailable { .. }) => unavailable.push(row.name.clone()),
+            Err(error) => return Err(error.into()),
         }
     }
+    unavailable.sort();
     Ok(Json(CatalogListing {
         catalogs,
         next: page.next,
+        unavailable,
     }))
 }
 

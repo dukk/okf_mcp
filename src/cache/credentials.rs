@@ -448,7 +448,9 @@ impl Credentials {
             return Ok(ceiling::Ceiling::new());
         }
         let names: Vec<String> = record.catalog_access.keys().cloned().collect();
-        let rows = self.directory.resolve_many(&names).await?;
+        // A catalog on an unreachable store still gives its access facts:
+        // the account database holds them, so sign-in never waits on a store.
+        let (rows, _unreachable) = self.directory.resolve_many(&names).await?;
         // `as_ref` turns each `&Arc<CatalogRow>` into `&CatalogRow`.
         Ok(ceiling::ceiling_over(rows.iter().map(AsRef::as_ref), gates))
     }

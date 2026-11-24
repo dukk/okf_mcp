@@ -31,11 +31,12 @@ use crate::okf::paths::{escapes_root, normpath};
 use crate::okf::rules;
 use crate::okf::workspace::Workspace;
 use crate::store::audit::Action;
+use crate::store::catalogs;
 use crate::store::keys::Access;
 // `as publishing`: the module's `publish` would clash with this file's
 // `publish` function.
 use crate::store::publish as publishing;
-use crate::stores::StoreName;
+use crate::stores::{StoreName, READ_CONCURRENCY};
 use crate::write::{apply_audited, OpAudit, WriteReport};
 
 /// `list_changesets`' arguments.
@@ -80,6 +81,12 @@ pub struct ListedChangeset {
 pub struct Listed {
     /// By catalog, oldest change first.
     pub changesets: Vec<ListedChangeset>,
+    /// The ids of catalogs this call offers whose store could not be reached
+    /// (sorted, each once), so their changesets are not listed: retry. Only
+    /// set without `catalog`; absent when every store answered.
+    // Left out of the JSON when empty, as the other optional fields are.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unavailable: Vec<String>,
 }
 
 /// The time before which an open changeset's last change makes it idle.
@@ -132,6 +139,7 @@ pub(crate) async fn list_changesets(
     // keys' changesets and paths never leave it.
     let key_filter = (!admin).then_some(principal.key_id.as_str());
     let accounts = ctx.app().accounts();
+    let mut unavailable = Vec::new();
     let rows = match params.catalog.as_deref() {
         // `one` refuses a catalog the key does not reach; it checks the name
         // and the incarnation whose changesets are listed, and admits
@@ -155,14 +163,11 @@ pub(crate) async fn list_changesets(
                 // rows, and each is checked against its row below.
                 (_, Reach::All | Reach::Ceiling) => None,
             };
-            // Across catalogs: read from `main`, the only store that can hold
-            // catalogs until Task 20 lifts P8. Task 18 makes this a fan-out
-            // over every store, with `unavailable` for those it could not
-            // reach.
-            let store = ctx.app().store_db(&StoreName::main()).await?;
-            let rows =
-                changesets::open_for_catalogs(accounts, &store, names.as_deref(), key_filter)
-                    .await?;
+            // Across catalogs: every store in turn, `main` first, each at
+            // most `READ_CONCURRENCY` at a time; a store that cannot be
+            // reached is left out and its catalogs are named below.
+            let (rows, down) = open_in_every_store(ctx, names.as_deref(), key_filter).await?;
+            unavailable = unreachable_catalogs(ctx, names.as_deref(), &down).await?;
             // A closed catalog shows no changesets: its handles and paths are
             // part of what suspension (M13) and a lock (M14) withhold.
             // `offers` (reach) is checked first; the lock is checked against
@@ -223,7 +228,124 @@ pub(crate) async fn list_changesets(
             paths: row.paths.iter().map(|path| format!("/{path}")).collect(),
         })
         .collect();
-    Ok(Listed { changesets })
+    Ok(Listed {
+        changesets,
+        unavailable,
+    })
+}
+
+/// The open changesets of the catalogs `names` (every catalog for `None`) in
+/// every store, read together (at most [`READ_CONCURRENCY`] stores at once)
+/// and each store within its connect timeout.
+///
+/// # Arguments
+/// * `ctx` - the call's context.
+/// * `names` - as for [`crate::store::changesets::open_for_catalogs`].
+/// * `key_filter` - as for it.
+///
+/// # Returns
+/// The rows, by catalog name then last change (as one store gives them) and
+/// the stores that could not be reached.
+///
+/// # Errors
+/// [`OkfError::Database`] for a reachable store's failed read.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn open_in_every_store(
+    ctx: &ToolContext,
+    names: Option<&[String]>,
+    key_filter: Option<&str>,
+) -> Result<(Vec<crate::store::changesets::ListedRow>, Vec<StoreName>), OkfError> {
+    use crate::store::changesets;
+
+    let accounts = ctx.app().accounts();
+    let bound = ctx.app().stores().connect_timeout();
+    let stores = ctx.stores_main_first().await?;
+    // A chunk's reads run together; chunks of `READ_CONCURRENCY` bound how
+    // many stores are asked at once, and the stores' order is kept.
+    let mut answers: Vec<Result<Vec<changesets::ListedRow>, OkfError>> =
+        Vec::with_capacity(stores.len());
+    for chunk in stores.chunks(READ_CONCURRENCY) {
+        answers.extend(
+            futures_util::future::join_all(chunk.iter().map(|store| async move {
+                let read = async {
+                    let db = ctx.app().store_db(store).await?;
+                    changesets::open_for_catalogs(accounts, &db, names, key_filter)
+                        .await
+                        .map_err(|error| match error {
+                            // A connection that fails mid-query is the store
+                            // being unreachable, as for a connect.
+                            OkfError::Database { source } => db.classify(source),
+                            other => other,
+                        })
+                };
+                tokio::time::timeout(bound, read)
+                    .await
+                    .unwrap_or_else(|_| Err(OkfError::store_unavailable(store)))
+            }))
+            .await,
+        );
+    }
+    let mut rows = Vec::new();
+    let mut down = Vec::new();
+    let mut contributing = 0;
+    for (store, answer) in stores.into_iter().zip(answers) {
+        match answer {
+            Ok(found) => {
+                contributing += usize::from(!found.is_empty());
+                rows.extend(found);
+            }
+            Err(OkfError::StoreUnavailable { .. }) => down.push(store),
+            Err(error) => return Err(error),
+        }
+    }
+    // One store's own order stands (it is the database's collation); stores
+    // merge by catalog name, and a stable sort keeps each catalog's changesets
+    // in the order its store gave them.
+    if contributing > 1 {
+        rows.sort_by(|left, right| left.catalog.cmp(&right.catalog));
+    }
+    Ok((rows, down))
+}
+
+/// The ids of the catalogs this call offers that sit on the `down` stores:
+/// what a list names as unavailable. Read from the account database, and
+/// only catalogs the key reaches and the connection offers.
+///
+/// # Arguments
+/// * `ctx` - the call's context.
+/// * `names` - the catalogs the key reaches by name, or `None` for any.
+/// * `down` - the stores that could not be reached.
+///
+/// # Returns
+/// The ids, sorted, each once.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn unreachable_catalogs(
+    ctx: &ToolContext,
+    names: Option<&[String]>,
+    down: &[StoreName],
+) -> Result<Vec<String>, OkfError> {
+    let mut unavailable = Vec::new();
+    for store in down {
+        let rows = match names {
+            Some(names) => catalogs::rows_by_names(ctx.app().accounts().executor(), names)
+                .await?
+                .into_iter()
+                .filter(|row| row.store == *store)
+                .collect(),
+            None => catalogs::rows_on_store(ctx.app().accounts().executor(), store).await?,
+        };
+        unavailable.extend(
+            rows.iter()
+                .filter(|row| ctx.offers(row))
+                .map(|row| row.name.clone()),
+        );
+    }
+    unavailable.sort();
+    unavailable.dedup();
+    Ok(unavailable)
 }
 
 // As in the read tool modules: the macro turns this block's `#[tool]`
@@ -238,7 +360,8 @@ impl OkfServer {
                        means nothing changed within the idle timeout. Empty changesets are \
                        listed too, but one with no write within 24 hours is discarded and no \
                        longer listed: open a new one then. Use it to find a handle again after a \
-                       reconnect or a lost context. Read access.",
+                       reconnect or a lost context. Read access. A catalog whose store cannot be \
+                       reached is listed in `unavailable`.",
         annotations(
             title = "List Changesets",
             read_only_hint = true,
