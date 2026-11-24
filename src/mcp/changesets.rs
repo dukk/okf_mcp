@@ -85,7 +85,8 @@ pub struct Listed {
     /// (sorted, each once), so their changesets are not listed: retry. Only
     /// set without `catalog`; absent when every store answered.
     // Left out of the JSON when empty, as the other optional fields are.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    // `default` keeps the key optional in the output schema, as it is in the JSON.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unavailable: Vec<String>,
 }
 

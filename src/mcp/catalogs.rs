@@ -91,7 +91,8 @@ pub struct CatalogList {
     /// file counts and last changes cannot be read now, so retry. Absent
     /// when every store answered.
     // Left out of the JSON when empty, as the other optional fields are.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    // `default` keeps the key optional in the output schema, as it is in the JSON.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unavailable: Vec<String>,
 }
 

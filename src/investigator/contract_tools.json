@@ -1557,8 +1557,7 @@
       },
       "required": [
         "hits",
-        "skipped",
-        "unavailable"
+        "skipped"
       ],
       "type": "object",
       "properties": {

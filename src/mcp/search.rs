@@ -74,7 +74,8 @@ pub struct SearchResult {
     /// answered, so retry for these. Absent when every store answered.
     // `skip_serializing_if` leaves the key out of the JSON when the list is
     // empty, as the other optional fields are.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    // `default` keeps the key optional in the output schema, as it is in the JSON.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unavailable: Vec<String>,
 }
 
