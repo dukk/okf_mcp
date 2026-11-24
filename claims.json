@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1288,
+  "next_claim_seq": 1304,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "09feeb8951aac056e1cb0291b8e1dd05d72a7485f891949f9d58e3c8b5f98bfd"
+    "mac": "f00875666518dd29f1113b8ff24815e9c1427651ab3ce2d4e486379c8d34faad"
   },
-  "next_evidence_seq": 1891,
+  "next_evidence_seq": 1925,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "115d62c76273ed535d8c48adf651c69c36bd6e401762e28267182d733478e457"
+    "mac": "9e88b15046aa34df5c46d8d82ebd700f7896bc3ac9dbc480a1eea07dd8b83f50"
   },
   "claims": [
     {
@@ -100275,6 +100275,72 @@
             "by": "server",
             "mac": "40f96cddcd388c37b8414b36f8a4c8ade0a2035ce79452cd27bc23da7ac07808"
           }
+        },
+        {
+          "id": "EVD-1904",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:309-336; src/stores/registry.rs:966-985; docs/operations.md:449-458",
+          "summary": "At HEAD add first takes the locks and refuses a taken name or location (stores.rs:314-315), and only then connects (check). check refuses an identity only when the store it names has a row (registry.rs:974-977). The numbered list in operations.md still starts with connecting and says 'names another store' with no 'registered' and no up-front name/location refusal, so its order and step 2 no longer match the code.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 449,
+                "end": 458
+              },
+              "commit": "713c561fc6366fa22128ea5a3d29ce5f873a46e9"
+            }
+          },
+          "recorded_at": "2026-11-24T21:02:00.485461192Z",
+          "seal": {
+            "by": "server",
+            "mac": "f257e9512206b5926f10d4f324b2f069ee16499b8ac93efd452fd6c86df32f6b"
+          }
+        },
+        {
+          "id": "EVD-1907",
+          "kind": "inspection",
+          "locator": "docs/operations.md:449-463 at 8e2a5db; src/store/stores.rs:309-336",
+          "summary": "The step list now starts with the name/location refusal, then connect, then the identity refusal naming 'another registered store', then migrate and store the row. This matches the code order in add. (Line 458 is long but accurate.)",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 449,
+                "end": 463
+              },
+              "commit": "8e2a5db5660af510d425f846810af82fcf52f535"
+            }
+          },
+          "recorded_at": "2026-11-24T21:05:35.939582820Z",
+          "seal": {
+            "by": "server",
+            "mac": "66f8d67ec01ff91035a16a31e3144b0d5599b3e809c8e970507ff23e1d799001"
+          }
+        },
+        {
+          "id": "EVD-1918",
+          "kind": "inspection",
+          "locator": "docs/operations.md:449-463 at df025f4; src/store/stores.rs:307-330; src/stores/registry.rs:971-1010",
+          "summary": "Steps 1 to 4 still match the code order: name/location refusal, connect (claim opens the row), account-database and registered-identity refusal (plus orphan replace), migrate and store the row; the added sentence about adds taking turns matches the target lock.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 449,
+                "end": 463
+              },
+              "commit": "df025f40797deaf4ac47a648ec49465e0745137b"
+            }
+          },
+          "recorded_at": "2026-11-24T21:33:51.812671842Z",
+          "seal": {
+            "by": "server",
+            "mac": "55d75ab7119bc50fa4bf31f5c2729d327f68d1a703c5c7e5e22c885b19633317"
+          }
         }
       ],
       "verdicts": [
@@ -100290,13 +100356,52 @@
             "by": "server",
             "mac": "1353520e0bf5d7ffd801993bc58930501415932929e401afc513103637b350a1"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "This diff reordered add (refusal of a taken name or location now precedes the connection) and narrowed the identity refusal to registered stores, but docs/operations.md:449-458 still lists connect first and 'names another store'. Fix: in docs/operations.md step list (lines 449-458) add a first step 'refuses a name, or a host, port and database, that already has a row, before the database is touched' and change step 2 to 'whose catalog.store_identity names another registered store'.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1904"
+          ],
+          "recorded_at": "2026-11-24T21:02:07.657726269Z",
+          "seal": {
+            "by": "server",
+            "mac": "32c0aaa5db3377d5dc9b92ea9bfdd373d0804823faea1bdb3d337d8ec9ab498e"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Docs step order and wording now match add, check and prepare at 8e2a5db.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1907"
+          ],
+          "recorded_at": "2026-11-24T21:05:50.397158325Z",
+          "seal": {
+            "by": "server",
+            "mac": "bbb64f5dc4240a7b12f09688ea1b6c97fd8496996a5ff3d2f6c875b8069efbfb"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Docs order still matches the code at df025f4.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1918"
+          ],
+          "recorded_at": "2026-11-24T21:34:10.482192471Z",
+          "seal": {
+            "by": "server",
+            "mac": "a89a236534d2dc9a69fdfdb163051405320c72712514b89cba3d7943a900d5ed"
+          }
         }
       ],
       "created_at": "2026-11-24T16:23:19.118447111Z",
-      "updated_at": "2026-11-24T16:26:03.737429053Z",
+      "updated_at": "2026-11-24T21:34:10.482192471Z",
       "seal": {
         "by": "server",
-        "mac": "d2e89b7b5f98aa318153cb42c874ba8430fe369cd02ddaded3ae6fc391b92712"
+        "mac": "83e0a7328092893fae5121b9e7c0256521d09fc6c32152c483509e853c51ee9d"
       }
     },
     {
@@ -100349,6 +100454,50 @@
             "by": "server",
             "mac": "87fa31a7780f9ff87db86287ea3a4e3324eb82bc6fd965cf5d1fac01758a7897"
           }
+        },
+        {
+          "id": "EVD-1905",
+          "kind": "test",
+          "locator": "cargo test --lib store::stores::tests::adding_a_store_that_aliases_another_is_refused (in the 18-test run, ok); src/stores/registry.rs:966-985",
+          "summary": "On the head commit the alias test passes: a database whose identity names a registered store is still refused under another host name; refuse_a_taken_database now also requires store_has_row, which is true for a registered store. Claim still holds.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 960,
+                "end": 986
+              },
+              "commit": "713c561fc6366fa22128ea5a3d29ce5f873a46e9"
+            }
+          },
+          "recorded_at": "2026-11-24T21:02:00.559314586Z",
+          "seal": {
+            "by": "server",
+            "mac": "b7e3ce8b90e3fb64610c69c66a8ed37e2cb964e60fe5181a1c47f4b736ca8afe"
+          }
+        },
+        {
+          "id": "EVD-1919",
+          "kind": "test",
+          "locator": "cargo test --lib store::stores::tests::adding_a_store_that_aliases_another_is_refused (ok at df025f4); src/stores/registry.rs:985-1000",
+          "summary": "claim_database refuses an identity naming a registered store (store_has_row on the add's connection); the alias test passes on df025f4.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 985,
+                "end": 1000
+              },
+              "commit": "df025f40797deaf4ac47a648ec49465e0745137b"
+            }
+          },
+          "recorded_at": "2026-11-24T21:33:51.895510591Z",
+          "seal": {
+            "by": "server",
+            "mac": "a9a4f5f2f80000a208314f4dd69a683e2ff93edf683bc3a8a49377fa2e7668c9"
+          }
         }
       ],
       "verdicts": [
@@ -100364,13 +100513,39 @@
             "by": "server",
             "mac": "7eb4ab40be06b787dfb42c02d512b3570718745167ab251ccb3e7195a5cd853d"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on 713c561 after the registry.rs change: the alias test passes and the refusal still applies to registered stores.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1905"
+          ],
+          "recorded_at": "2026-11-24T21:02:07.725211677Z",
+          "seal": {
+            "by": "server",
+            "mac": "83da1dcb08c4eb04193ed83ff416d3de124a111ff6152956c7950aefdc0f7c81"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Alias of a registered store is still refused; test passes at df025f4.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1919"
+          ],
+          "recorded_at": "2026-11-24T21:34:10.561578213Z",
+          "seal": {
+            "by": "server",
+            "mac": "ab01acc1f866f0b35bc2583182ce31a974229507fd635e861991bedbb426bc1e"
+          }
         }
       ],
       "created_at": "2026-11-24T16:23:19.118447111Z",
-      "updated_at": "2026-11-24T16:26:03.813115683Z",
+      "updated_at": "2026-11-24T21:34:10.561578213Z",
       "seal": {
         "by": "server",
-        "mac": "73bc5291e0817a2feb96527dd9e25fe22dd7dd358d438f8891ff28aee16d890e"
+        "mac": "12c98606803e90b1deeb66abb7411fe863ce2e1b41bf8efd4b481d96f0a8e43f"
       }
     },
     {
@@ -104617,6 +104792,1438 @@
       "seal": {
         "by": "server",
         "mac": "a4ff83bd06f5c8793b956e39b2d899ff5a25c4abc4fa924903f3d916a804f704"
+      }
+    },
+    {
+      "id": "CLM-1288",
+      "statement": "The change for issue #1026 makes stores::add stop claiming the target database when it refuses a taken name or location, and gives a supported recovery for a database left claimed.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/1026 (title and Acceptance)",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/stores.rs",
+        "src/stores/registry.rs",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1906",
+          "kind": "analysis",
+          "locator": "children of CLM-1288",
+          "summary": "All issue acceptance claims (CLM-1289 to CLM-1294) are supported, so the issue's requirements are met. Two PR-description claims are refuted (CLM-1298 locks guarantee overstated for host aliases; CLM-1299 wrong task number) and one existing claim the diff outdated (CLM-1226 operations.md order). None concerns the issue's own requirements.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-24T21:02:07.790655588Z",
+          "seal": {
+            "by": "server",
+            "mac": "31dfb9662c4790d40c924a2a4b848ec0a6a88a0f296747ef1caa018a143c0365"
+          }
+        },
+        {
+          "id": "EVD-1911",
+          "kind": "analysis",
+          "locator": "children of CLM-1288",
+          "summary": "Every active child (CLM-1289 to CLM-1297, CLM-1299, CLM-1300) is supported; CLM-1298 is retired and replaced by CLM-1300, and CLM-1299 was fixed in the description. Together they cover the issue's acceptance and the description's facts.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T21:05:55.700946728Z",
+          "seal": {
+            "by": "server",
+            "mac": "4b2f4ce0fded86779a6c6c1bc9ed05be11cd400d1007c08da57b39a514325e46"
+          }
+        },
+        {
+          "id": "EVD-1923",
+          "kind": "analysis",
+          "locator": "children of CLM-1288",
+          "summary": "At df025f4 every active child (CLM-1289 to CLM-1295, CLM-1299, CLM-1301 to CLM-1303) is supported; CLM-1296, 1297, 1298 and 1300 are retired and replaced. Together they cover the issue's acceptance and the Brooke-review changes.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T21:34:10.896904146Z",
+          "seal": {
+            "by": "server",
+            "mac": "6e4a0c905abbbfe95ce2ee7ce615315682710b64350622ade178790d21d07362"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Roll-up per skill rule: the issue's requirements are all supported but two description claims are refuted. Fix: resolve CLM-1298 and CLM-1299 in the PR description and CLM-1226 in docs/operations.md, then re-audit them and re-record this roll-up.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1906"
+          ],
+          "recorded_at": "2026-11-24T21:02:10.695201142Z",
+          "seal": {
+            "by": "server",
+            "mac": "0171ebca80bcabbb6f4f6db0aceb164ac9164f02b7c439d07897c2cefc2c02c4"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All active children supported after the docs and description fixes (EVD-1911).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1911"
+          ],
+          "recorded_at": "2026-11-24T21:05:59.051571959Z",
+          "seal": {
+            "by": "server",
+            "mac": "c2b195398f890bb4002555e0fe0472d401e7c9ff0f17ae793086353d517f2122"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Every claim about the issue's behaviour and docs is supported at df025f4 (EVD-1923); only the Validation-line claim CLM-1295 is not_enough_info, which does not concern the behaviour the issue asked for.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1923"
+          ],
+          "recorded_at": "2026-11-24T21:34:23.661039059Z",
+          "seal": {
+            "by": "server",
+            "mac": "cbab24be256a9d64f17c83c8167ed69656dbeb16bd2c5192a1d32325d98d6766"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:00:24.152214997Z",
+      "updated_at": "2026-11-24T21:34:23.661039059Z",
+      "seal": {
+        "by": "server",
+        "mac": "e2c25c7faff543e8252361f5e707f4ac867f6ac99b0976c1fc356c3732b2cf03"
+      }
+    },
+    {
+      "id": "CLM-1289",
+      "statement": "stores::add refuses a store name that already has a row in the stores table before Stores::prepare migrates or writes the identity row of the target database.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #1026 Acceptance: 'add refuses a name already registered ... before prepare touches the target database'",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1891",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:314-315,375-390",
+          "summary": "add begins a transaction, calls refuse_known_conflicts (advisory locks, then EXISTS on stores.name) and returns Refused 'store X already exists' before stores.check/prepare are reached.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 309,
+                "end": 336
+              },
+              "commit": "713c561fc6366fa22128ea5a3d29ce5f873a46e9"
+            }
+          },
+          "recorded_at": "2026-11-24T21:00:33.267681291Z",
+          "seal": {
+            "by": "server",
+            "mac": "9ceb85029f0f019b037f10bce9c4d905b38e016968992163d94a7a973f632dad"
+          }
+        },
+        {
+          "id": "EVD-1892",
+          "kind": "test",
+          "locator": "cargo test --lib store::stores::tests (18 passed, 0 failed) at 713c561; a_taken_name_is_refused_before_the_database_is_claimed",
+          "summary": "Test registers shared-1, calls public add with shared-1 on a fresh DB: asserts Refused containing 'already exists' and owner_of(fresh)==None, then add under shared-2 succeeds with identity shared-2. I reran it: ok.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 832,
+                "end": 857
+              },
+              "commit": "713c561fc6366fa22128ea5a3d29ce5f873a46e9"
+            }
+          },
+          "recorded_at": "2026-11-24T21:01:01.120471054Z",
+          "seal": {
+            "by": "server",
+            "mac": "999ab3a8b05e074f9eb37c6658dacbfedd612e140b4c1c0e0b07baefbbce80e3"
+          }
+        },
+        {
+          "id": "EVD-1912",
+          "kind": "test",
+          "locator": "cargo test --lib store::stores::tests (22 passed, 0 failed) at df025f4; a_taken_name_is_refused_before_the_database_is_claimed",
+          "summary": "Reran on df025f4: ok. add (stores.rs:307-) calls refuse_known_conflicts (344-) before stores.claim, so a taken name is refused before the target is opened; the test still asserts no owner on the fresh database and a later free-name add succeeds.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 307,
+                "end": 330
+              },
+              "commit": "df025f40797deaf4ac47a648ec49465e0745137b"
+            }
+          },
+          "recorded_at": "2026-11-24T21:33:51.295646297Z",
+          "seal": {
+            "by": "server",
+            "mac": "5455f3b97cde9ff43fb1dc8add24a62f4421b909ec23f5cdbd4898b62d94b959"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code refuses before check/prepare and a public-add test asserts the fresh database stays unclaimed; reran ok.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1891",
+            "EVD-1892"
+          ],
+          "recorded_at": "2026-11-24T21:01:21.987119764Z",
+          "seal": {
+            "by": "server",
+            "mac": "77cd78a44d83de2f47ba2cc3d437b54f37e6bdaf81d9c17194a3694e515ca829"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Still holds at df025f4; test reran ok.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1912"
+          ],
+          "recorded_at": "2026-11-24T21:34:09.933092196Z",
+          "seal": {
+            "by": "server",
+            "mac": "7601aa89b0fafce94d670f6bd0c249558a814e59e61f57ef669593eaf48301e5"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:00:24.152214997Z",
+      "updated_at": "2026-11-24T21:34:09.933092196Z",
+      "seal": {
+        "by": "server",
+        "mac": "b797da89384bdb4d96b8ee1430d0891d849bc55ad2339bea6d5cf104809a2e6d"
+      }
+    },
+    {
+      "id": "CLM-1290",
+      "statement": "stores::add refuses a host, port and database that already has a row in the stores table before Stores::prepare migrates or writes the identity row of the target database.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #1026 Acceptance: 'and a host, port and database already registered, before prepare touches the target database'",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1893",
+          "kind": "test",
+          "locator": "cargo test --lib store::stores::tests (18 passed); a_taken_location_is_refused_before_the_database_is_claimed",
+          "summary": "Registers shared-1 on target (never opened, no identity), then public add of shared-2 at the same host/port/database: asserts Refused 'host, port' and owner_of(target)==None. Reran: ok. Code: refuse_known_conflicts EXISTS on lower(host),port,database (stores.rs:375-390).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 859,
+                "end": 878
+              },
+              "commit": "713c561fc6366fa22128ea5a3d29ce5f873a46e9"
+            }
+          },
+          "recorded_at": "2026-11-24T21:01:01.197301773Z",
+          "seal": {
+            "by": "server",
+            "mac": "bf9788a7631ca9da26e1cf56d077a7c871c50b24a35c2e79090f3f79be2767d9"
+          }
+        },
+        {
+          "id": "EVD-1913",
+          "kind": "test",
+          "locator": "cargo test --lib store::stores::tests (22 passed) at df025f4; a_taken_location_is_refused_before_the_database_is_claimed",
+          "summary": "Reran: ok. The location EXISTS check is still in refuse_known_conflicts, ahead of claim; the test asserts Refused 'host, port' and no identity row.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 344,
+                "end": 400
+              },
+              "commit": "df025f40797deaf4ac47a648ec49465e0745137b"
+            }
+          },
+          "recorded_at": "2026-11-24T21:33:51.391154226Z",
+          "seal": {
+            "by": "server",
+            "mac": "4bc3462baec48c0f35fbad5d3b963a0f0e487efe1e001a5e8a6daa15b64ad407"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Public-add test on a registered but unopened location asserts refusal and no identity row; reran ok.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1893"
+          ],
+          "recorded_at": "2026-11-24T21:01:22.061480123Z",
+          "seal": {
+            "by": "server",
+            "mac": "06fcd8cf959a2cd99543d8b56e7be4e629a0c0f2defb70284efb3c8e8bf1a175"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Still holds at df025f4; test reran ok.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1913"
+          ],
+          "recorded_at": "2026-11-24T21:34:10.014831019Z",
+          "seal": {
+            "by": "server",
+            "mac": "c63770fe5404a25b0e90506587456d5bcf96fe7f2df85c81ee62b2b734b69d85"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:00:24.152214997Z",
+      "updated_at": "2026-11-24T21:34:10.014831019Z",
+      "seal": {
+        "by": "server",
+        "mac": "11b73c6b64baf4224e77c6fd73b56b29f107da1e688e80f28de67c593714d70e"
+      }
+    },
+    {
+      "id": "CLM-1291",
+      "statement": "A database whose store_identity names a store that has no row in stores is re-claimed by the next stores::add of that database (under the same or another name) and ends with the new name as its identity.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #1026 Acceptance: 'a database whose identity names a store that is not registered can be re-claimed by the next add'",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1894",
+          "kind": "test",
+          "locator": "cargo test --lib store::stores::tests (18 passed); a_database_claimed_by_an_unregistered_store_can_be_added_again",
+          "summary": "prepare of 'ghost' claims the DB (identity ghost, no row); public add under shared-1 succeeds, stores are [main, shared-1] and identity is shared-1. Reran: ok. Only the different-name case is tested; same-name retry takes the Some(_) no-op path by reading the code.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 880,
+                "end": 897
+              },
+              "commit": "713c561fc6366fa22128ea5a3d29ce5f873a46e9"
+            }
+          },
+          "recorded_at": "2026-11-24T21:01:01.275540739Z",
+          "seal": {
+            "by": "server",
+            "mac": "f53191075a8b057ffe76508e414d788b463ad767fa77f562bbdbf9b135344fbc"
+          }
+        },
+        {
+          "id": "EVD-1895",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:966-1017; src/db.rs:418-434",
+          "summary": "check refuses an owner only if store_has_row; prepare calls reclaim_orphaned_identity which, for an owner different from this name with no row, runs UPDATE catalog.store_identity SET name=$1 before migrate_on.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 960,
+                "end": 1017
+              },
+              "commit": "713c561fc6366fa22128ea5a3d29ce5f873a46e9"
+            }
+          },
+          "recorded_at": "2026-11-24T21:01:01.353506584Z",
+          "seal": {
+            "by": "server",
+            "mac": "a8f5c871ef88e8a7ecd9ff144500b30550aa09629a7d179d0abebbc53003eccf"
+          }
+        },
+        {
+          "id": "EVD-1914",
+          "kind": "test",
+          "locator": "cargo test --lib store::stores::tests::a_database_claimed_by_an_unregistered_store_can_be_added_again (ok at df025f4); src/stores/registry.rs:971-1010",
+          "summary": "The reclaim now lives in claim_database: an owner different from this name with no row is replaced via db::replace_store_identity under the target lock, then migrated. The ghost test (identity ghost, no row; add under shared-1 succeeds, identity shared-1) passes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 971,
+                "end": 1010
+              },
+              "commit": "df025f40797deaf4ac47a648ec49465e0745137b"
+            }
+          },
+          "recorded_at": "2026-11-24T21:33:51.473504501Z",
+          "seal": {
+            "by": "server",
+            "mac": "f9c71454e54e25228b86c0068b7c839a02afc68a2b45c60e254fdb5bdd72186b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test shows ghost-claimed DB re-claimed under another name; code shows the replace path.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1894",
+            "EVD-1895"
+          ],
+          "recorded_at": "2026-11-24T21:01:22.135518002Z",
+          "seal": {
+            "by": "server",
+            "mac": "d79de46983a9322db3e5bf16b3ade8c8980c54d6b3a8e70596091c6966770692"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Reclaim moved into claim_database and the ghost test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1914"
+          ],
+          "recorded_at": "2026-11-24T21:34:10.098314521Z",
+          "seal": {
+            "by": "server",
+            "mac": "654e216460952ede178d337026983ad01a966d5692fbe02ae952f662edb7bee6"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:00:24.152214997Z",
+      "updated_at": "2026-11-24T21:34:10.098314521Z",
+      "seal": {
+        "by": "server",
+        "mac": "897343e53d808fb64411df99e5d9ef2ac5f7e518e5f3c28ed756bd9d295abf81"
+      }
+    },
+    {
+      "id": "CLM-1292",
+      "statement": "When two stores::add calls with the same name run concurrently on two different fresh databases, exactly one succeeds and the loser's database keeps no identity row.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #1026 Acceptance: 'a failure after prepare (a concurrent add of the same name winning the insert) has a supported recovery' and 'the concurrent case'",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1896",
+          "kind": "test",
+          "locator": "cargo test --lib store::stores::tests (18 passed); concurrent_adds_of_one_name_leave_the_loser_database_unclaimed",
+          "summary": "tokio::join! of two public adds of name shared-1 on two fresh DBs: asserts exactly one Ok, winner identity shared-1, loser owner None, stores [main, shared-1]. No sleeps. Reran: ok. Without the name lock both would pass check and prepare, so the loser assertion would fail; it is timing-independent in outcome.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 899,
+                "end": 923
+              },
+              "commit": "713c561fc6366fa22128ea5a3d29ce5f873a46e9"
+            }
+          },
+          "recorded_at": "2026-11-24T21:01:01.429481760Z",
+          "seal": {
+            "by": "server",
+            "mac": "83c2729eca66a59b539544faa2fad08647272448af1c811e80cedcd26d1250a6"
+          }
+        },
+        {
+          "id": "EVD-1915",
+          "kind": "test",
+          "locator": "cargo test --lib store::stores::tests::concurrent_adds_of_one_name_leave_the_loser_database_unclaimed (ok at df025f4)",
+          "summary": "Reran on df025f4: ok. Same-name adds still serialize on the name advisory lock in the account transaction; the test asserts one winner and an unclaimed loser.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 920,
+                "end": 945
+              },
+              "commit": "df025f40797deaf4ac47a648ec49465e0745137b"
+            }
+          },
+          "recorded_at": "2026-11-24T21:33:51.557176224Z",
+          "seal": {
+            "by": "server",
+            "mac": "1ccb3ec237bec021142119a8229fc174959fbc1c80712d299481c670b5e39ed7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Concurrent test asserts one winner and an unclaimed loser; reran ok.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1896"
+          ],
+          "recorded_at": "2026-11-24T21:01:22.207506951Z",
+          "seal": {
+            "by": "server",
+            "mac": "f0079322d641af67d4b6e1c37256d00e2badfaf7c33672d01c536d868f285a37"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Still holds at df025f4; test reran ok.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1915"
+          ],
+          "recorded_at": "2026-11-24T21:34:10.183327180Z",
+          "seal": {
+            "by": "server",
+            "mac": "988fc66801d72bf69e649d2269004ded32404a4bc836ff8a9570607816d46f60"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:00:24.152214997Z",
+      "updated_at": "2026-11-24T21:34:10.183327180Z",
+      "seal": {
+        "by": "server",
+        "mac": "050c1e03c102ae2f65301356027bf9e3428558cd3c1cd17f6c8c94f67e3a4333"
+      }
+    },
+    {
+      "id": "CLM-1293",
+      "statement": "Regression tests call public stores::add and show (a) a duplicate name against a fresh database leaves it unclaimed so a later add under a free name succeeds, and (b) the concurrent same-name case.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Issue #1026 Acceptance: 'Regression tests through public add'",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1897",
+          "kind": "test",
+          "locator": "src/store/stores.rs:832-923 (four tests); cargo test --lib store::stores::tests: 18 passed",
+          "summary": "All four new tests call public add (not private insert); the duplicate-name one asserts the fresh DB has no identity and a later free-name add succeeds; the concurrent one asserts the loser is unclaimed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 826,
+                "end": 923
+              },
+              "commit": "713c561fc6366fa22128ea5a3d29ce5f873a46e9"
+            }
+          },
+          "recorded_at": "2026-11-24T21:01:01.508095157Z",
+          "seal": {
+            "by": "server",
+            "mac": "ce512d49df7c2582a963268ac25b082c52e08bb204631423d788ea9ddbd6bd84"
+          }
+        },
+        {
+          "id": "EVD-1916",
+          "kind": "test",
+          "locator": "src/store/stores.rs:846-945; cargo test --lib store::stores::tests: 22 passed at df025f4",
+          "summary": "The original tests are intact, still call public add, and pass on df025f4 (a_taken_name, a_taken_location, a_database_claimed, concurrent_adds_of_one_name).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 846,
+                "end": 945
+              },
+              "commit": "df025f40797deaf4ac47a648ec49465e0745137b"
+            }
+          },
+          "recorded_at": "2026-11-24T21:33:51.641429859Z",
+          "seal": {
+            "by": "server",
+            "mac": "ef3e5c1db1940a005a2ac5bab8f0e29646f116566c52f77f5f0ad27fa29a8fc1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Four tests call public add with the asserted outcomes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1897"
+          ],
+          "recorded_at": "2026-11-24T21:01:22.279226230Z",
+          "seal": {
+            "by": "server",
+            "mac": "3f5a0209276bfba046da054feceeaf4bb0ede6ad25617e81314f3165550031c5"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Tests intact and passing at df025f4.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1916"
+          ],
+          "recorded_at": "2026-11-24T21:34:10.268695990Z",
+          "seal": {
+            "by": "server",
+            "mac": "8240ae58f24b8db1bef01dfa821503ef5c436c1d58cd99bb0463a34c6edfd38f"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:00:24.152214997Z",
+      "updated_at": "2026-11-24T21:34:10.268695990Z",
+      "seal": {
+        "by": "server",
+        "mac": "b1f944ee13646bbde8655670c1e5441e823ad67649d6cae39e04a34bfbb8e8dc"
+      }
+    },
+    {
+      "id": "CLM-1294",
+      "statement": "The behaviour is documented: the add doc comment, docs/operations.md (Catalog stores API) and a changelog entry describe the refusal before the database is touched and the recovery, and the plan has a correction note.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #1026 Acceptance: 'document it in the doc comment and docs/operations.md ...; changelog entry; plan correction note'",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "changelog/2026-11-24T20-38-27Z-m21-issue-1026-store-name-before-prepare.md",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1898",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:266-286; docs/operations.md:4140; changelog/2026-11-24T20-38-27Z-m21-issue-1026-store-name-before-prepare.md; plan line 589",
+          "summary": "add's doc comment, the POST /api/v1/stores row in operations.md, a dated changelog file and a plan 'Corrected (issue #1026)' bullet all describe refusal before the database is touched and the re-claim recovery. The plan note sits in Task 14's section, not Task 10 or 20 (Acceptance said 'if their text is affected'; Task 20's text is unaffected).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 4140,
+                "end": 4140
+              },
+              "commit": "713c561fc6366fa22128ea5a3d29ce5f873a46e9"
+            }
+          },
+          "recorded_at": "2026-11-24T21:01:01.588396752Z",
+          "seal": {
+            "by": "server",
+            "mac": "f74c5eb9b4b9a17d36e2c30337939705a6b2051ab4e8ff8b05a57244cbc09039"
+          }
+        },
+        {
+          "id": "EVD-1917",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:266-304; docs/operations.md:449-463; changelog/2026-11-24T20-38-27Z-m21-issue-1026-store-name-before-prepare.md; plan line 589 at df025f4",
+          "summary": "Doc comment, operations.md steps, changelog and plan note were all updated to describe Stores::claim, the target lock and one account transaction; none still mentions check/prepare or the alias gap (grep of src and operations.md for Stores::check/prepare found no stale reference outside the plan history and changelog).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 266,
+                "end": 304
+              },
+              "commit": "df025f40797deaf4ac47a648ec49465e0745137b"
+            }
+          },
+          "recorded_at": "2026-11-24T21:33:51.724478209Z",
+          "seal": {
+            "by": "server",
+            "mac": "80c6831cc835ef7db1f978591f8c15254b975f95d04ba1adf0cfe436057df881"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Doc comment, operations.md, changelog and a plan note all present and accurate to the code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1898"
+          ],
+          "recorded_at": "2026-11-24T21:01:22.352678326Z",
+          "seal": {
+            "by": "server",
+            "mac": "73620f8dd5e76375fa46ea9381cb0a67ea23ba068612663795c48039738146e3"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Docs, changelog and plan note updated to the claim design.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1917"
+          ],
+          "recorded_at": "2026-11-24T21:34:10.386097150Z",
+          "seal": {
+            "by": "server",
+            "mac": "c18c6ba788dc7630f315fb38b7180d7d12fa6d843f3e6a04fee30fac69209768"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:00:24.152214997Z",
+      "updated_at": "2026-11-24T21:34:10.386097150Z",
+      "seal": {
+        "by": "server",
+        "mac": "22d29b480c116e0e608840998c1de70c6bdc4174dc793e714d190dab6382f8f0"
+      }
+    },
+    {
+      "id": "CLM-1295",
+      "statement": "PR body: 'tools/agentic/gate.sh fmt, lint, dylint: passed. test: see the comment' - the fmt, lint, dylint and test gates all exited 0 on this change.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body Validation: \"`tools/agentic/gate.sh fmt`, `lint`, `dylint`: passed. `test`: see the comment on this PR / report.\"",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "target/i1026-logs/gates.log",
+        "target/i1026-logs/test.log"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1899",
+          "kind": "log",
+          "locator": "target/i1026-logs/gates.log:1-5; target/i1026-logs/test.log (second run, lines ~3970-7805)",
+          "summary": "gates.log records 'fmt 0, lint 0, dylint 0, test 0, alldone'. test.log shows two full-suite runs (lib 3070 passed, 0 failed, 2 ignored; every 'test result' line ok, none failed) including the four new tests. I did not rerun the full gates (logs are untracked; HEAD at the time is not stamped in them); I reran store::stores::tests: 18 passed.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T21:01:01.662563300Z",
+          "seal": {
+            "by": "server",
+            "mac": "b50f784d62d321e56cbb8dea93fd7a42d9abdf75e90c4ff0f3cca422964219f7"
+          }
+        },
+        {
+          "id": "EVD-1924",
+          "kind": "other",
+          "locator": "author's message about df025f4 (not independent); target/i1026-logs/gates.log is from 713c561",
+          "summary": "For df025f4 I have no gate log. The author reports fmt, lint and dylint green, and a test gate where known 28P01 flakes failed in the gate and passed on rerun, plus one ui_e2e flake. I reran only store::stores::tests (22 passed). That means the test gate did not exit 0 on that run, which the earlier claim wording ('all exited 0') does not allow.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T21:34:17.318392762Z",
+          "seal": {
+            "by": "server",
+            "mac": "c849faeee87fae22a19ec7c7f38cc27fc211199e2a0b68b2cb1956f7e469bced"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "gates.log shows all four gates exit 0 and test.log shows no failures; I reran only the affected module (18 passed), not the full gates, and the logs do not state their commit.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1899"
+          ],
+          "recorded_at": "2026-11-24T21:01:22.430120519Z",
+          "seal": {
+            "by": "server",
+            "mac": "72049268d513dce77289f7a181e7353fda715e985e17abc582769585fd538f2e"
+          }
+        },
+        {
+          "verdict": "not_enough_info",
+          "rationale": "At df025f4 no gate log exists and the author reports flake failures in the test gate, so 'all four gates exited 0' is not shown for the head commit. Fix: rerun tools/agentic/gate.sh fmt, lint, dylint and test on the head commit, keep the logs under target/i1026-logs, and either show all exit 0 or reword the PR Validation line to say the test gate failed only on the named flakes and passed on rerun.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1924"
+          ],
+          "recorded_at": "2026-11-24T21:34:23.578929984Z",
+          "seal": {
+            "by": "server",
+            "mac": "8020b7a609c4c1f2b350f9c1f7c8e0b240de596415a8a517d2bae9d4ee306bf3"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:00:24.152214997Z",
+      "updated_at": "2026-11-24T21:34:23.578929984Z",
+      "seal": {
+        "by": "server",
+        "mac": "34975552e152dfc98ceb8aae5922de6e3b6c124b10380dd1ebd4fde118aeb0c9"
+      }
+    },
+    {
+      "id": "CLM-1296",
+      "statement": "PR body: 'one account connection is held while the store's pool connects (writes nothing)' - add holds an account-database transaction that writes nothing across the target's check and prepare.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body Design: \"Cost: one account connection is held while the store's pool connects (writes nothing).\"",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Wording outdated by df025f4: the add's account transaction now also runs the registry reads and the insert, so it is no longer write-free. Replaced by CLM-1301.",
+        "retired_at": "2026-11-24T21:33:24.158700285Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1900",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:314-334",
+          "summary": "reservation = pool.begin() holds one account connection to the end; it only runs advisory-lock and SELECT statements and is rolled back. While insert runs, a second account-pool connection is taken (so two, briefly), a small extension of the wording not a falsehood about the connect phase.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 309,
+                "end": 336
+              },
+              "commit": "713c561fc6366fa22128ea5a3d29ce5f873a46e9"
+            }
+          },
+          "recorded_at": "2026-11-24T21:01:01.741670720Z",
+          "seal": {
+            "by": "server",
+            "mac": "65c4ba41483c65416466d1570add17d8fffd367f2506831a0b424305cc6e0da9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The reservation transaction holds one account connection, writes nothing, and spans check and prepare.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1900"
+          ],
+          "recorded_at": "2026-11-24T21:01:22.503031243Z",
+          "seal": {
+            "by": "server",
+            "mac": "bf1c78047faf861a3855813fed60413d3d1ec104b157d2fe4d6f791e7693fde7"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:00:24.152214997Z",
+      "updated_at": "2026-11-24T21:33:24.158700285Z",
+      "seal": {
+        "by": "server",
+        "mac": "733cc50c3330dbe0c7b9f1def6aaaf6986f90c590b398fe4fd022b515a043425"
+      }
+    },
+    {
+      "id": "CLM-1297",
+      "statement": "PR body: 'Stores::prepare replaces an identity naming a store with no row ... with the new name (db::replace_store_identity)' and 'Aliases of registered stores are still refused.'",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body Design Recover: \"Stores::prepare replaces an identity naming a store with no row (...) with the new name (db::replace_store_identity). ... Aliases of registered stores are still refused.\"",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Stores::prepare and check no longer exist (df025f4); replaced by CLM-1302 on Stores::claim.",
+        "retired_at": "2026-11-24T21:33:24.240331782Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1901",
+          "kind": "test",
+          "locator": "cargo test --lib store::stores::tests (18 passed): a_database_claimed_by_an_unregistered_store_can_be_added_again, adding_a_store_that_aliases_another_is_refused",
+          "summary": "Replacement is shown by the ghost test (identity ends shared-1 via replace_store_identity at db.rs:425). The alias test registers and opens shared-1, adds shared-2 under another host name of the same DB and expects a refusal (owner has a row); it passes on rerun.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 945,
+                "end": 985
+              },
+              "commit": "713c561fc6366fa22128ea5a3d29ce5f873a46e9"
+            }
+          },
+          "recorded_at": "2026-11-24T21:01:01.818096647Z",
+          "seal": {
+            "by": "server",
+            "mac": "83dd82fb3bd183adc57487ff52aeabfc56b6b0cdeb9d59a71d09f2ac70212081"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Ghost-reclaim and alias-refusal tests both pass and match the statement.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1901"
+          ],
+          "recorded_at": "2026-11-24T21:01:22.576426658Z",
+          "seal": {
+            "by": "server",
+            "mac": "6d397969bf6017781934b76bc542859178aeb3329efe0d54bc4a2061c416cf07"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:00:24.152214997Z",
+      "updated_at": "2026-11-24T21:33:24.240331782Z",
+      "seal": {
+        "by": "server",
+        "mac": "2c078a13b6bb38b99558cb008301b53175a0b46ecc59ee426b1b0945fe7e3922"
+      }
+    },
+    {
+      "id": "CLM-1298",
+      "statement": "PR body: 'The locks guarantee no other add is mid-way on that database when it is re-claimed.'",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body Design Recover: \"The locks guarantee no other add is mid-way on that database when it is re-claimed.\"",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "src/store/stores.rs",
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "The PR description no longer makes the unconditional guarantee (it was refuted); replaced by CLM-1300 with the corrected scope.",
+        "retired_at": "2026-11-24T21:05:44.180392360Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1902",
+          "kind": "analysis",
+          "locator": "src/store/stores.rs:357-373 (lock keys); src/stores/registry.rs:1006-1017",
+          "summary": "The location lock key is built from lower(host), port and database strings, and the name lock from the name. Two adds that reach one physical database under different host strings (localhost vs 127.0.0.1, the alias case this code itself says exists) and different names take different locks. Add A (X) can be between prepare and insert while add B (Y) sees identity X with no row, passes check, and replaces the identity with Y; A then registers X over a database that names Y. The guarantee holds only for the same name or the same host string. No test covers it.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 357,
+                "end": 373
+              },
+              "commit": "713c561fc6366fa22128ea5a3d29ce5f873a46e9"
+            }
+          },
+          "recorded_at": "2026-11-24T21:01:01.895142838Z",
+          "seal": {
+            "by": "server",
+            "mac": "2be173552cda7c140c92e0095294088375011690456177ccf10c12c391e057d7"
+          }
+        },
+        {
+          "id": "EVD-1908",
+          "kind": "inspection",
+          "locator": "target/i1026-logs/pr-1026-body.md:6; src/store/stores.rs add doc comment; src/stores/registry.rs prepare doc comment",
+          "summary": "The unconditional sentence is gone. The PR body now says the locks exclude other adds of the same name or same host, port and database, and names the alias-spelling window as a known untested gap; both doc comments say the same. The statement as originally quoted is no longer made, and the replacement is accurate.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T21:05:36.019843141Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d85dd437240ed69d2bb61b1b8752d5037286fff92b9888c4414d32d84655040"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The locks key on the name and on the lowercased host string, port and database, so two adds of one physical database under different host names and names do not exclude each other, and the reclaim can overwrite an identity whose add is still in flight. The guarantee is unconditional in the description. Fix: reword the PR description and the add and prepare doc comments to say the locks exclude only adds of the same name or the same host, port and database, and name the alias race as a known gap (or lock on the database's own identity, for example pg_advisory_lock inside the target database during prepare).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1902"
+          ],
+          "recorded_at": "2026-11-24T21:01:22.667821514Z",
+          "seal": {
+            "by": "server",
+            "mac": "b58ea94cc57dcd66adc91c5acbc4d5e723fc642ec9b9283b11e47dfa507aadec"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:00:24.152214997Z",
+      "updated_at": "2026-11-24T21:05:44.180392360Z",
+      "seal": {
+        "by": "server",
+        "mac": "4884a939a1bd1921013b05e0fef4e3cd0af4fb07632cd6a6911bc574ec7a7a99"
+      }
+    },
+    {
+      "id": "CLM-1299",
+      "statement": "PR body: the plan correction note (issue #1026) is placed 'at the Task 8 \"Adding a store\" note'.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body Changes: \"plan correction note (issue #1026) at the Task 8 \\\"Adding a store\\\" note\"",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1903",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:318,570,588-589",
+          "summary": "The 'Corrected (issue #1026)' bullet is line 589, inside Task 14's section (heading at line 570, next heading Task 15 at 594), directly after the 'Adding a store' bullet in Task 14's #973 correction note. Task 8 is at line 318 and holds no such note.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 588,
+                "end": 589
+              },
+              "commit": "713c561fc6366fa22128ea5a3d29ce5f873a46e9"
+            }
+          },
+          "recorded_at": "2026-11-24T21:01:01.972121799Z",
+          "seal": {
+            "by": "server",
+            "mac": "09256bf481897c220a3b3598e69f02bc81b80a9a81b1043db2b07a0beff57842"
+          }
+        },
+        {
+          "id": "EVD-1909",
+          "kind": "inspection",
+          "locator": "target/i1026-logs/pr-1026-body.md:13; docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:589",
+          "summary": "PR body now says 'Task 14 \"Adding a store\" note (plan line 589)'; the note is at line 589 in the Task 14 section.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 588,
+                "end": 589
+              },
+              "commit": "8e2a5db5660af510d425f846810af82fcf52f535"
+            }
+          },
+          "recorded_at": "2026-11-24T21:05:36.103809508Z",
+          "seal": {
+            "by": "server",
+            "mac": "e4cce6bfe46cc3cd0bea1b3ab9c225e8291f1d09a6a95d75c0548091e066ccd1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The correction note is in the Task 14 section (plan line 589), not at a Task 8 note; Task 8 holds none. Fix: in the PR body Changes line, change 'the Task 8 \"Adding a store\" note' to 'the Task 14 \"Adding a store\" note (plan line 589)'.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1903"
+          ],
+          "recorded_at": "2026-11-24T21:01:22.741798602Z",
+          "seal": {
+            "by": "server",
+            "mac": "5575fccb0e5a20625bff0da9182ccebd53f045eba01a5255d50946dac564bd27"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The PR body now names Task 14 and line 589, which is where the note is.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1909"
+          ],
+          "recorded_at": "2026-11-24T21:05:50.481662596Z",
+          "seal": {
+            "by": "server",
+            "mac": "4abd7c9f099238e1ef6589fe7e5d15d954a33f44dd678f269672d7b594206241"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:00:24.152214997Z",
+      "updated_at": "2026-11-24T21:05:50.481662596Z",
+      "seal": {
+        "by": "server",
+        "mac": "cc6641b835874ea1244f27f5396cfb16eeafd70bcef0e1171cc4247097ad8ff6"
+      }
+    },
+    {
+      "id": "CLM-1300",
+      "statement": "PR body: 'The locks exclude other adds of the same name or the same host, port and database while one is re-claimed. Known gap: two adds of one physical database under different host spellings and names take different locks (a narrow window; not tested).'",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body Design Recover (revised draft), replacing the retired CLM-1298",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "src/store/stores.rs",
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "The alias gap it names is closed by the target-database lock (df025f4); replaced by CLM-1303.",
+        "retired_at": "2026-11-24T21:33:24.323030804Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1910",
+          "kind": "analysis",
+          "locator": "src/store/stores.rs:357-373 (lock keys) at 8e2a5db; target/i1026-logs/pr-1026-body.md:6",
+          "summary": "The name lock and the lowercased host/port/database lock are advisory transaction locks taken before the EXISTS checks, so adds of the same name or same location serialize; adds under different host spellings and names take different keys, as the statement says. No test covers the gap, which the statement also says.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 357,
+                "end": 375
+              },
+              "commit": "8e2a5db5660af510d425f846810af82fcf52f535"
+            }
+          },
+          "recorded_at": "2026-11-24T21:05:50.279591250Z",
+          "seal": {
+            "by": "server",
+            "mac": "3037f2db81345a40be6ff96b0880d6d1595dfaf1c62892c99297cc60e6b96770"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The corrected scope matches the lock keys and states the alias gap.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1910"
+          ],
+          "recorded_at": "2026-11-24T21:05:55.616940899Z",
+          "seal": {
+            "by": "server",
+            "mac": "d2abeb151018c0c90ca4aab0e480dc8a4861b48148548d30e11108025f74b89f"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:05:44.263205305Z",
+      "updated_at": "2026-11-24T21:33:24.323030804Z",
+      "seal": {
+        "by": "server",
+        "mac": "f9cc34db3c8697372699c1c3a7b830b43a9ea9912537082e46328f79bf9383d8"
+      }
+    },
+    {
+      "id": "CLM-1301",
+      "statement": "stores::add runs its advisory locks, registry reads and the registry insert on one account-database transaction, so an account pool of one connection can add a store and concurrent adds on a small bounded pool all succeed.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Brooke review of PR 1027 as reported by the author; replaces CLM-1296",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1920",
+          "kind": "test",
+          "locator": "cargo test --lib store::stores::tests: a_store_can_be_added_on_a_one_connection_account_pool, concurrent_adds_on_a_bounded_account_pool_all_succeed (22 passed at df025f4)",
+          "summary": "add begins one tx (stores.rs:307-330) used for the locks, the registry read passed into claim, and insert_in; the tests use a pool capped at 1 and at 2 (5 s acquire timeout) and assert success, including 4 concurrent adds on a pool of 2 with all identities correct. Both pass.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 307,
+                "end": 330
+              },
+              "commit": "df025f40797deaf4ac47a648ec49465e0745137b"
+            }
+          },
+          "recorded_at": "2026-11-24T21:33:51.980200568Z",
+          "seal": {
+            "by": "server",
+            "mac": "e956846b20aed555623d5e33e92712d578a5f7a730f075529fd84c1459230d3d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "One transaction used throughout; pool-of-one and bounded-pool tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1920"
+          ],
+          "recorded_at": "2026-11-24T21:34:10.650835262Z",
+          "seal": {
+            "by": "server",
+            "mac": "4abb51d77ce8cd9f7e37f9459a5665bc696aebb1ed0c26740c6c2fbc5bb1c102"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:33:24.421013069Z",
+      "updated_at": "2026-11-24T21:34:10.650835262Z",
+      "seal": {
+        "by": "server",
+        "mac": "676735422529ef9d300565d0e21c7c0f3b5cd1dbd63d95221fa74e27e95a676d"
+      }
+    },
+    {
+      "id": "CLM-1302",
+      "statement": "Stores::claim opens the new store's database, takes the add's advisory lock in it, refuses the account database and an identity naming a registered store, replaces an identity naming a store with no row, and migrates, all on one connection; Stores::check and Stores::prepare no longer exist.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Author's description of df025f4; replaces CLM-1297",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1921",
+          "kind": "test",
+          "locator": "src/stores/registry.rs:855-1010; cargo test --lib store::stores::tests (22 passed); git grep Stores::check|Stores::prepare in src",
+          "summary": "claim opens the row, then claim_database takes pg_advisory_lock(STORE_ADD_LOCK_KEY), refuses account tables, refuses a registered owner, replaces an unregistered owner, migrates, all on one connection. check/prepare are deleted from registry.rs (no remaining definition or caller in src). Covered by the account-database, ghost, alias and unmigratable-schema tests, all passing.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 855,
+                "end": 1010
+              },
+              "commit": "df025f40797deaf4ac47a648ec49465e0745137b"
+            }
+          },
+          "recorded_at": "2026-11-24T21:33:52.061150638Z",
+          "seal": {
+            "by": "server",
+            "mac": "eca19e762fdfa15bdbf9f4fa18823574963f524d56bbf73fc8577846ded26268"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "claim/claim_database do what the statement lists and check/prepare are gone.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1921"
+          ],
+          "recorded_at": "2026-11-24T21:34:10.730403415Z",
+          "seal": {
+            "by": "server",
+            "mac": "7a09ebdfbc904d01558aab47b1f7a4f7386dd855777bcbe7daa5f014ae06c4a8"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:33:24.421013069Z",
+      "updated_at": "2026-11-24T21:34:10.730403415Z",
+      "seal": {
+        "by": "server",
+        "mac": "beab5d39dc895ab78dfecf66940948ec5436ccd197b16e857458a8ae983ed5b1"
+      }
+    },
+    {
+      "id": "CLM-1303",
+      "statement": "Two adds that reach one physical database under different host spellings and different names are ordered by an advisory lock taken inside that database and held until after the registry insert commits (or fails), so exactly one is registered and the database's identity names it.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Author's description of df025f4; replaces CLM-1300",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs",
+        "src/store/stores.rs",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1922",
+          "kind": "test",
+          "locator": "cargo test --lib store::stores::tests::an_add_waits_while_another_holds_the_target_database, ::concurrent_alias_adds_of_one_database_register_exactly_one (both ok at df025f4)",
+          "summary": "The lock is a session advisory lock inside the target database (registry.rs:971-980), kept on the claim's connection and released only in StoreClaim::release (registry.rs:951), which add calls after tx.commit() or failure (stores.rs:330-340). The deterministic test holds the lock externally, asserts add blocks 500 ms with no owner written, then completes after unlock. The alias test (localhost vs 127.0.0.1, different names, barrier, 5 rounds) asserts exactly one winner and identity naming it; it is probabilistic about interleaving, so the lock test carries the ordering proof.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 942,
+                "end": 985
+              },
+              "commit": "df025f40797deaf4ac47a648ec49465e0745137b"
+            }
+          },
+          "recorded_at": "2026-11-24T21:33:52.147861004Z",
+          "seal": {
+            "by": "server",
+            "mac": "ab66a7ab69504d84669d94efb27e59028d6fea03c2f10004993e63f8411f9cd7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The deterministic lock test and the alias test pass; the lock is held through the commit by construction.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1922"
+          ],
+          "recorded_at": "2026-11-24T21:34:10.810714042Z",
+          "seal": {
+            "by": "server",
+            "mac": "d7ad7093eee3b1450a23eee702dbffcfc986caf40dbf546ced15de108807c0f0"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:33:24.421013069Z",
+      "updated_at": "2026-11-24T21:34:10.810714042Z",
+      "seal": {
+        "by": "server",
+        "mac": "c90e1f343605fb9ad8cab34d5d176e4799e9debf9614f9144745ee80a0abb48c"
       }
     }
   ]

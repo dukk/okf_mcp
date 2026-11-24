@@ -85,6 +85,12 @@ const CONCURRENT_INDEXES: [&str; 6] = [
 /// migrations (an arbitrary constant, distinct from sqlx's own lock key).
 const CONCURRENT_INDEX_LOCK: i64 = 0x6f6b_665f_6964_7831;
 
+/// The advisory lock, taken inside a new store's own database, that orders the
+/// adds that reach one physical database (under any host spelling or name):
+/// it is held from the ownership decision through the account registration.
+/// Advisory locks are per database, so every add of that database meets it.
+pub const STORE_ADD_LOCK_KEY: &str = "okf.store-add.database";
+
 /// Drops each of [`CONCURRENT_INDEXES`] that exists but is INVALID (a
 /// failed concurrent build), so its migration builds it again.
 ///
@@ -413,6 +419,24 @@ pub async fn store_owner(conn: &mut PgConnection) -> Result<Option<String>, OkfE
             .fetch_optional(&mut *conn)
             .await?,
     )
+}
+
+/// Replaces a database's identity row with `store`: a reclaim of a database
+/// whose previous claimant was never registered. The caller has checked that
+/// the old name has no row and holds the add's location lock.
+///
+/// # Errors
+/// [`OkfError::Database`] (or `Busy`) for a driver error.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "db.replace_store_identity"))]
+pub async fn replace_store_identity(
+    conn: &mut PgConnection,
+    store: &StoreName,
+) -> Result<(), OkfError> {
+    sqlx::query("UPDATE catalog.store_identity SET name = $1")
+        .bind(store.as_str())
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
 }
 
 /// Whether a database holds the account tables (`public.stores`): it is the

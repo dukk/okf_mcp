@@ -447,14 +447,19 @@ runs, each catalog's generation and the catalog audit
 catalog. Create the database and its login role first; the server creates the
 `catalog` schema and its tables itself. The add:
 
-1. connects to the new database (a store that cannot be reached is refused,
+1. refuses a name, or a host, port and database, that already has a row,
+   before the new database is touched (a refused request claims nothing);
+2. connects to the new database (a store that cannot be reached is refused,
    and the reply names no host, port or credential; the log has the cause);
-2. refuses a database that holds the account tables (the account database
+3. refuses a database that holds the account tables (the account database
    under another host name) or whose `catalog.store_identity` names another
-   store: each physical database answers to one store name, whatever host
+   registered store (an identity naming a store with no row is left by an
+   add that failed after step 4 and is replaced, so a retry works; adds of
+   one physical database take turns, whatever host name or store name they
+   use): each physical database answers to one store name, whatever host
    name reached it, so adding the same database twice under two names is
    refused;
-3. migrates it (`migrations/catalog/`: the baseline, then the identity row)
+4. migrates it (`migrations/catalog/`: the baseline, then the identity row)
    and stores the row. Every replica then drops any pool it had for that name.
 
 The stores table never holds a password. `credential_ref` says where to get
@@ -4137,7 +4142,7 @@ default store) and never changes.
 | Method and path | Key | Does |
 |---|---|---|
 | `GET /api/v1/stores` | admin | `{stores}` in name order: `name`, `location` (`account-database` or `host`), `host`, `port`, `database`, `credential_kind`, `credential_ref` (a variable name, secret ARN or IAM identity, never the credential; all `null` for `main`), `created_at`, `is_default`, `pinned_teams` (a count) |
-| `POST /api/v1/stores` | admin, every catalog | Body `{name, host, port, database, credential_kind, credential_ref}` (`credential_kind` is `env`, `secrets-manager` or `iam`). Opens a connection to the new store first and answers 201 with the store only if that works. 409 when it cannot be reached (the reply names no host, port or credential; the cause is in the server log), when a name or a host, port and database is already used, or when the store's schema cannot be migrated; 422 for a malformed body |
+| `POST /api/v1/stores` | admin, every catalog | Body `{name, host, port, database, credential_kind, credential_ref}` (`credential_kind` is `env`, `secrets-manager` or `iam`). Opens a connection to the new store first and answers 201 with the store only if that works. 409 when it cannot be reached (the reply names no host, port or credential; the cause is in the server log), when a name or a host, port and database is already used (refused before the store's database is touched), or when the store's schema cannot be migrated (a retry is safe: a database left claimed by an add that failed is re-claimed by the next add); 422 for a malformed body |
 | `PUT /api/v1/settings/default_store` | admin, every catalog | Body `{value}`, a store's name. Answers `{key, value}`. 404 for an unknown store |
 | `PUT /api/v1/teams/{team}/store` | admin, every catalog | Body `{store}`. Pins the team: catalogs it owns are created there from now on. Answers `{team, store, changed}`. 404 for an unknown team or store |
 | `DELETE /api/v1/teams/{team}/store` | admin, every catalog | Removes the pin; answers `{team, store: null, changed}`. 404 for an unknown team |
