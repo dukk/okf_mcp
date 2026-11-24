@@ -837,25 +837,50 @@ pub(crate) mod testing {
         // database (`OKF_TEST_STORE=separate`): a publish, import or repair
         // sends its catalog message from the store's transaction.
         let store = crate::db::store_pool(pool);
-        let mut pools = vec![pool.clone()];
+        let mut pools = vec![pool];
         if !crate::stores::same_database(pool, &store) {
-            pools.push(store);
+            pools.push(&store);
         }
+        let (output, by_database) = messages_by_database(&pools, write).await;
+        (output, by_database.into_iter().flatten().collect())
+    }
+
+    /// [`messages_of`] with one listener per database in `pools`, keeping
+    /// each database's messages apart: what a test needs to say which
+    /// database a writer's `NOTIFY` went out on, and that none went out on
+    /// another. An end marker is sent on every database after `write`, so a
+    /// database that received nothing is also answered within a bound.
+    ///
+    /// # Arguments
+    /// * `pools` - the databases to listen on (distinct databases).
+    /// * `write` - the write.
+    ///
+    /// # Returns
+    /// `write`'s output, and for each pool, in order, the invalidations
+    /// delivered on its database in commit order.
+    ///
+    /// # Panics
+    /// As [`invalidations_of`].
+    pub(crate) async fn messages_by_database<T>(
+        pools: &[&PgPool],
+        write: impl Future<Output = T>,
+    ) -> (T, Vec<Vec<Invalidation>>) {
         let mut listeners = Vec::with_capacity(pools.len());
-        for pool in &pools {
+        for pool in pools {
             let mut listener = PgListener::connect_with(pool).await.expect("listener");
             listener.listen(CHANNEL).await.expect("LISTEN");
             listeners.push(listener);
         }
         let output = write.await;
-        let mut got = Vec::new();
+        let mut by_database = Vec::with_capacity(pools.len());
         for (pool, listener) in pools.iter().zip(&mut listeners) {
             sqlx::query("SELECT pg_notify($1, $2)")
                 .bind(CHANNEL)
                 .bind(END)
-                .execute(pool)
+                .execute(*pool)
                 .await
                 .expect("send the end marker");
+            let mut got = Vec::new();
             loop {
                 let notification = tokio::time::timeout(WAIT, listener.recv())
                     .await
@@ -867,8 +892,9 @@ pub(crate) mod testing {
                 let message = Message::parse(notification.payload()).expect("a readable payload");
                 got.push(message.invalidation);
             }
+            by_database.push(got);
         }
-        (output, got)
+        (output, by_database)
     }
 
     /// Runs `write` and applies every change-feed message it committed to

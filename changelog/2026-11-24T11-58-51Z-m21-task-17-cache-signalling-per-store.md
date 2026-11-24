@@ -22,7 +22,7 @@ Issue #975, Task 17 of `docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores
   the message is lost because the account commit failed. Other invalidations are unchanged.
 - The account listener's loop is now `invalidate::Feed::run`, shared with the store listeners: same backoff,
   catch-up and shutdown behaviour.
-- `invalidate::testing::messages_of` also listens on the store `main` when it is another database.
+- `invalidate::testing::messages_of` also listens on the store `main` when it is another database, merging the messages. `messages_by_database` keeps each database's messages apart, and `a_publish_an_import_and_a_repair_send_their_catalog_message_on_the_store` uses it to pin the sender move: each writer's `Catalog` message arrives on the store database and none on the account database (end markers bound both). Moving any one sender back to the account transaction fails it.
 - `docs/operations.md`: each opened separate store holds one more connection (its listener), outside
   `store_max_connections`; the connection arithmetic says so.
 - Plan Task 17 is corrected.

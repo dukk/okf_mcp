@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use super::{listen_signalling, spawn_store_feed, StoreFeedStart};
+use super::{listen_signalling, spawn_store_feed, Invalidation, StoreFeedStart};
 use crate::app::App;
 use crate::clock::SystemClock;
 use crate::config::Config;
@@ -27,6 +27,7 @@ use crate::store::catalogs::{self, NewCatalog};
 use crate::store::changesets::{self, EntryRow};
 use crate::store::import::{import, ImportOptions, ImportScope};
 use crate::store::publish::{publish, PublishInput};
+use crate::store::repair::{repair, RepairOptions};
 use crate::store::teams;
 use crate::stores::{PoolSettings, StoreName, Stores};
 
@@ -58,7 +59,12 @@ async fn add_store(db: &crate::db::pg_support::TestDb, name: &str) -> String {
 
 /// Creates catalog `name` on `store` (`None`: the default store) and imports
 /// one note into it (generation 1).
-async fn catalog_on(stores: &Stores, pool: &PgPool, name: &str, store: Option<&StoreName>) {
+async fn catalog_on(
+    stores: &Stores,
+    pool: &PgPool,
+    name: &str,
+    store: Option<&StoreName>,
+) -> catalogs::Catalog {
     teams::set_store(pool, TEST_TEAM, store, &AuditActor::cli(), Utc::now())
         .await
         .unwrap();
@@ -68,7 +74,7 @@ async fn catalog_on(stores: &Stores, pool: &PgPool, name: &str, store: Option<&S
         description: "",
         owner_team: TEST_TEAM,
     };
-    catalogs::create_in(stores, &new, &AuditActor::cli(), Utc::now())
+    let created = catalogs::create_in(stores, &new, &AuditActor::cli(), Utc::now())
         .await
         .unwrap();
     let store = store.cloned().unwrap_or_else(StoreName::main);
@@ -89,6 +95,7 @@ async fn catalog_on(stores: &Stores, pool: &PgPool, name: &str, store: Option<&S
     )
     .await
     .unwrap();
+    created
 }
 
 /// A replica: an app with its account listener and store listeners.
@@ -163,6 +170,47 @@ async fn listeners_on(pool: &PgPool, database: &str) -> Vec<i32> {
     .unwrap()
 }
 
+/// Edits `a.md` of `catalog` on `store` and publishes it through `app`. The
+/// changeset is made on the catalog's store directly: the tools find a
+/// changeset by handle on `main` only until Task 18.
+async fn edit_and_publish(app: &Arc<App>, store: &StoreName, catalog: &str) {
+    let state = app.catalog(catalog).await.unwrap().unwrap();
+    let db = app.stores().get(store).await.unwrap();
+    let mut tx = db.begin().await.unwrap();
+    changesets::lock_catalog(&mut tx, state.id()).await.unwrap();
+    let changeset = changesets::open(&mut tx, state.id(), "writer-a", "writer-a", Utc::now())
+        .await
+        .unwrap();
+    changesets::upsert_entry(
+        &mut tx,
+        changeset.id,
+        &EntryRow {
+            path: "a.md".to_owned(),
+            base_revision: Some(1),
+            content: Some(NOTE_EDITED.as_bytes().to_vec()),
+            executable: false,
+            replay: None,
+        },
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let report = publish(
+        app,
+        &state,
+        &PublishInput {
+            changeset: &changeset,
+            actor: "writer-a",
+            message: "edit a",
+        },
+        &AuditActor::cli(),
+    )
+    .await
+    .unwrap();
+    assert!(report.published);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_publish_on_a_separate_store_reaches_the_other_replica() {
     let db = test_db().await;
@@ -193,44 +241,7 @@ async fn a_publish_on_a_separate_store_reaches_the_other_replica() {
         .current()
         .generation();
 
-    // Replica A edits the note and publishes it. The changeset is made on the
-    // catalog's store directly: the tools find a changeset by handle on `main`
-    // only until Task 18.
-    let state = writer.app.catalog("on-b").await.unwrap().unwrap();
-    let db = writer.app.stores().get(&store_b).await.unwrap();
-    let mut tx = db.begin().await.unwrap();
-    changesets::lock_catalog(&mut tx, state.id()).await.unwrap();
-    let changeset = changesets::open(&mut tx, state.id(), "writer-a", "writer-a", Utc::now())
-        .await
-        .unwrap();
-    changesets::upsert_entry(
-        &mut tx,
-        changeset.id,
-        &EntryRow {
-            path: "a.md".to_owned(),
-            base_revision: Some(1),
-            content: Some(NOTE_EDITED.as_bytes().to_vec()),
-            executable: false,
-            replay: None,
-        },
-        Utc::now(),
-    )
-    .await
-    .unwrap();
-    tx.commit().await.unwrap();
-    let report = publish(
-        &writer.app,
-        &state,
-        &PublishInput {
-            changeset: &changeset,
-            actor: "writer-a",
-            message: "edit a",
-        },
-        &AuditActor::cli(),
-    )
-    .await
-    .unwrap();
-    assert!(report.published);
+    edit_and_publish(&writer.app, &store_b, "on-b").await;
 
     // The reader's directory row lives for an hour, so only the store's
     // message can have moved it: it drops the row, the next read loads the
@@ -438,6 +449,90 @@ async fn a_store_in_the_account_database_gets_no_listener_of_its_own() {
             .unwrap()
             .to_owned();
         assert_eq!(listeners_on(&db.pool, &store).await.len(), 1);
+    }
+    replica.stop().await;
+}
+
+/// The invalidations a write sent on the account database and on `store`'s.
+async fn sent_by<T>(
+    account: &PgPool,
+    store: &PgPool,
+    write: impl std::future::Future<Output = T>,
+) -> (Vec<Invalidation>, Vec<Invalidation>) {
+    let (_, mut by_database) =
+        crate::invalidate::testing::messages_by_database(&[account, store], write).await;
+    let on_store = by_database.pop().unwrap();
+    let on_account = by_database.pop().unwrap();
+    (on_account, on_store)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_publish_an_import_and_a_repair_send_their_catalog_message_on_the_store() {
+    let db = test_db().await;
+    add_store(&db, "store-b").await;
+    let store_b = StoreName::parse("store-b").unwrap();
+    let stores = Stores::new(
+        db.pool.clone(),
+        PoolSettings::from_config(&Config::default()),
+    );
+    let created = catalog_on(&stores, &db.pool, "on-b", Some(&store_b)).await;
+    let replica = Replica::start(db.pool.clone()).await;
+    let store = replica.app.stores().get(&store_b).await.unwrap();
+    let store = store.executor();
+    let audit = AuditActor::cli();
+    let expected = |sent: &[Invalidation]| matches!(sent, [Invalidation::Catalog { id, .. }] if *id == created.id);
+
+    let published = sent_by(&db.pool, store, async {
+        edit_and_publish(&replica.app, &store_b, "on-b").await;
+    })
+    .await;
+    let imported = sent_by(&db.pool, store, async {
+        let options = ImportOptions {
+            replace: true,
+            scope: ImportScope::Everything,
+            expect_generation: None,
+            expect_catalog_id: None,
+            actor: "tester",
+            audit: &audit,
+            now: Utc::now(),
+        };
+        import(
+            &replica.app.stores().get(&store_b).await.unwrap(),
+            "on-b",
+            crate::archive::files(&[("b.md", NOTE)]),
+            &options,
+        )
+        .await
+        .unwrap();
+    })
+    .await;
+    let repaired = sent_by(&db.pool, store, async {
+        let options = RepairOptions {
+            dry_run: false,
+            actor: "tester",
+            audit: &audit,
+            now: Utc::now(),
+        };
+        repair(
+            &replica.app.stores().get(&store_b).await.unwrap(),
+            "on-b",
+            &options,
+        )
+        .await
+        .unwrap();
+    })
+    .await;
+
+    // Each writer's message went out on the store's database, and nothing
+    // went out on the account database: a sender moved back onto the account
+    // transaction fails here (and loses the message if that commit failed).
+    for (writer, (on_account, on_store)) in [
+        ("publish", published),
+        ("import", imported),
+        ("repair", repaired),
+    ] {
+        assert!(expected(&on_store), "{writer}: on the store: {on_store:?}");
+        assert_eq!(on_account, [], "{writer}: on the account database");
     }
     replica.stop().await;
 }
