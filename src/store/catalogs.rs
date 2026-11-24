@@ -1,5 +1,7 @@
 //! Catalog rows, the per-catalog lock, and the administrative generation.
 
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 // `PgExecutor` is "anything a query can run on": a pool, a connection or a
 // transaction. Functions generic over it work inside or outside a transaction.
@@ -18,6 +20,7 @@ use crate::store::changesets;
 use crate::store::cleanups;
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::store::teams;
+use crate::stores::bounded::{account_tx, store_tx};
 use crate::stores::{placement, CatalogDb, StoreName, Stores};
 
 /// The `revisions.message` of a new catalog's [`starter_files`].
@@ -581,20 +584,27 @@ pub enum Recovery {
 ///   account database).
 /// * `catalog` - the half-created catalog.
 /// * `now` - the server clock.
+/// * `wait` - the database-side bound on every lock wait and statement of
+///   the account and store transactions (`lock_timeout` and
+///   `statement_timeout`, as `stores::bounded` sets them), so a catalog lock
+///   another connection holds, or a store that stops answering, fails the
+///   recovery instead of waiting on (issue #1028).
 ///
 /// # Returns
 /// What was done.
 ///
 /// # Errors
-/// [`OkfError::Database`] or [`OkfError::StoreUnavailable`]; nothing is
+/// [`OkfError::Database`] or [`OkfError::StoreUnavailable`] (a wait past
+/// `wait` is a `Database` error, SQLSTATE `55P03` or `57014`); nothing is
 /// changed, and the next run tries again.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.recover", catalog_id = catalog.id))]
 pub async fn recover(
     db: &CatalogDb,
     catalog: &Pending,
     now: DateTime<Utc>,
+    wait: Duration,
 ) -> Result<Recovery, OkfError> {
-    recover_holding(db, catalog, now, std::future::ready(())).await
+    recover_holding(db, catalog, now, wait, std::future::ready(())).await
 }
 
 /// [`recover`] with `hold` awaited before the commit, with the lock held:
@@ -607,11 +617,12 @@ async fn recover_holding(
     db: &CatalogDb,
     catalog: &Pending,
     now: DateTime<Utc>,
+    wait: Duration,
     hold: impl std::future::Future<Output = ()>,
 ) -> Result<Recovery, OkfError> {
     let actor = AuditActor::system("provision-catalogs");
     // The account transaction wraps the store's; the store commits first.
-    let mut account_tx = db.accounts().begin().await?;
+    let mut account_tx = account_tx(db.accounts(), wait).await?;
     // The people the audit entry belongs to, locked before the store's
     // connection and the catalog's lock, as `delete` does.
     audit::lock_people(
@@ -629,7 +640,7 @@ async fn recover_holding(
     // for a user row would block a user deletion (which holds those rows and
     // then needs a store connection) in a cycle PostgreSQL cannot see,
     // because one edge is a pool wait.
-    let mut tx = db.begin().await?;
+    let mut tx = store_tx(db, wait).await?;
     lock(&mut tx, catalog.id).await?;
     let Registration::Unprovisioned { .. } = registration(&mut account_tx, catalog.id).await?
     else {

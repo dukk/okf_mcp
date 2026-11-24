@@ -979,6 +979,14 @@ two). What `[redis]` does not share:
   removed, because both sides take the lock, not because of the age: the
   create either commits first (and the task finishes the catalog) or waits
   behind the task, finds its row gone and fails with a retryable `Busy`.
+  Each recovery attempt is bounded: its transactions run with
+  `lock_timeout` and `statement_timeout` set to `store_connect_timeout`, and
+  the whole attempt, including the store's first open and migration, is
+  dropped after six times that (30 s by default). A store that stalls, or a
+  catalog lock another connection holds, fails that attempt; the task skips
+  that store's other rows for the rest of the run, keeps the first failure
+  as its result (so the job is retried), and goes on to the catalogs on
+  other stores. The row stays pending. There is no separate setting.
   The first release that writes unprovisioned rows must run only after every
   replica runs one that hides them (plan decision P11). Rows stuck for long
   show up as `SELECT id, name, created_at FROM catalogs WHERE provisioned_at
