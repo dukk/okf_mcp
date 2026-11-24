@@ -59,7 +59,10 @@ pub async fn backstop<T>(
     limits: Limits,
     step: impl Future<Output = Result<T, OkfError>>,
 ) -> Result<T, OkfError> {
-    tokio::time::timeout(limits.attempt, step)
+    // `Box::pin` puts the step's state on the heap: a store open nests
+    // several of these steps inside request futures, and inline they made
+    // a debug build's futures deep enough to overflow a test thread's stack.
+    tokio::time::timeout(limits.attempt, Box::pin(step))
         .await
         .unwrap_or_else(|_| {
             Err(OkfError::Busy {

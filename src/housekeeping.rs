@@ -35,9 +35,14 @@
 //!    work), the store half of `prune_audit` ([`audit::prune_catalog`]) and
 //!    the open changeset count of `cluster_stats`. Each job touches one
 //!    store, so a store that is down fails its own jobs only. Every step is
-//!    bounded ([`crate::stores::bounded`]): its statements run under
-//!    `lock_timeout` and `statement_timeout`, and the step, opening the store
-//!    included, under a `tokio` backstop. No step holds a connection of one
+//!    bounded ([`crate::stores::bounded`]): the job's own statements run
+//!    under `lock_timeout` and `statement_timeout`, and the step, opening the
+//!    store included, under a `tokio` backstop. Two reads are bounded by the
+//!    backstop alone: the first open of a store runs its schema migrations
+//!    (whose statements may rightly take long, so they get no statement
+//!    bound; the registry's row read is bounded), and `prune_audit` reads
+//!    the settings through [`App::fresh_settings`], which has its own
+//!    timeout. No step holds a connection of one
 //!    database while it takes one of the other. A job whose store has no
 //!    `stores` row any more does nothing and succeeds (it is not retried);
 //!    a store the registry forgot ([`crate::stores::Stores::forget`], after

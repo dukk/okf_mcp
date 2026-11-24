@@ -607,6 +607,7 @@ mod tests {
                 "audit_teams",
                 "catalogs",
                 "cluster_stats",
+                "cluster_store_stats",
                 "email_tokens",
                 "feedback",
                 "key_catalogs",

@@ -34,9 +34,14 @@ struct Replica {
 }
 
 async fn replica(db: &TestDb) -> Replica {
+    replica_sized(db, 5, Config::default()).await
+}
+
+/// [`replica`] with an account pool of `connections` and `config`.
+async fn replica_sized(db: &TestDb, connections: u32, config: Config) -> Replica {
     let (provider, metrics, registry) = local_metrics();
-    let pool = crate::db::connect(&db.url, 5).await.unwrap();
-    let app = App::load_with_metrics(pool, Config::default(), Arc::new(SystemClock), metrics)
+    let pool = crate::db::connect(&db.url, connections).await.unwrap();
+    let app = App::load_with_metrics(pool, config, Arc::new(SystemClock), metrics)
         .await
         .unwrap();
     Replica {
@@ -417,4 +422,41 @@ async fn a_store_job_blocked_on_a_lock_gives_up_at_the_database() {
         assert_eq!(waiting, 0, "{task:?}: nothing still waits on the lock");
         assert!(after.is_ok(), "{task:?}: {after:?}");
     }
+}
+
+/// No store job holds a connection of one database while it waits for one
+/// of the other, or a second of the same: with one account connection and
+/// one connection per store, every per-store job and the cluster sum finish.
+#[tokio::test(flavor = "multi_thread")]
+async fn store_jobs_finish_on_pools_of_one_connection() {
+    let db = test_db().await;
+    writer_key(&db.pool).await;
+    let shared = store("shared-1");
+    add_store(&db, shared.as_str()).await;
+    let config = Config {
+        store_max_connections: 1,
+        ..Config::default()
+    };
+    let replica = replica_sized(&db, 1, config).await;
+    let (store_db, id) =
+        changeset_in_new_catalog(&replica, &db, "one", Some(&shared), day_old()).await;
+
+    let finished = tokio::time::timeout(PATIENCE, async {
+        for task in Task::ALL.into_iter().filter(|task| task.runs_per_store()) {
+            for name in [StoreName::main(), shared.clone()] {
+                run_on_store(task, &name, &replica.app)
+                    .await
+                    .unwrap_or_else(|error| panic!("{task:?} on {name}: {error:?}"));
+            }
+        }
+        run(Task::ClusterStats, &replica.app).await.unwrap();
+    })
+    .await;
+
+    assert!(finished.is_ok(), "a job waited on a connection it holds");
+    assert_eq!(state_on(&store_db, id).await, ChangesetState::Discarded);
+    assert_eq!(
+        store_counts(&db.pool).await,
+        [("main".to_string(), 0), ("shared-1".to_string(), 0)]
+    );
 }
