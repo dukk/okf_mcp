@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1131,
+  "next_claim_seq": 1139,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "3805fb776d92d3b74c915307f0e279d40505fd5337fc02fd5b956dccaf944478"
+    "mac": "e496cfb39c9355205b0d894ddb923d255ae6e1bd2ca12dafa14e96776dfe9ee2"
   },
-  "next_evidence_seq": 1668,
+  "next_evidence_seq": 1678,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "4b994f97c299c0add8cc4675105ceb27a2a1b9aed8b62753ceb9ec5b2d0d059e"
+    "mac": "089c8ce241b46fadf0b18d242ca8db46235f321b4f871273e16abe2af5e76f8f"
   },
   "claims": [
     {
@@ -91694,7 +91694,9 @@
         "from-issue:974"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Superseded by CLM-1138: the datname prefix match it describes was replaced by own_databases! in c31f3ac.",
+        "retired_at": "2026-11-24T08:06:18.745946504Z"
       },
       "evidence": [
         {
@@ -91718,6 +91720,28 @@
             "by": "server",
             "mac": "9ce59dcff468ad3f47e4648ca91963d6404906cd6482527b8dc4fc2809fc1ebe"
           }
+        },
+        {
+          "id": "EVD-1677",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:3068-3078 at c31f3ac",
+          "summary": "The datname prefix match in the statement is gone: AWAITED_LOCKS and the other helpers now use own_databases! (exact name, _store, _x). EVD-1657's quoted left() filter no longer exists.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 3068,
+                "end": 3078
+              },
+              "commit": "c31f3acba2dbda89399131e7893e1f7ec6cf0c87"
+            }
+          },
+          "recorded_at": "2026-11-24T08:06:01.713225640Z",
+          "seal": {
+            "by": "server",
+            "mac": "d466eead3f5c4a912f42f4def594c6d92b4d0e8ca71cb30e805b5746fa1be307"
+          }
         }
       ],
       "verdicts": [
@@ -91733,13 +91757,26 @@
             "by": "server",
             "mac": "20215a3ed5259a739c8c094960af0580134e81c957f42dcad77676cc05a0bb50"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "Statement says the helpers use a datname prefix match; c31f3ac replaced it with exact-name matching.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1677"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.883141573Z",
+          "seal": {
+            "by": "server",
+            "mac": "cc382cf900d966bfc6f724eddbd11452c29979d4bd421982d616d1a85256608e"
+          }
         }
       ],
       "created_at": "2026-11-24T06:59:16.365698120Z",
-      "updated_at": "2026-11-24T07:00:11.520218825Z",
+      "updated_at": "2026-11-24T08:06:18.745946504Z",
       "seal": {
         "by": "server",
-        "mac": "f7bd80c6042a96d71d8885a1479c7c3364a20523e63d252f898a5423614d6765"
+        "mac": "b40d843c92e78cf2c8ce9ca5a692fd4bbf8f6f2bec55e664d6eb584a0a174696"
       }
     },
     {
@@ -92244,6 +92281,502 @@
       "seal": {
         "by": "server",
         "mac": "7fb33d5d269de961ad187a821a7ee8fb8f962c47411f019b68c51ccd8fb533b9"
+      }
+    },
+    {
+      "id": "CLM-1131",
+      "statement": "The macro own_databases! in src/test_locks.rs yields a condition that matches only the exact database name, name||'_store', and names whose first length(name)+2 characters equal name||'_x'; it does not match a longer-counter name such as ..._10 for database ..._1.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [
+        "src/test_locks.rs"
+      ],
+      "tags": [
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1668",
+          "kind": "inspection",
+          "locator": "src/test_locks.rs:25-50",
+          "summary": "Macro expands to (col = db OR col = db||'_store' OR left(col, length(db)+2) = db||'_x'). No prefix-only branch; ..._10 vs ..._1 matches none of the three (not equal, not ..._1_store, third 2 chars past name are '0'/'_'... differ from '_x').",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/test_locks.rs",
+              "lines": {
+                "start": 25,
+                "end": 50
+              },
+              "commit": "c31f3acba2dbda89399131e7893e1f7ec6cf0c87"
+            }
+          },
+          "recorded_at": "2026-11-24T08:06:01.101131924Z",
+          "seal": {
+            "by": "server",
+            "mac": "c7e58796504ae134b0f94bbfca6f1981250d0bdbe169f64b2f69f6346b9f3b62"
+          }
+        },
+        {
+          "id": "EVD-1669",
+          "kind": "test",
+          "locator": "target/i974-logs/gate6-test.log (own_databases test)",
+          "summary": "The unit test evaluating the macro in Postgres over _1/_10/_11 names ran in the green gate (0 failed in all 56 test result lines).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T08:06:01.167345689Z",
+          "seal": {
+            "by": "server",
+            "mac": "c3102056807271fea1bde50485a2b98c4059031b94fc647a2a0d122c5029445e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Macro text and passing test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1668",
+            "EVD-1669"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.369910468Z",
+          "seal": {
+            "by": "server",
+            "mac": "93ecf54f77a14440cf8c97e787af0bf912af430ad40265c0f5687823b1611f33"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:13.369910468Z",
+      "seal": {
+        "by": "server",
+        "mac": "825ba6ab15496739de678e05ef802e47b104581e7ffbe4adafa007dd892c1f16"
+      }
+    },
+    {
+      "id": "CLM-1132",
+      "statement": "No lock-wait filter on pg_stat_activity.datname in src/ still uses a prefix match; all eight former prefix filters use own_databases!.",
+      "kind": "functional",
+      "level": "component",
+      "verification_method": "inspection",
+      "derived_from": [],
+      "artifacts": [
+        "src"
+      ],
+      "tags": [
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Wrong count (six filters, not eight); restated accurately as CLM-1133.",
+        "retired_at": "2026-11-24T08:06:18.810736894Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1670",
+          "kind": "analysis",
+          "locator": "git show c31f3ac -- src; git grep length(current_database c31f3ac~1",
+          "summary": "Before the commit there were six prefix filters in code (testing.rs:562, changesets.rs:1697 and 3174, lock_order_tests.rs:115, catalogs.rs:3074, catalogs_provision_tests.rs:77), not eight. The commit and its changelog say eight; the count is wrong, though all six now use own_databases!.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-24T08:06:01.230322263Z",
+          "seal": {
+            "by": "server",
+            "mac": "b664dd78d366fd3c69e4418f69d7e422304e4c820b9721d06756aa6b93bd3d6d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Only six prefix filters existed, not eight; the count in the commit message and changelog is wrong (superseded by CLM-1133 for the substance).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1670"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.436814036Z",
+          "seal": {
+            "by": "server",
+            "mac": "6c75dc775c8c07d59e23caa09e9ee365499cabd632d0ef7a28d6566b575a6f8f"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:18.810736894Z",
+      "seal": {
+        "by": "server",
+        "mac": "6181428b785d93486816bf2f677bc7803418a051010f6e7d4d7f633c9b3bbee1"
+      }
+    },
+    {
+      "id": "CLM-1133",
+      "statement": "No lock-wait filter on pg_stat_activity.datname in src/ still uses a prefix match (left(datname, length(current_database()))), and every former prefix filter uses own_databases!.",
+      "kind": "functional",
+      "level": "component",
+      "verification_method": "inspection",
+      "derived_from": [],
+      "artifacts": [
+        "src"
+      ],
+      "tags": [
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1671",
+          "kind": "inspection",
+          "locator": "git grep over src and tests at c31f3ac",
+          "summary": "Zero hits for a left()/length(current_database()) prefix match on datname in src; the six former prefix filters (testing.rs, changesets.rs x2, lock_order_tests.rs, catalogs.rs, catalogs_provision_tests.rs) now call own_databases!. Remaining datname filters are exact datname = current_database().",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "length\\(current_database|left\\([a-z.]*datname",
+              "scope": [
+                "src",
+                "tests"
+              ],
+              "hits": 0,
+              "commit": "c31f3acba2dbda89399131e7893e1f7ec6cf0c87"
+            }
+          },
+          "recorded_at": "2026-11-24T08:06:01.315189285Z",
+          "seal": {
+            "by": "server",
+            "mac": "70fc1aec39f9839b2cf0677f59bf3ea21bc2cb97e5c5bad6d9965dae2178ad05"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Zero-hit search and diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1671"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.500657443Z",
+          "seal": {
+            "by": "server",
+            "mac": "f3dfc656408e4008aaec46c05252d36fc9d7e8a6d74f8d5422b136d6931065d3"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:13.500657443Z",
+      "seal": {
+        "by": "server",
+        "mac": "0b44785773b13410ac9649ff0c7578dea9e0407cef76e2595ad8ccb62ae233f4"
+      }
+    },
+    {
+      "id": "CLM-1134",
+      "statement": "Test own_databases_are_the_name_its_store_and_its_extras_and_no_longer_counter in src/test_locks.rs covers names ending in _1 and _10.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "derived_from": [],
+      "artifacts": [
+        "src/test_locks.rs"
+      ],
+      "tags": [
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1672",
+          "kind": "inspection",
+          "locator": "src/test_locks.rs:207-235",
+          "summary": "Test checks databases r_test_5_9_1 and r_test_5_9_10 over names incl. _1, _10, _11, and their _store/_xa variants, asserting exact kept sets.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/test_locks.rs",
+              "lines": {
+                "start": 207,
+                "end": 235
+              },
+              "commit": "c31f3acba2dbda89399131e7893e1f7ec6cf0c87"
+            }
+          },
+          "recorded_at": "2026-11-24T08:06:01.379419603Z",
+          "seal": {
+            "by": "server",
+            "mac": "494883abde86b8c8a5d39d756b345b4c50f4bf9fe6149b821ee9274baed04c0a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test body covers _1 and _10.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1672"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.564071378Z",
+          "seal": {
+            "by": "server",
+            "mac": "7872e511a21e90a8e5ad55d09c6d6b10e44a5eb0fe64821d49c87d209b87e087"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:13.564071378Z",
+      "seal": {
+        "by": "server",
+        "mac": "8a78c5d890b2bdca078242943930aaad863880c00f60b696be0a83d575220629"
+      }
+    },
+    {
+      "id": "CLM-1135",
+      "statement": "tests/support/pg.rs server_password parses the URL with url::Url and percent-decodes the password, and set_store_password_once uses it; test the_server_password_is_percent_decoded in tests/test_database.rs asserts p%40ss decodes to p@ss.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "derived_from": [],
+      "artifacts": [
+        "tests/support/pg.rs",
+        "tests/test_database.rs"
+      ],
+      "tags": [
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1673",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:510-535; tests/test_database.rs:237-247",
+          "summary": "set_store_password_once calls server_password; server_password parses with url and percent_decode_str (line ~526); test asserts p%40ss -> p@ss plus empty-password and invalid-URL cases.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 510,
+                "end": 535
+              },
+              "commit": "c31f3acba2dbda89399131e7893e1f7ec6cf0c87"
+            }
+          },
+          "recorded_at": "2026-11-24T08:06:01.450055844Z",
+          "seal": {
+            "by": "server",
+            "mac": "a01f7874a10cfeb99a49ee70144b83f9453706952368758c70db17282524cb96"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and test as claimed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1673"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.628634908Z",
+          "seal": {
+            "by": "server",
+            "mac": "591412fb1b06b01b0bd6e885e23510527ae8b635f9be657efe0e366b7a1816db"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:13.628634908Z",
+      "seal": {
+        "by": "server",
+        "mac": "55605952bd98c77314b6a6edae73821ca25ad49bf7fa2e2fd542f4ca70a786b6"
+      }
+    },
+    {
+      "id": "CLM-1136",
+      "statement": "The changelog describes stores_of_same_named_databases_on_distinct_servers_stay_apart as a unit test with lazy pools that never connect and does not claim two live servers.",
+      "kind": "documentation",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "derived_from": [],
+      "artifacts": [
+        "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md"
+      ],
+      "tags": [
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1674",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md:47-51",
+          "summary": "Says it is a unit test of the key using two lazy pools on different ports (fictional host, never connected) and that it does not start two servers.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md",
+              "lines": {
+                "start": 47,
+                "end": 51
+              },
+              "commit": "c31f3acba2dbda89399131e7893e1f7ec6cf0c87"
+            }
+          },
+          "recorded_at": "2026-11-24T08:06:01.520041463Z",
+          "seal": {
+            "by": "server",
+            "mac": "e74a97a3a2556b42feefb7ef5900b286789ae4ec1340579e4fbc3f5668b72020"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Changelog text matches.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1674"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.691449961Z",
+          "seal": {
+            "by": "server",
+            "mac": "cd72ded2758570dcdb7a85c32491878fa4ca05dd23539dbf080470ac0b64ca88"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:13.691449961Z",
+      "seal": {
+        "by": "server",
+        "mac": "c6070dca31342ac21751ea8df1b1fa6ffedbe759314b7a116d777ce6770d4bf5"
+      }
+    },
+    {
+      "id": "CLM-1137",
+      "statement": "The final gate.sh test passed in both store modes with 0 failed.",
+      "kind": "functional",
+      "level": "system",
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [
+        "target/i974-logs/gate6-test.log"
+      ],
+      "tags": [
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1675",
+          "kind": "log",
+          "locator": "target/i974-logs/gate6-test.rc, gate6-test.log",
+          "summary": "rc file contains 0; log has 56 'test result' lines, none lacking '0 failed' (checked with grep).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T08:06:01.580371508Z",
+          "seal": {
+            "by": "server",
+            "mac": "9af6cd3da82c051a8dfcf6b8d339e2a971b914faafcca8c9e09a848ef75890d6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "rc 0, 56 result lines all 0 failed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1675"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.754612596Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d5e5a189823808adb63bfa36537ea0781da0d42a832c8b578179a8afc898df4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:13.754612596Z",
+      "seal": {
+        "by": "server",
+        "mac": "3765dc8c16a4d9817fac1b434cf65df1f1c13f7853430e613197ee6fe6008ea2"
+      }
+    },
+    {
+      "id": "CLM-1138",
+      "statement": "Lock-wait helpers on catalog locks (AWAITED_LOCKS, wait_for_lock_waiters, the two in changesets.rs, lock_order_tests, catalogs_provision_tests) match the account database, its _store and its _x databases through own_databases!, not a datname prefix match; statements joining registry tables to catalog.* tables became two queries.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "src"
+      ],
+      "tags": [
+        "from-issue:974",
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1676",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:3074; src/http/api/testing.rs:562; src/mcp/changesets.rs:1697,3174; lock_order_tests.rs:115; catalogs_provision_tests.rs:78",
+          "summary": "All six helpers use own_databases!; no prefix match remains; the two-query change from the earlier commit is unchanged by c31f3ac.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 3068,
+                "end": 3078
+              },
+              "commit": "c31f3acba2dbda89399131e7893e1f7ec6cf0c87"
+            }
+          },
+          "recorded_at": "2026-11-24T08:06:01.643791213Z",
+          "seal": {
+            "by": "server",
+            "mac": "1ae230c6265a4493bbefa184b7a47b3d5489ed2386e65e4e0b6a775700bac938"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Replacement for stale CLM-1122.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1676"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.816705177Z",
+          "seal": {
+            "by": "server",
+            "mac": "96f39853f932e8999d451bf26d0b7ad7a1b691f80fe27ad80bbe34d8bdf928fd"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:13.816705177Z",
+      "seal": {
+        "by": "server",
+        "mac": "69b3d3ad7505404453f5ca7e7cb8043907ab851c49677c29983db074db24f4b5"
       }
     }
   ]

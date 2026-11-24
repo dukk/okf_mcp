@@ -60,7 +60,7 @@ Issue #974, Task 15 of `docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores
 
 - Lock-wait helpers no longer match a prefix of `current_database()`: a counter without padding made `..._1`
   match another test's `..._10`. One macro, `crate::test_locks::own_databases!`, keeps the exact name, `{name}_store`
-  and `{name}_x...` (account names end in digits, so no other test's name can match), and replaces all eight
+  and `{name}_x...` (account names end in digits, so no other test's name can match), and replaces all six
   filters (`AWAITED_LOCKS`, `wait_for_lock_waiters` in `src/http/api/testing.rs`, the two in `src/mcp/changesets.rs`,
   `lock_order_tests.rs`, `catalogs_provision_tests.rs`). The test
   `own_databases_are_the_name_its_store_and_its_extras_and_no_longer_counter` runs the condition over names ending
