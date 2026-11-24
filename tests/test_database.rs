@@ -230,3 +230,56 @@ fn the_template_name_is_stable_and_valid() {
     assert!(name.starts_with("okf_tpl_"));
     assert_eq!(name.len(), "okf_tpl_".len() + 16);
 }
+
+/// A lazy pool on `database` of the server at `port`: nothing connects.
+fn lazy_pool(port: u16, database: &str) -> sqlx::PgPool {
+    let options = sqlx::postgres::PgConnectOptions::new()
+        .host("db.example.internal")
+        .port(port)
+        .username("postgres")
+        .database(database);
+    sqlx::postgres::PgPoolOptions::new().connect_lazy_with(options)
+}
+
+/// Two account databases that share a name (every container names its own
+/// `postgres`) on distinct servers keep distinct stores, and dropping one
+/// leaves the other's registration.
+#[tokio::test]
+async fn stores_of_same_named_databases_on_distinct_servers_stay_apart() {
+    let (first, second) = (lazy_pool(15432, "postgres"), lazy_pool(15433, "postgres"));
+    let first_key = pg::register_store(
+        &first.connect_options(),
+        first
+            .connect_options()
+            .as_ref()
+            .clone()
+            .database("first_store"),
+    );
+    let second_key = pg::register_store(
+        &second.connect_options(),
+        second
+            .connect_options()
+            .as_ref()
+            .clone()
+            .database("second_store"),
+    );
+
+    assert_ne!(first_key, second_key);
+    assert_eq!(
+        pg::store_options(&first).get_database(),
+        Some("first_store")
+    );
+    assert_eq!(
+        pg::store_options(&second).get_database(),
+        Some("second_store")
+    );
+    assert_eq!(pg::store_options(&first).get_port(), 15432);
+
+    pg::unregister_store(&first_key);
+    assert_eq!(pg::store_options(&first).get_database(), Some("postgres"));
+    assert_eq!(
+        pg::store_options(&second).get_database(),
+        Some("second_store")
+    );
+    pg::unregister_store(&second_key);
+}

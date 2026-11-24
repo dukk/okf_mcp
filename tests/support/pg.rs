@@ -250,9 +250,13 @@ impl TestDb {
                 .await
                 .expect("apalis migrations apply");
         }
-        let store_database = match migrated && store_mode() == StoreMode::Separate {
-            true => Some(separate_store(&server_url, &name, container.is_some(), &pool).await),
-            false => None,
+        let (store_database, registry_key) = match migrated && store_mode() == StoreMode::Separate {
+            true => {
+                let (store, key) =
+                    separate_store(&server_url, &name, container.is_some(), &pool).await;
+                (Some(store), Some(key))
+            }
+            false => (None, None),
         };
         Self {
             pool,
@@ -261,6 +265,7 @@ impl TestDb {
                 server_url,
                 name,
                 store_database,
+                registry_key,
                 extra: Mutex::new(Vec::new()),
                 container,
             },
@@ -310,8 +315,8 @@ pub fn store_mode() -> StoreMode {
 }
 
 /// The second database of each [`StoreMode::Separate`] test, by the account
-/// database's name, for the helpers that derive a store handle from the
-/// account pool alone.
+/// database's server and name ([`registry_key`]), for the helpers that derive
+/// a store handle from the account pool alone.
 static SEPARATE_STORES: Mutex<Option<HashMap<String, PgConnectOptions>>> = Mutex::new(None);
 
 /// The connection settings of the `main` store of the test whose account
@@ -329,12 +334,46 @@ pub fn store_options(accounts: &PgPool) -> PgConnectOptions {
         .lock()
         .expect("the store registry lock")
         .as_ref()
-        .and_then(|stores| {
-            stores
-                .get(options.get_database().unwrap_or_default())
-                .cloned()
-        });
+        .and_then(|stores| stores.get(&registry_key(&options)).cloned());
     registered.unwrap_or(options)
+}
+
+/// The key of an account database in [`SEPARATE_STORES`]: its server (host
+/// and port) and its name. The name alone is not unique: every container of
+/// its own holds its account database as `postgres`.
+pub fn registry_key(accounts: &PgConnectOptions) -> String {
+    format!(
+        "{}:{}/{}",
+        accounts.get_host(),
+        accounts.get_port(),
+        accounts.get_database().unwrap_or_default()
+    )
+}
+
+/// Registers `store` as the `main` store of the account database `accounts`
+/// connects to.
+///
+/// # Returns
+/// The key to [`unregister_store`] it with.
+pub fn register_store(accounts: &PgConnectOptions, store: PgConnectOptions) -> String {
+    let key = registry_key(accounts);
+    SEPARATE_STORES
+        .lock()
+        .expect("the store registry lock")
+        .get_or_insert_with(HashMap::new)
+        .insert(key.clone(), store);
+    key
+}
+
+/// Removes the registration [`register_store`] made under `key`.
+pub fn unregister_store(key: &str) {
+    if let Some(stores) = SEPARATE_STORES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+    {
+        stores.remove(key);
+    }
 }
 
 /// A pool on the store `main` of the test whose account pool is `accounts`:
@@ -359,7 +398,7 @@ pub fn store_pool(accounts: &PgPool) -> PgPool {
 /// writes `main`.
 ///
 /// # Returns
-/// The second database's name, for [`Database`] to drop.
+/// The second database's name, for [`Database`] to drop, and its registry key.
 ///
 /// # Panics
 /// If a statement fails: a test environment problem.
@@ -368,7 +407,7 @@ async fn separate_store(
     account_database: &str,
     own_container: bool,
     accounts: &PgPool,
-) -> String {
+) -> (String, String) {
     let store_name = format!("{account_database}_store");
     create_store_database(server_url, &store_name, own_container).await;
     let options = (*accounts.connect_options()).clone();
@@ -386,15 +425,8 @@ async fn separate_store(
     .execute(accounts)
     .await
     .expect("register the second database as the store main");
-    SEPARATE_STORES
-        .lock()
-        .expect("the store registry lock")
-        .get_or_insert_with(HashMap::new)
-        .insert(
-            options.get_database().unwrap_or_default().to_string(),
-            options.database(&store_name),
-        );
-    store_name
+    let key = register_store(&options, options.clone().database(&store_name));
+    (store_name, key)
 }
 
 /// Creates database `name` holding an empty, migrated store schema: a copy
@@ -463,6 +495,8 @@ struct Database {
     name: String,
     /// The second database of a [`StoreMode::Separate`] test.
     store_database: Option<String>,
+    /// The key of that store in [`SEPARATE_STORES`].
+    registry_key: Option<String>,
     /// The databases [`TestDb::extra_store_database`] made.
     extra: Mutex<Vec<String>>,
     /// The container of this test's own, when no server is shared.
@@ -473,14 +507,8 @@ struct Database {
 // deterministic), including while a failed test unwinds.
 impl Drop for Database {
     fn drop(&mut self) {
-        if self.store_database.is_some() {
-            if let Some(stores) = SEPARATE_STORES
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .as_mut()
-            {
-                stores.remove(&self.name);
-            }
+        if let Some(key) = &self.registry_key {
+            unregister_store(key);
         }
         if self.container.is_some() {
             // The container's own `Drop` removes the whole server.

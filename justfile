@@ -21,7 +21,7 @@ lint:
 # template and registered as the store `main`. Both runs happen even when the
 # first fails, and the recipe fails if either did.
 test: test-worker
-    scripts/test-pg.sh run bash -c 'status=0; cargo test || status=1; OKF_TEST_STORE=separate cargo test || status=1; exit $status'
+    scripts/test-pg.sh run bash -c 'status=0; OKF_TEST_STORE=same cargo test || status=1; OKF_TEST_STORE=separate cargo test || status=1; exit $status'
 
 # The mobile reader's service worker (src/http/read/sw.js) in a Node vm, and
 # its page modules without a DOM (src/http/read/js/), with fake Cache Storage,
