@@ -781,7 +781,10 @@ async fn prune_store_changesets(app: &App, db: &CatalogDb, limits: Limits) -> Re
 /// [`UNPROVISIONED_GRACE_SECONDS`]; that age only keeps it off creates still
 /// running, since the catalog's lock decides the outcome. A failure on one
 /// catalog (its store unreachable, say) is logged and does not stop the
-/// others; the first is the task's result, so the job is retried.
+/// others; the first is the task's result, so the job is retried. It pages
+/// through the rows ([`catalogs::pending`]) and, once a store is found
+/// unreachable, leaves that store's remaining rows for the next run, so a
+/// lost store cannot starve the others.
 ///
 /// # Errors
 /// The first failure; every catalog is tried regardless.
@@ -789,35 +792,49 @@ async fn prune_store_changesets(app: &App, db: &CatalogDb, limits: Limits) -> Re
 async fn provision_catalogs(app: &App) -> Result<(), OkfError> {
     let now = app.clock().now();
     let older_than = now - TimeDelta::seconds(UNPROVISIONED_GRACE_SECONDS);
-    let half_made = catalogs::pending(app.accounts().executor(), older_than).await?;
     let mut steps = Steps::default();
     let mut finished = 0_u64;
-    for catalog in &half_made {
-        // The store is read from the row, so a catalog is recovered where
-        // it was placed.
-        let outcome = async {
-            let store = StoreName::parse(&catalog.store)?;
-            let db = app.store_db(&store).await?;
-            catalogs::recover(&db, catalog, now).await
-        }
-        .await;
-        match outcome {
-            Ok(catalogs::Recovery::Finished) => finished += 1,
-            Ok(catalogs::Recovery::Removed) => {
-                tracing::warn!(
-                    catalog_id = catalog.id,
-                    "removed a catalog whose create failed"
-                );
+    // Stores found unreachable in this run: their rows are left out of the
+    // later pages, so a lost store cannot hold up the others.
+    let mut down: Vec<String> = Vec::new();
+    let mut after = None;
+    loop {
+        let page = catalogs::pending(app.accounts().executor(), older_than, after, &down).await?;
+        let Some(last) = page.last() else { break };
+        after = Some(last.cursor());
+        for catalog in &page {
+            if down.contains(&catalog.store) {
+                continue;
             }
-            Ok(catalogs::Recovery::Settled) => {}
-            Err(error) => {
-                split_event!(
-                    error,
-                    { kind = error.kind(), catalog_id = catalog.id, },
-                    { %error, },
-                    "recovering a half-created catalog failed"
-                );
-                steps.keep(error);
+            // The store is read from the row, so a catalog is recovered
+            // where it was placed.
+            let outcome = async {
+                let store = StoreName::parse(&catalog.store)?;
+                let db = app.store_db(&store).await?;
+                catalogs::recover(&db, catalog, now).await
+            }
+            .await;
+            match outcome {
+                Ok(catalogs::Recovery::Finished) => finished += 1,
+                Ok(catalogs::Recovery::Removed) => {
+                    tracing::warn!(
+                        catalog_id = catalog.id,
+                        "removed a catalog whose create failed"
+                    );
+                }
+                Ok(catalogs::Recovery::Settled) => {}
+                Err(error) => {
+                    if matches!(error, OkfError::StoreUnavailable { .. }) {
+                        down.push(catalog.store.clone());
+                    }
+                    split_event!(
+                        error,
+                        { kind = error.kind(), catalog_id = catalog.id, },
+                        { %error, },
+                        "recovering a half-created catalog failed"
+                    );
+                    steps.keep(error);
+                }
             }
         }
     }
@@ -1891,6 +1908,56 @@ mod tests {
         assert_eq!(removed.len(), 1, "{removed:?}");
         assert_eq!(removed[0].target.as_deref(), Some("lost"));
         assert_eq!(removed[0].details["failed_create"], true);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn half_made_catalogs_on_an_unreachable_store_do_not_starve_a_healthy_store() {
+        // Arrange: more than one batch of older half-made catalogs on `down`
+        // (no credential in the environment, so it cannot be opened), and a
+        // newer one on `main` whose store side committed.
+        let test = app_with(&[("ok", &[])], Config::default()).await;
+        let pool = test.app.accounts().executor().clone();
+        let now = test.app.clock().now();
+        sqlx::query(
+            "INSERT INTO stores (name, location_kind, host, port, database, credential_kind, \
+             credential_ref, created_at) \
+             VALUES ('down', 'host', 'db.example.internal', 5432, 'okf', 'env', \
+                     'UNSET_PASSWORD', now())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO catalogs (name, created_at, store, provisioned_at) \
+             SELECT 'lost-' || n, $1 + n * interval '1 second', 'down', NULL \
+             FROM generate_series(1, $2) AS n",
+        )
+        .bind(now - TimeDelta::hours(1))
+        .bind(catalogs::PENDING_BATCH + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE catalogs SET provisioned_at = NULL, created_at = $1 WHERE name = 'ok'")
+            .bind(now - TimeDelta::minutes(5))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Act
+        let outcome = run(Task::ProvisionCatalogs, &test.app).await;
+
+        // Assert: the down store's failure is the task's result, the healthy
+        // catalog is settled, and the down store's rows are untouched.
+        assert!(outcome.is_err(), "the unreachable store's failure is kept");
+        let counts: (bool, i64) = sqlx::query_as(
+            "SELECT bool_or(name = 'ok' AND provisioned_at IS DISTINCT FROM NULL), \
+                    count(*) FILTER (WHERE store = 'down' AND provisioned_at IS NULL) \
+             FROM catalogs",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(counts, (true, catalogs::PENDING_BATCH + 1));
     }
 
     #[tokio::test(flavor = "multi_thread")]
