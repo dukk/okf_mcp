@@ -190,6 +190,11 @@ async fn a_deleted_catalogs_name_is_reserved_until_cleanup() {
     assert!(after.is_ok(), "{after:?}");
 }
 
+/// P5: the catalog's audit entries outlive the catalog. Two things keep them:
+/// the cleanup never touches `catalog_audit_entries` (it has no foreign key to
+/// `catalog_state`), and the table's append-only guard refuses a delete inside
+/// the retention period. This test checks the outcome, not which of the two
+/// held.
 #[tokio::test(flavor = "multi_thread")]
 async fn catalog_audit_survives_catalog_deletion() {
     // Arrange: one entry written on the store for the catalog (plan P5).
@@ -254,13 +259,11 @@ async fn an_edit_racing_a_delete_either_lands_first_and_blocks_it_or_fails_after
     // Arrange: the delete first.
     let db = test_db().await;
     let pg = seed(&db.pool, "pg").await;
-    let pause = delete_pause::set(
-        db.pool
-            .connect_options()
-            .get_database()
-            .expect("a database"),
-        pg.id,
-    );
+    let identity: String = sqlx::query_scalar(delete_pause::SERVER_IDENTITY)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let pause = delete_pause::set(&identity, pg.id);
     let pool = db.pool.clone();
     let deleting =
         tokio::spawn(async move { delete(&pool, "pg", false, &AuditActor::cli(), now()).await });

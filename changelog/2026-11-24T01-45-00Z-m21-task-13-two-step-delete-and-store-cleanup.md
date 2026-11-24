@@ -58,3 +58,27 @@ came with 0041.
   after the deletion commits.
 - Plan: Task 13's text is corrected in place (lock order, `CleanupStores`
   shape, test names).
+
+## Mutation checks
+
+Each change below was made on its own, the named tests were run through
+`tools/agentic/gate.sh narrow`, and the change was reverted. Every mutation
+made at least one named test fail:
+
+| Mutation | Tests that failed |
+|----------|-------------------|
+| The cleanup keeps the registry row (no `DELETE FROM catalogs`) | `cleanup_removes_the_store_data_then_the_registry_row`, `a_deleted_catalogs_name_is_reserved_until_cleanup` |
+| `owe_keys` writes nothing | the key cleanup tests (every store, retry, crash after commit, clearing the key) |
+| `catalog_state.deleted_at` is not set | `an_edit_racing_a_delete_either_lands_first_and_blocks_it_or_fails_after` |
+| The unpublished-work check is skipped | `a_delete_without_force_never_discards_work_written_during_it`, `delete_refuses_unpublished_work_unless_forced` |
+| One registry filter loses `deleted_at IS NULL` (`keys.rs`) | `every_registry_filter_on_provisioned_also_filters_deleted` |
+| `open_changeset` drops `FOR KEY SHARE` | `a_changeset_opened_while_its_key_is_deleted_is_refused_and_leaves_nothing` |
+| A failed try does not count an attempt | `cleanup_retries_an_unreachable_store_without_blocking_others` |
+| `rows_by_names` loses `deleted_at IS NULL` | `a_deleted_catalog_resolves_to_nothing_before_its_cleanup` |
+| Key cleanup does not clear the key id | `a_key_cleanup_clears_the_key_from_the_stores_history` (it loops until the run is killed) |
+
+Not mutation-checked: `catalog_audit_survives_catalog_deletion` (the
+table's append-only guard also refuses a delete, so the test checks the
+outcome, not which of the two held), the admin-race test (a guard on the lock
+order), the starvation test (added after the run), and the directory test's
+other paths.

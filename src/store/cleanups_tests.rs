@@ -187,6 +187,56 @@ async fn cleanup_retries_an_unreachable_store_without_blocking_others() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn rows_that_keep_failing_do_not_starve_the_rest_of_their_store() {
+    // Arrange: 100 deleted catalogs whose cleanup always fails, and a 101st
+    // that would succeed, one more than a run takes.
+    let db = test_db().await;
+    sqlx::query(
+        "INSERT INTO catalog.catalog_state (id) SELECT g FROM generate_series(1000, 1099) g \
+         UNION ALL SELECT 2000",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO store_cleanups (store, kind, subject, created_at) \
+         SELECT 'main', 'catalog', g::text, now() FROM generate_series(1000, 1099) g \
+         UNION ALL SELECT 'main', 'catalog', '2000', now()",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    crate::http::api::testing::fail_on(
+        &db.pool,
+        "BEFORE DELETE ON catalog.catalog_state FOR EACH ROW WHEN (OLD.id < 2000)",
+    )
+    .await;
+
+    // Act
+    let first = settle_for_tests(&db.pool).await;
+    let second = settle_for_tests(&db.pool).await;
+
+    // Assert: the first run spends itself on the failing rows; the second
+    // takes the row that has not failed first.
+    assert_eq!(
+        first,
+        Report {
+            done: 0,
+            failed: 100
+        }
+    );
+    assert_eq!(second.done, 1);
+    assert_eq!(
+        count(
+            &db.pool,
+            "SELECT count(*) FROM catalog.catalog_state WHERE id = 2000"
+        )
+        .await,
+        0
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_key_deletion_crashing_after_commit_still_cleans_up_its_changesets() {
     // Arrange: the deletion commits, and the process dies before the job:
     // its pool is closed, and only the database's rows remain.

@@ -1889,11 +1889,13 @@ changeset and maintenance-run history.
 
 A store that is down, or a cleanup that fails, is retried every run: the row
 counts its `attempts`, and a store that fails never holds up the others or the
-deletion itself. Past 20 attempts the job logs `a store cleanup keeps failing` at
+deletion itself, and a row that keeps failing is tried after the rows that
+have failed less, so it cannot starve the rest of its store. Past 20 attempts the job logs `a store cleanup keeps failing` at
 error level on every run and keeps the row; look at `store_cleanups` for the
 store, kind and subject, and fix the store (its credential, its reachability).
-A catalog deleted while its store was down is marked on the store as soon as
-the store is back, but its data is removed only after that.
+If the store's commit fails after the account's, the catalog is gone from
+every lookup and its data stays unmarked until the cleanup removes it all the
+same.
 
 ### Deletion rules
 
@@ -2166,7 +2168,7 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | `team.member_added` | A user joins a team (`team add-member`, `PUT /api/v1/teams/{name}/members/{user}`); its person is the user | `role`, `from` (`null`) |
 | `team.role_changed` | A member's role changes (`team set-role`, the same `PUT`). Setting the role a member already has records nothing | `role`, `from` |
 | `team.member_removed` | A member leaves a team (`team remove-member`, `DELETE /api/v1/teams/{name}/members/{user}`); its person is the user. A refused removal records nothing | none |
-| `team.deleted` | A shared team is deleted (`team delete`, `DELETE /api/v1/teams/{name}`), recorded in the deleting transaction, which also marks the catalog deleted and owes the store cleanup ([Store cleanup](#store-cleanup)). A refused deletion records nothing | none |
+| `team.deleted` | A shared team is deleted (`team delete`, `DELETE /api/v1/teams/{name}`), recorded before the row goes. A refused deletion records nothing | none |
 | `team.suspended` | A team is suspended or its notice changes (`team suspend`, `PUT /api/v1/teams/{name}/suspension`). Suspending a suspended team with the same notice, a refused notice and an unknown or malformed name record nothing | `notice` (whether there is one; never its text), `already` (it was suspended before) |
 | `team.display_name_changed` | A shared team's display name changes, by an admin, a provisioner or an owner of the team. A personal team is refused (its label follows its user); the same text again, and a refused change, record nothing | `length` (in characters; never the text) |
 | `team.unsuspended` | A suspension is lifted (`team unsuspend`, the same `PUT`). Lifting an active team's suspension records nothing | none |
@@ -2177,7 +2179,7 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | `catalog.display_name_changed` | A catalog's display name changes, by an admin on the catalog or an owner of its team. The same text again, and a refused change, record nothing | `length` (in characters; never the text) |
 | `catalog.member_access_changed` | A catalog's member access changes (`catalog set-member-access`, `PUT /api/v1/catalogs/{catalog}/member-access`). The same value again records nothing | `from`, `to` (`none`, `read` or `write`) |
 | `catalog.maintenance_changed` | A catalog's maintenance flag changes (`catalog set-maintenance`, `PUT /api/v1/catalogs/{catalog}/maintenance`), by an admin that reaches every catalog or an owner of its team signed in to the console. The same value again, and a refused change, record nothing | `from`, `to` (`on` or `off`) |
-| `catalog.deleted` | A catalog is deleted (`catalog delete`, `DELETE /api/v1/catalogs/{catalog}`), recorded before the row goes. A refused deletion records nothing | `forced` (unpublished changes were deleted with it), `generation` |
+| `catalog.deleted` | A catalog is deleted (`catalog delete`, `DELETE /api/v1/catalogs/{catalog}`), recorded in the deleting transaction, which also marks the catalog deleted and owes the store cleanup ([Store cleanup](#store-cleanup)). A refused deletion records nothing | `forced` (unpublished changes were deleted with it), `generation` |
 | `catalog.repaired` | `okf-mcp catalog repair-indexes` writes at least one file (a dry run, or a catalog with nothing missing, records nothing) | `files` (the paths written), `generation` (after the repair) |
 | `catalog.imported` | An import writes or deletes at least one file (`okf-mcp import`, `POST /catalogs/{name}/import` and its `/api/v1` twin, the console). An import that changes nothing, or is refused, records nothing | `replace`, `scope` (`everything` or `machinery`), `written` (files added or changed), `deleted`, `generation` (after the import) |
 | **Credentials** | | |

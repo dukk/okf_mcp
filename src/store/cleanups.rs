@@ -215,7 +215,7 @@ pub async fn run(stores: &Stores, now: DateTime<Utc>) -> Result<Report, OkfError
     for name in names {
         let rows: Vec<Due> = sqlx::query_as(
             "SELECT id, kind, subject, attempts FROM store_cleanups \
-             WHERE store = $1 ORDER BY id LIMIT $2",
+             WHERE store = $1 ORDER BY attempts, id LIMIT $2",
         )
         .bind(&name)
         .bind(BATCH_PER_STORE)

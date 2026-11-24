@@ -1782,8 +1782,14 @@ pub(crate) mod delete_pause {
     static PAUSES: LazyLock<Mutex<HashMap<(String, i64), Pause>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
 
-    /// Makes the next delete of catalog `id` in account database `database`
-    /// pause.
+    /// Names one account database of one server: tests run side by side,
+    /// each in a database (and often a server) of its own that counts catalog
+    /// ids from 1, and the database name alone can repeat between servers.
+    pub(crate) const SERVER_IDENTITY: &str =
+        "SELECT current_database() || '@' || pg_postmaster_start_time()::text";
+
+    /// Makes the next delete of catalog `id` in the account database named
+    /// `database` (a [`SERVER_IDENTITY`]) pause.
     ///
     /// # Returns
     /// The barriers the test meets.
@@ -1807,7 +1813,7 @@ pub(crate) mod delete_pause {
         conn: &mut sqlx::PgConnection,
         id: i64,
     ) -> Result<(), crate::error::OkfError> {
-        let database: String = sqlx::query_scalar("SELECT current_database()")
+        let database: String = sqlx::query_scalar(SERVER_IDENTITY)
             .fetch_one(&mut *conn)
             .await?;
         let pause = PAUSES
