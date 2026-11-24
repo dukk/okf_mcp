@@ -91,3 +91,4 @@ else
     echo "MERGED PR $pr -> $base; warning: could not find the merge commit"
 fi
 [ "$fetched" = 1 ] || echo "warning: could not fetch origin afterwards"
+echo "next: tools/agentic/remove-worktree.sh <worktree> --branch (frees its Cargo build output)"

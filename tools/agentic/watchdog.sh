@@ -94,15 +94,8 @@ quiet_limit=${AGENTIC_WATCHDOG_QUIET:-1200}
 # counts as idle.
 idle_cpu_ticks=${AGENTIC_WATCHDOG_IDLE_CPU:-$(getconf CLK_TCK 2>/dev/null || echo 100)}
 
-# True when $1 is one of the checkouts or below one, on a directory boundary
-# (so /x/wt2 is not inside /x/wt).
-in_checkout() {
-    local path
-    for path in "${checkouts[@]}"; do
-        case "$1" in "$path" | "$path"/*) return 0 ;; esac
-    done
-    return 1
-}
+# True when $1 is one of the checkouts or below one (lib.sh).
+in_checkout() { agentic_path_inside "$1" "${checkouts[@]}"; }
 
 # True when $1 (seconds) is no more than the host's uptime. With the uptime
 # unknown, nothing is ruled out.
