@@ -743,9 +743,13 @@ two). What `[redis]` does not share:
   catalog events, past the same `audit_retention_days`) and the open
   changeset count of `cluster_stats`. The ticker reads the `stores` table on
   every push, so a store added while the replicas run gets its jobs within a
-  minute. A store that is down fails only its own jobs, which are retried;
-  every statement of a store job runs under a 20 s `lock_timeout` and
-  `statement_timeout`, so a held lock never keeps a worker waiting. A failed job is retried twice with a backoff; a slot
+  minute. A store that is down fails only its own jobs, which are retried.
+  A store job's own prune, count and write statements run under a 20 s
+  `lock_timeout` and `statement_timeout`, so a held lock doesn't keep a
+  worker waiting; a 30 s backstop covers the whole job. Finding and opening
+  the store is bounded by `store_connect_timeout` instead, and a store's
+  first-open migrations by the backstop alone, since a migration can
+  legitimately run long. A failed job is retried twice with a backoff; a slot
   missed while every replica was down is not caught up, and the next slot
   does the same work. `okf_housekeeping_runs_total` counts the runs. A
   replica looks a slot up before pushing it, so a slot already scheduled

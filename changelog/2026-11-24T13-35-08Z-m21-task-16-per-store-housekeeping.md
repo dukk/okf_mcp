@@ -22,10 +22,13 @@
 ## Changed
 
 - `housekeeping::schedule` takes a `&Housekeeping` job; `Housekeeping` carries an
-  optional `store`, and `run_on_store` runs a job's store half. Every statement
-  of a store job runs under `lock_timeout` and `statement_timeout` (20 s) with a
-  30 s `tokio` backstop, and no job holds an account and a store transaction at
-  once.
+  optional `store`, and `run_on_store` runs a job's store half. A store job's
+  own prune, count and write statements run under `lock_timeout` and
+  `statement_timeout` (20 s), with a 30 s `tokio` backstop over the whole job.
+  Three things are bounded differently: the registry reads that find and open
+  the store use `store_connect_timeout`, a store's first-open migrations have
+  only the backstop, and `prune_audit`'s settings read uses its own timeout.
+  No job holds an account and a store transaction at once.
 - `audit::prune_catalog` takes a `wait` bound; `changesets::prune_empty` and
   `changesets::open_total` take any executor.
 - Issue #1006: `Stores::all` and the registry row read on a store's first open
