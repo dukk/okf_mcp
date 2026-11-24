@@ -601,11 +601,12 @@ or the account database:
 - the **account database** holds users' names and emails, credential labels,
   team and catalog **names**, who may reach them, and the audit of account
   actions, which names catalogs and teams;
-- the **job queue** holds ids, never a catalog's content;
+- the **job queue** is in the account database; a housekeeping job names a
+  store and a slot, never a catalog's content;
 - every replica's **in-memory caches** hold the content of the catalogs it
   has read, from whichever store;
-- **logs and traces** carry catalog and store names and error text, never
-  content ([Telemetry](#telemetry)).
+- **logs** name catalogs and stores (the local log names the store of a
+  `StoreUnavailable`); [Telemetry](#telemetry) says what is exported.
 
 Say which of these a deployment shares when you describe a store as
 segregated.
