@@ -14,6 +14,8 @@ use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
 use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
 use crate::store::ceiling::MemberAccess;
+use crate::store::changesets;
+use crate::store::cleanups;
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::store::teams;
 use crate::stores::{placement, CatalogDb, StoreName, Stores};
@@ -750,7 +752,7 @@ pub async fn set_owner(
     let previous: Option<(i64, Option<String>, Option<String>)> = sqlx::query_as(
         "UPDATE catalogs c SET owner_team_id = $2 \
          FROM (SELECT id, owner_team_id FROM catalogs \
-               WHERE name = $1 AND provisioned_at IS NOT NULL FOR UPDATE) old \
+               WHERE name = $1 AND provisioned_at IS NOT NULL AND deleted_at IS NULL FOR UPDATE) old \
          WHERE c.id = old.id \
          RETURNING c.id, old.owner_team_id, \
                    (SELECT t.name FROM teams t WHERE t.id = old.owner_team_id)",
@@ -908,7 +910,7 @@ pub async fn update_details(
         "UPDATE catalogs c SET display_name = COALESCE($2, c.display_name), \
                                description = COALESCE($3, c.description) \
          FROM (SELECT id, owner_team_id, display_name, description FROM catalogs \
-               WHERE name = $1 AND provisioned_at IS NOT NULL FOR NO KEY UPDATE) old \
+               WHERE name = $1 AND provisioned_at IS NOT NULL AND deleted_at IS NULL FOR NO KEY UPDATE) old \
          WHERE c.id = old.id \
          RETURNING c.id, old.owner_team_id, old.display_name, old.description",
     )
@@ -1208,7 +1210,7 @@ pub async fn set_maintenance(
     let row: Option<(i64, bool, Option<String>)> = sqlx::query_as(
         "UPDATE catalogs c SET maintenance = $2 \
          FROM (SELECT id, maintenance, owner_team_id FROM catalogs \
-               WHERE name = $1 AND provisioned_at IS NOT NULL FOR NO KEY UPDATE) old \
+               WHERE name = $1 AND provisioned_at IS NOT NULL AND deleted_at IS NULL FOR NO KEY UPDATE) old \
          WHERE c.id = old.id RETURNING c.id, old.maintenance, old.owner_team_id",
     )
     .bind(name)
@@ -1272,7 +1274,7 @@ pub async fn set_maintenance(
 pub async fn list(pool: &PgPool) -> Result<Vec<Catalog>, OkfError> {
     let catalogs = sqlx::query_as::<_, Catalog>(concat!(
         select_catalogs!(),
-        " WHERE c.provisioned_at IS NOT NULL ORDER BY c.name"
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL ORDER BY c.name"
     ))
     .fetch_all(pool)
     .await?;
@@ -1317,10 +1319,11 @@ pub(crate) async fn test_generation(pool: &PgPool, name: &str) -> i64 {
 pub async fn list_in(stores: &Stores) -> Result<Vec<Catalog>, OkfError> {
     let accounts = stores.accounts();
     let mut catalogs = list(accounts.executor()).await?;
-    let placed: Vec<(i64, String)> =
-        sqlx::query_as("SELECT id, store FROM catalogs WHERE provisioned_at IS NOT NULL")
-            .fetch_all(accounts.executor())
-            .await?;
+    let placed: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, store FROM catalogs WHERE provisioned_at IS NOT NULL AND deleted_at IS NULL",
+    )
+    .fetch_all(accounts.executor())
+    .await?;
     let mut by_store: std::collections::HashMap<String, Vec<i64>> =
         std::collections::HashMap::new();
     for (id, store) in placed {
@@ -1357,7 +1360,7 @@ pub async fn find<'e>(executor: impl PgExecutor<'e>, name: &str) -> Result<Catal
     check_name(name)?;
     sqlx::query_as::<_, Catalog>(concat!(
         select_catalogs!(),
-        " WHERE c.provisioned_at IS NOT NULL AND c.name = $1"
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL AND c.name = $1"
     ))
     .bind(name)
     .fetch_optional(executor)
@@ -1537,7 +1540,7 @@ pub async fn row_by_name<'e>(
     }
     let row = sqlx::query_as::<_, CatalogRowColumns>(concat!(
         select_catalog_rows!(),
-        " WHERE c.provisioned_at IS NOT NULL AND c.name = $1"
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL AND c.name = $1"
     ))
     .bind(name)
     .fetch_optional(executor)
@@ -1565,7 +1568,7 @@ pub async fn row_by_id<'e>(
 ) -> Result<Option<CatalogRow>, OkfError> {
     let row = sqlx::query_as::<_, CatalogRowColumns>(concat!(
         select_catalog_rows!(),
-        " WHERE c.provisioned_at IS NOT NULL AND c.id = $1"
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL AND c.id = $1"
     ))
     .bind(id)
     .fetch_optional(executor)
@@ -1601,7 +1604,7 @@ pub async fn rows_by_names<'e>(
     }
     let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
         select_catalog_rows!(),
-        " WHERE c.provisioned_at IS NOT NULL AND c.name = ANY($1) ORDER BY c.name"
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL AND c.name = ANY($1) ORDER BY c.name"
     ))
     .bind(valid)
     .fetch_all(executor)
@@ -1660,7 +1663,7 @@ pub async fn page<'e>(
     }
     let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
         select_catalog_rows!(),
-        " WHERE c.provisioned_at IS NOT NULL AND ($1::text IS NULL OR c.name > $1) \
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL AND ($1::text IS NULL OR c.name > $1) \
          ORDER BY c.name LIMIT $2"
     ))
     .bind(after)
@@ -1706,17 +1709,17 @@ pub async fn ceiling_page<'e>(
     // `unnest`), each an index range scan stopping after `limit` rows.
     let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
         select_catalog_rows!(),
-        " WHERE c.provisioned_at IS NOT NULL AND c.id IN ( \
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL AND c.id IN ( \
               SELECT owned.id FROM unnest($1::text[]) AS team (id) \
               CROSS JOIN LATERAL ( \
                   SELECT i.id FROM catalogs i \
                   WHERE i.owner_team_id = team.id AND i.member_access <> 'none' \
-                    AND i.provisioned_at IS NOT NULL \
+                    AND i.provisioned_at IS NOT NULL AND i.deleted_at IS NULL \
                     AND ($3::text IS NULL OR i.name > $3) \
                   ORDER BY i.name LIMIT $4) owned \
               UNION \
               (SELECT i.id FROM catalogs i \
-               WHERE i.id = ANY($2) AND i.provisioned_at IS NOT NULL \
+               WHERE i.id = ANY($2) AND i.provisioned_at IS NOT NULL AND i.deleted_at IS NULL \
                  AND ($3::text IS NULL OR i.name > $3) \
                ORDER BY i.name LIMIT $4)) \
           ORDER BY c.name LIMIT $4"
@@ -1738,10 +1741,81 @@ mod rows_tests;
 #[path = "catalogs_unprovisioned_tests.rs"]
 mod unprovisioned_tests;
 
+/// A pause inside [`delete_on`], between its store steps and its account
+/// writes, for the race tests: a catalog id (in a named account database,
+/// since tests run side by side and every database counts ids from 1) with
+/// a pair of barriers makes the delete of that catalog stop there until the
+/// test lets it go.
+#[cfg(test)]
+pub(crate) mod delete_pause {
+    use std::collections::HashMap;
+    use std::sync::{Arc, LazyLock, Mutex};
+
+    use tokio::sync::Barrier;
+
+    /// The two barriers one catalog's delete meets: it arrives at `reached`
+    /// and then waits at `resume`; the test waits at `reached`, does its
+    /// work, and waits at `resume`.
+    #[derive(Clone)]
+    pub(crate) struct Pause {
+        /// Met when the delete has taken its store locks.
+        pub reached: Arc<Barrier>,
+        /// Met when the test lets the delete go on.
+        pub resume: Arc<Barrier>,
+    }
+
+    static PAUSES: LazyLock<Mutex<HashMap<(String, i64), Pause>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    /// Makes the next delete of catalog `id` in account database `database`
+    /// pause.
+    ///
+    /// # Returns
+    /// The barriers the test meets.
+    pub(crate) fn set(database: &str, id: i64) -> Pause {
+        let pause = Pause {
+            reached: Arc::new(Barrier::new(2)),
+            resume: Arc::new(Barrier::new(2)),
+        };
+        PAUSES
+            .lock()
+            .expect("the pauses lock")
+            .insert((database.to_string(), id), pause.clone());
+        pause
+    }
+
+    /// Called by the delete: meets the barriers if a test set them.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`] reading the database's name.
+    pub(super) async fn wait(
+        conn: &mut sqlx::PgConnection,
+        id: i64,
+    ) -> Result<(), crate::error::OkfError> {
+        let database: String = sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(&mut *conn)
+            .await?;
+        let pause = PAUSES
+            .lock()
+            .expect("the pauses lock")
+            .remove(&(database, id));
+        if let Some(pause) = pause {
+            pause.reached.wait().await;
+            pause.resume.wait().await;
+        }
+        Ok(())
+    }
+}
+
 // Two-step creation and its recovery, tested away from `tests` below.
 #[cfg(test)]
 #[path = "catalogs_provision_tests.rs"]
 mod provision_tests;
+
+// Two-step deletion, tested away from `tests` below.
+#[cfg(test)]
+#[path = "catalogs_delete_tests.rs"]
+mod delete_tests;
 
 /// Deletes a catalog with its documents, history, changesets and grants
 /// (cascading foreign keys), under the catalog's lock, and bumps the
@@ -1806,25 +1880,40 @@ pub async fn delete_in(
     delete_on(&db, name, force, actor, now).await
 }
 
-/// Deletes catalog `name`, whose data is on the store `db`.
+/// Deletes catalog `name`, whose data is on the store `db`, in two steps
+/// (plan decisions P12 and P13, issue #972): this marks it deleted, and the
+/// housekeeping task `CleanupStores` removes its data and then its registry
+/// row ([`crate::store::cleanups`]).
 ///
-/// Under the catalog's lock (taken on the store) it locks the catalog's
-/// `catalog_state` row and its open changesets (`FOR UPDATE`) before looking
-/// for unpublished work. A foreign-key check takes `FOR KEY SHARE` on the
-/// row it references, which conflicts with `FOR UPDATE`, so a changeset or
-/// entry being written concurrently is either committed first (and seen) or
-/// held off until the delete ends (and then fails its foreign-key check):
-/// the refusal cannot be raced. Writers take that row
-/// (`FOR KEY SHARE`, `changesets::lock_catalog`) before any changeset or
-/// entry, the same order as here, so a write and a delete wait for each
-/// other rather than deadlock: a write that waited finds the catalog gone.
+/// # The order, and why it cannot deadlock
+/// Every lock and connection is taken in the one global order of
+/// [`CatalogDb::begin`]: the account connection; the account row locks (the
+/// people the entry resolves, [`audit::lock_people`]; the keys naming the
+/// catalog as their default; the catalog's registry row `FOR UPDATE`; the
+/// `stores` row `FOR KEY SHARE`, which the cleanup row's foreign key would
+/// take); the account audit ids the entry names ([`audit::resolve_actor`]),
+/// created or waited for now; and only then the store connection, whose
+/// locks are the catalog's advisory lock, its `catalog_state` row
+/// `FOR UPDATE` and its open changesets. Everything after that on the
+/// account connection (the entry, `deleted_at`, the cleanup row, the
+/// invalidation) is an insert or an update of a row this transaction
+/// holds, which waits for nobody. So a transaction that holds the store's
+/// connection or locks never waits for an account row: the edge that would
+/// close a cross-database cycle, which PostgreSQL cannot see when the
+/// store is a separate database (or has one connection), does not exist.
 ///
-/// The catalog's registry row and audit entry go in an account transaction
-/// that wraps the store's. The account side commits first: a failure of the
-/// store commit then leaves data no registry row names (harmless; a later
-/// task's cleanup list removes it), where the other order would leave a
-/// registry row with no data. It records `catalog.deleted` before deleting
-/// the row (the entry's teams are read from it).
+/// # What it guarantees
+/// Writers take `catalog_state` `FOR KEY SHARE` first
+/// ([`changesets::lock_catalog`]), so under the `FOR UPDATE` here an edit
+/// either committed before (a delete without `force` then sees its entries
+/// and refuses), or waits, and finds the catalog marked deleted once this
+/// ends, and fails. With `force`, the open changesets are discarded in this
+/// transaction. The account transaction commits first: the catalog is gone
+/// from every lookup (`catalogs.deleted_at`; its name stays reserved, P6)
+/// and the cleanup is owed (`store_cleanups`, written in the same
+/// transaction, P13). If that commit fails, the store transaction, still
+/// open, rolls back and nothing has changed. If the store commit fails
+/// after it, the data is only unmarked: the cleanup removes it anyway.
 ///
 /// # Arguments
 /// * `db` - the store the catalog is on.
@@ -1846,8 +1935,7 @@ pub async fn delete_on(
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<(), OkfError> {
-    // The account connection first, then the store's, as every change that
-    // uses both takes them.
+    // 1. The account connection, and every account row lock.
     let mut account_tx = db.accounts().begin().await?;
     audit::lock_people(
         &mut account_tx,
@@ -1859,33 +1947,37 @@ pub async fn delete_on(
     )
     .await?;
     let catalog = find(&mut *account_tx, name).await?;
-    // The keys whose default this catalog is, which the delete below clears
-    // (`ON DELETE SET NULL`), locked in id order BEFORE the store's
-    // connection and the changesets' locks. A user deletion holds its key
-    // and then waits for a changeset the catalog's store transaction holds;
-    // if this delete took the changesets first and the key afterwards, the
-    // two would wait on each other across the databases, unseen by
-    // PostgreSQL (acquisition order, issue #970).
+    // The keys whose default this catalog is, which the cleanup clears
+    // (`ON DELETE SET NULL`), in id order.
     sqlx::query("SELECT id FROM api_keys WHERE default_catalog_id = $1 ORDER BY id FOR UPDATE")
         .bind(catalog.id)
         .execute(&mut *account_tx)
         .await?;
-    let mut tx = db.begin().await?;
-    lock(&mut tx, catalog.id).await?;
-    // A delete that waited on the lock may find the row already gone.
-    let still_there: Option<(String, Option<String>)> =
-        sqlx::query_as("SELECT store, owner_team_id FROM catalogs WHERE id = $1 FOR UPDATE")
-            .bind(catalog.id)
-            .fetch_optional(&mut *account_tx)
-            .await?;
-    let Some((store, owner_team_id)) =
-        still_there.filter(|(store, _)| store == db.store().as_str())
+    let registered: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT store, owner_team_id FROM catalogs \
+         WHERE id = $1 AND provisioned_at IS NOT NULL AND deleted_at IS NULL FOR UPDATE",
+    )
+    .bind(catalog.id)
+    .fetch_optional(&mut *account_tx)
+    .await?;
+    // A delete that waited on the row may find it already deleted.
+    let Some((store, owner_team_id)) = registered.filter(|(store, _)| store == db.store().as_str())
     else {
         return Err(OkfError::CatalogNotSelected {
             catalog: name.to_string(),
         });
     };
-    debug_assert_eq!(store, db.store().as_str());
+    sqlx::query("SELECT 1 FROM stores WHERE name = $1 FOR KEY SHARE")
+        .bind(&store)
+        .execute(&mut *account_tx)
+        .await?;
+    // The entry's account ids, resolved (and any row another transaction
+    // is still creating waited for) before the store's connection.
+    audit::resolve_actor(&mut account_tx, actor, catalog.id).await?;
+
+    // 2. The store: its locks, then its checks.
+    let mut tx = db.begin().await?;
+    lock(&mut tx, catalog.id).await?;
     // The generation no publish can move any more. A half-created catalog
     // has no row yet: nothing was published to it.
     let generation: i64 =
@@ -1896,12 +1988,12 @@ pub async fn delete_on(
             .unwrap_or(0);
     // In id order, so two transactions locking several changesets cannot
     // take them in opposite orders.
-    sqlx::query(
+    let open: Vec<i64> = sqlx::query_scalar(
         "SELECT id FROM changesets WHERE catalog_id = $1 AND state = 'open' \
          ORDER BY id FOR UPDATE",
     )
     .bind(catalog.id)
-    .execute(&mut *tx)
+    .fetch_all(&mut *tx)
     .await?;
     // An open changeset with no entries holds no work, so it does not block.
     let unpublished: bool = sqlx::query_scalar(
@@ -1919,6 +2011,21 @@ pub async fn delete_on(
             ),
         });
     }
+    for id in open {
+        changesets::set_state(&mut tx, id, changesets::ChangesetState::Discarded, now).await?;
+    }
+    // What a writer that waited on the lock reads when it gets the row.
+    sqlx::query("UPDATE catalog_state SET deleted_at = $2 WHERE id = $1")
+        .bind(catalog.id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+    // A test stops here to start an edit that queues behind the lock.
+    #[cfg(test)]
+    delete_pause::wait(&mut account_tx, catalog.id).await?;
+
+    // 3. The account writes, on the transaction that already holds its rows.
     record_catalog(
         &mut account_tx,
         actor,
@@ -1932,15 +2039,12 @@ pub async fn delete_on(
         now,
     )
     .await?;
-    sqlx::query("DELETE FROM catalogs WHERE id = $1")
+    sqlx::query("UPDATE catalogs SET deleted_at = $2 WHERE id = $1")
         .bind(catalog.id)
+        .bind(now)
         .execute(&mut *account_tx)
         .await?;
-    // The foreign keys carry the delete through every table of the catalog.
-    sqlx::query("DELETE FROM catalog_state WHERE id = $1")
-        .bind(catalog.id)
-        .execute(&mut *tx)
-        .await?;
+    cleanups::owe_catalog(&mut account_tx, db.store(), catalog.id, now).await?;
     // The catalog, and its owner's list of catalogs.
     let mut invalidations = vec![Invalidation::CatalogMeta {
         id: catalog.id,
@@ -1948,8 +2052,19 @@ pub async fn delete_on(
     }];
     invalidations.extend(owner_team_id.map(|id| Invalidation::Team { id }));
     invalidate(&mut account_tx, &invalidations).await?;
+
+    // 4. Account first: the catalog is gone from lookups. A failure here
+    // drops `tx`, which rolls the store back.
     account_tx.commit().await?;
-    tx.commit().await?;
+    // The delete has happened. A store commit that fails now only leaves
+    // the data unmarked, which the owed cleanup removes all the same, so
+    // the caller is not told the delete failed.
+    if let Err(error) = tx.commit().await {
+        tracing::warn!(
+            kind = db.classify(error).kind(),
+            "the store side of a catalog deletion did not commit; the cleanup removes it"
+        );
+    }
     Ok(())
 }
 
@@ -2801,6 +2916,8 @@ pub(crate) mod tests {
             .unwrap();
 
         assert!(list(&db.pool).await.unwrap().is_empty());
+        // The data goes with the cleanup the delete owes.
+        crate::store::cleanups::settle_for_tests(&db.pool).await;
         let entries: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.changeset_entries")
             .fetch_one(&db.pool)
             .await
@@ -2991,17 +3108,23 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
+        // Another delete's account side: the registry row, held until it
+        // commits (a delete takes it before it takes the store).
         let mut first = db.pool.begin().await.unwrap();
-        lock(&mut first, pg.id).await.unwrap();
+        sqlx::query("SELECT id FROM catalogs WHERE id = $1 FOR UPDATE")
+            .bind(pg.id)
+            .execute(&mut *first)
+            .await
+            .unwrap();
         // `tokio::spawn` runs the second delete concurrently, like a thread;
-        // it blocks on the lock `first` holds.
+        // it blocks on the row `first` holds.
         let pool = db.pool.clone();
         let second = tokio::spawn(async move {
             delete(&pool, "pg", false, &AuditActor::cli(), Utc::now()).await
         });
         until_a_lock_is_awaited(&db.pool).await;
 
-        sqlx::query("DELETE FROM catalogs WHERE id = $1")
+        sqlx::query("UPDATE catalogs SET deleted_at = now() WHERE id = $1")
             .bind(pg.id)
             .execute(&mut *first)
             .await

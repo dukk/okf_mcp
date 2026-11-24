@@ -66,7 +66,6 @@ use crate::store::teams::{self, MemberChange, Membership, NewTeam, Role, TeamRec
 use crate::store::unassigned;
 use crate::store::users::{self, AdminChange, NewUser, UserRecord};
 use crate::store::{sign_in_events, user_sessions};
-use crate::stores::StoreName;
 use crate::telemetry::subscriber::split_event;
 
 /// One user as the API shows it.
@@ -1080,7 +1079,6 @@ async fn delete_user(
     };
     users::delete_on(
         app.accounts().executor(),
-        &app.store_db(&StoreName::main()).await?,
         &name,
         options,
         &actor,

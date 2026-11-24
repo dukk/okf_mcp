@@ -284,7 +284,7 @@ impl LabelLookup {
                 sqlx::query_as::<_, CatalogLoad>(
                     "SELECT c.name, c.display_name, c.description, t.name AS owner_team \
                      FROM catalogs c LEFT JOIN teams t ON t.id = c.owner_team_id \
-                     WHERE c.name = ANY($1)",
+                     WHERE c.name = ANY($1) AND c.deleted_at IS NULL",
                 )
                 .bind(&catalogs)
                 .fetch_all(&self.pool)

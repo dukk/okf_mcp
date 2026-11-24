@@ -31,13 +31,11 @@ use crate::store::teams::{self, MemberChange, Membership, NewTeam, Role, TeamRec
 use crate::store::unassigned;
 use crate::store::user_sessions::{self, SessionInfo};
 use crate::store::users::{self, AdminChange, NewUser, UserRecord};
-use crate::stores::{StoreName, Stores};
 
 /// Runs `okf-mcp user ...`.
 ///
 /// # Arguments
 /// * `pool` - the migrated database.
-/// * `stores` - the registry of stores (a user deletion reaches the `main` store).
 /// * `config` - for `user invite`: `public_url` (the link's origin) and the
 ///   `[auth]` defaults under the stored settings (`setup_link_ttl`).
 /// * `command` - which user subcommand.
@@ -57,7 +55,6 @@ use crate::stores::{StoreName, Stores};
 #[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn user(
     pool: &PgPool,
-    stores: &Stores,
     config: &Config,
     command: UserCommand,
     now: DateTime<Utc>,
@@ -99,12 +96,10 @@ pub(super) async fn user(
         UserCommand::Delete { name } => {
             // `allow_last_admin: true`: operator access may delete the last
             // admin user, as it may clear the last admin flag.
-            // The store half of the deletion runs on the `main` store, from the
-            // registry (one pool per store, as in the server).
-            let main = stores.get(&StoreName::main()).await?;
+            // The stores' half (discarding the keys' open changesets) is owed in
+            // `store_cleanups` and done by the server's housekeeping.
             let deleted = users::delete_on(
                 pool,
-                &main,
                 &name,
                 users::DeleteOptions::OPERATOR,
                 &AuditActor::cli(),
@@ -112,9 +107,9 @@ pub(super) async fn user(
             )
             .await?;
             format!(
-                "deleted user {name} ({} key(s) and grant(s), {} sign-in code(s), \
-                 {} open changeset(s) discarded)\n",
-                deleted.keys, deleted.codes, deleted.discarded
+                "deleted user {name} ({} key(s) and grant(s), {} sign-in code(s); their open \
+                 changesets are discarded by the server's store cleanup)\n",
+                deleted.keys, deleted.codes
             )
         }
         // `off: _` ignores the field: clap made `--on` and `--off` exclusive
@@ -640,13 +635,7 @@ mod tests {
         let pool = &db.pool;
         let config = test_config();
         match parsed.command.expect("a subcommand") {
-            Command::User(command) => {
-                let stores = Stores::new(
-                    pool.clone(),
-                    crate::stores::PoolSettings::from_config(&config),
-                );
-                user(pool, &stores, &config, command, now).await
-            }
+            Command::User(command) => user(pool, &config, command, now).await,
             Command::Team(command) => team(pool, command, now).await,
             Command::Unassigned => unassigned(pool).await,
             Command::Settings(command) => {
