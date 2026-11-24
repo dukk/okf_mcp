@@ -551,7 +551,7 @@ pub async fn claim(
         &result,
     )
     .await?;
-    watch.commit(tx, db, Some(&result.run_id)).await?;
+    watch.commit(tx, Some(&result.run_id)).await?;
     Ok(result)
 }
 
@@ -617,7 +617,7 @@ pub async fn renew(
         || now >= expiry
         || now >= deadline
     {
-        watch.commit(tx, db, None).await?;
+        watch.commit(tx, None).await?;
         return Err(refused("maintenance lease has expired or ended"));
     }
     let current: Option<i32> = sqlx::query_scalar(
@@ -633,7 +633,7 @@ pub async fn renew(
         let run_id: String = row.try_get("run_id")?;
         sqlx::query("UPDATE maintenance_runs SET state='completed', ended_at=$3 WHERE catalog_id=$1 AND id=$2 AND state='running' AND NOT EXISTS (SELECT 1 FROM maintenance_work WHERE catalog_id=$1 AND run_id=$2 AND outcome IS NULL)")
             .bind(catalog_id).bind(&run_id).bind(now).execute(&mut *tx).await?;
-        watch.commit(tx, db, None).await?;
+        watch.commit(tx, None).await?;
         return Err(refused("maintenance source changed"));
     }
     let renewed = lease_end(now, deadline);
@@ -674,7 +674,7 @@ pub async fn renew(
         &result,
     )
     .await?;
-    watch.commit(tx, db, None).await?;
+    watch.commit(tx, None).await?;
     Ok(result)
 }
 
@@ -748,7 +748,7 @@ pub async fn close(
         let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM maintenance_work WHERE catalog_id=$1 AND run_id=$2 AND outcome IS NULL")
             .bind(catalog_id).bind(run_id).fetch_one(&mut *tx).await?;
         if desired == RunState::Completed && remaining > 0 {
-            watch.commit(tx, db, None).await?;
+            watch.commit(tx, None).await?;
             return Err(refused("cannot complete a run with active work"));
         }
         if remaining > 0 {
@@ -767,7 +767,7 @@ pub async fn close(
         || status == "completed" && desired == RunState::Completed)
         && (status != "failed" || now < row.try_get::<DateTime<Utc>, _>("deadline")?)
     {
-        watch.commit(tx, db, None).await?;
+        watch.commit(tx, None).await?;
         return Err(refused("maintenance run already ended"));
     }
     let result = summary(&mut tx, catalog_id, run_id).await?;
@@ -781,6 +781,6 @@ pub async fn close(
         &result,
     )
     .await?;
-    watch.commit(tx, db, None).await?;
+    watch.commit(tx, None).await?;
     Ok(result)
 }

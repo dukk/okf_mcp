@@ -33,7 +33,7 @@ use crate::okf::ops::replay::{replay, ReplayOp};
 use crate::okf::rules;
 use crate::okf::snapshot::Snapshot;
 use crate::overlay::{build_overlay, Overlay};
-use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
+use crate::store::audit::{self, Action, AuditActor, CatalogEntry, People};
 use crate::store::catalogs::{self, is_unique_violation, CatalogGeneration};
 use crate::store::changesets::{self, ChangesetRow, ChangesetState, EntryRow};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
@@ -212,15 +212,18 @@ async fn publish_locked(
     let lock_started = std::time::Instant::now();
     let locks = async {
         let publishing = app.publish_lock(state.id()).await;
-        // The account transaction (the audit entry's rows) wraps the store
-        // transaction; the store commits first, then this (plan Task 11's
-        // interim, until Task 12 moves the entry into the store).
+        // The account transaction (the audit entry's rows, the invalidation
+        // notice) wraps the store transaction; the store commits first, then
+        // this. The entry itself is written in the store transaction, from
+        // ids resolved here (plan Task 12).
         let mut account_tx = app.accounts().begin().await?;
         // The users the entry resolves (the actor, its key's owner and the
         // person of a personal owner team), before the changeset: the
         // order `users::delete` takes them in (issue #418). After the
         // mutex, so no waiter on it holds a row lock.
         lock_people(&mut account_tx, audit, state.name()).await?;
+        // Still before the store connection: the entry's account ids.
+        let resolved = audit::resolve_actor(&mut account_tx, audit, state.id()).await?;
         let mut tx = db.begin().await?;
         catalogs::lock(&mut tx, state.id()).await?;
         changesets::lock_catalog(&mut tx, state.id()).await?;
@@ -230,14 +233,14 @@ async fn publish_locked(
             .ok_or_else(|| OkfError::Refused {
                 reason: format!("changeset {} is no longer open", changeset.handle),
             })?;
-        Ok::<_, OkfError>((publishing, account_tx, tx, locked))
+        Ok::<_, OkfError>((publishing, account_tx, tx, locked, resolved))
     }
     .instrument(tracing::info_span!("okf.publish.lock"))
     .await;
     // A refusal waited too, so the wait is recorded before `?` returns it.
     app.metrics()
         .publish_lock_wait(state.name(), lock_started.elapsed());
-    let (_publishing, mut account_tx, mut tx, locked) = locks?;
+    let (_publishing, mut account_tx, mut tx, locked, resolved) = locks?;
     let now = app.clock().now();
     // Again under the lock: a discard may have emptied it meanwhile.
     let entries = changesets::entries(&mut *tx, locked.id).await?;
@@ -288,12 +291,10 @@ async fn publish_locked(
         let mut changed = None;
         if !revisions.is_empty() {
             let generation = catalogs::bump_generation(&mut tx, state.id()).await?;
-            let teams = audit::catalog_teams(&mut account_tx, state.id()).await?;
-            let entry = Entry {
+            let entry = CatalogEntry {
                 action: Action::CatalogPublished,
-                target: Target::Catalog(state.name()),
-                person: None,
-                teams: &teams,
+                catalog_id: state.id(),
+                catalog: state.name(),
                 // The diff stays in the catalog's history, found by the handle.
                 details: serde_json::json!({
                     "changeset": locked.handle,
@@ -302,7 +303,8 @@ async fn publish_locked(
                     "generation_to": generation,
                 }),
             };
-            audit::record(&mut account_tx, audit, &entry, now).await?;
+            // In the store transaction: it commits with the revisions it records.
+            audit::record_catalog(&mut tx, &resolved, &entry, now).await?;
             // Every replica's listener refreshes the catalog once this commits.
             invalidate(
                 &mut account_tx,

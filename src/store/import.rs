@@ -13,8 +13,8 @@ use crate::okf::analysis::lint::{lint, LintReport};
 use crate::okf::rules::is_machinery;
 use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
-use crate::store::audit::{self, Action, AuditActor, People};
-use crate::store::catalogs::{self, CatalogEvent, CatalogGeneration};
+use crate::store::audit::{self, Action, AuditActor, CatalogEntry, People};
+use crate::store::catalogs::{self, CatalogGeneration};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionRecord};
 use crate::stores::CatalogDb;
 
@@ -195,6 +195,9 @@ pub async fn import(
     let mut tx = db.begin().await?;
     // Under the lock, and read again: see `lock_by_name`.
     let found = catalogs::lock_by_name(&mut account_tx, &mut tx, catalog).await?;
+    // The entry's account ids, resolved on the account transaction (the
+    // rows `lock_people` holds) for the store transaction to write.
+    let resolved = audit::resolve_actor(&mut account_tx, options.audit, found.id).await?;
     // Under the lock, before anything is written: a replacement under the
     // same name is not what the caller was let into.
     catalogs::check_incarnation(catalog, found.id, options.expect_catalog_id)?;
@@ -299,10 +302,11 @@ pub async fn import(
             ImportScope::Everything => "everything",
             ImportScope::Machinery => "machinery",
         };
-        catalogs::record_catalog(
-            &mut account_tx,
-            options.audit,
-            CatalogEvent {
+        // In the store transaction: the entry commits with the import.
+        audit::record_catalog(
+            &mut tx,
+            &resolved,
+            &CatalogEntry {
                 action: Action::CatalogImported,
                 catalog_id: found.id,
                 catalog,
@@ -1178,8 +1182,11 @@ mod tests {
     async fn a_failed_audit_write_fails_the_import() {
         let db = test_db().await;
         create_empty(&db.pool).await;
-        crate::http::api::testing::fail_on(&db.pool, "BEFORE INSERT ON audit_entries FOR EACH ROW")
-            .await;
+        crate::http::api::testing::fail_on(
+            &db.pool,
+            "BEFORE INSERT ON catalog.catalog_audit_entries FOR EACH ROW",
+        )
+        .await;
 
         let refused = import(
             &crate::stores::CatalogDb::main_in(&db.pool),

@@ -626,9 +626,8 @@ async fn an_ended_runs_entry_survives_the_catalogs_deletion_before_it_is_written
     // Arrange: the target is read, then the catalog is deleted.
     let db = test_db().await;
     let catalog = setup(&db.pool, &[]).await;
-    let target = super::AuditTarget::read(&CatalogDb::main_of(&db.pool), catalog)
-        .await
-        .unwrap();
+    let store = CatalogDb::main_of(&db.pool);
+    let mut target = super::AuditTarget::read(&store, catalog).await.unwrap();
     sqlx::query("DELETE FROM catalogs WHERE id = $1")
         .bind(catalog)
         .execute(&db.pool)
@@ -643,15 +642,32 @@ async fn an_ended_runs_entry_survives_the_catalogs_deletion_before_it_is_written
         findings: 2,
     };
 
-    // Act
-    let mut conn = db.pool.acquire().await.unwrap();
-    super::record_ended_run(&mut conn, &target, &run)
+    // Act: what `RunWatch::commit` does for an ended run.
+    let credential = crate::store::audit::RunCredential {
+        credential_id: run.credential_id.clone(),
+        key_id: run.key_id.clone(),
+    };
+    let resolved = crate::store::audit::resolve_run(
+        &mut target.account_tx,
+        &credential,
+        target.owner_team_id.as_deref(),
+    )
+    .await
+    .unwrap();
+    let entry = crate::store::audit::CatalogEntry {
+        action: crate::store::audit::Action::CatalogMaintenanceRun,
+        catalog_id: catalog,
+        catalog: &target.name,
+        details: serde_json::json!({"run": run.id, "state": run.state, "findings": run.findings}),
+    };
+    let mut conn = store.executor().acquire().await.unwrap();
+    crate::store::audit::record_catalog(&mut conn, &resolved, &entry, run.at)
         .await
         .unwrap();
 
-    // Assert: exactly one entry, naming the deleted catalog.
+    // Assert: exactly one entry, in the store, naming the deleted catalog.
     let entries: Vec<(String, String)> = sqlx::query_as(
-        "SELECT target_name, details->>'run' FROM audit_entries \
+        "SELECT target_name, details->>'run' FROM catalog.catalog_audit_entries \
          WHERE action = 'catalog.maintenance_run'",
     )
     .fetch_all(&db.pool)

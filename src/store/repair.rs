@@ -25,8 +25,8 @@ use crate::okf::ops::{repair_catalog, OpContext, OpOutcome};
 use crate::okf::rules;
 use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
-use crate::store::audit::{self, Action, AuditActor, People};
-use crate::store::catalogs::{self, CatalogEvent, CatalogGeneration};
+use crate::store::audit::{self, Action, AuditActor, CatalogEntry, People};
+use crate::store::catalogs::{self, CatalogGeneration};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::store::import::{existing_rows, ExistingRow};
 use crate::stores::{AccountDb, CatalogDb};
@@ -113,6 +113,9 @@ pub async fn repair(
     // because one edge is a pool wait.
     let mut tx = db.begin().await?;
     let found = catalogs::lock_by_name(&mut account_tx, &mut tx, catalog).await?;
+    // The entry's account ids, resolved on the account transaction (the
+    // rows `lock_people` holds) for the store transaction to write.
+    let resolved = audit::resolve_actor(&mut account_tx, options.audit, found.id).await?;
     let existing = existing_rows(&mut tx, found.id).await?;
     let live: Vec<(String, StoredFile)> = existing
         .values()
@@ -155,10 +158,11 @@ pub async fn repair(
     }
     write_files(&mut tx, found.id, &existing, &files, options).await?;
     let generation = catalogs::bump_generation(&mut tx, found.id).await?;
-    catalogs::record_catalog(
-        &mut account_tx,
-        options.audit,
-        CatalogEvent {
+    // In the store transaction: the entry commits with the repair.
+    audit::record_catalog(
+        &mut tx,
+        &resolved,
+        &CatalogEntry {
             action: Action::CatalogRepaired,
             catalog_id: found.id,
             catalog,
@@ -650,8 +654,11 @@ mod tests {
     async fn a_failed_audit_write_fails_the_repair() {
         let db = test_db().await;
         legacy(&db.pool, "pg", "", &[("a.md", NOTE)]).await;
-        crate::http::api::testing::fail_on(&db.pool, "BEFORE INSERT ON audit_entries FOR EACH ROW")
-            .await;
+        crate::http::api::testing::fail_on(
+            &db.pool,
+            "BEFORE INSERT ON catalog.catalog_audit_entries FOR EACH ROW",
+        )
+        .await;
         let audit = AuditActor::cli();
 
         let refused = repair(
