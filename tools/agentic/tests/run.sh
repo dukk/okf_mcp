@@ -1208,6 +1208,132 @@ EOF
         || die "cargo got SQLX_OFFLINE=$(cat "$fx/sqlx_offline"), want true"
 }
 
+# --- remove-worktree.sh ---
+
+# A worktree of the throwaway repo on its own branch. With <cargo> it carries a
+# committed Cargo.toml (so git sees it as clean) and gets a stub `cargo` that
+# logs its directory and whether the worktree existed, and prints cargo's
+# summary line; `cargo.fail` in the fixtures makes it fail.
+rw_worktree() {
+    rw_branch=rw-$RANDOM$RANDOM
+    rw_wt=$work/$rw_branch
+    git -C "$repo" worktree add -q -b "$rw_branch" "$rw_wt" main
+    if [ "${1:-}" = cargo ]; then
+        echo '[package]' >"$rw_wt/Cargo.toml"
+        git -C "$rw_wt" add Cargo.toml
+        git_quiet -C "$rw_wt" commit -q -m cargo
+    fi
+    mkdir -p "$fx/bin"
+    cat >"$fx/bin/cargo" <<'EOS'
+#!/usr/bin/env bash
+printf '%s exists=%s\n' "$PWD" "$([ -d "$PWD" ] && echo yes)" >>"$GH_FIXTURES/cargo.log"
+[ ! -e "$GH_FIXTURES/cargo.fail" ] || { echo "error: clean failed" >&2; exit 101; }
+[ ! -e "$GH_FIXTURES/cargo.hang" ] || exec sleep 30
+echo "     Removed 12 files, 1.5GiB total" >&2
+EOS
+    chmod +x "$fx/bin/cargo"
+}
+
+run_remove() {
+    out=$(cd "$repo" && PATH="$fx/bin:$PATH" AGENTIC_BASE_REF=main timeout 20 \
+        "$tools/remove-worktree.sh" "$@" 2>&1)
+    rc=$?
+}
+
+test_remove_refuses_the_main_checkout() {
+    new_fixtures; rw_worktree
+    run_remove "$repo"
+    want_rc 1; want_out "REFUSE: $repo is the main checkout"
+}
+
+test_remove_refuses_an_unregistered_path() {
+    new_fixtures; rw_worktree
+    run_remove "$work/elsewhere"
+    want_rc 1; want_out "is not a registered worktree"
+    [ -d "$work/elsewhere" ] || die "removed it"
+}
+
+test_remove_refuses_with_a_process_inside() {
+    new_fixtures; rw_worktree cargo
+    (cd "$rw_wt" && exec sleep 30) >/dev/null 2>&1 &
+    rw_pid=$!
+    trap 'kill "$rw_pid" 2>/dev/null' EXIT
+    sleep 0.3
+    run_remove "$rw_wt"
+    want_rc 1; want_out "processes are running inside"; want_out "$rw_pid $rw_wt sleep"
+    case "$out" in *"sleep 30"*) die "printed the command line: $out" ;; esac
+    [ -d "$rw_wt" ] || die "removed it"
+    [ ! -e "$fx/cargo.log" ] || die "ran cargo clean"
+}
+
+test_remove_cleans_then_removes() {
+    new_fixtures; rw_worktree cargo
+    run_remove "$rw_wt"
+    want_rc 0; want_out "REMOVED $rw_wt (cargo clean: removed 12 files, 1.5GiB total)"
+    [ "$(cat "$fx/cargo.log")" = "$rw_wt exists=yes" ] || die "cargo ran: $(cat "$fx/cargo.log")"
+    [ ! -e "$rw_wt" ] || die "worktree still there"
+    git -C "$repo" rev-parse -q --verify "refs/heads/$rw_branch" >/dev/null || die "branch gone"
+}
+
+test_remove_keeps_the_worktree_when_clean_fails() {
+    new_fixtures; rw_worktree cargo; touch "$fx/cargo.fail"
+    run_remove "$rw_wt"
+    want_rc 1; want_out "REFUSE: cargo clean failed (exit 101)"; want_out "error: clean failed"
+    [ -d "$rw_wt" ] || die "removed it"
+}
+
+test_remove_keeps_the_worktree_when_clean_times_out() {
+    new_fixtures; rw_worktree cargo; touch "$fx/cargo.hang"
+    out=$(cd "$repo" && PATH="$fx/bin:$PATH" AGENTIC_BASE_REF=main AGENTIC_CLEAN_TIMEOUT=1 \
+        timeout 20 "$tools/remove-worktree.sh" "$rw_wt" 2>&1)
+    rc=$?
+    want_rc 1; want_out "timed out after 1 s"
+    [ -d "$rw_wt" ] || die "removed it"
+}
+
+test_remove_skips_clean_without_cargo_toml() {
+    new_fixtures; rw_worktree
+    run_remove "$rw_wt"
+    want_rc 0; want_out "no Cargo.toml, cargo clean skipped"
+    [ ! -e "$fx/cargo.log" ] || die "ran cargo"
+}
+
+test_remove_deletes_a_merged_branch_with_branch() {
+    new_fixtures; rw_worktree
+    run_remove "$rw_wt" --branch
+    want_rc 0; want_out "deleted branch $rw_branch"
+    ! git -C "$repo" rev-parse -q --verify "refs/heads/$rw_branch" >/dev/null || die "branch kept"
+}
+
+test_remove_refuses_an_unmerged_branch_unless_forced() {
+    new_fixtures; rw_worktree cargo
+    run_remove "$rw_wt" --branch
+    want_rc 1; want_out "is not merged into main"
+    [ -d "$rw_wt" ] && [ ! -e "$fx/cargo.log" ] || die "changed something before refusing"
+    run_remove "$rw_wt" --force-branch
+    want_rc 0; want_out "deleted branch $rw_branch"
+    ! git -C "$repo" rev-parse -q --verify "refs/heads/$rw_branch" >/dev/null || die "branch kept"
+}
+
+# A sub-issue branch merged into a milestone branch, not main: --base names it.
+test_remove_deletes_a_branch_merged_into_the_given_base() {
+    new_fixtures; rw_worktree cargo
+    git -C "$repo" branch -q "milestone-$rw_branch" "$rw_branch"
+    run_remove "$rw_wt" --branch
+    want_rc 1; want_out "is not merged into main"
+    run_remove "$rw_wt" --branch --base "milestone-$rw_branch"
+    want_rc 0; want_out "deleted branch $rw_branch"
+    ! git -C "$repo" rev-parse -q --verify "refs/heads/$rw_branch" >/dev/null || die "branch kept"
+}
+
+test_remove_wants_a_ref_after_base() {
+    new_fixtures; rw_worktree
+    run_remove "$rw_wt" --branch --base
+    want_rc 2; want_out "usage: remove-worktree.sh"
+    [ -d "$rw_wt" ] || die "removed it"
+}
+
+
 # --- expect.sh and the watchdog's quiet-agent check (#850) ---
 
 # expect_wt <name>: a fresh linked worktree $work/<name> and the real time in

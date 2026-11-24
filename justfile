@@ -71,7 +71,7 @@ test-mcpjam:
 
 # Shell tests for tools/agentic (stub gh, fake clock; no Docker or network).
 test-agentic:
-    timeout 120 tools/agentic/tests/run.sh
+    timeout 300 tools/agentic/tests/run.sh
 
 # Prepare locally; ship through a PR, then publish the merged commit's tag.
 release-prepare patchlevel:
