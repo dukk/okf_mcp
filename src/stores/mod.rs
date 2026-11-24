@@ -17,6 +17,8 @@ pub mod placement;
 mod registry;
 
 pub(crate) use credentials::{is_auth_failure, signal_auth_refused};
+#[cfg(test)]
+pub(crate) use registry::same_database;
 pub use registry::{PoolSettings, Stores, STORE_SEARCH_PATH};
 
 use crate::error::OkfError;

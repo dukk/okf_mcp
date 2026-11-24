@@ -594,6 +594,35 @@ impl CatalogDirectory {
         }
     }
 
+    /// After a store's change feed lost its connection, messages from that
+    /// store were missed: every cached row of a catalog on it is dropped
+    /// (read again on next use), and no absence is trusted, since a catalog
+    /// created there may have been announced meanwhile. Rows of catalogs on
+    /// other stores stay cached.
+    ///
+    /// # Arguments
+    /// * `store` - the store whose feed was interrupted.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn drop_store(&self, store: &StoreName) {
+        self.meta_changes.fetch_add(1, Ordering::SeqCst);
+        self.rows
+            .invalidate_where(|_, loaded| {
+                loaded.row.as_ref().is_some_and(|row| row.store == *store)
+            })
+            .await;
+        self.absent.invalidate_where(|_, _| true).await;
+    }
+
+    /// Tests: whether a row is cached for `name`.
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "a test hook")
+    )]
+    pub(crate) async fn is_cached(&self, name: &str) -> bool {
+        self.rows.peek(&name.to_owned()).await.is_some()
+    }
+
     /// After the change feed's connection was lost, messages were missed:
     /// every row is reread on its next use, and no absence is trusted.
     #[tracing::instrument(level = "debug", skip_all)]

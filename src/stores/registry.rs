@@ -31,7 +31,7 @@
 //! it.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
@@ -42,8 +42,10 @@ use super::credentials::{
     is_auth_failure, spawn_keeper, Credential, CredentialSource, Keeper, Providers, Refresh,
 };
 use super::{AccountDb, CatalogDb, StoreName};
+use crate::app::App;
 use crate::db::{self, StoreMigration};
 use crate::error::OkfError;
+use crate::invalidate::{spawn_store_feed, StoreFeed, StoreFeedStart};
 use crate::store::stores::{self, StoreLocation, StoreRow};
 use crate::telemetry::subscriber::split_event;
 
@@ -138,6 +140,11 @@ struct OpenStore {
     migration: StoreMigration,
     // Only held, for its `Drop`.
     _keeper: Option<Keeper>,
+    // The listener on the store's database, once the registry follows a
+    // replica ([`Stores::follow`]) and the store is not the account
+    // database. Dropping the entry ends it, so a forgotten store leaves no
+    // task or connection behind.
+    feed: Mutex<Option<StoreFeed>>,
 }
 
 /// A pool just opened from a row, before it is migrated and kept: what
@@ -169,6 +176,7 @@ impl Opened {
             db: self.db,
             migration,
             _keeper: keeper,
+            feed: Mutex::new(None),
         }
     }
 }
@@ -202,12 +210,25 @@ struct Inner {
     // read the row before the change, so it serves its caller but is not
     // kept.
     forgets: AtomicU64,
+    // The replica whose caches each store's listener updates, set by
+    // [`Stores::follow`]. Unset (a command, most tests): no listener runs.
+    follow: OnceLock<Following>,
+    // Tests: the store of each catch-up a store's listener finished, in order.
+    #[cfg(test)]
+    catch_ups: tokio::sync::watch::Sender<Vec<StoreName>>,
     // How many pools were opened, for tests.
     #[cfg(test)]
     opened: AtomicU64,
     // Tests: makes the next open stop once it has read the row.
     #[cfg(test)]
     gate: std::sync::Mutex<Option<OpenGate>>,
+}
+
+/// Whom each opened store's listener serves.
+struct Following {
+    // `Weak`: the registry is part of the replica, and must not keep it alive.
+    app: Weak<App>,
+    shutdown: tokio_util::sync::CancellationToken,
 }
 
 /// A test's hold on an open: the open says when it has read the row, then
@@ -277,6 +298,9 @@ impl Stores {
                     .max_capacity(MAX_OPEN_STORES)
                     .build(),
                 forgets: AtomicU64::new(0),
+                follow: OnceLock::new(),
+                #[cfg(test)]
+                catch_ups: tokio::sync::watch::channel(Vec::new()).0,
                 #[cfg(test)]
                 opened: AtomicU64::new(0),
                 #[cfg(test)]
@@ -349,6 +373,8 @@ impl Stores {
         if ran.load(Ordering::SeqCst) && self.inner.forgets.load(Ordering::SeqCst) != forgets_before
         {
             self.inner.pools.invalidate(store).await;
+        } else if let Ok(entry) = &result {
+            self.ensure_feed(store, entry);
         }
         result.map_err(|failure| match &*failure {
             OpenFailure::NoSuchStore => OkfError::NotFound {
@@ -361,6 +387,92 @@ impl Stores {
                 OkfError::store_unavailable(store)
             }
         })
+    }
+
+    /// Makes this registry run a listener on the database of every store
+    /// it opens (and has opened), applying what each hears to `app`'s caches
+    /// (Task 17). The listener stops when its store is forgotten, when
+    /// `shutdown` is cancelled or when `app` is gone. A store inside the
+    /// account database gets none: the account listener already hears it.
+    /// Each listener holds one connection of its own, outside the store's
+    /// pool, so it does not count against `store_max_connections`. Only the
+    /// first call has an effect.
+    ///
+    /// # Arguments
+    /// * `app` - the replica the messages are applied to.
+    /// * `shutdown` - cancelled when the server stops.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn follow(&self, app: Weak<App>, shutdown: tokio_util::sync::CancellationToken) {
+        if self.inner.follow.set(Following { app, shutdown }).is_err() {
+            return;
+        }
+        for (store, entry) in self.inner.pools.iter() {
+            self.ensure_feed(&store, &entry);
+        }
+    }
+
+    /// Starts the store's listener if the registry follows a replica, the
+    /// store is not the account database and none runs yet.
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn ensure_feed(&self, store: &StoreName, entry: &OpenStore) {
+        let Some(following) = self.inner.follow.get() else {
+            return;
+        };
+        let pool = entry.db.executor();
+        if same_database(&self.inner.accounts, pool) {
+            return;
+        }
+        let mut slot = entry
+            .feed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot.is_some() {
+            return;
+        }
+        #[cfg(test)]
+        let caught_up = {
+            let sender = self.inner.catch_ups.clone();
+            let store = store.clone();
+            Some(
+                Arc::new(move || sender.send_modify(|log| log.push(store.clone())))
+                    as Arc<dyn Fn() + Send + Sync>,
+            )
+        };
+        #[cfg(not(test))]
+        let caught_up = None;
+        *slot = Some(spawn_store_feed(StoreFeedStart {
+            app: following.app.clone(),
+            name: store.clone(),
+            pool: pool.clone(),
+            connect_timeout: self.inner.settings.connect_timeout,
+            shutdown: following.shutdown.clone(),
+            caught_up,
+        }));
+    }
+
+    /// Tests: the store of each catch-up a store's listener has finished.
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "a test hook")
+    )]
+    pub(crate) fn catch_ups(&self) -> tokio::sync::watch::Receiver<Vec<StoreName>> {
+        self.inner.catch_ups.subscribe()
+    }
+
+    /// Tests: the store's listener, if one runs.
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "a test hook")
+    )]
+    pub(crate) async fn feed_finished(&self, store: &StoreName) -> Option<bool> {
+        let entry = self.inner.pools.get(store).await?;
+        let slot = entry
+            .feed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        slot.as_ref().map(StoreFeed::is_finished)
     }
 
     /// Every store's name, from the `stores` table (for fan-out to all
@@ -717,6 +829,26 @@ impl Stores {
         let open = self.inner.pools.get(store).await?;
         open._keeper.as_ref().map(Keeper::watch)
     }
+}
+
+/// Whether two pools reach the same database: same host (or socket), port
+/// and database name.
+///
+/// # Arguments
+/// * `a`, `b` - the pools.
+///
+/// # Returns
+/// `true` if their connect options name the same database.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "compares three option fields")
+)]
+pub(crate) fn same_database(a: &PgPool, b: &PgPool) -> bool {
+    let (a, b) = (a.connect_options(), b.connect_options());
+    a.get_host() == b.get_host()
+        && a.get_port() == b.get_port()
+        && a.get_socket() == b.get_socket()
+        && a.get_database() == b.get_database()
 }
 
 /// Migrates a store's schema on one connection of its pool

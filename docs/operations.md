@@ -119,7 +119,7 @@ unknown keys are ignored, so one file serves every version.
 | `time_server` | none | The NTP server for the clock check (`host`, `host:port` or an address). Without it there is no check |
 | `concept_outline_chars` | `20000` | `get_concept` returns an outline of the headings, not the body, for a body longer than this many characters, unless the call passes `full` or `section` |
 | `database_max_connections` | `16` | The most database connections one process opens (`serve` and every subcommand). Writers queued on one changeset wait without one; the writer whose turn it is, a publish, and a read that builds an overlay each hold one |
-| `store_max_connections` | `8` | The most connections one process opens to each catalog store, beside `database_max_connections` (the account database). Every store, `main` included, has a pool of its own, opened on its first use |
+| `store_max_connections` | `8` | The most connections one process opens to each catalog store, beside `database_max_connections` (the account database). Every store, `main` included, has a pool of its own, opened on its first use. A store on its own database also holds one more connection for its change-feed listener, outside this limit |
 | `store_idle_timeout` | `"10m"` | How long an idle connection to a catalog store is kept open before it is closed. A store's pool holds no connection while unused |
 | `store_connect_timeout` | `"5s"` | How long opening a store's pool, or waiting for a connection to begin a transaction on it, may take. Past it the request fails with `StoreUnavailable`, which never names the store |
 | `overlay_cache_bytes` | `"256MiB"` | The most memory the changeset overlays (an open changeset's view of its catalog) may take, estimated like a catalog snapshot (a fixed cost per file plus a multiple of the stored size, over the overlay's whole workspace, so many empty files count). Past it, an overlay is dropped and rebuilt on its next read; one larger than the whole budget is served but not kept. An overlay unused for `session_idle_timeout` is dropped too. `overlay_cache_size` is deprecated and ignored (a warning at start-up) |
@@ -351,11 +351,15 @@ reads the same file as the server, with no extra flags.
   up to `database_max_connections` (16 by default) for requests, plus 1 for
   the change-feed listener (it holds one connection for the life of the
   process, on its own one-connection pool, so it never takes a request slot),
-  plus up to 3 for the worker pool that the mail and housekeeping workers
+  plus one more per catalog store the replica has opened whose database is not
+  the account database (that store's own change-feed listener, held while its
+  pool is open and outside `store_max_connections`; a store inside the account
+  database has none, the account listener hears it), plus up to 3 for the worker pool that the mail and housekeeping workers
   share (the feedback worker, if on, has its own 3). For N replicas that is
   `N x (database_max_connections + 4)`, plus `3 x N` with the feedback worker
-  on. Keep the database's `max_connections` above that, with room for the
-  command line, `okf-mcp migrate` and your own tools.
+  on, plus `N x (store_max_connections + 1)` for each separate store (the pool
+  and its listener). Keep the database's `max_connections` above that, with
+  room for the command line, `okf-mcp migrate` and your own tools.
 - **Two schemas.** okf's tables are in `public`; the mail queue is apalis'
   `apalis` schema, which `migrate` sets up after okf's migrations, with its
   own migration table (`apalis._sqlx_migrations`).

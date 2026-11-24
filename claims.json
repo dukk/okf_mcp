@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1148,
+  "next_claim_seq": 1169,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "9f600f1855f893074bc7219b2532b8895c80f97c0875d386144bc9d8e8a454c9"
+    "mac": "c6247c825b288d0c037b42b80a0f73c57ba72f580a5286d9cbfc444545a21ed5"
   },
-  "next_evidence_seq": 1687,
+  "next_evidence_seq": 1728,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "3295e8d849c4c4b1c77d045e39df96e69ac441ff10081aceced45d7f9a3c43c9"
+    "mac": "e4be371ea550ded3231940f970fa40fd523d2b01da101eb64c6b55496755e99e"
   },
   "claims": [
     {
@@ -22426,6 +22426,28 @@
             "by": "server",
             "mac": "ec1910d0cfa9b2715298a8eca2eb6be4bd8eae764258241def991236678f3dea"
           }
+        },
+        {
+          "id": "EVD-1706",
+          "kind": "inspection",
+          "locator": "src/invalidate.rs:421-430 (was 355-362); docs/operations.md:352-361 at da2e16f",
+          "summary": "The account listener's connect moved into Feed::connect (max_connections(1) own pool, unchanged) and the doc paragraph kept the 16 + 1 + 3 (+3) arithmetic, adding the per-separate-store terms. The recorded claim still holds.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate.rs",
+              "lines": {
+                "start": 421,
+                "end": 430
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:17.843157843Z",
+          "seal": {
+            "by": "server",
+            "mac": "c0fafbf3406c2d654a82a09bf49ae6adba64198e3d124a8707d83e0d055a8704"
+          }
         }
       ],
       "verdicts": [
@@ -22441,13 +22463,26 @@
             "by": "server",
             "mac": "1ed8739d30f5bef979484e5f6eea55c7381f755cabed676aefb5fdecdf1d3c1e"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at da2e16f: listener pool code moved but is unchanged; docs arithmetic extended, not altered.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1706"
+          ],
+          "recorded_at": "2026-11-24T12:17:51.917839466Z",
+          "seal": {
+            "by": "server",
+            "mac": "efde40afcc8514eeec1011aff2756db5baa8335c973bacfcd4a53982146e8b4e"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:50.360239770Z",
-      "updated_at": "2026-11-21T19:12:15.313783984Z",
+      "updated_at": "2026-11-24T12:17:51.917839466Z",
       "seal": {
         "by": "server",
-        "mac": "52fccfd84f8abdb15210f2202d8b868d63ab87f690c2cfe32aae1d70d7ac7752"
+        "mac": "4e4794836ad9385af8b1147dcabbb733d4041de45207bff02b9a5e377d58c11d"
       }
     },
     {
@@ -74587,6 +74622,28 @@
             "by": "server",
             "mac": "97a8c95383277a2d18de3f2037e83e4c17e9baeddfe1351d14abbf4500b4f3de"
           }
+        },
+        {
+          "id": "EVD-1707",
+          "kind": "inspection",
+          "locator": "docs/operations.md:122-124 at da2e16f",
+          "summary": "The three store_* rows still carry defaults 8, 10m, 5s; the store_max_connections row only gained the listener sentence.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 122,
+                "end": 124
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:17.915055130Z",
+          "seal": {
+            "by": "server",
+            "mac": "c5fdf737a12c675f13d6c4e51047c906fb7c3e3ad27e9803bf96176d83574640"
+          }
         }
       ],
       "verdicts": [
@@ -74615,13 +74672,26 @@
             "by": "server",
             "mac": "824bfda7eb62b1a369002dd84efdec15f81fe61ae67b02de8e331479f9d42f64"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at da2e16f: rows and defaults intact.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1707"
+          ],
+          "recorded_at": "2026-11-24T12:17:51.992931361Z",
+          "seal": {
+            "by": "server",
+            "mac": "af87da9809c2b1561cb1936e66372d92a97093f0bf66cbb6365f126484a09f54"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T17:53:38.641031371Z",
+      "updated_at": "2026-11-24T12:17:51.992931361Z",
       "seal": {
         "by": "server",
-        "mac": "65e1560123510ccccb33a678b337ab492e5c8b95791259a42e0fcee8435553d5"
+        "mac": "88acfda3c33e98b8aed4e475edc827574b476de0b765772f5f19e90ccdbff6f9"
       }
     },
     {
@@ -83351,6 +83421,28 @@
             "by": "server",
             "mac": "32043cb27857e4d9288b6e1d981290ab1ccab1c483e113df900c1d491dd73fa4"
           }
+        },
+        {
+          "id": "EVD-1705",
+          "kind": "inspection",
+          "locator": "src/store/publish.rs:219,227,324-325 at da2e16f",
+          "summary": "Re-checked after this diff touched publish.rs: account_tx = accounts().begin() (219) precedes tx = db.begin() (227); tx.commit() (324) precedes account_tx.commit() (325). The diff only made account_tx immutable and moved the invalidate call to tx.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 217,
+                "end": 228
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:17.770385143Z",
+          "seal": {
+            "by": "server",
+            "mac": "c586f50bd2f30f4806c25a31af2dc3776d612d396c3b64f363fe0df1722f8f30"
+          }
         }
       ],
       "verdicts": [
@@ -83392,13 +83484,26 @@
             "by": "server",
             "mac": "d3f7ac5eb1b3f25d08d6026df89e75c7be82ac5260c84c94ea4f3e924ff30972"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at da2e16f: begin and commit order unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1705"
+          ],
+          "recorded_at": "2026-11-24T12:17:51.843154992Z",
+          "seal": {
+            "by": "server",
+            "mac": "8c84dfeb0bc69b701b27e08a48f74bfcb034fae4a5f2d81ebab0978e9174e358"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-24T00:44:16.116993358Z",
+      "updated_at": "2026-11-24T12:17:51.843154992Z",
       "seal": {
         "by": "server",
-        "mac": "776fb3698eb314ce3ec76bceada55d7fcbd422e7aeef6dc4d2b0d7d1297948aa"
+        "mac": "92ef66bee19e01b4a68fca24116e360bf0f796dcbab077b08a57140c6e9377e8"
       }
     },
     {
@@ -93339,6 +93444,1882 @@
       "seal": {
         "by": "server",
         "mac": "bf6a19852161fa306436d10647bd2bd8f1b564767d6527c76d2fd22f6da1a880"
+      }
+    },
+    {
+      "id": "CLM-1148",
+      "statement": "Issue #975 (M21.17) is delivered: each opened separate catalog store has its own change-feed listener so a store transaction's catalog invalidation reaches every replica.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/975 (M21.17: cache signalling per store)",
+      "derived_from": [],
+      "artifacts": [
+        "src/invalidate.rs",
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1708",
+          "kind": "analysis",
+          "locator": "children of CLM-1148",
+          "summary": "Children cover the listener, lifecycle, selective drop, connection accounting, backoff/shutdown, isolation, docs and plan note, and the two release-gate tests, all supported except CLM-1161: the test the plan note lists for 'a store in the account database gets no listener' does not test it. The behavior itself (CLM-1160) holds by reading.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-24T12:17:52.072776376Z",
+          "seal": {
+            "by": "server",
+            "mac": "2cb22b07e20f19c2a975923ab9f6c423f4f638f0de37453124af197b6d46d75e"
+          }
+        },
+        {
+          "id": "EVD-1711",
+          "kind": "analysis",
+          "locator": "children of CLM-1148",
+          "summary": "All children are now supported: CLM-1161 was re-judged supported at ae7c116 after the test was rewritten and both OKF_TEST_STORE modes pass; the others were judged earlier and the only change since is that test.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T12:22:18.687078147Z",
+          "seal": {
+            "by": "server",
+            "mac": "d91214ff617884697aa35cf0b2d757056612c6553fab4bde304b5f66312b125b"
+          }
+        },
+        {
+          "id": "EVD-1727",
+          "kind": "analysis",
+          "locator": "children of CLM-1148",
+          "summary": "Re-judged at 06c6743: every active child (CLM-1149 to CLM-1163 and CLM-1164 to CLM-1168) is supported. Together they cover the listener per opened separate store, its lifecycle and isolation, the catalog messages sent on the store transaction (with a test that pins the sender move), the tests, and the docs.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T13:16:34.195646690Z",
+          "seal": {
+            "by": "server",
+            "mac": "0e571855b4cb2a0344678ebbbcedf7c19c2e5dc8374d31f2ffcd4db2712463dc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Every functional requirement holds and both release-gate tests are real, but one child, CLM-1161, is refuted: the plan correction note lists a test for same-database stores that does not test it. Fix: repair that test so it registers a store inside the account database and asserts no listener starts (or correct the plan note and test name), then re-audit CLM-1161.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1708"
+          ],
+          "recorded_at": "2026-11-24T12:17:56.065184767Z",
+          "seal": {
+            "by": "server",
+            "mac": "6999ddc221fa542eea189bacff4d3f613bd9ec825d86dfad79b1b8d0229fe5b5"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Every child is supported at head ae7c116, including the rewritten same-database test; the only change since the first audit is in that test file.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1711"
+          ],
+          "recorded_at": "2026-11-24T12:22:22.479595156Z",
+          "seal": {
+            "by": "server",
+            "mac": "9acb2fdc483bf460ec2ecb217b1635046cdde3c1c0764eec3ca9e0cfd213199f"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All children are supported at 06c6743, including CLM-1163 and the new CLM-1164 to CLM-1168.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1727"
+          ],
+          "recorded_at": "2026-11-24T13:16:39.133478785Z",
+          "seal": {
+            "by": "server",
+            "mac": "710ab6aa6b8b253f699bf84262a361e42564c56a6c66c7239c25b4f1e020b07c"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T13:16:39.133478785Z",
+      "seal": {
+        "by": "server",
+        "mac": "7034f66c533d130a7c7d4e41eb910ba47cfe0fcdd62abca7c9d996f61b4bec5d"
+      }
+    },
+    {
+      "id": "CLM-1149",
+      "statement": "Opening a store's pool also starts a change-feed listener on that store's database (Stores::get calls ensure_feed once Stores::follow has been called, and follow starts one for stores already open), and serve_with calls Stores::follow.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #975: Opening a store's pool also starts a listener on that store",
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs",
+        "src/http/mod.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1687",
+          "kind": "analysis",
+          "locator": "src/stores/registry.rs:330-377,405-440; src/http/mod.rs:875",
+          "summary": "Stores::get calls ensure_feed(store, entry) after a successful open (registry.rs:377); follow sets the OnceLock and loops over already-open pools calling ensure_feed (405-411); ensure_feed returns early only if follow unset, store is in the account database, or a feed exists, otherwise spawn_store_feed. serve_with calls app.stores().follow(Arc::downgrade(&app), shutdown.clone()) at http/mod.rs:875. Tests call follow themselves (store_feed_tests.rs:123); none exercises serve_with, so the http/mod.rs wiring is covered by reading only.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 405,
+                "end": 445
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:16:31.329575816Z",
+          "seal": {
+            "by": "server",
+            "mac": "89f4d5351f01c19bd05c8da634e1e8329f4ff4d1d652069773777854f30095db"
+          }
+        },
+        {
+          "id": "EVD-1688",
+          "kind": "inspection",
+          "locator": "src/http/mod.rs:873-875",
+          "summary": "serve_with calls Stores::follow beside the account listener spawn.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/mod.rs",
+              "lines": {
+                "start": 866,
+                "end": 876
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:16:31.416529709Z",
+          "seal": {
+            "by": "server",
+            "mac": "d870acdb85dffce63104be2958767b91bb5feeae1a0261017868488c0066c673"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "get and follow both reach ensure_feed, which spawns the listener; serve_with calls follow. Only the serve_with call itself is untested (tests call follow directly).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1687",
+            "EVD-1688"
+          ],
+          "recorded_at": "2026-11-24T12:17:50.530259528Z",
+          "seal": {
+            "by": "server",
+            "mac": "05765e3c01c8bb26dd544ac6f0d801a8b48364a779f1d0d9f0c80e3198724cfa"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T12:17:50.530259528Z",
+      "seal": {
+        "by": "server",
+        "mac": "0e47c9ea615ab95e271223f5c46fa13f4c6d9e9e3599a819cad67baef0c6b189"
+      }
+    },
+    {
+      "id": "CLM-1150",
+      "statement": "The listener stops when the store's pool is forgotten: forgetting a store ends its listener task and closes its connection, leaving no listener backend on the store's database.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #975: The listener stops when the pool is forgotten; no task or connection left behind",
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/invalidate.rs",
+        "src/stores/registry.rs",
+        "src/invalidate/store_feed_tests.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1689",
+          "kind": "test",
+          "locator": "scripts/test-pg.sh run env OKF_TEST_STORE=separate cargo test --jobs 4 --lib invalidate::store_feed_tests (6 passed); src/invalidate/store_feed_tests.rs:315-339",
+          "summary": "forgetting_a_store_ends_its_listener_and_closes_its_connection asserts one LISTEN backend on the store's database, calls forget, waits (bounded polling, no sleep) until pg_stat_activity shows none, asserts feed_finished is None, then re-opens and sees one listener again. Mechanism: StoreFeed::Drop cancels the child token (invalidate.rs:685) and the OpenStore entry owns the StoreFeed (registry.rs:147). Passes at head in both OKF_TEST_STORE modes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate/store_feed_tests.rs",
+              "lines": {
+                "start": 315,
+                "end": 339
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:16:31.486421368Z",
+          "seal": {
+            "by": "server",
+            "mac": "72c57e514de0a51679ba47f4e35844a523e993e07c9a6edc6d1eba4c36fd1986"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test observes the LISTEN backend disappear after forget and the feed slot gone; mechanism is Drop on the registry-owned StoreFeed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1689"
+          ],
+          "recorded_at": "2026-11-24T12:17:50.671006361Z",
+          "seal": {
+            "by": "server",
+            "mac": "a81be023b6865e17451cfddc8010fdbc93a0d26c1ea21e0d79690062127b1b61"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T12:17:50.671006361Z",
+      "seal": {
+        "by": "server",
+        "mac": "1f0e75c270468e357aa13b17b37c0bbe921c10f2cf36ff01a5134c0b489f8dcd"
+      }
+    },
+    {
+      "id": "CLM-1151",
+      "statement": "A lost store listener connection drops the cached directory rows (and remembered absences) of that store's catalogs only, and leaves the rows of catalogs on other stores cached.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #975: A lost listening connection drops the caches for that store's catalogs only; PR body: A lost store connection ... drops only that store's catalogs from the directory",
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/cache/directory.rs",
+        "src/app.rs",
+        "src/invalidate.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1690",
+          "kind": "analysis",
+          "locator": "src/cache/directory.rs:597-612; src/app.rs:1455-1466; src/invalidate.rs:464-475",
+          "summary": "CatalogDirectory::drop_store invalidates rows only where row.store == store, and clears every remembered absence (all stores' absences, not only this store's: a small over-reach, safe). Feed::catch_up for Scope::Store calls apply_store_reconnect, which calls only drop_store; pools, credentials, labels and settings are untouched.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/directory.rs",
+              "lines": {
+                "start": 597,
+                "end": 612
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:16:31.562531761Z",
+          "seal": {
+            "by": "server",
+            "mac": "255c285d15cac416f1c6853e6a5187b74ce1812a6e90797325a77e1de77975f0"
+          }
+        },
+        {
+          "id": "EVD-1691",
+          "kind": "test",
+          "locator": "cargo test --jobs 4 --lib invalidate::store_feed_tests::a_lost_store_listener_drops_only_that_stores_catalogs (passed, separate and same)",
+          "summary": "After pg_terminate_backend of store b's listener and a second catch-up, is_cached(on-b) is false while on-c and on-main are still cached.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate/store_feed_tests.rs",
+              "lines": {
+                "start": 261,
+                "end": 312
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:07.574843991Z",
+          "seal": {
+            "by": "server",
+            "mac": "4429e77c3d15de4de528e48ee4c8076a51dc55ba9e351391e36562e58a67de99"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "drop_store filters on the row's store and the test asserts the other store's and the default store's rows survive a backend kill. Absences of all stores are cleared too, which is safe but wider than rows.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1690",
+            "EVD-1691"
+          ],
+          "recorded_at": "2026-11-24T12:17:50.804742455Z",
+          "seal": {
+            "by": "server",
+            "mac": "b197834c685968b2f294046aac4062be0f4be43ca4675278fad43d8b1f31fec9"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T12:17:50.804742455Z",
+      "seal": {
+        "by": "server",
+        "mac": "33c463c82d43a0b5033dcc817953ac45c4c55de0f5422e085720d51d69be8cc8"
+      }
+    },
+    {
+      "id": "CLM-1152",
+      "statement": "Each store listener holds one dedicated connection on its own one-connection pool, outside the store's pool.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #975: Each listener holds one dedicated connection outside the pool",
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/invalidate.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1692",
+          "kind": "analysis",
+          "locator": "src/invalidate.rs:421-430, 748-770",
+          "summary": "Feed::connect builds PgPoolOptions max_connections(1) from the store pool's connect_options (a separate pool, not a connection checked out of the store's pool), then PgListener::connect_with and LISTEN. The registry never passes the store pool for queries. The test forgetting_a_store... sees exactly one LISTEN backend per store database (store_feed_tests.rs:155-165,320).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate.rs",
+              "lines": {
+                "start": 421,
+                "end": 430
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:07.657868829Z",
+          "seal": {
+            "by": "server",
+            "mac": "aa6b4d3b0fa15629434d532b0412a74de2a461f697907ce6d3e2aa1805e8a990"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "One-connection own pool built from the store pool's options; one LISTEN backend per store database seen in tests.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1692"
+          ],
+          "recorded_at": "2026-11-24T12:17:50.901056287Z",
+          "seal": {
+            "by": "server",
+            "mac": "d238b90a17d123b08cb296c1264127fe73bb1373be97b70a05352c8e8add3202"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T12:17:50.901056287Z",
+      "seal": {
+        "by": "server",
+        "mac": "c20acd7dcda5f8a9efebb2c2115f3343b8d53a94e27c972619831109dd580994"
+      }
+    },
+    {
+      "id": "CLM-1153",
+      "statement": "The listener's reconnect loop backs off from 1 s to 30 s after a failed connect and returns promptly when the shutdown token is cancelled (including while connecting, sleeping, catching up or applying).",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #975: a reconnect loop has backoff and gives up cleanly on shutdown; PR body: reconnects with a 1 s to 30 s backoff",
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/invalidate.rs",
+        "src/invalidate/store_feed_tests.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1693",
+          "kind": "analysis",
+          "locator": "src/invalidate.rs:71-72,539-560,600-620",
+          "summary": "Feed::run builds Backoff::new(1s, 30s), selects every open (connect), the backoff sleep, the catch-up (run_until_cancelled), and each apply against shutdown.cancelled() and returns; backoff.reset() after a successful catch-up. Connect is bounded by acquire_timeout(store_connect_timeout).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate.rs",
+              "lines": {
+                "start": 539,
+                "end": 590
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:07.747311201Z",
+          "seal": {
+            "by": "server",
+            "mac": "72d2a1eb6af1b63c1b8bccd7e57a7728c21316c4e6e38b9e63a5bd4309b1f24d"
+          }
+        },
+        {
+          "id": "EVD-1694",
+          "kind": "test",
+          "locator": "cargo test --jobs 4 --lib invalidate::store_feed_tests::the_shutdown_ends_a_store_listener and a_store_that_cannot_be_listened_to_does_not_hold_up_another (passed)",
+          "summary": "The shutdown test cancels the token and waits for feed_finished and for the LISTEN backend to disappear; the unreachable-store test ends a retrying listener (connect refused at port 1) by dropping it. No test asserts the 1 s to 30 s backoff delays themselves (Backoff has its own unit tests elsewhere, not read here); the backoff constants are verified by reading only.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate/store_feed_tests.rs",
+              "lines": {
+                "start": 341,
+                "end": 409
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:07.822419170Z",
+          "seal": {
+            "by": "server",
+            "mac": "243c2ae95dcfc915d0f2959c863ac7e45c8a4345d1c9e92d82519151c70047cd"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Backoff 1-30 s and shutdown races are in Feed::run; shutdown ending the listener and its connection is tested. The backoff delays themselves are read, not tested.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1693",
+            "EVD-1694"
+          ],
+          "recorded_at": "2026-11-24T12:17:50.988177592Z",
+          "seal": {
+            "by": "server",
+            "mac": "2261002fc1a37f62454aa2b5df27fd9203be38e2e965458fc24571dbf04f8dc0"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T12:17:50.988177592Z",
+      "seal": {
+        "by": "server",
+        "mac": "a00555c2f07ff87f55d41761772f9c599101f2ede80b5209d70dd30476e881eb"
+      }
+    },
+    {
+      "id": "CLM-1154",
+      "statement": "A store whose listener cannot connect retries on its own task and does not block another store's listener or the account listener.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #975: a store whose listener cannot connect does not block the others or the account listener; PR body: an unreachable store delays no other listener",
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/invalidate.rs",
+        "src/invalidate/store_feed_tests.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1695",
+          "kind": "test",
+          "locator": "cargo test --jobs 4 --lib invalidate::store_feed_tests::a_store_that_cannot_be_listened_to_does_not_hold_up_another (passed, separate and same)",
+          "summary": "Spawns a feed for store-c whose pool points at 127.0.0.1:1, asserts it stays unfinished (retrying) while store-b's listener subscribes and catches up and reports Some(false) for finished; the replica's account listener is running and stops normally. Each feed is its own tokio task (spawn_store_feed, invalidate.rs:748).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate/store_feed_tests.rs",
+              "lines": {
+                "start": 341,
+                "end": 382
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:07.893888076Z",
+          "seal": {
+            "by": "server",
+            "mac": "7cf3ee0d6467010ade6d6f518fb2edd9cbde975b01cbf6e5ca6aaa8cdbfbe965"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test keeps an unreachable store's feed retrying while another store's feed and the account listener work and finish normally.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1695"
+          ],
+          "recorded_at": "2026-11-24T12:17:51.069909164Z",
+          "seal": {
+            "by": "server",
+            "mac": "0a81de8335108760bafec4bfc556145ab32e39938c19bc5e82192603613f8c09"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T12:17:51.069909164Z",
+      "seal": {
+        "by": "server",
+        "mac": "cb70fc656d25728611a48d67d2528a91c1440dc8b0aa75d4769732c7b531a699"
+      }
+    },
+    {
+      "id": "CLM-1155",
+      "statement": "docs/operations.md states that a store's listener connection is outside, and does not count against, store_max_connections.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #975: Docs say whether the listener's connection counts against store_max_connections; PR body: docs/operations.md states the extra connection per opened separate store",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 122,
+          "end": 122
+        },
+        "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+      },
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1696",
+          "kind": "inspection",
+          "locator": "docs/operations.md:122; docs/operations.md:352-361",
+          "summary": "The store_max_connections row says a store on its own database holds one more connection for its change-feed listener, outside this limit; the Postgres section adds one connection per opened separate store outside store_max_connections and N x (store_max_connections + 1) per separate store in the arithmetic.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 122,
+                "end": 122
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:07.964703969Z",
+          "seal": {
+            "by": "server",
+            "mac": "7360ba53ac8b769ec0916a88fc177d228ff6454ea0a9955c25f6e75ad9f16a5d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "operations.md line 122 says the listener connection is outside the limit.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1696"
+          ],
+          "recorded_at": "2026-11-24T12:17:51.147320299Z",
+          "seal": {
+            "by": "server",
+            "mac": "4298347b4446f80031fa6152f73301592f81991b1edfdbca469b057fbe03ce27"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T12:17:51.147320299Z",
+      "seal": {
+        "by": "server",
+        "mac": "5a9808714ac278fe7dd67b7bb16ed0da2477f95e1ea08410931f314e68bb6bbc"
+      }
+    },
+    {
+      "id": "CLM-1156",
+      "statement": "Test a_publish_on_a_separate_store_reaches_the_other_replica runs two replicas on one account database with a separate store, publishes on one, and asserts the other replica's cached catalog generation advances, with catalog_ttl of an hour so only the store feed can move it, and waits on observed state rather than fixed sleeps.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #975 tests; PR body: a_publish_on_a_separate_store_reaches_the_other_replica (two apps on one account database, catalog_ttl an hour so only the feed can move the reader's cache)",
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/invalidate/store_feed_tests.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1697",
+          "kind": "test",
+          "locator": "scripts/test-pg.sh run env OKF_TEST_STORE=separate cargo test --jobs 4 --lib invalidate::store_feed_tests (6 passed); same mode 6 passed; store_feed_tests.rs:166-258",
+          "summary": "Read the assertions. Two Replica::start apps (second on its own pool of the same account DB) with catalog_ttl 3600 s; both wait on the store listener catch-up log (watch channel, not sleep); reader caches generation; writer opens a changeset on the store and calls the real publish(); reader loops under a 30 s timeout until catalog().current().generation() exceeds the earlier one. The only path that can move the reader's 1 h-TTL row is a Catalog message (the message is on the store DB, which only the store listener hears). Adversarial limits: the test would still pass if the sender move to the store transaction were reverted (the account listener would then deliver it); and it needs the store listener to exist because follow_store waits for its catch-up. The poll loop uses yield_now, not sleep.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate/store_feed_tests.rs",
+              "lines": {
+                "start": 166,
+                "end": 258
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:08.034769249Z",
+          "seal": {
+            "by": "server",
+            "mac": "c1decbac574f9d1f2e5550f51e3dfa61208aa56133da20befdf0cfe4b0d11718"
+          }
+        },
+        {
+          "id": "EVD-1722",
+          "kind": "inspection",
+          "locator": "src/invalidate/store_feed_tests.rs:176-266 at 06c6743",
+          "summary": "Re-read after the refactor that extracted edit_and_publish (176-212, same body as before, now taking app, store, catalog): the test still starts two replicas on one account database, records the reader's generation, publishes through the writer, and polls under timeout(WAIT) with yield_now (no sleep) until the reader's generation exceeds the earlier one; the Replica catalog_ttl is 3600 s (line 114). Behavior of the test is unchanged.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate/store_feed_tests.rs",
+              "lines": {
+                "start": 176,
+                "end": 266
+              },
+              "commit": "06c674334a15179a6d95a9d82500adefd9faa006"
+            }
+          },
+          "recorded_at": "2026-11-24T12:45:10.780730102Z",
+          "seal": {
+            "by": "server",
+            "mac": "d779cb74893bb3c5be10cd13126220efa41530df83f67edb2b182e8ee15def2d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test publishes on a store and asserts the second replica's generation moves under an hour TTL, waiting on state with a bound. It needs the store listener for its setup and its delivery. It would not catch a revert of the sender move alone (account listener would deliver), which is outside this claim.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1697"
+          ],
+          "recorded_at": "2026-11-24T12:17:51.217575725Z",
+          "seal": {
+            "by": "server",
+            "mac": "4f3db8f3708ccc35083f194dac14fae796c44eb9e84704d948c90685247b199f"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited after the edit_and_publish refactor; the test's assertions are unchanged (code reading only; not rerun after the refactor by me).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1722"
+          ],
+          "recorded_at": "2026-11-24T12:45:28.867502205Z",
+          "seal": {
+            "by": "server",
+            "mac": "ea200749ef13cc7ac247df4b6aa59df1970ae91aa6ab434a5441e32b7ae76786"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T12:45:28.867502205Z",
+      "seal": {
+        "by": "server",
+        "mac": "15360b098dd06b6fb70dda6b8e03f36e020e6a4736a93f91dc9c239e45d7dbec"
+      }
+    },
+    {
+      "id": "CLM-1157",
+      "statement": "Test a_lost_store_listener_drops_only_that_stores_catalogs ends the store listener's backend by pid with pg_terminate_backend and asserts the store's catalog row is no longer cached while another store's and the default store's rows remain cached, synchronizing on the listener's catch-up log rather than sleeps.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #975 tests; PR body: ends the listener's backend by pid with pg_terminate_backend",
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/invalidate/store_feed_tests.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1698",
+          "kind": "test",
+          "locator": "scripts/test-pg.sh run env OKF_TEST_STORE=separate|same cargo test --jobs 4 --lib invalidate::store_feed_tests (6 passed each); store_feed_tests.rs:261-312",
+          "summary": "Caches on-main, on-b, on-c rows (asserted via is_cached after each store's first catch-up), finds exactly one LISTEN backend on store b's database, terminates it by pid (asserts true), waits on the catch-up log reaching 2 for store b, then asserts on-b uncached, on-c and on-main cached, and a new listener pid differs. The first catch-up happens before the rows are cached, so only the reconnect catch-up can have dropped on-b; if drop_store dropped everything the on-c/on-main asserts would fail. No sleeps.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate/store_feed_tests.rs",
+              "lines": {
+                "start": 261,
+                "end": 312
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:08.105012700Z",
+          "seal": {
+            "by": "server",
+            "mac": "a6a3344c1b0521615df0a94f3e25c9aa58bcb1494e7703715760f0ee96568c4e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Kills the listener by pid and asserts selective drop; ordering shows the drop comes from the reconnect catch-up, not the first one.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1698"
+          ],
+          "recorded_at": "2026-11-24T12:17:51.293389174Z",
+          "seal": {
+            "by": "server",
+            "mac": "e4b1ae532b79d6053602a59e45d4635ddc5e672822cd7cc18727dac076c11ac0"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T12:17:51.293389174Z",
+      "seal": {
+        "by": "server",
+        "mac": "ff133ef374f7f86e83314d7eaba06556539a69a4b752747c52d32a2b3ad9dbcb"
+      }
+    },
+    {
+      "id": "CLM-1158",
+      "statement": "The plan's Task 17 carries a dated '> **Corrected (issue #975, 2026-11-24).**' note describing the divergences from the plan text.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #975: Any divergence from the plan is corrected in the plan with a dated '> **Corrected (issue #975.**' note; PR body: plan Task 17 carries a dated correction note",
+      "source_anchor": {
+        "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "lines": {
+          "start": 624,
+          "end": 631
+        },
+        "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+      },
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1699",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:624-631",
+          "summary": "Block-quote note begins '> **Corrected (issue #975, 2026-11-24).**' under Task 17 and lists the differences (send on store tx, Stores::follow, Feed::run, store-only drop, tests, Tasks 18-20 unaffected). Its description of the code matches what I read. One statement is overstated: it lists a test that 'a store in the account database gets no listener' (see the claim on that test).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 624,
+                "end": 631
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:08.176152344Z",
+          "seal": {
+            "by": "server",
+            "mac": "0db6411ecb9f068ca26c2194623dceb12c28f3545a77b993311c16e75a44bae5"
+          }
+        },
+        {
+          "id": "EVD-1723",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:624-631 at 06c6743",
+          "summary": "Re-read after the diff 917a10c..06c6743, which lengthened only the first bullet (line 626, the messages_of sentences); line 624 still carries the dated '> **Corrected (issue #975, 2026-11-24).**' note and the other bullets are untouched.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 624,
+                "end": 631
+              },
+              "commit": "06c674334a15179a6d95a9d82500adefd9faa006"
+            }
+          },
+          "recorded_at": "2026-11-24T12:45:10.899534951Z",
+          "seal": {
+            "by": "server",
+            "mac": "3282ace58e80ec6fdf95d364d1c053d8ea8237695ed45aabd24f0b4cda4dde0f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The dated Corrected note exists at the stated place and matches the code, apart from the overstated test line recorded on its own claim.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1699"
+          ],
+          "recorded_at": "2026-11-24T12:17:51.370584208Z",
+          "seal": {
+            "by": "server",
+            "mac": "5d8c94ee90f8c04ac90d9fb5b57474c18c9d4188be1f87555082f8602f090f4a"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited: the note is still present and dated; only a bullet was extended.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1723"
+          ],
+          "recorded_at": "2026-11-24T12:45:28.999918627Z",
+          "seal": {
+            "by": "server",
+            "mac": "3ef32972007f661fe3b8b99215b7fd229b9b32c998231ff4f269016003886473"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T12:45:28.999918627Z",
+      "seal": {
+        "by": "server",
+        "mac": "81cbade2210bac5a365f4e6e19832d975dc954b46beec6e61ec3c5db5fb5afe6"
+      }
+    },
+    {
+      "id": "CLM-1159",
+      "statement": "publish, import and repair send Invalidation::Catalog on the store transaction (not the account transaction), so it is delivered when the generation commits.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: publish, import and repair send Invalidation::Catalog on the store transaction instead of the account transaction. It is delivered when the generation commits.",
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/store/publish.rs",
+        "src/store/import.rs",
+        "src/store/repair.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1700",
+          "kind": "analysis",
+          "locator": "src/store/publish.rs:310-312,324-325; src/store/import.rs:325-327,339; src/store/repair.rs:178-180,187",
+          "summary": "Each of the three calls invalidate(&mut tx, [Invalidation::Catalog{..}]) on the store transaction; tx.commit precedes account_tx.commit in publish (324-325), so the NOTIFY goes out with the generation commit. No other Invalidation::Catalog sender exists outside tests (git grep over src). In OKF_TEST_STORE=same the store tx is the account database, so account listener still hears it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 305,
+                "end": 326
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:08.250387490Z",
+          "seal": {
+            "by": "server",
+            "mac": "50e507375e4f91110af72a574e6d3a33211dc7baf0ffdea1b3c6f76ea6163f0e"
+          }
+        },
+        {
+          "id": "EVD-1720",
+          "kind": "inspection",
+          "locator": "src/store/publish.rs:310-312; src/store/import.rs:325-327; src/store/repair.rs:178-180 at 06c6743",
+          "summary": "Re-read at 06c6743: all three call invalidate(&mut tx, [Catalog{..}]) where tx is the store transaction; the account transaction (account_tx) is committed after tx in each (publish.rs:324-325, import.rs:338-339, repair.rs:186-187). The diff 917a10c..06c6743 does not touch these files.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/repair.rs",
+              "lines": {
+                "start": 176,
+                "end": 187
+              },
+              "commit": "06c674334a15179a6d95a9d82500adefd9faa006"
+            }
+          },
+          "recorded_at": "2026-11-24T12:45:06.589800304Z",
+          "seal": {
+            "by": "server",
+            "mac": "6172807f7863a0fe622b5fa87effefafe37059556eb09ca48ae26856f10c9688"
+          }
+        },
+        {
+          "id": "EVD-1721",
+          "kind": "log",
+          "locator": "target/i975-logs/mutate.log, mutate2.log; src/invalidate/store_feed_tests.rs:469-538",
+          "summary": "The sender move is now pinned by a test: moving any one of the three senders back to account_tx fails a_publish_an_import_and_a_repair_send_their_catalog_message_on_the_store at :534 with '<writer>: on the store: []' (import, repair in mutate.log; publish in mutate2.log). The test passes on the unmutated code under same and separate (new-test.log).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T12:45:10.640438733Z",
+          "seal": {
+            "by": "server",
+            "mac": "26f4cb094c0eb2552a21ae1a6cf1d21517ba499a199c703b3e381eea8725c627"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All three call sites pass &mut tx; no other non-test sender exists.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1700"
+          ],
+          "recorded_at": "2026-11-24T12:17:51.446526947Z",
+          "seal": {
+            "by": "server",
+            "mac": "88af0dd0815a38739b4abe3c30c3ea819402d48d85a8b0ca2183dbe5a4463b9e"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at 06c6743: the three call sites still send on the store transaction, and a test now fails if any is moved back (mutation logs).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1700",
+            "EVD-1720",
+            "EVD-1721"
+          ],
+          "recorded_at": "2026-11-24T12:45:28.734691861Z",
+          "seal": {
+            "by": "server",
+            "mac": "7f78b4b680dbebf78e92d71cc92606dc58c25d9218d03baf50e2f7c30999bd5b"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T12:45:28.734691861Z",
+      "seal": {
+        "by": "server",
+        "mac": "decfe34cce9a1543bf101b5fbb9638bba4590c2e1096b8856ece4bf1d6eb3f6b"
+      }
+    },
+    {
+      "id": "CLM-1160",
+      "statement": "A store whose database is the account database (same host or socket, port and database name) gets no listener of its own.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: A store in the account database (same host, port and database) gets no listener; the account listener hears it.",
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1701",
+          "kind": "analysis",
+          "locator": "src/stores/registry.rs:417-425,846-855",
+          "summary": "ensure_feed returns before spawning when same_database(accounts, store pool) is true; same_database compares host, port, socket and database name from connect_options. Spelling differences of one host (localhost vs 127.0.0.1) would compare unequal and start a redundant, harmless second listener. No test builds such a store (see the claim on the test).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 417,
+                "end": 425
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:08.321908646Z",
+          "seal": {
+            "by": "server",
+            "mac": "db391ce2447f0d1ef8c7c03dd2136056b43e01d8a89822b6aac850de71132a76"
+          }
+        },
+        {
+          "id": "EVD-1710",
+          "kind": "test",
+          "locator": "OKF_TEST_STORE=same cargo test --jobs 4 --lib invalidate::store_feed_tests::a_store_in_the_account_database_gets_no_listener_of_its_own (passed) at ae7c116",
+          "summary": "In same mode, with follow active and main opened, no listener exists for main and the account database has exactly one LISTEN backend: the behavior is now observed, not only read.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate/store_feed_tests.rs",
+              "lines": {
+                "start": 421,
+                "end": 429
+              },
+              "commit": "ae7c1163316b91a3b21deef69c5ae69899ab3f4c"
+            }
+          },
+          "recorded_at": "2026-11-24T12:22:12.629363576Z",
+          "seal": {
+            "by": "server",
+            "mac": "6941d4d3f58cc0dc5c24b637ca17475d9356d23f938220c6d4217cc499adcd4b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "ensure_feed skips a store whose pool is same_database as the account pool. Verified by reading only; the test claimed for it does not exercise it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1701"
+          ],
+          "recorded_at": "2026-11-24T12:17:51.529362624Z",
+          "seal": {
+            "by": "server",
+            "mac": "3c71b320ccd481af2d886ef35dba181bde581ac71131f58061c91686039ba755"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Code reading plus the same-mode test observing no listener for main.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1701",
+            "EVD-1710"
+          ],
+          "recorded_at": "2026-11-24T12:22:18.622278686Z",
+          "seal": {
+            "by": "server",
+            "mac": "57120d5c0eac15cf32f15bea4b3384bd96443a1ec282ea6d36af87107e3ca298"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T12:22:18.622278686Z",
+      "seal": {
+        "by": "server",
+        "mac": "7c791979bdb0c98000345745c74dc791a1d887ee7be05e27a1e62ff63ee6543a"
+      }
+    },
+    {
+      "id": "CLM-1161",
+      "statement": "Test a_store_in_the_account_database_gets_no_listener_of_its_own registers a store that lives in the account database and asserts that opening it starts no listener.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Plan correction note: tests for the lifecycle: ... and a store in the account database gets no listener",
+      "source_anchor": {
+        "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "lines": {
+          "start": 629,
+          "end": 629
+        },
+        "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+      },
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/invalidate/store_feed_tests.rs",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1704",
+          "kind": "inspection",
+          "locator": "src/invalidate/store_feed_tests.rs:411-428",
+          "summary": "The test registers store-b on a database of its own (add_store uses extra_store_database), builds a Stores that never calls follow, and asserts only that same_database(account pool, itself) is true and same_database(account pool, store-b's pool) is false. It never registers a store in the account database, never calls follow, and never checks feed_finished or listeners_on, so it would pass if ensure_feed started a listener for every store or for none. The plan note and the test name claim more.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate/store_feed_tests.rs",
+              "lines": {
+                "start": 411,
+                "end": 428
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:17.700853914Z",
+          "seal": {
+            "by": "server",
+            "mac": "39958e064fd8be6459f11fcf4ffc406edfcd3da30f1ca420faf309a7d103775a"
+          }
+        },
+        {
+          "id": "EVD-1709",
+          "kind": "test",
+          "locator": "scripts/test-pg.sh run env OKF_TEST_STORE=same cargo test --jobs 4 --lib invalidate::store_feed_tests (6 passed); separate (6 passed); store_feed_tests.rs:411-443 at ae7c116",
+          "summary": "The test now starts a Replica (which calls follow), opens main, and computes same_database(account pool, main's pool). In same mode (main is in the account database) it asserts feed_finished(main) == None and exactly one LISTEN backend on the account database, so ensure_feed's skip is exercised and a listener started for main would fail it. In separate mode it asserts Some(false) and one LISTEN backend on each database. Only the same-mode run exercises the skip; the test registers no extra store, it uses main. Both modes pass.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate/store_feed_tests.rs",
+              "lines": {
+                "start": 411,
+                "end": 443
+              },
+              "commit": "ae7c1163316b91a3b21deef69c5ae69899ab3f4c"
+            }
+          },
+          "recorded_at": "2026-11-24T12:22:12.550297761Z",
+          "seal": {
+            "by": "server",
+            "mac": "250435422df561da35a81c4bf3b6d7228a76478b6a174ac5a7dbd8035d804942"
+          }
+        },
+        {
+          "id": "EVD-1724",
+          "kind": "inspection",
+          "locator": "src/invalidate/store_feed_tests.rs:422-454 at 06c6743",
+          "summary": "Re-read: the test body is unchanged by 917a10c..06c6743 (it only moved down); in same mode it asserts feed_finished == None and one listener on the account database; in separate mode a listener for the separate database.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate/store_feed_tests.rs",
+              "lines": {
+                "start": 422,
+                "end": 454
+              },
+              "commit": "06c674334a15179a6d95a9d82500adefd9faa006"
+            }
+          },
+          "recorded_at": "2026-11-24T12:45:11.019615824Z",
+          "seal": {
+            "by": "server",
+            "mac": "2894bcb95c0fff4e2fff6915b762f79f9439fd873a9188ed5bcfc6eea3835707"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The test never creates a store inside the account database and never calls follow or checks for a listener; it only asserts same_database on two pools. It passes whether or not ensure_feed skips such stores. Fix: make the test register a store whose host, port and database equal the account database's, call follow on a Replica, open it, and assert feed_finished returns None and listeners_on of the account database does not grow; or change the plan note and test name to say it only tests same_database.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1704"
+          ],
+          "recorded_at": "2026-11-24T12:17:51.608734428Z",
+          "seal": {
+            "by": "server",
+            "mac": "7ef845c3c219747edb285b6e636ebf5bd7232a3d2bc937ee60fe7bfb86b50ee2"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at ae7c116: the test now follows, opens main and, in same mode, asserts no feed and one account LISTEN backend; passes in both modes. It uses main rather than a registered extra store, which still places a store in the account database.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1709"
+          ],
+          "recorded_at": "2026-11-24T12:22:18.544301946Z",
+          "seal": {
+            "by": "server",
+            "mac": "2c7ca729e6ce99fb3002853fb02b011de6526341c33989ced960219084c6e9ba"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited: test body unchanged, only moved.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1724"
+          ],
+          "recorded_at": "2026-11-24T12:45:29.118774219Z",
+          "seal": {
+            "by": "server",
+            "mac": "4951375702cf56cf9800ff71ae8b615c0a9a12906bfd3e6f6cfe77b8ef546892"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T12:45:29.118774219Z",
+      "seal": {
+        "by": "server",
+        "mac": "3ff57fee876c8c26c17cd90c158cc932649e9e2db2987d30bec32176e2eb9e4b"
+      }
+    },
+    {
+      "id": "CLM-1162",
+      "statement": "An unreadable payload on a store's feed drops only that store's catalogs from the directory (Feed::apply_payload calls catch_up, which calls apply_store_reconnect for a Store scope).",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: A lost store connection, or an unreadable payload on a store's feed, drops only that store's catalogs",
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/invalidate.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1702",
+          "kind": "analysis",
+          "locator": "src/invalidate.rs:464-475,498-512",
+          "summary": "apply_payload: Message::parse fails -> metrics.invalidation_unreadable() then self.catch_up(), which for Scope::Store calls app.apply_store_reconnect(name) (drop_store only). Verified by reading; no test sends an unreadable payload on a store's feed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate.rs",
+              "lines": {
+                "start": 464,
+                "end": 512
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:08.435834879Z",
+          "seal": {
+            "by": "server",
+            "mac": "fd6b548ebcc7527bdf7312c17a9a60cbfa2a2dbb0204791e2607a696deddff3a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "By code path. No test sends an unreadable payload on a store feed (level 2, analysis suffices).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1702"
+          ],
+          "recorded_at": "2026-11-24T12:17:51.685282879Z",
+          "seal": {
+            "by": "server",
+            "mac": "2976727f362230a296b5c961f2e4729c47c31304954429a1cc97a464962c9c59"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T12:17:51.685282879Z",
+      "seal": {
+        "by": "server",
+        "mac": "5d2db0bf46e7591176fac5e5d48b28ae264813b6bc5b2a6dda3bcfb7f770cf55"
+      }
+    },
+    {
+      "id": "CLM-1163",
+      "statement": "The seven tests in invalidate::store_feed_tests pass under OKF_TEST_STORE=separate (and under OKF_TEST_STORE=same).",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: OKF_TEST_STORE=separate cargo test --lib invalidate::store_feed_tests passes: six tests, including the two release gate tests",
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/invalidate/store_feed_tests.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1703",
+          "kind": "test",
+          "locator": "cd worktree && scripts/test-pg.sh run env OKF_TEST_STORE=separate cargo test --jobs 4 --lib invalidate::store_feed_tests; same with OKF_TEST_STORE=same",
+          "summary": "separate: 6 passed, 0 failed (3030 filtered), 1.27 s; same: 6 passed, 0 failed, 1.54 s. Run at da2e16f with a clean tree.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate/store_feed_tests.rs",
+              "lines": {
+                "start": 160,
+                "end": 170
+              },
+              "commit": "da2e16faa36ef9110e2562966080a9fa0a66886d"
+            }
+          },
+          "recorded_at": "2026-11-24T12:17:08.519821791Z",
+          "seal": {
+            "by": "server",
+            "mac": "da177cdcd93ef28a7567ac79a7d3fdc464a6fdad8d3b67622a853d2571eaf82c"
+          }
+        },
+        {
+          "id": "EVD-1725",
+          "kind": "log",
+          "locator": "target/i975-logs/narrow5.log (6 tests), new-test.log (the seventh), test.log",
+          "summary": "The file now holds seven #[tokio::test]s (lines 214, 272, 326, 352, 395, 422, 469). Logs show the six older tests passing under same and separate (narrow5.log, 07:21: 6 passed each) and the seventh passing alone under both (new-test.log, 07:36: 1 passed each). No log shows all seven run together at 06c6743, and the full-suite run (test.log, 07:30) predates the new test; the refactor of the publish test into edit_and_publish also postdates narrow5.log.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T12:45:11.132652102Z",
+          "seal": {
+            "by": "server",
+            "mac": "f98de4fc0cb5f3adbf81c23400ca0d7a572ef13bd75389d4f2ff444d3ae515cc"
+          }
+        },
+        {
+          "id": "EVD-1726",
+          "kind": "log",
+          "locator": "target/i975-logs/g-test5.log (tools/agentic/gate.sh test at 06c6743, exit 0)",
+          "summary": "I read the log: it ends 'test exit 0'; the lib suite shows 'ok. 3035 passed; 0 failed' per mode, and 14 lines match store_feed_tests...ok (seven tests in each of OKF_TEST_STORE=same and =separate). HEAD is 06c6743 and git diff HEAD -- src is empty. g-test.log to g-test4.log also show 14 ok store_feed_tests lines each; their failures are other tests.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T13:16:29.079716112Z",
+          "seal": {
+            "by": "server",
+            "mac": "66b50024af8f3aea455627c1305dcf25ad76d2d86897b720a2b545118763ab99"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reran both modes at head: 6 passed each.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1703"
+          ],
+          "recorded_at": "2026-11-24T12:17:51.760421975Z",
+          "seal": {
+            "by": "server",
+            "mac": "f3748beded6da4e3232e2c1e1fcca112f6385297edae43f2fecae2d64ada1734"
+          }
+        },
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The statement now says seven tests. The logs show six passing in an earlier tree and the seventh passing alone, but no log runs all seven together at 06c6743 under both modes, and I may not run cargo. Fix: run OKF_TEST_STORE=separate and OKF_TEST_STORE=same cargo test --lib invalidate::store_feed_tests at 06c6743 and record that 7 passed, 0 failed in each mode.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [],
+          "recorded_at": "2026-11-24T12:45:29.249264774Z",
+          "seal": {
+            "by": "server",
+            "mac": "f947503a7ecbc2a17346a8b7727f5f7cb01a643989be4c97a968eed05bf1e62e"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The gate log at unchanged 06c6743 shows all seven store_feed_tests ok in both modes and exit 0.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1726"
+          ],
+          "recorded_at": "2026-11-24T13:16:34.129758973Z",
+          "seal": {
+            "by": "server",
+            "mac": "a8175d971d04fc9cebe74a4c2e63bc406080a40ce1c63899d20521837857220d"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:16:18.352420071Z",
+      "updated_at": "2026-11-24T13:16:34.129758973Z",
+      "seal": {
+        "by": "server",
+        "mac": "15d57cd31412e7a442f436a933b116cf5effc72b0bc11ef8fb0415461406665a"
+      }
+    },
+    {
+      "id": "CLM-1164",
+      "statement": "testing::messages_by_database returns each pool's messages separately, in pool order, each bounded by its own end marker.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Reviewer finding on #975: messages_of merged account and store notifications unlabelled; fix 06c6743 adds testing::messages_by_database",
+      "source_anchor": {
+        "path": "src/invalidate.rs",
+        "lines": {
+          "start": 848,
+          "end": 898
+        },
+        "commit": "06c674334a15179a6d95a9d82500adefd9faa006"
+      },
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/invalidate.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1712",
+          "kind": "inspection",
+          "locator": "src/invalidate.rs:864-898",
+          "summary": "messages_by_database opens one PgListener per pool in pool order (LISTEN before the write), runs the write, then for each (pool, listener) pair sends an END marker pg_notify on that same pool and reads until END with a WAIT timeout, pushing into a fresh per-database Vec; it returns Vec<Vec<Invalidation>> in pool order. A database that received nothing yields an empty Vec once its own marker arrives.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate.rs",
+              "lines": {
+                "start": 864,
+                "end": 898
+              },
+              "commit": "06c674334a15179a6d95a9d82500adefd9faa006"
+            }
+          },
+          "recorded_at": "2026-11-24T12:44:38.776230597Z",
+          "seal": {
+            "by": "server",
+            "mac": "ebe15ded4bbbe1b6afef6eafd6db05db37d61c6129bacc94a4e193c420d4c48b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code reading shows one listener and one end marker per pool, results in pool order.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1712"
+          ],
+          "recorded_at": "2026-11-24T12:45:28.026424948Z",
+          "seal": {
+            "by": "server",
+            "mac": "04ef9244975fd6462368741ceabdfa2d5a6361ab2d137013a69b31783fe202bb"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:44:15.417160225Z",
+      "updated_at": "2026-11-24T12:45:28.026424948Z",
+      "seal": {
+        "by": "server",
+        "mac": "c4135eb16fb6f6bb7e8eec97ffa68600f63a86ace66386759a8385aa0f61085e"
+      }
+    },
+    {
+      "id": "CLM-1165",
+      "statement": "The test a_publish_an_import_and_a_repair_send_their_catalog_message_on_the_store asserts, for publish, import and repair on a separate store, that exactly one Invalidation::Catalog for the catalog arrives on the store database and that nothing arrives on the account database.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Fix 06c6743 for the reviewer finding on #975",
+      "source_anchor": {
+        "path": "src/invalidate/store_feed_tests.rs",
+        "lines": {
+          "start": 469,
+          "end": 538
+        },
+        "commit": "06c674334a15179a6d95a9d82500adefd9faa006"
+      },
+      "derived_from": [
+        "CLM-1159"
+      ],
+      "artifacts": [
+        "src/invalidate/store_feed_tests.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1713",
+          "kind": "inspection",
+          "locator": "src/invalidate/store_feed_tests.rs:469-538",
+          "summary": "The test creates catalog on-b on store-b, runs publish (edit_and_publish), import and repair each inside sent_by(account pool, store executor), then for each writer asserts expected(&on_store) (the slice matches exactly [Invalidation::Catalog{id == created.id, ..}], so exactly one) and assert_eq!(on_account, []). sent_by pops the store result last and the account result first, matching pool order [account, store].",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate/store_feed_tests.rs",
+              "lines": {
+                "start": 457,
+                "end": 538
+              },
+              "commit": "06c674334a15179a6d95a9d82500adefd9faa006"
+            }
+          },
+          "recorded_at": "2026-11-24T12:44:49.118921119Z",
+          "seal": {
+            "by": "server",
+            "mac": "529f8805701371c1d2841cc641e5804f7373ff75a69f09e06e9a316ba34e38b0"
+          }
+        },
+        {
+          "id": "EVD-1714",
+          "kind": "log",
+          "locator": "target/i975-logs/new-test.log",
+          "summary": "The new test passes under OKF_TEST_STORE=same (1 passed, 0.62 s) and OKF_TEST_STORE=separate (1 passed, 0.69 s), 3036 others filtered out. (The test builds its own separate store-b database in both modes.)",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T12:44:49.609054171Z",
+          "seal": {
+            "by": "server",
+            "mac": "13a08131e150479ab982090ab810620678daa21b5947a937890ff2a52f12c15c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The assertions at lines 529-537 say exactly this for the three writers, and the test passes in both modes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1713",
+            "EVD-1714"
+          ],
+          "recorded_at": "2026-11-24T12:45:28.162208883Z",
+          "seal": {
+            "by": "server",
+            "mac": "5a31cc9bf995cbae67c86cb2406b554bace5e1dc651635c9e5461abb28d929ad"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:44:15.417160225Z",
+      "updated_at": "2026-11-24T12:45:28.162208883Z",
+      "seal": {
+        "by": "server",
+        "mac": "df0a94b7601fcbc44a81568cdfef1d5436dfc7a2bdeb7b38d3030c616829a7af"
+      }
+    },
+    {
+      "id": "CLM-1166",
+      "statement": "Moving the Invalidation::Catalog sender back to the account transaction in any one of publish, import or repair makes a_publish_an_import_and_a_repair_send_their_catalog_message_on_the_store fail.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Fix 06c6743: the test pins the sender move (mutation proof)",
+      "derived_from": [
+        "CLM-1159"
+      ],
+      "artifacts": [
+        "src/store/publish.rs",
+        "src/store/import.rs",
+        "src/store/repair.rs",
+        "src/invalidate/store_feed_tests.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1715",
+          "kind": "log",
+          "locator": "target/i975-logs/mutate.log (import, repair); target/i975-logs/mutate2.log (publish)",
+          "summary": "With the Catalog sender moved to account_tx: import mutant fails at store_feed_tests.rs:534 with \"import: on the store: []\" (1 failed); repair mutant fails at :534 with \"repair: on the store: []\"; publish mutant (mutate2.log, after the first publish attempt in mutate.log failed to compile for a missing mut and so proves nothing) fails at :534 with \"publish: on the store: []\". Each log ends with \"restored\" and the sources were restored by git checkout.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T12:44:49.865546948Z",
+          "seal": {
+            "by": "server",
+            "mac": "8d26684388a0df3cdac422ab1a839aec7d6b54044e705550eeff5ea53f8d26c7"
+          }
+        },
+        {
+          "id": "EVD-1716",
+          "kind": "analysis",
+          "locator": "src/invalidate/store_feed_tests.rs:529-537; src/store/publish.rs:310-312; src/store/import.rs:325-327; src/store/repair.rs:178-180",
+          "summary": "Why it fails: invalidate() NOTIFYs on the connection of the transaction it is given, so a sender on account_tx puts the message on the account database; the test then sees on_store == [] (fails expected) and on_account non-empty (fails assert_eq). The three senders are separate call sites, each exercised by its own writer in the loop, so a move in any one fails that writer's iteration. Caveat: the mutation runs are log evidence, not reproduced by me (no cargo allowed).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate/store_feed_tests.rs",
+              "lines": {
+                "start": 527,
+                "end": 538
+              },
+              "commit": "06c674334a15179a6d95a9d82500adefd9faa006"
+            }
+          },
+          "recorded_at": "2026-11-24T12:44:50.339352730Z",
+          "seal": {
+            "by": "server",
+            "mac": "7f630a7735ce8247dd07fc93719424025660ee6291d8de59adc96ee6c1b89819"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Logs show the test failing for each of import, repair (mutate.log) and publish (mutate2.log) with the sender on account_tx; the code reading explains why. The publish mutant in mutate.log did not compile and is not counted. I did not rerun them.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1715",
+            "EVD-1716"
+          ],
+          "recorded_at": "2026-11-24T12:45:28.292621238Z",
+          "seal": {
+            "by": "server",
+            "mac": "e53a0f47dd22bff59179e397bec14cae9e0f2fba9b1f4938e9e99a52c7307bbd"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:44:15.417160225Z",
+      "updated_at": "2026-11-24T12:45:28.292621238Z",
+      "seal": {
+        "by": "server",
+        "mac": "e7296dc8701ae5060676af0c90f1f63daf76abf88dd01b90950ecbd5abb78f12"
+      }
+    },
+    {
+      "id": "CLM-1167",
+      "statement": "testing::messages_of still merges the messages of the account database and, when the store main is another database, the store main, account database first, with its signature unchanged, so existing callers need no change.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Plan Task 17 correction note: messages_of merges both databases' messages",
+      "source_anchor": {
+        "path": "src/invalidate.rs",
+        "lines": {
+          "start": 832,
+          "end": 846
+        },
+        "commit": "06c674334a15179a6d95a9d82500adefd9faa006"
+      },
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "src/invalidate.rs"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1717",
+          "kind": "inspection",
+          "locator": "src/invalidate.rs:832-846",
+          "summary": "messages_of(pool, write) keeps its signature (PgPool, Future) -> (T, Vec<Invalidation>); it builds pools = [pool] and pushes the store pool only when !same_database, calls messages_by_database, and flattens the Vec<Vec<>> in order, so account messages precede store messages. It listens on the store only when it is another database.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/invalidate.rs",
+              "lines": {
+                "start": 832,
+                "end": 846
+              },
+              "commit": "06c674334a15179a6d95a9d82500adefd9faa006"
+            }
+          },
+          "recorded_at": "2026-11-24T12:44:50.590573308Z",
+          "seal": {
+            "by": "server",
+            "mac": "c7b5e9ea12d979a57b6eaa08675153840236f10d587584e9ca5a0b23086744dc"
+          }
+        },
+        {
+          "id": "EVD-1718",
+          "kind": "inspection",
+          "locator": "git diff 917a10c 06c6743 -- src/invalidate.rs; git grep messages_of -- src",
+          "summary": "The diff changes only the body (Vec<PgPool> clone replaced by Vec<&PgPool>, delegation to messages_by_database); the public signature line is unchanged, and git grep finds no caller outside src/invalidate.rs that needed an edit (cache/credentials_tests.rs uses its own apply_messages_of). The pre-existing merge order (account first, then store) is preserved.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T12:44:50.815567289Z",
+          "seal": {
+            "by": "server",
+            "mac": "49858155689e6df35f3d6db1229f2c3044984bc45001c85a5c876180aa58d314"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Signature unchanged and the merged order is account then store, per the code and diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1717",
+            "EVD-1718"
+          ],
+          "recorded_at": "2026-11-24T12:45:28.453103274Z",
+          "seal": {
+            "by": "server",
+            "mac": "a90a18d8916b01cbc18ef9674f558d1728fdc2066754090d48ef46fe11f94471"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:44:15.417160225Z",
+      "updated_at": "2026-11-24T12:45:28.453103274Z",
+      "seal": {
+        "by": "server",
+        "mac": "caa2ade4803da44f1864457de1d5939a9a93e74d9deb05e8164f943a377ad9fe"
+      }
+    },
+    {
+      "id": "CLM-1168",
+      "statement": "The plan's Task 17 correction note and the m21-task-17 changelog entry state that messages_of merges both databases' messages, and that messages_by_database plus the new test pin the sender move.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Fix 06c6743 docs changes",
+      "source_anchor": {
+        "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "lines": {
+          "start": 626,
+          "end": 626
+        },
+        "commit": "06c674334a15179a6d95a9d82500adefd9faa006"
+      },
+      "derived_from": [
+        "CLM-1148"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "changelog/2026-11-24T11-58-51Z-m21-task-17-cache-signalling-per-store.md"
+      ],
+      "tags": [
+        "from-issue:975"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1719",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:626; changelog/2026-11-24T11-58-51Z-m21-task-17-cache-signalling-per-store.md:25",
+          "summary": "Plan line 626 (under the '> **Corrected (issue #975, 2026-11-24).**' note, line 624) ends: 'messages_of merges both databases' messages, so it does not show which one a message went out on: invalidate::testing::messages_by_database does, and one test uses it to pin that each writer sends on the store database and none on the account database.' Changelog line 25 says messages_of merges, and that messages_by_database and the new test pin the sender move (each writer's Catalog message on the store, none on the account database, end markers bound both; moving any one sender back fails it).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 624,
+                "end": 626
+              },
+              "commit": "06c674334a15179a6d95a9d82500adefd9faa006"
+            }
+          },
+          "recorded_at": "2026-11-24T12:44:51.196974339Z",
+          "seal": {
+            "by": "server",
+            "mac": "6563779adc570ae28ecef795f574d254dfa0b7118961735f82e19856065d4405"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both texts state what the claim says (plan line 626, changelog line 25).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1719"
+          ],
+          "recorded_at": "2026-11-24T12:45:28.573572892Z",
+          "seal": {
+            "by": "server",
+            "mac": "dcce263f5b6a3ef7a742154e8b8ba0013f175896d4ec7f788050adba5646c40a"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T12:44:15.417160225Z",
+      "updated_at": "2026-11-24T12:45:28.573572892Z",
+      "seal": {
+        "by": "server",
+        "mac": "71904893fac01d7fdb11e1d5dcb930145f4cb87816ed75c5215778ba20503742"
       }
     }
   ]

@@ -870,6 +870,9 @@ pub async fn serve_with(
         Arc::clone(&app),
         shutdown.clone(),
     ));
+    // The same for each separate store's own feed: a listener per opened
+    // store (Task 17), stopped with the store's pool or the shutdown.
+    app.stores().follow(Arc::downgrade(&app), shutdown.clone());
     let clock_checker = tokio::spawn(Arc::clone(&app).check_clock_until(shutdown.clone()));
     // The workers' one pool, shared by every worker this process runs.
     // `bool::then` runs the closure only for `true`, giving an `Option`.
