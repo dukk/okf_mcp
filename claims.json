@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1260,
+  "next_claim_seq": 1274,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "34b3d9e92de01b607bc24c511f17f54fb4f5fef9b727f057aeb5c1188b6c4277"
+    "mac": "d3fe63ee368478ed1b88e8971b869c313202bd27d537fc846af72d5d08646a3f"
   },
-  "next_evidence_seq": 1863,
+  "next_evidence_seq": 1877,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "a26860e86081af12fa8c4e87076578ab2cd01c27d688eceaf5dd9ffb7bdd41b1"
+    "mac": "b9c3bf535bada7b36f5219c660e64d7dceabbcbcb51fbfcdc0c08d3c20545775"
   },
   "claims": [
     {
@@ -102917,6 +102917,896 @@
       "seal": {
         "by": "server",
         "mac": "886e154f27955154f8968217f7870c061db292c1dfad35ba29c4f3bc297d7133"
+      }
+    },
+    {
+      "id": "CLM-1260",
+      "statement": "Issue #979 (M21.20) is delivered: end-to-end test, upgrade smoke test, repair-indexes over all stores, P8 lifted, milestone changelog.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/979",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:979"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [],
+      "verdicts": [],
+      "created_at": "2026-11-24T17:43:24.063413248Z",
+      "updated_at": "2026-11-24T17:43:24.063413248Z",
+      "seal": {
+        "by": "server",
+        "mac": "c84499f1853de5ebca7cb8f8c2054f5f75559b4e040415f2b3db96cd53c2ad75"
+      }
+    },
+    {
+      "id": "CLM-1261",
+      "statement": "tests/stores.rs has a test that runs open, edit, publish, history, revert, search across both catalogs, export and maintenance on a server with `main` and a host store `acme`, with team A pinned to acme and a catalog each for teams A and B.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "issue #979 req 1; PR body: `two_stores_serve_their_catalogs_and_a_lost_store_costs_only_its_own` runs open, edit, publish, history, revert, search across both catalogs, export and maintenance",
+      "derived_from": [
+        "CLM-1260"
+      ],
+      "artifacts": [
+        "tests/stores.rs"
+      ],
+      "tags": [
+        "from-issue:979"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1863",
+          "kind": "inspection",
+          "locator": "tests/stores.rs:84-170,284-370",
+          "summary": "fixture() adds acme as a host store via store_rows::add behind StoreProxy, creates team-a/team-b, pins team-a to acme, creates alpha/beta. Test does edit_and_publish, history, revert+publish, search across both, export (tarball contains note.md), and a maintenance claim/submit via run_maintenance. Not executed by me (no heavy runs).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/stores.rs",
+              "lines": {
+                "start": 284,
+                "end": 360
+              },
+              "commit": "3ac9e85c0102fcf8f996af2fe6c4065aeceefc49"
+            }
+          },
+          "recorded_at": "2026-11-24T17:43:58.528227498Z",
+          "seal": {
+            "by": "server",
+            "mac": "f2e2ecd5e2ea979c0ba6ecd3510fd471b59747c0f08cee87208b8ee3559c5166"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Fixture and test body read directly; every listed step and the two teams, pin and two catalogs are present. Test not executed by me (inspection only).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1863"
+          ],
+          "recorded_at": "2026-11-24T17:44:24.955644285Z",
+          "seal": {
+            "by": "server",
+            "mac": "67f4c8ae2b522ed8fc621678c43085c30ac2fa60bde99d7038f00546d06abc44"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T17:43:24.063413248Z",
+      "updated_at": "2026-11-24T17:44:24.955644285Z",
+      "seal": {
+        "by": "server",
+        "mac": "0865e4ce6015bfb5a14fb3d9531295e2d0e64156e4a6cb01e36c256281ed43df"
+      }
+    },
+    {
+      "id": "CLM-1262",
+      "statement": "The end-to-end test asserts each catalog's documents and revisions exist only on its own store.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "issue #979 req 1; PR body: checks each catalog's documents and revisions are only on its own store",
+      "derived_from": [
+        "CLM-1261"
+      ],
+      "artifacts": [
+        "tests/stores.rs"
+      ],
+      "tags": [
+        "from-issue:979"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1864",
+          "kind": "inspection",
+          "locator": "tests/stores.rs:371-396",
+          "summary": "Asserts documents_on(acme, alpha)>0, acme has 0 of beta, main has >0 of beta and 0 of alpha; per store, count(DISTINCT catalog_id) over catalog.revisions == 1.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/stores.rs",
+              "lines": {
+                "start": 371,
+                "end": 396
+              },
+              "commit": "3ac9e85c0102fcf8f996af2fe6c4065aeceefc49"
+            }
+          },
+          "recorded_at": "2026-11-24T17:43:58.603502491Z",
+          "seal": {
+            "by": "server",
+            "mac": "3a8a0b3e2aca278a1750b7bbdb0edc8407a3d3bb86b950dc2575854c066a010e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Assertions read directly cover documents and revisions on both stores.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1864"
+          ],
+          "recorded_at": "2026-11-24T17:44:25.039434088Z",
+          "seal": {
+            "by": "server",
+            "mac": "e63d3aeb9033392b3bae03aeb1e03a25e0cfefca71a6c2af1b4d54123662ccb1"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T17:43:24.063413248Z",
+      "updated_at": "2026-11-24T17:44:25.039434088Z",
+      "seal": {
+        "by": "server",
+        "mac": "164f2d0f94366d48972ebc7358640aa3b79f61721c27e80edf242ac0d7d06682"
+      }
+    },
+    {
+      "id": "CLM-1263",
+      "statement": "After acme's database is stopped, the end-to-end test asserts team B can write and read, team A's open_changeset fails with StoreUnavailable, and a merged search returns only beta and lists alpha in `unavailable`.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "issue #979 req 1; PR body: team B is unaffected while team A gets StoreUnavailable and a merged search names A's catalog in unavailable",
+      "derived_from": [
+        "CLM-1261"
+      ],
+      "artifacts": [
+        "tests/stores.rs",
+        "tests/support/stores.rs"
+      ],
+      "tags": [
+        "from-issue:979"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1865",
+          "kind": "inspection",
+          "locator": "tests/stores.rs:398-452",
+          "summary": "After restart and proxy.stop(): beta edit_and_publish and search (1 hit, no unavailable); open_changeset on alpha has error == StoreUnavailable; merged search yields hits == [beta] and unavailable == [alpha]; reply must not contain 127.0.0.1. Matches the requirement.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/stores.rs",
+              "lines": {
+                "start": 398,
+                "end": 452
+              },
+              "commit": "3ac9e85c0102fcf8f996af2fe6c4065aeceefc49"
+            }
+          },
+          "recorded_at": "2026-11-24T17:43:58.678494093Z",
+          "seal": {
+            "by": "server",
+            "mac": "08f93cc237007d0d3330b43424c72f68da23aa52c560386a9b4aa096eb561ff6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Outage assertions read directly; all three required outcomes are asserted.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1865"
+          ],
+          "recorded_at": "2026-11-24T17:44:25.129509558Z",
+          "seal": {
+            "by": "server",
+            "mac": "95acccd8afb12a60d6212e1fdf42aede222b050d52eed0018d014593b4599568"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T17:43:24.063413248Z",
+      "updated_at": "2026-11-24T17:44:25.129509558Z",
+      "seal": {
+        "by": "server",
+        "mac": "3a71f1e3d22c60e5e9ef5b0bdb2832955d7289e3d1338f83520fd51c75fdd76d"
+      }
+    },
+    {
+      "id": "CLM-1264",
+      "statement": "The upgrade smoke test builds a database at the pre-split schema (account migrations 1-35 identical to main's), runs `migrate` and the main store migration, and asserts adoption (identity row, recorded baseline, rows moved, public tables gone), the audit view (old entry without store plus new entry with store main, once each) and a publish to an old catalog.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "issue #979 req 2; PR body: Smoke test `the_upgrade_procedure_adopts_a_pre_split_database_and_keeps_its_history`",
+      "derived_from": [
+        "CLM-1260"
+      ],
+      "artifacts": [
+        "tests/stores.rs"
+      ],
+      "tags": [
+        "from-issue:979"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1866",
+          "kind": "inspection",
+          "locator": "tests/stores.rs:462-640; git diff origin/main vs HEAD for migrations 0001-0035",
+          "summary": "seed_release_two runs MIGRATOR.run_to(35) and seeds 2 catalogs/docs/revisions and an account audit entry. Test runs okf_mcp migrate, registry.migration(main) (asserts not adopted, 0 applied), then asserts identity=main, recorded migrations==embedded, moved rows (2,2,2), public.documents gone, publish to old-one succeeds, audit stores == [Some(main), None]. I diffed migrations 0001-0035 between origin/main:migrations and HEAD:migrations/accounts: all 35 identical. Note: `stores migrate` itself is not run via the CLI; registry.migration is used, and the test comment says so.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/stores.rs",
+              "lines": {
+                "start": 527,
+                "end": 620
+              },
+              "commit": "3ac9e85c0102fcf8f996af2fe6c4065aeceefc49"
+            }
+          },
+          "recorded_at": "2026-11-24T17:43:58.754644580Z",
+          "seal": {
+            "by": "server",
+            "mac": "031abdede86e7656b72d2a37eea3684a9ca90a088be5d4ca510ace6908234b04"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Seed, migrate, adoption, audit and publish assertions all present; migrations 1-35 verified byte-identical to main's. Caveat: `stores migrate` is exercised via registry.migration, not the CLI command (stated in the test).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1866"
+          ],
+          "recorded_at": "2026-11-24T17:44:25.221924779Z",
+          "seal": {
+            "by": "server",
+            "mac": "2a59b2a8158c6643fc405c989cd5f803cb86c8a65da43ca24e9dfea9d797e299"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T17:43:24.063413248Z",
+      "updated_at": "2026-11-24T17:44:25.221924779Z",
+      "seal": {
+        "by": "server",
+        "mac": "9e6bb2985d5ddac8f556549f96cd31cc8ceaee537f5d1d9a95dc6baae7d10170"
+      }
+    },
+    {
+      "id": "CLM-1265",
+      "statement": "The task and milestone changelogs record the smoke test result and say plainly that a run against a real snapshot is still for the maintainer.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "issue #979 req 2",
+      "derived_from": [
+        "CLM-1260"
+      ],
+      "artifacts": [
+        "changelog/2026-11-24T17-02-20Z-m21-task-20-stores-end-to-end.md",
+        "changelog/2026-11-24T17-02-21Z-m21-milestone-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:979"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1867",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T17-02-20Z-m21-task-20-stores-end-to-end.md (Notes, Smoke test); milestone changelog \"Before release 3\"",
+          "summary": "Task changelog records the smoke result item by item and ends \"A smoke test against a real snapshot of the maintainer's database is still for the maintainer.\"; the milestone changelog says \"a run on a real snapshot is still to be done by the maintainer\".",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "still (for|to be done by) the maintainer",
+              "case_insensitive": true,
+              "scope": [
+                "changelog/2026-11-24T17-02-20Z-m21-task-20-stores-end-to-end.md",
+                "changelog/2026-11-24T17-02-21Z-m21-milestone-catalog-stores.md"
+              ],
+              "hits": 2,
+              "commit": "3ac9e85c0102fcf8f996af2fe6c4065aeceefc49"
+            }
+          },
+          "recorded_at": "2026-11-24T17:43:58.835587278Z",
+          "seal": {
+            "by": "server",
+            "mac": "91a67234dff36c170ecc199a5be869547cb8efbde79d60c60fd916dbd6eee9eb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both changelogs say it (2 hits).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1867"
+          ],
+          "recorded_at": "2026-11-24T17:44:25.305297540Z",
+          "seal": {
+            "by": "server",
+            "mac": "174e4d57787259cf1e57b335959158dcf39f4407f7b04cb8e3634009b7586ff3"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T17:43:24.063413248Z",
+      "updated_at": "2026-11-24T17:44:25.305297540Z",
+      "seal": {
+        "by": "server",
+        "mac": "92ab31cefc60aec92b454c3a6bf5a6ae9d027e3fd6485bfc628052f191fb5f6f"
+      }
+    },
+    {
+      "id": "CLM-1266",
+      "statement": "`okf-mcp catalog repair-indexes` loops over every store returned by Stores::all() and repairs each catalog on the store that holds it, with a failing store not stopping the others.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "issue #979 req 3; PR body: `catalog repair-indexes` loops over `Stores::all()`",
+      "derived_from": [
+        "CLM-1260"
+      ],
+      "artifacts": [
+        "src/cli.rs",
+        "src/store/repair.rs"
+      ],
+      "tags": [
+        "from-issue:979"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1868",
+          "kind": "inspection",
+          "locator": "src/cli.rs:1464-1496; src/store/repair.rs:298-358",
+          "summary": "run_catalog iterates `stores.all().await?`, per store gets the handle, repair_targets (scoped via missing_root_index store=$1 and placed_on) then repair_catalogs; an Err is pushed to failures and the loop continues; ensure! fails at the end naming each. A store with no targets returns early. Minor: explicit names with --missing-only absent are routed by placed_on, unknown names count as main.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli.rs",
+              "lines": {
+                "start": 1464,
+                "end": 1496
+              },
+              "commit": "3ac9e85c0102fcf8f996af2fe6c4065aeceefc49"
+            }
+          },
+          "recorded_at": "2026-11-24T17:43:58.910768095Z",
+          "seal": {
+            "by": "server",
+            "mac": "84e2ad3a58e259bddcc7d4fbed97fe6ea55dddb4749c84666847cb83d445419b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code reads as claimed (loop over Stores::all, per-store scoping, failures collected).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1868"
+          ],
+          "recorded_at": "2026-11-24T17:44:25.403171015Z",
+          "seal": {
+            "by": "server",
+            "mac": "66815670fe781e5635c1c58bb89ba98a89b9dfb8360da390d153fcaf8b6fd0ac"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T17:43:24.063413248Z",
+      "updated_at": "2026-11-24T17:44:25.403171015Z",
+      "seal": {
+        "by": "server",
+        "mac": "826d7565a2f7128da028dad1e233e405ab6a8eaa3f5d2c3a189430f2d4235315"
+      }
+    },
+    {
+      "id": "CLM-1267",
+      "statement": "A unit test (cli::tests::repair_indexes_repairs_a_catalog_on_each_store) creates one catalog on main and one on a host store, runs repair-indexes, and asserts each store holds the root index of its own catalog only.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: Manual Test Plan `cli::tests::repair_indexes` ...",
+      "derived_from": [
+        "CLM-1266"
+      ],
+      "artifacts": [
+        "src/cli.rs"
+      ],
+      "tags": [
+        "from-issue:979"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1869",
+          "kind": "inspection",
+          "locator": "src/cli.rs repair_indexes_repairs_a_catalog_on_each_store",
+          "summary": "Test registers store-b, creates on-main and on-b by pinning, deletes their docs/revisions, runs RepairIndexes{missing_only:true}, then asserts per store that DISTINCT catalog_id of index.md rows equals that store's own catalog id.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "async fn repair_indexes_repairs_a_catalog_on_each_store",
+              "scope": [
+                "src/cli.rs"
+              ],
+              "hits": 1,
+              "commit": "3ac9e85c0102fcf8f996af2fe6c4065aeceefc49"
+            }
+          },
+          "recorded_at": "2026-11-24T17:43:58.988294871Z",
+          "seal": {
+            "by": "server",
+            "mac": "3437a59f18c7588ec135383f615ad1ea0702b7cabe84ca1faa8cd908b1e01942"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test body read; asserts per-store root index ownership.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1869"
+          ],
+          "recorded_at": "2026-11-24T17:44:25.486414435Z",
+          "seal": {
+            "by": "server",
+            "mac": "d1790de939fd9954cdb9c3f84489b7eebdc2b7a9b3a7e645063f12dc45a39740"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T17:43:24.063413248Z",
+      "updated_at": "2026-11-24T17:44:25.486414435Z",
+      "seal": {
+        "by": "server",
+        "mac": "7db73bfdc4b690287aaabdd0eb0e02e0f9ac509f1f9dfb6f12692947d92b4e19"
+      }
+    },
+    {
+      "id": "CLM-1268",
+      "statement": "placement::refuse_host_stores_until_task_20 and its call in store::stores::add are deleted, and no reference to them remains in src or tests.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "issue #979 req 4; PR body: P8 lifted",
+      "derived_from": [
+        "CLM-1260"
+      ],
+      "artifacts": [
+        "src/stores/placement.rs",
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:979"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1870",
+          "kind": "analysis",
+          "locator": "git grep -E 'refuse_host_stores|until_task_20' src tests",
+          "summary": "Zero hits in src and tests at HEAD; diff shows the function removed from src/stores/placement.rs and the call removed from src/store/stores.rs add(). Remaining mentions are only in the historical plan doc.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "refuse_host_stores|until_task_20",
+              "scope": [
+                "src",
+                "tests"
+              ],
+              "hits": 0,
+              "commit": "3ac9e85c0102fcf8f996af2fe6c4065aeceefc49"
+            }
+          },
+          "recorded_at": "2026-11-24T17:43:59.079291086Z",
+          "seal": {
+            "by": "server",
+            "mac": "e1943ed7ffbfa10075ebe92380c58848805f85a06fc81211884c951b49540180"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Zero-hit search over src and tests; diff shows function and call removed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1870"
+          ],
+          "recorded_at": "2026-11-24T17:44:25.562137472Z",
+          "seal": {
+            "by": "server",
+            "mac": "d65f3863e7f54291a2cdee2beee3a501d6b693ab8469acb33bae6c401af92c09"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T17:43:24.063413248Z",
+      "updated_at": "2026-11-24T17:44:25.562137472Z",
+      "seal": {
+        "by": "server",
+        "mac": "7b49f8771596ac462a9d4329e5def67858134ea50a617c9ef75d302e20b86674"
+      }
+    },
+    {
+      "id": "CLM-1269",
+      "statement": "The unit test adding_a_host_store_is_refused_until_enabled is replaced by a_host_store_can_be_added, which asserts the added store, its migrated schema and its identity row; a_store_whose_schema_cannot_be_migrated_leaves_no_row is new.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "issue #979 req 4; PR body: P8 lifted bullet",
+      "derived_from": [
+        "CLM-1268"
+      ],
+      "artifacts": [
+        "src/store/stores.rs"
+      ],
+      "tags": [
+        "from-issue:979"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1871",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs a_host_store_can_be_added, a_store_whose_schema_cannot_be_migrated_leaves_no_row",
+          "summary": "a_host_store_can_be_added asserts added name, store_names == [main, shared-1], store_owner == shared-1 and applied catalog migrations == embedded CATALOG_MIGRATOR. The new second test pre-creates a conflicting catalog.documents, expects Refused containing \"migrated\" and store_names == [main]. Old name no longer present.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "async fn a_host_store_can_be_added|async fn a_store_whose_schema_cannot_be_migrated_leaves_no_row",
+              "scope": [
+                "src/store/stores.rs"
+              ],
+              "hits": 2,
+              "commit": "3ac9e85c0102fcf8f996af2fe6c4065aeceefc49"
+            }
+          },
+          "recorded_at": "2026-11-24T17:43:59.155582170Z",
+          "seal": {
+            "by": "server",
+            "mac": "c29ddf4873bb0a8ec82bf3b0becad3e90e0e17d59fad5f0f875f37708aad9122"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both tests exist with the described assertions.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1871"
+          ],
+          "recorded_at": "2026-11-24T17:44:25.660232388Z",
+          "seal": {
+            "by": "server",
+            "mac": "6ba8230f0c2c327ac3325f1bbf64fcd6b46baa42a35338cc0719a31493a4acf4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T17:43:24.063413248Z",
+      "updated_at": "2026-11-24T17:44:25.660232388Z",
+      "seal": {
+        "by": "server",
+        "mac": "2604aacedc8f07bfc762ef6c4177d144940efc27e6575f79403c5f9fbfac14a0"
+      }
+    },
+    {
+      "id": "CLM-1270",
+      "statement": "docs/operations.md sections \"Catalog stores\" and \"Catalog stores API\" no longer say host stores are refused or not enabled.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "issue #979 req 4; PR body: `docs/operations.md` updated",
+      "derived_from": [
+        "CLM-1268"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:979"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1872",
+          "kind": "analysis",
+          "locator": "git grep -iE 'not enabled|refuses to add one|until separate stores|separate stores are not' docs/operations.md",
+          "summary": "Zero hits. Diff replaces the \"This release refuses to add one\" paragraph, drops \"Applies once separate stores are enabled\" in Adding a store, and the POST /api/v1/stores row now lists the failed-migration 409 instead of the not-enabled one.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "not enabled|refuses to add one|until separate stores|separate stores are not|until the milestone",
+              "case_insensitive": true,
+              "scope": [
+                "docs/operations.md"
+              ],
+              "hits": 0,
+              "commit": "3ac9e85c0102fcf8f996af2fe6c4065aeceefc49"
+            }
+          },
+          "recorded_at": "2026-11-24T17:43:59.235537239Z",
+          "seal": {
+            "by": "server",
+            "mac": "c574ce86ed7701630c36110f20720062024dd8d3a42997e0ffc0189b958fb78d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Zero-hit search for refusal wording in docs/operations.md, and the diff removes those passages.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1872"
+          ],
+          "recorded_at": "2026-11-24T17:44:25.737329991Z",
+          "seal": {
+            "by": "server",
+            "mac": "1e0a3828b65cce356b36f54c71eeeb1a1dd6dab56ef61f521e657c3fab0f8769"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T17:43:24.063413248Z",
+      "updated_at": "2026-11-24T17:44:25.737329991Z",
+      "seal": {
+        "by": "server",
+        "mac": "1310787284983883b108ffac2f28eca40cb657daebe185d9bdfe9e62a6e0fb81"
+      }
+    },
+    {
+      "id": "CLM-1271",
+      "statement": "A milestone changelog and a per-task changelog entry exist, the milestone one listing Tasks 1-20 and 10b with PRs and open follow-ups #993, #995, #998, #1002, #1004, #1017.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "issue #979 req 5",
+      "derived_from": [
+        "CLM-1260"
+      ],
+      "artifacts": [
+        "changelog/2026-11-24T17-02-21Z-m21-milestone-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:979"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1873",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T17-02-21Z-m21-milestone-catalog-stores.md",
+          "summary": "Table has rows 1-20 plus 10b with PRs; follow-ups #993 #995 #998 #1002 #1004 #1017 all listed. Per-task entry changelog/2026-11-24T17-02-20Z-m21-task-20-stores-end-to-end.md exists.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-24T17-02-21Z-m21-milestone-catalog-stores.md",
+              "commit": "3ac9e85c0102fcf8f996af2fe6c4065aeceefc49"
+            }
+          },
+          "recorded_at": "2026-11-24T17:43:59.310670791Z",
+          "seal": {
+            "by": "server",
+            "mac": "8c21e51d20ba88ee2487718c9ab1f8c54bf5721c9f72c8b05f4439aea08cb43e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both files exist with the required content.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1873"
+          ],
+          "recorded_at": "2026-11-24T17:44:25.825734084Z",
+          "seal": {
+            "by": "server",
+            "mac": "21eb8c7cf92053224ceacccecef283b81504c79bb0d9c58e1a20a4db0d8e39ff"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T17:43:24.063413248Z",
+      "updated_at": "2026-11-24T17:44:25.825734084Z",
+      "seal": {
+        "by": "server",
+        "mac": "4cc09dbc356edaec8330c228761b92c77daa3c11af3f5c32ee0df8c13224f1d6"
+      }
+    },
+    {
+      "id": "CLM-1272",
+      "statement": "The milestone changelog's task-to-issue-to-PR table matches GitHub: each listed PR is merged into milestone/958-catalog-stores and closes the listed issue.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "milestone changelog table",
+      "derived_from": [
+        "CLM-1271"
+      ],
+      "artifacts": [
+        "changelog/2026-11-24T17-02-21Z-m21-milestone-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:979"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1874",
+          "kind": "log",
+          "locator": "gh pr view N --json title,state,body,baseRefName for 981 983 984 985 987 990 992 994 996 997 1001 1003 1008 (Closes #), and titles/state for 999 1000 1005 1007 1010 1013 1014 1018 1016 991; gh issue view 969 975 976",
+          "summary": "All checked PRs are MERGED into milestone/958-catalog-stores. Closes-references match the table for 981->959, 983->960, 984->961, 985->962, 987->963, 990->964, 992->965, 994->966, 996->967, 997->968, 1001->970, 1003->971, 1008->974. Titles match tasks for 999/1000 (10b, two parts), 1005 (13), 1007 (14), 1010 (17, issue 975), 1013 (18), 1014 (16, issue 976), 1018 (19). 991 and 1016 are syncs of main. Not individually checked: 1000/999 Closes lines, 1010/1013/1014/1018 Closes lines (matched by title and issue title only).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T17:43:59.389360878Z",
+          "seal": {
+            "by": "server",
+            "mac": "18283921958b8ec06c34aff8250a94b0774102f166509be2662bc1edfc3ddcd3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every sampled PR (about 25 of 27) matches its issue; none contradicted.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1874"
+          ],
+          "recorded_at": "2026-11-24T17:44:25.914122147Z",
+          "seal": {
+            "by": "server",
+            "mac": "2dea2148c6ca8b701222ae0b6d56844ee75361061eb2a13818593ad6a0df50de"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T17:43:24.063413248Z",
+      "updated_at": "2026-11-24T17:44:25.914122147Z",
+      "seal": {
+        "by": "server",
+        "mac": "0d5ddaff58107651a37f5bbf5c6dd8d5aa22df230913c80cf888a3d0b0fb541f"
+      }
+    },
+    {
+      "id": "CLM-1273",
+      "statement": "PR body: `tools/agentic/gate.sh narrow --test stores` -> 3 passed (tests/stores.rs contains 3 tests).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body Manual Test Plan: \"`tools/agentic/gate.sh narrow --test stores` -> 3 passed.\"",
+      "derived_from": [
+        "CLM-1260"
+      ],
+      "artifacts": [
+        "tests/stores.rs"
+      ],
+      "tags": [
+        "from-issue:979"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1875",
+          "kind": "analysis",
+          "locator": "git grep -c 'tokio::test' tests/stores.rs",
+          "summary": "tests/stores.rs has exactly 2 test functions (lines 284 and 527); there is no other #[test] or #[tokio::test]. The Manual Test Plan line claiming `--test stores` gives 3 passed cannot be right.",
+          "stance": "refutes",
+          "anchor": {
+            "search": {
+              "pattern": "#\\[(tokio::)?test",
+              "scope": [
+                "tests/stores.rs"
+              ],
+              "hits": 2,
+              "commit": "3ac9e85c0102fcf8f996af2fe6c4065aeceefc49"
+            }
+          },
+          "recorded_at": "2026-11-24T17:43:59.468846107Z",
+          "seal": {
+            "by": "server",
+            "mac": "c3a4eca8a718e251bd4dbd812b160c51d10a5bf29cfa4f014f248cb1d654119f"
+          }
+        },
+        {
+          "id": "EVD-1876",
+          "kind": "analysis",
+          "locator": "tests/stores.rs:19 (mod support;) and tests/support/*.rs",
+          "summary": "The `stores` test binary also compiles tests/support, whose modules may carry their own #[test] functions (a third test could come from there); I did not run the binary or trace which support modules are included, so the count of 3 cannot be confirmed or excluded.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T17:44:05.820469052Z",
+          "seal": {
+            "by": "server",
+            "mac": "6bf65478b1cfeb60c602de327fc3782f8d0986738e6d98ab9437e5027e289c83"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "tests/stores.rs holds two test functions, so \"3 passed\" looks wrong, but the support modules compiled into the binary may add a third; I was told not to run builds. Fix: run `tools/agentic/gate.sh narrow --test stores` and put the real count in the PR body (2 if the support modules add none).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1875",
+            "EVD-1876"
+          ],
+          "recorded_at": "2026-11-24T17:44:24.866530519Z",
+          "seal": {
+            "by": "server",
+            "mac": "124dfb808235760eb0e5435ee95b9b83de5a489004a492ad3393010afdffbc98"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T17:43:24.063413248Z",
+      "updated_at": "2026-11-24T17:44:24.866530519Z",
+      "seal": {
+        "by": "server",
+        "mac": "bda56611455ce1535590bc9b9446dc5ea666d5824412fd47b97fdb1cdaff9df8"
       }
     }
   ]
