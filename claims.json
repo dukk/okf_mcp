@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1221,
+  "next_claim_seq": 1260,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "3357bc734b401c3445e2a00acc669d18f3610483dc310a1b1e60e6bf52252e59"
+    "mac": "34b3d9e92de01b607bc24c511f17f54fb4f5fef9b727f057aeb5c1188b6c4277"
   },
-  "next_evidence_seq": 1815,
+  "next_evidence_seq": 1863,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "74717ddc72924201bb8786eef8f619f6d2c0a768bee56eebc36e89c33e90bd4b"
+    "mac": "a26860e86081af12fa8c4e87076578ab2cd01c27d688eceaf5dd9ffb7bdd41b1"
   },
   "claims": [
     {
@@ -99822,6 +99822,3101 @@
       "seal": {
         "by": "server",
         "mac": "8f5af1ca0f0073d285129f27d5b288dc88995c329abf7385f1f66cfa148a2fff"
+      }
+    },
+    {
+      "id": "CLM-1221",
+      "statement": "The #978 docs change (operations.md Catalog stores section, tools reference intro, README) describes only what the code on the milestone branch does, and every setting, command, route, tool field and error name it documents exists in the source.",
+      "kind": "documentation",
+      "level": "system",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Issue #978 (M21.19: docs) and the extra instruction: documents describe what the code does, not undone follow-ups",
+      "derived_from": [],
+      "artifacts": [
+        "docs/operations.md",
+        "docs/reference/tools.md",
+        "src/mcp/reference.rs",
+        "README.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1852",
+          "kind": "analysis",
+          "locator": "children of CLM-1221",
+          "summary": "All children are supported except one (the job queue / logs and traces sentence) which is not_enough_info and overstated; so the parent is not fully covered.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T16:26:06.139153766Z",
+          "seal": {
+            "by": "server",
+            "mac": "e6cb19ba5a33b85a75267b35becfc15decdbf1f90a466792ec10dd95be402b84"
+          }
+        },
+        {
+          "id": "EVD-1855",
+          "kind": "analysis",
+          "locator": "children of CLM-1221",
+          "summary": "All 35 children are now supported (CLM-1253 re-audited after 8d6df1d); together they cover every setting, command, route, tool field, error name and behaviour the change documents.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T16:29:48.629364675Z",
+          "seal": {
+            "by": "server",
+            "mac": "210c9bc6a1d795ec16c70823a367478b7177748178af3dd3b965fc4821b2792a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "All children except CLM-1253 are supported; that one's wording about the job queue, logs and traces is not backed by the code. Fix: reword docs/operations.md lines 604-608 as described under the child claim about the job queue, logs and traces, then re-audit it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1852"
+          ],
+          "recorded_at": "2026-11-24T16:26:11.940808405Z",
+          "seal": {
+            "by": "server",
+            "mac": "539b45612bbff9274066e77ab6b26cef515c33d5be1ff2b865f8d9d8cf4cfebe"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All 35 child claims are supported, including CLM-1253 after the rewording in 8d6df1d, so the documented settings, commands, routes, fields and error names all exist and behave as described.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1855"
+          ],
+          "recorded_at": "2026-11-24T16:29:53.618490862Z",
+          "seal": {
+            "by": "server",
+            "mac": "4475d7f0b2f410b9c3d0451686b2065fc80a2537d445831ddbe9ba6c64f1a2f4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:29:53.618490862Z",
+      "seal": {
+        "by": "server",
+        "mac": "e745f106ffe9133e044c5d1a300cb5ebe080f2dda12bd0f659af042d9b1710b4"
+      }
+    },
+    {
+      "id": "CLM-1222",
+      "statement": "The Postgres connection arithmetic is N x (database_max_connections + store_max_connections + 4) on the account database, because the pool of the store `main` is a separate pool of store_max_connections connections opened on the account database.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "docs/operations.md lines 354-362 and 508-525",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 354,
+          "end": 362
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1815",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:677-698,773-800; src/config.rs:49-50",
+          "summary": "open_row builds a pool for every store including AccountDatabase (base options, no credential) via connect_pool with PgPoolOptions max_connections = store_max_connections (default 8); it is a pool apart from the account pool, on the same database. The module doc says pools are never shared with the account database, even for main.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 773,
+                "end": 800
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:23:54.403723999Z",
+          "seal": {
+            "by": "server",
+            "mac": "ceeb81f4b5fc517aa932583c520fb1345920c244389cbf006d8762f68f546477"
+          }
+        },
+        {
+          "id": "EVD-1816",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:703-720 (connection_of)",
+          "summary": "For StoreLocation::AccountDatabase connection_of returns the account pool's own options with no credential source, so main's pool connects to the account database.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 703,
+                "end": 720
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:23:54.487122489Z",
+          "seal": {
+            "by": "server",
+            "mac": "22d0d66d7448d162f5ed5f17e8f6267a7976bd573f91d9e8dd0d779ac792c80c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "main's pool is a separate pool of store_max_connections on the account database, so the account database sees database_max_connections + store_max_connections + the listener and worker connections.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1815",
+            "EVD-1816"
+          ],
+          "recorded_at": "2026-11-24T16:26:03.411067622Z",
+          "seal": {
+            "by": "server",
+            "mac": "7837be5148aeacf08d31730872f92f52c362c86b6bed875f4fe689c3d8697c46"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:03.411067622Z",
+      "seal": {
+        "by": "server",
+        "mac": "b111aaf39f4bd7f5e369265c7687bf38f19c6e8265d3662a3feeebfa33f8e2f0"
+      }
+    },
+    {
+      "id": "CLM-1223",
+      "statement": "With the defaults (database_max_connections 16, store_max_connections 8) and 3 replicas, the account database needs 84 connections and a separate store 27.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "docs/operations.md line 526",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 526,
+          "end": 528
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1817",
+          "kind": "analysis",
+          "locator": "src/config.rs:49-50 (store_max_connections 8); arithmetic 3 x (16+8+4)=84, 3 x (8+1)=27",
+          "summary": "Defaults are database_max_connections 16 and store_max_connections 8 (config.rs:49-50). Using the doc's formulas, 3 x 28 = 84 and 3 x 9 = 27, matching the doc.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/config.rs",
+              "lines": {
+                "start": 49,
+                "end": 50
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:23:54.567779479Z",
+          "seal": {
+            "by": "server",
+            "mac": "89959253d36c89635632411cef32e1c251484860388e74b77cc0a231152e4e57"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Defaults 16 and 8 give 3x28=84 and 3x9=27.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1817"
+          ],
+          "recorded_at": "2026-11-24T16:26:03.491915162Z",
+          "seal": {
+            "by": "server",
+            "mac": "f58c406b0f1768025bef3510941a08183448f126136f077ffb490f97a8548b1b"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:03.491915162Z",
+      "seal": {
+        "by": "server",
+        "mac": "bc29188100ce0620fa4a307ce4593620b0369fe4b367529f712a7e4a095a6d06"
+      }
+    },
+    {
+      "id": "CLM-1224",
+      "statement": "A separate store's database takes N x (store_max_connections + 1) connections: the pool plus one change-feed listener held outside the limit, and a store inside the account database has no listener of its own.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "docs/operations.md lines 358-361, 516-518",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 516,
+          "end": 518
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1818",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:395-440 (follow, ensure_feed)",
+          "summary": "ensure_feed returns without a listener when same_database(accounts, pool) (a store inside the account database); otherwise spawns one store feed whose connection is its own, outside the pool (follow doc: held outside store_max_connections).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 395,
+                "end": 440
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:23:54.647289674Z",
+          "seal": {
+            "by": "server",
+            "mac": "5403d3d39baf390dacae5f6340d7165a24c036286e71337f07bbee37bd303836"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Listener is one extra connection outside the pool for separate stores only.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1818"
+          ],
+          "recorded_at": "2026-11-24T16:26:03.570622544Z",
+          "seal": {
+            "by": "server",
+            "mac": "e928f1eb8b28dff3e0491183187f872530e3882a87d54da687d9006ab18bc8f0"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:03.570622544Z",
+      "seal": {
+        "by": "server",
+        "mac": "929d345efd52b6b80e51c6f90db771bb4923cf52a8ef99569e649b4515050935"
+      }
+    },
+    {
+      "id": "CLM-1225",
+      "statement": "This release refuses to add a `host` store: POST /api/v1/stores and `okf-mcp stores add` answer 409 for one, after checking that it can be reached.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "docs/operations.md lines 430-436",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 430,
+          "end": 436
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1819",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:303-320; src/stores/placement.rs:91-100; src/http/mod.rs:150-153",
+          "summary": "add() runs stores.check (connect + taken-database check) first, then refuse_host_stores_until_task_20, which returns OkfError::Refused(\"separate stores are not enabled yet\") for any Host store; Refused maps to HTTP 409. The CLI and POST /stores both call stores::add.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 303,
+                "end": 320
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:23:54.729591810Z",
+          "seal": {
+            "by": "server",
+            "mac": "9df36ee137f0f0ef9ad3fe08f0b63969ddd2a99c16a87f45a2b77f4d4eb89cec"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "add() checks reachability then refuses any host store with Refused, which is 409; both entry points use it. Nit: the check also includes the taken-database refusal before the host refusal.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1819"
+          ],
+          "recorded_at": "2026-11-24T16:26:03.665130346Z",
+          "seal": {
+            "by": "server",
+            "mac": "1e29092c8015b9ffee718e6caf9bca329119399f900b8e05355062497033f4fd"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:03.665130346Z",
+      "seal": {
+        "by": "server",
+        "mac": "99056d58c2448956eb80fecabfb7da50b611b1a69b01e2dd360ad9b8ad5f4370"
+      }
+    },
+    {
+      "id": "CLM-1226",
+      "statement": "Adding a store checks in the documented order: connect to the new database, refuse a database that holds the account tables or whose catalog.store_identity names another store, migrate it and write the identity row, then store the row.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md lines 450-463",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 450,
+          "end": 463
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1820",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:303-325; src/stores/registry.rs:846-880,957-975; src/db.rs:312-366",
+          "summary": "add(): check (open row, then refuse_a_taken_database: account tables present, or identity row names another store) -> host refusal -> prepare (migrate_on, which writes the identity row) -> insert. This matches the doc's three steps; the host refusal between steps 2 and 3 is stated earlier in the section.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 846,
+                "end": 880
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:23:54.810669611Z",
+          "seal": {
+            "by": "server",
+            "mac": "40f96cddcd388c37b8414b36f8a4c8ade0a2035ce79452cd27bc23da7ac07808"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code order check, refuse host, migrate (identity), insert matches the documented steps.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1820"
+          ],
+          "recorded_at": "2026-11-24T16:26:03.737429053Z",
+          "seal": {
+            "by": "server",
+            "mac": "1353520e0bf5d7ffd801993bc58930501415932929e401afc513103637b350a1"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:03.737429053Z",
+      "seal": {
+        "by": "server",
+        "mac": "d2e89b7b5f98aa318153cb42c874ba8430fe369cd02ddaded3ae6fc391b92712"
+      }
+    },
+    {
+      "id": "CLM-1227",
+      "statement": "The same physical database added twice under two host names is refused (by the identity row, and by the unique index on host, port and database for the same host spelling).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "docs/operations.md lines 456-460; issue comment: duplicate databases under two host names are refused",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 456,
+          "end": 460
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1821",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:957-975; migrations/accounts/0036_stores.sql:42; src/store/stores.rs:733 (adding_a_store_that_aliases_another_is_refused)",
+          "summary": "refuse_a_taken_database refuses a database whose store_identity names another store (\"already belongs to store X\"), independent of host name; unique index stores_one_row_per_database (lower(host), port, database) refuses the same spelling; a test named adding_a_store_that_aliases_another_is_refused exists (test read, not rerun).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 957,
+                "end": 975
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:23:54.891084790Z",
+          "seal": {
+            "by": "server",
+            "mac": "87fa31a7780f9ff87db86287ea3a4e3324eb82bc6fd965cf5d1fac01758a7897"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Identity row check refuses a second name for the same database regardless of host spelling.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1821"
+          ],
+          "recorded_at": "2026-11-24T16:26:03.813115683Z",
+          "seal": {
+            "by": "server",
+            "mac": "7eb4ab40be06b787dfb42c02d512b3570718745167ab251ccb3e7195a5cd853d"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:03.813115683Z",
+      "seal": {
+        "by": "server",
+        "mac": "73bc5291e0817a2feb96527dd9e25fe22dd7dd358d438f8891ff28aee16d890e"
+      }
+    },
+    {
+      "id": "CLM-1228",
+      "statement": "A store that cannot be reached is refused on add and the reply names no host, port or credential (the log has the cause).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "docs/operations.md lines 454-456",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 454,
+          "end": 456
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1822",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:333-345 (unreachable_refused); src/http/api/stores.rs:447 (adding_an_unreachable_store_through_the_api_leaks_nothing)",
+          "summary": "StoreUnavailable from the open is mapped to Refused(\"the store cannot be reached with these settings; check the host, port, database and credential\"), naming no host/port/credential; the cause is logged by store_unavailable/split_event. API test asserting nothing leaks exists.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 333,
+                "end": 345
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:23:54.969891882Z",
+          "seal": {
+            "by": "server",
+            "mac": "04e2b8925151ae4dfd9be20bef8c73837c2a5d265e261e24cff16786cc119f16"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Fixed refusal text with no host, port or credential; cause goes to the local log.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1822"
+          ],
+          "recorded_at": "2026-11-24T16:26:03.891041502Z",
+          "seal": {
+            "by": "server",
+            "mac": "d2694d6aac53aaa39629e3a36f20fd645e180d0831a59af823c01fb1526b9660"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:03.891041502Z",
+      "seal": {
+        "by": "server",
+        "mac": "77c93609f88938fe59d3136177c787e399a48279e6fc36696705b3339c460fe4"
+      }
+    },
+    {
+      "id": "CLM-1229",
+      "statement": "For credential_kind `env`, credential_ref is the name of an environment variable holding the password; the user, TLS and other connection options are the account database's own and the account database's password is never sent to another host.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md line 469; issue comment on credential_ref per kind",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 469,
+          "end": 469
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1823",
+          "kind": "inspection",
+          "locator": "src/stores/credentials.rs:5-10,193-225; src/stores/registry.rs:703-720",
+          "summary": "EnvCredential reads the named variable only (Credential::new(None, password), refresh Never); with user None the base (account database) options keep user, TLS etc.; the comment states the account password is never sent to another host.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/credentials.rs",
+              "lines": {
+                "start": 193,
+                "end": 225
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:23:55.052167008Z",
+          "seal": {
+            "by": "server",
+            "mac": "110dff695a88c56ea1dbcfc6e69633c73c8f4f45e09770f04c4e7496c02b1aa4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Env source supplies only the password; user and other options remain the account pool's.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1823"
+          ],
+          "recorded_at": "2026-11-24T16:26:03.965741768Z",
+          "seal": {
+            "by": "server",
+            "mac": "e9b2ab3f9961656692ad62f2d91dab022382b8693a2f4a8ee43be2cba2e9ec3b"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:03.965741768Z",
+      "seal": {
+        "by": "server",
+        "mac": "ae357b3ba1182eeea0d70fd500be599571393ee94a257a47e5c358de291e5ad0"
+      }
+    },
+    {
+      "id": "CLM-1230",
+      "statement": "For credential_kind `secrets-manager`, credential_ref is a secret ARN whose JSON value has `username` and `password`; the secret is read when the pool opens and again when the database refuses a login.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md line 470; issue comment",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 470,
+          "end": 470
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1824",
+          "kind": "inspection",
+          "locator": "src/stores/credentials.rs:255-300; src/stores/registry.rs:736-770",
+          "summary": "SecretJson requires username and password; fetch gives Credential(Some(username), password); refresh is OnAuthFailure; connect_with_credential fetches at open and refetches once on a refused login. ARN is the reference (region_of_arn).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/credentials.rs",
+              "lines": {
+                "start": 255,
+                "end": 300
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:23:55.131778954Z",
+          "seal": {
+            "by": "server",
+            "mac": "85964294855eeaf2f58e2f39ea5602928c2998f43de9571d38b8f055f644faa7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Secret JSON username and password, refetched on auth failure.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1824"
+          ],
+          "recorded_at": "2026-11-24T16:26:04.048422685Z",
+          "seal": {
+            "by": "server",
+            "mac": "4fcb287740f10f553d0f07321ecdee0d59ca0eae8587bc8e1be68b43e1e586ae"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:04.048422685Z",
+      "seal": {
+        "by": "server",
+        "mac": "37645886a130e81afd5ba8b2dc3c0c6c88346eef1e6f5d106ced251ac278ce16"
+      }
+    },
+    {
+      "id": "CLM-1231",
+      "statement": "For credential_kind `iam`, credential_ref is the database user; the server signs an RDS IAM token with its AWS credentials and replaces the pool's token every 10 minutes and when a login is refused.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md line 471; issue comment",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 471,
+          "end": 471
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1825",
+          "kind": "inspection",
+          "locator": "src/stores/credentials.rs:52-53,310-335,560-600",
+          "summary": "IAM_REFRESH_EVERY = 10 minutes; IamCredential signs a token for (host, port, user=reference) and returns Credential(Some(user), token) with Refresh::Every(refresh_every); spawn_keeper re-applies on the timer and on refused logins.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/credentials.rs",
+              "lines": {
+                "start": 310,
+                "end": 335
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:23:55.213138176Z",
+          "seal": {
+            "by": "server",
+            "mac": "61c1f2207f5477e796c6b5c31d706db66d135809f8c37c1f5f3eac78065ff3d4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reference is the DB user, 10 minute timer plus refusal-triggered refresh.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1825"
+          ],
+          "recorded_at": "2026-11-24T16:26:04.121083113Z",
+          "seal": {
+            "by": "server",
+            "mac": "8287e837ba658369d656e9c7b49dc33e120b71aebdafc3b93f3ab63d191d0e95"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:04.121083113Z",
+      "seal": {
+        "by": "server",
+        "mac": "e29915049a5e5ab2d6d40f6aad68c04889316f7bf58e690018c30af95228def4"
+      }
+    },
+    {
+      "id": "CLM-1232",
+      "statement": "The IAM token is signed for the region in an RDS host name (name.id.REGION.rds.amazonaws.com), else the server's own region, and there is no per-store region setting.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md line 471",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 471,
+          "end": 471
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1826",
+          "kind": "inspection",
+          "locator": "src/stores/credentials.rs:765-830",
+          "summary": "signing_region(host, server_region) = region_of_rds_host(host).or(server_region); region_of_rds_host reads the REGION label of an RDS host name; no region column or setting exists on the stores row (no per-store region).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/credentials.rs",
+              "lines": {
+                "start": 795,
+                "end": 830
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:23:55.292283130Z",
+          "seal": {
+            "by": "server",
+            "mac": "0b5577b0e645dcb937f63aefcf412b985995e5273cc19925c53030d6444d461d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Region from RDS host else server region, no per-store setting.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1826"
+          ],
+          "recorded_at": "2026-11-24T16:26:04.195963550Z",
+          "seal": {
+            "by": "server",
+            "mac": "b9233d4db8e00d7d12924bb70adc08a0f4f1c9130a76d6c8678120dba32d6021"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:04.195963550Z",
+      "seal": {
+        "by": "server",
+        "mac": "73010b90f3ddce40c630064be380c61a185825d7e735dec339bb461e8f87a75b"
+      }
+    },
+    {
+      "id": "CLM-1233",
+      "statement": "A refused login fails the request that met it with StoreUnavailable and the pool then takes the refreshed credential; the AWS credentials (same default chain as the SES mailer) are used only for secrets-manager and iam stores; issue #998 tracking a retry is open.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md lines 473-478",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 473,
+          "end": 478
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1827",
+          "kind": "inspection",
+          "locator": "src/stores/mod.rs:40-62; src/stores/credentials.rs:560-600; src/stores/credentials.rs:670-682; gh issue 998 (OPEN)",
+          "summary": "classify_store_error turns a refused login into StoreUnavailable and calls signal_auth_refused, which wakes the keeper task that fetches and set_connect_options for later connections; the AWS SdkConfig is loaded lazily via aws_config::defaults (same default chain as src/mail/ses.rs:83); only secrets-manager and iam sources use AWS. Issue #998 (retry) is OPEN, as the docs say.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 40,
+                "end": 62
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:24:21.378698839Z",
+          "seal": {
+            "by": "server",
+            "mac": "d073308600cc01100225028b37e41decfe541124cfff10436c3ec6f23f76ae5e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Refused logins become StoreUnavailable and trigger a refresh for later connections; #998 is open and named as such.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1827"
+          ],
+          "recorded_at": "2026-11-24T16:26:04.271726550Z",
+          "seal": {
+            "by": "server",
+            "mac": "414cd86f939bc5ddad1b397b6a1f23b7d1c953fa734a89fba00719499082c6be"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:04.271726550Z",
+      "seal": {
+        "by": "server",
+        "mac": "c14c053c2e95df549d547b360a39e4e03ba9946773e96bf58ccffb17a246716c"
+      }
+    },
+    {
+      "id": "CLM-1234",
+      "statement": "A new catalog goes on its owner team's pin, else on the default store (setting default_store, main until changed); `stores set-default`, `stores pin` and `stores unpin` change that, each change is audited, and existing catalogs do not move.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md lines 481-486",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 481,
+          "end": 486
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1828",
+          "kind": "inspection",
+          "locator": "src/stores/placement.rs:25-75; src/cli.rs:536-575; src/store/stores.rs:365-420; src/store/teams.rs:780-830",
+          "summary": "choose() uses teams.store pin else default_store (missing row gives main); StoresCommand has SetDefault, Pin, Unpin; set_default records setting.default_store_changed in the same transaction and teams::set_store records TeamStorePinned / TeamStoreUnpinned; catalogs record their store at creation and no code updates catalogs.store afterwards (grep 'SET store' finds only teams).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/placement.rs",
+              "lines": {
+                "start": 25,
+                "end": 75
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:24:21.470592421Z",
+          "seal": {
+            "by": "server",
+            "mac": "67bbae64a4fde29b15ff293ea5f5af2584ccf30ee0e0d78b33875a075f9e7893"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Placement logic, commands and audit actions exist as described; nothing moves a catalog.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1828"
+          ],
+          "recorded_at": "2026-11-24T16:26:04.346155575Z",
+          "seal": {
+            "by": "server",
+            "mac": "65c73ce66f1e520320e701c364007262d55b002c67e39a022ccdc003d6fb598d"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:04.346155575Z",
+      "seal": {
+        "by": "server",
+        "mac": "8219fd7cc4b9146ed798085a60151f5f9bbf3f9a0ce62a8ca2e6578786699973"
+      }
+    },
+    {
+      "id": "CLM-1235",
+      "statement": "`stores list` shows each store, the default, its credential kind and reference and the number of pinned teams, and there is no command or route to remove a store.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md lines 484-488",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 484,
+          "end": 488
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1829",
+          "kind": "inspection",
+          "locator": "src/cli/stores.rs:130-160; src/cli.rs:536-590; src/http/api/stores.rs:165-180",
+          "summary": "format_store prints name, default or '-', place, '<kind> <ref>', '<n> pinned', created time. StoresCommand has only List, Add, SetDefault, Pin, Unpin, Migrate (no remove); the store routes are list, add, default setting, pin, unpin (no DELETE of a store).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli/stores.rs",
+              "lines": {
+                "start": 130,
+                "end": 160
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:24:21.550976300Z",
+          "seal": {
+            "by": "server",
+            "mac": "ecf0e0265dc17b87706c26917d108334b3415457a8af692f17f0df565d9f4dda"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "List output fields and the absence of any remove command or route match.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1829"
+          ],
+          "recorded_at": "2026-11-24T16:26:04.418619423Z",
+          "seal": {
+            "by": "server",
+            "mac": "005cc009617ba5405402c901d9dbe37e8148b558716d7f93ad4324cbe4fe038a"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:04.418619423Z",
+      "seal": {
+        "by": "server",
+        "mac": "9612ab9b7fa340bb6cdfeb45ad1e7d3954c4d74471fa20104087cb63c681f787"
+      }
+    },
+    {
+      "id": "CLM-1236",
+      "statement": "`okf-mcp stores migrate` migrates every store in name order, trying all, printing one line per store: name, tab, then `up to date`, `<n> applied`, `adopted, <n> applied` or `failed: <error> (the log has the cause)`.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "docs/operations.md lines 500-503; issue comment on the command output",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 500,
+          "end": 503
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1830",
+          "kind": "inspection",
+          "locator": "src/cli/stores.rs:100-125,300-353; src/db.rs:193-203; src/stores/registry.rs:493-500; src/store/stores.rs:230-245",
+          "summary": "migrate_all iterates stores.all() (names ORDER BY name), pushes '<name>\\t<migration>' or '<name>\\tfailed: <error> (the log has the cause)' and keeps going; StoreMigration Display gives 'up to date', 'adopted, N applied', 'N applied'. A cli test asserts lines 'a-down\\tfailed: ', 'main\\tup to date', 'shared-2\\t<n> applied' (test read, not rerun).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli/stores.rs",
+              "lines": {
+                "start": 100,
+                "end": 125
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:24:21.645930044Z",
+          "seal": {
+            "by": "server",
+            "mac": "9706e8c3fadc0a90348191af9b090d85e9f5497fdcd73c14e5851b5832f934d6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "migrate_all lines and Display strings match the doc and the issue comment exactly; name order from ORDER BY name.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1830"
+          ],
+          "recorded_at": "2026-11-24T16:26:04.489636195Z",
+          "seal": {
+            "by": "server",
+            "mac": "94c0b353ef3742e1e71a0cc03d6914795420e67f8b53b74a329514e12b7ef82b"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:04.489636195Z",
+      "seal": {
+        "by": "server",
+        "mac": "93fc18f0ae7c022aa71424a0f9993484129396f29ea5149772082fad9c4ebd1f"
+      }
+    },
+    {
+      "id": "CLM-1237",
+      "statement": "If any store failed, `stores migrate` exits with an error ending `<n> of <m> stores could not be migrated`.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "docs/operations.md lines 503-505",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 503,
+          "end": 505
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1831",
+          "kind": "inspection",
+          "locator": "src/cli/stores.rs:116-121; test assertion src/cli/stores.rs:339",
+          "summary": "When failed > 0, anyhow::bail!(\\\"{report}{failed} of {} stores could not be migrated\\\") so the error text ends with that sentence (the report precedes it); test asserts the last line is '1 of 3 stores could not be migrated'.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli/stores.rs",
+              "lines": {
+                "start": 116,
+                "end": 121
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:24:21.726140622Z",
+          "seal": {
+            "by": "server",
+            "mac": "8045faadae8fdafa6d6743b67126fa3a192afccfc62a0ea42c9d3bf5a25d4e39"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The bail message ends with the documented sentence.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1831"
+          ],
+          "recorded_at": "2026-11-24T16:26:04.561398210Z",
+          "seal": {
+            "by": "server",
+            "mac": "ea9a13a41d313afecd52bdbd2af8068d3d7e0eec0b5cde0479165dccab31b163"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:04.561398210Z",
+      "seal": {
+        "by": "server",
+        "mac": "dc2d529b87fd7e44aeb6cabb09a3a56c4e391cdb81121e9f091dc82110a0c1b4"
+      }
+    },
+    {
+      "id": "CLM-1238",
+      "statement": "A store's schema migrations run automatically the first time a process opens its pool under an advisory lock; a store whose migration fails or whose identity names another store is StoreUnavailable for that process, nothing is cached, and other stores are unaffected.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md lines 490-499",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 490,
+          "end": 499
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1832",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:370-395,623-662; src/db.rs:233-250,312-366",
+          "summary": "open() reads the row, opens the pool, runs migrate_on (migrate_store under pg_advisory_lock CONCURRENT_INDEX_LOCK); Unmigrated (a failed migration or Refused identity) maps to store_unavailable and the failed entry is invalidated (not cached); each store has its own entry so others are untouched. History table is catalog._sqlx_migrations (db.rs:33).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 623,
+                "end": 662
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:24:21.808840060Z",
+          "seal": {
+            "by": "server",
+            "mac": "2326fd97c94700077ac1a92ea0a1a594298b124c834c436d8d116b7c45801d0e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Open migrates under the advisory lock; failures are StoreUnavailable and not cached; per-store entries isolate others.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1832"
+          ],
+          "recorded_at": "2026-11-24T16:26:04.632553753Z",
+          "seal": {
+            "by": "server",
+            "mac": "92e6890644166c2c69ab2812017149a6e0d285d96d6f18d79cd774805711cdd1"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:04.632553753Z",
+      "seal": {
+        "by": "server",
+        "mac": "beac4b580bf52e4549e0d4ff1f421a06d6bd69c039d784995edd477e402c9bad"
+      }
+    },
+    {
+      "id": "CLM-1239",
+      "statement": "The release-3 procedure names real artifacts: account migrations 0041_catalog_schema and 0042_catalog_audit exist, migrations/catalog holds a baseline then an identity row, history is in catalog._sqlx_migrations, and 0041 is marked not rolling-safe with the same snapshot, scale to zero, migrate, start sequence.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "docs/operations.md lines 531-552",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 531,
+          "end": 552
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1833",
+          "kind": "inspection",
+          "locator": "ls migrations/accounts migrations/catalog; migrations/accounts/0041_catalog_schema.sql:1-12; src/db.rs:33",
+          "summary": "migrations/accounts/0041_catalog_schema.sql and 0042_catalog_audit.sql exist; migrations/catalog has 0001_baseline.sql and 0002_store_identity.sql; 0041 header says NOT ROLLING-SAFE and 'snapshot the database, scale serve to zero, run okf-mcp migrate, start the new release'; CATALOG_HISTORY = catalog._sqlx_migrations.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0041_catalog_schema.sql",
+              "lines": {
+                "start": 1,
+                "end": 12
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:24:21.892936002Z",
+          "seal": {
+            "by": "server",
+            "mac": "2113be777be1aa05d503a593753f59d9d842e29b32444461030ae901a6b70544"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Migration names, catalog migration files and the not-rolling-safe sequence all exist in the source.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1833"
+          ],
+          "recorded_at": "2026-11-24T16:26:04.708662394Z",
+          "seal": {
+            "by": "server",
+            "mac": "83a0ca9caa3a1808b0c1bfb870a090b4e73edaea66c9f8201ef3e598f1d0486a"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:04.708662394Z",
+      "seal": {
+        "by": "server",
+        "mac": "42a9d37c52248e53ad248a26b13b9d2f0ccad0bd680fe9c706ed6dac57ec4a2d"
+      }
+    },
+    {
+      "id": "CLM-1240",
+      "statement": "`okf-mcp migrate` applies the account migrations then adopts `main` (records the catalog baseline as applied, writes main's identity row), so a following `stores migrate` reports main as `up to date`.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "docs/operations.md lines 542-545",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 542,
+          "end": 545
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1834",
+          "kind": "inspection",
+          "locator": "src/db.rs:139-170,312-366",
+          "summary": "migrate() runs the account MIGRATOR then migrate_store_locked(main): if catalog_state exists and history is empty it records the baseline as applied without running it (adopted), runs remaining catalog migrations (0002 creates store_identity) and inserts main's identity row; a later migrate_store finds the store current (store_is_current) and returns the default StoreMigration, displayed 'up to date'. A db.rs test (adopted_schema_equals_a_fresh_store_schema) covers adoption (test read, not rerun).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 139,
+                "end": 170
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:24:21.978553311Z",
+          "seal": {
+            "by": "server",
+            "mac": "957bb91979bb9105bc30cf9852ddbf8f1e10439ce3b4e4664a2b79d6082bd3db"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "migrate() adopts main as described, so stores migrate finds it current.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1834"
+          ],
+          "recorded_at": "2026-11-24T16:26:04.787473636Z",
+          "seal": {
+            "by": "server",
+            "mac": "929dbec7838ca80d30bb818c91f59f42fc24a563d6aee813c98fdb3613fd7968"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:04.787473636Z",
+      "seal": {
+        "by": "server",
+        "mac": "08474c0bd7867fb5085713d06fad788742935f9616c8c69e1decc0afbe244285"
+      }
+    },
+    {
+      "id": "CLM-1241",
+      "statement": "Catalog audit entries written before the upgrade stay in the account audit table and the audit log reads old and new entries as one list, each once.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md lines 548-550",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 548,
+          "end": 550
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1835",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0042_catalog_audit.sql:1-14",
+          "summary": "Header: entries written before this migration stay in public.audit_entries; 'The audit view reads both tables, so each entry appears once.' The new table is catalog.catalog_audit_entries.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0042_catalog_audit.sql",
+              "lines": {
+                "start": 1,
+                "end": 14
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:24:22.055031765Z",
+          "seal": {
+            "by": "server",
+            "mac": "482787e1737b6d2923f390847d875f37940b989d97bf23a31605bced8e72f078"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Migration header states exactly this.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1835"
+          ],
+          "recorded_at": "2026-11-24T16:26:04.870402744Z",
+          "seal": {
+            "by": "server",
+            "mac": "b6ab03dd92d9874ebc7de3f5e62bf2537831e4e8f8b0de65d60fe936bd7f7f61"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:04.870402744Z",
+      "seal": {
+        "by": "server",
+        "mac": "a8c1c60ec9802b2c8e7b3f9955a96f0c84d64a0d0f168c38d7faa5a0e6ef982b"
+      }
+    },
+    {
+      "id": "CLM-1242",
+      "statement": "StoreUnavailable is HTTP 503 and MCP error name `StoreUnavailable` with the text \"the catalog's data is temporarily unavailable; retry later\", never naming the store.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "docs/operations.md lines 554-560",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 556,
+          "end": 560
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1836",
+          "kind": "inspection",
+          "locator": "src/error.rs:239-249,392; src/http/mod.rs:158-160,1290-1305",
+          "summary": "#[error(\\\"the catalog's data is temporarily unavailable; retry later\\\")] on StoreUnavailable; kind() returns \\\"StoreUnavailable\\\"; status maps to SERVICE_UNAVAILABLE; test store_unavailable_is_503_and_hides_the_store_name asserts status 503, body error, message and that the store name is absent (test read, not rerun).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/error.rs",
+              "lines": {
+                "start": 239,
+                "end": 249
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:24:22.139527479Z",
+          "seal": {
+            "by": "server",
+            "mac": "7ece8632b3b197b4cff88c4cc4b1b56ab277dc653be93de91b3a875315eda73d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Status, name and message text match the doc.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1836"
+          ],
+          "recorded_at": "2026-11-24T16:26:04.949414497Z",
+          "seal": {
+            "by": "server",
+            "mac": "94158d1e35be11f359dad8f73fc2017d77e1fa75a84b8293f5c21a74d4025816"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:04.949414497Z",
+      "seal": {
+        "by": "server",
+        "mac": "adc9bca4cc2a5db36bb42464ad0e7e19a64986d0253835e38b5ae5f8b2ffd6e4"
+      }
+    },
+    {
+      "id": "CLM-1243",
+      "statement": "The merging reads (search, list_catalogs, list_changesets without catalog, GET /api/v1/search, /catalogs, /changesets, the console search) return what they could and add `unavailable`, a sorted list of reachable-caller catalog ids, omitted when every store answered.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "docs/operations.md lines 568-573; tools.md and reference.rs intro; table rows 4380, 4398, 4536",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 568,
+          "end": 573
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "docs/reference/tools.md",
+        "src/mcp/reference.rs"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1837",
+          "kind": "inspection",
+          "locator": "src/mcp/search.rs:75-80,144-146,181,213-218; src/mcp/catalogs.rs:93-97,128-177; src/mcp/changesets.rs:86-91,143-171,325-349",
+          "summary": "The tool results carry unavailable: Vec<String> with skip_serializing_if is_empty; search collects states_or_unavailable (selected catalogs only) then sorts and dedups; list_catalogs sorts; list_changesets sets it only without catalog (unreachable_catalogs filters with ctx.offers, sorted, deduped).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets.rs",
+              "lines": {
+                "start": 325,
+                "end": 349
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:02.957456393Z",
+          "seal": {
+            "by": "server",
+            "mac": "18391226e83557069d64469f3c2d4a2cba6deb0c1b5a9287bd58d057b9ca02b3"
+          }
+        },
+        {
+          "id": "EVD-1838",
+          "kind": "inspection",
+          "locator": "src/http/api/search.rs:64-70; src/http/api/catalogs.rs:150-158,275-296; src/http/api/changesets.rs:70-84",
+          "summary": "GET /search (WebSearch, the console's search) and GET /catalogs carry unavailable with skip_serializing_if is_empty; GET /changesets calls list_changesets and so returns its unavailable field. The three table rows in operations.md (4380, 4398, 4536) name exactly these.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/catalogs.rs",
+              "lines": {
+                "start": 150,
+                "end": 158
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:03.039220797Z",
+          "seal": {
+            "by": "server",
+            "mac": "8c90ec36e5e9fbdd24c3c6e036bb8a0bcf853cbdbce2a5d46c1ee0ca56d064d7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All six listed tool and route surfaces carry a sorted, omitted-when-empty unavailable list limited to offered catalogs.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1837",
+            "EVD-1838"
+          ],
+          "recorded_at": "2026-11-24T16:26:05.025129267Z",
+          "seal": {
+            "by": "server",
+            "mac": "801e38db94685df0e88946818a12997df45e8b60a49a2406592ad8c4d1fd865e"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:05.025129267Z",
+      "seal": {
+        "by": "server",
+        "mac": "fd6c83ec8074939b04fa86a9c96b2ce03e52bb21a1c1fc7cf614bd0df18df305"
+      }
+    },
+    {
+      "id": "CLM-1244",
+      "statement": "get_concept, read_document and history walk the selection in order, answer from a catalog before the first lost store, and otherwise fail with StoreUnavailable instead of NotFound, never consulting later catalogs.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "docs/operations.md lines 574-580; docs/reference/tools.md intro",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 574,
+          "end": 580
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "docs/reference/tools.md",
+        "src/mcp/reference.rs"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1839",
+          "kind": "inspection",
+          "locator": "src/mcp/context.rs:663-690; src/mcp/documents.rs:395-399,534-537; src/mcp/history.rs:126,173-176",
+          "summary": "read_set loads states in selection order and on the first StoreUnavailable returns the states so far plus blocked, never consulting later catalogs; get_concept, read_document and history all search set.states first and only then return set.blocked in place of NotFound.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 663,
+                "end": 690
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:03.114725817Z",
+          "seal": {
+            "by": "server",
+            "mac": "1e1a51b0399c2ce8a60b3c973193894d15100e27024b1b78992acd4e0eee110e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The three first-match tools return blocked only after no earlier catalog answered, and later catalogs are never loaded.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1839"
+          ],
+          "recorded_at": "2026-11-24T16:26:05.104835962Z",
+          "seal": {
+            "by": "server",
+            "mac": "282d8c714a9bdf1e9bd7d7cef2a57e6ebf94a2bbc9bcab3aa768049890d92777"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:05.104835962Z",
+      "seal": {
+        "by": "server",
+        "mac": "2701f6cd6fa459273f50105a1af08bbc649a64501399ad6300286dd65212cd02"
+      }
+    },
+    {
+      "id": "CLM-1245",
+      "statement": "cited_by fails with StoreUnavailable if any selected catalog's store is lost; it does not merge.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "docs/operations.md lines 581-582",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 581,
+          "end": 582
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1840",
+          "kind": "inspection",
+          "locator": "src/mcp/cited_by.rs:111; src/mcp/context.rs:621-631",
+          "summary": "cited_by calls ctx.states(...), which loads every selected catalog with state(name).await? so a StoreUnavailable propagates; no unavailable field or merging.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 621,
+                "end": 631
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:03.194536993Z",
+          "seal": {
+            "by": "server",
+            "mac": "327fbea9092e0955871a0c45a174df9a3d3b3e04c3848bb1bfc866e5cf2f07df"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "cited_by uses ctx.states with ?, so any lost store fails the call.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1840"
+          ],
+          "recorded_at": "2026-11-24T16:26:05.190641251Z",
+          "seal": {
+            "by": "server",
+            "mac": "f40687e0072ee87adc4652366665a65de253285d82fbd7065e870578be9aed53"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:05.190641251Z",
+      "seal": {
+        "by": "server",
+        "mac": "ce591315379e6eb5d6ce357a4f6625fee9c24a973959affbc2ee3f60962cbd5f"
+      }
+    },
+    {
+      "id": "CLM-1246",
+      "statement": "Writes to a catalog on a lost store fail with StoreUnavailable, and so does any changeset-handle lookup (an unknown handle too) while a store is down.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "docs/operations.md lines 566-570; tools.md intro",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 566,
+          "end": 570
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "docs/reference/tools.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1841",
+          "kind": "inspection",
+          "locator": "src/mcp/context.rs:1128-1145,1215-1250; src/stores/mod.rs:300-340; src/store/catalogs.rs:182",
+          "summary": "resolve_changeset asks every store for the handle (main first) and a store that cannot be reached ends the search with StoreUnavailable, including for an unknown handle (comment: the handle might be on it); CatalogDb::begin classifies pool failures as StoreUnavailable for write transactions; store-layer writes document StoreUnavailable.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 1215,
+                "end": 1250
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:03.273864248Z",
+          "seal": {
+            "by": "server",
+            "mac": "17fd1cf8b79011630530f540939105f1ac4695c016bfee63c0c913334c2055f1"
+          }
+        },
+        {
+          "id": "EVD-1860",
+          "kind": "inspection",
+          "locator": "src/mcp/context.rs:1127-1140, 1224-1250; docs/operations.md:565-572",
+          "summary": "Re-read after cf2fc37: writes fail on a lost store, and the handle bullet now matches changeset_by_handle (in turn, main first, stop at holder, StoreUnavailable only on meeting a lost store first, malformed refused early). The old overstated 'any lookup fails while a store is down' is gone.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 1224,
+                "end": 1250
+              },
+              "commit": "cf2fc37c2ccd5b43386e3a95157b97a3eec6d85b"
+            }
+          },
+          "recorded_at": "2026-11-24T16:35:53.878308912Z",
+          "seal": {
+            "by": "server",
+            "mac": "6cbe2e89122d5fb5251bb626cb94948a661862991fcd109c304d5ba30f8af323"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Handle lookup asks every store and fails on an unreachable one; writes classify to StoreUnavailable.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1841"
+          ],
+          "recorded_at": "2026-11-24T16:26:05.274326052Z",
+          "seal": {
+            "by": "server",
+            "mac": "02944e385b9c42749f34050a4f019d313089302eba4b401f3bd6a7b4be505a1c"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The reworded writes and handle bullet matches the code (src/mcp/context.rs:1224-1250).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1860"
+          ],
+          "recorded_at": "2026-11-24T16:36:03.741958996Z",
+          "seal": {
+            "by": "server",
+            "mac": "46391c6b91ee7616e1939bab172b757b3583785af1d0d4b17f0d831544395ba5"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:36:03.741958996Z",
+      "seal": {
+        "by": "server",
+        "mac": "288d021d5449cc619219f54ffb8508de3a19d31cb31cb644383f60a82b417b0f"
+      }
+    },
+    {
+      "id": "CLM-1247",
+      "statement": "A catalog in memory whose refresh finds its store lost is unavailable and is not served from its stale copy.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "docs/operations.md lines 583-584",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 583,
+          "end": 584
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1842",
+          "kind": "inspection",
+          "locator": "src/cache/catalogs.rs:287-299",
+          "summary": "On a refresh error StoreUnavailable is returned (return Err), with the comment 'An outage is not a stale answer'; only other failures fall through and serve the old snapshot.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/catalogs.rs",
+              "lines": {
+                "start": 287,
+                "end": 299
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:03.352947021Z",
+          "seal": {
+            "by": "server",
+            "mac": "a9255ea518d6bfe852788bac469619fd72d00f25449885b3a26adae810e482ba"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Refresh returns StoreUnavailable and does not serve the stale snapshot.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1842"
+          ],
+          "recorded_at": "2026-11-24T16:26:05.351891409Z",
+          "seal": {
+            "by": "server",
+            "mac": "86b796bbcfeeaa19cdeb100a82971b50fff15b2cbacc5dfb98f511ae63b0eb24"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:05.351891409Z",
+      "seal": {
+        "by": "server",
+        "mac": "7a6fce9abd167d4b62d0b258d036a155dd43b7056bf6ffed1a05e93afdaff3dd"
+      }
+    },
+    {
+      "id": "CLM-1248",
+      "statement": "GET /healthz probes the account database only, so a lost store does not make a replica unready.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md lines 585-586",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 585,
+          "end": 586
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1843",
+          "kind": "inspection",
+          "locator": "src/http/mod.rs:228-256",
+          "summary": "healthz runs SELECT 1 on app.accounts().executor() and a Redis probe; it never touches stores; 503 only when the account database is unreachable.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/mod.rs",
+              "lines": {
+                "start": 228,
+                "end": 256
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:03.444941254Z",
+          "seal": {
+            "by": "server",
+            "mac": "3b32a74797791ee8da4ae74d85aa6bfc412371aaaf37289ad4dfe0eec88bebe7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "healthz only queries the account pool (and Redis).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1843"
+          ],
+          "recorded_at": "2026-11-24T16:26:05.441640403Z",
+          "seal": {
+            "by": "server",
+            "mac": "7279f2dc368efe076e7b26ba2e362c628c57e89700e565f1bb48ae5b6c31aaaf"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:05.441640403Z",
+      "seal": {
+        "by": "server",
+        "mac": "d2ebf1ca32fa052e30d016470a21cc545efbb20e930030728321ed733b0efc91"
+      }
+    },
+    {
+      "id": "CLM-1249",
+      "statement": "Housekeeping runs per store so a lost store fails only its own jobs, and okf_changesets_open carries a lost store's last count.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md lines 585-586",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 585,
+          "end": 586
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1844",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs:56-62,639-672,1088-1110",
+          "summary": "run_on_store runs prune_changesets, prune_audit and cluster_stats per store, touching only that store, so a failure is its job's alone; the module doc and count_store_changesets say a store whose count fails keeps its last cluster_store_stats row, which the open_changesets gauge sums.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 639,
+                "end": 672
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:03.526625188Z",
+          "seal": {
+            "by": "server",
+            "mac": "82986f700fe75a67a4e82cf5bbbb7f96667258d76bbe1c5d30cb8157628718ac"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Per-store housekeeping jobs and last-row retention for the gauge are in the code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1844"
+          ],
+          "recorded_at": "2026-11-24T16:26:05.518076006Z",
+          "seal": {
+            "by": "server",
+            "mac": "43b86c00140695d601af84fd6adab998489a3d746d686b1cc72291ff97b8c656"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:05.518076006Z",
+      "seal": {
+        "by": "server",
+        "mac": "68a09284417cae21cf713ee840192df3a2ab8cf2a8a57efa273a98f75e7f3fbc"
+      }
+    },
+    {
+      "id": "CLM-1250",
+      "statement": "A call remembers a store it found down and does not spend another timeout on it, and loading a catalog from a store may take up to 6 times store_connect_timeout before the store is reported unavailable.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md lines 560-564",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 560,
+          "end": 564
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1845",
+          "kind": "inspection",
+          "locator": "src/mcp/context.rs:488-506,1318-1340; src/stores/mod.rs:30-37; src/stores/registry.rs:553-565",
+          "summary": "mark_down records the store and state() / held_state() return StoreUnavailable at once for a down store; STATE_LOAD_TIMEOUT_FACTOR = 6 and state_load_timeout = connect_timeout * 6.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 30,
+                "end": 37
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:03.614525515Z",
+          "seal": {
+            "by": "server",
+            "mac": "07ec102a8816ca2449d3f09f27e8cfb344ff1c2cbaf7f5e8726fcacfee268af2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "mark_down short-circuits within a call; factor is 6.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1845"
+          ],
+          "recorded_at": "2026-11-24T16:26:05.594541039Z",
+          "seal": {
+            "by": "server",
+            "mac": "ae5ba5ab9becb2dd4af831860c80dabcb5e99c63a837112e38204fff624be2ee"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:05.594541039Z",
+      "seal": {
+        "by": "server",
+        "mac": "b05f9ffac37f25fea0433efbfee6c32a27a157736c436356ac1177d7e256ab9c"
+      }
+    },
+    {
+      "id": "CLM-1251",
+      "statement": "Some reads on an already open store pool report a timeout as Database (HTTP 500) instead of StoreUnavailable (#995, open), and two paths re-probe a down store within one call (#1017, open); the docs present both as open gaps, not as fixed.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md lines 588-593; instruction not to describe follow-ups as done",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 588,
+          "end": 593
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1846",
+          "kind": "inspection",
+          "locator": "src/store/history.rs:54-55; src/http/mod.rs:161-165; gh issue view 995 (OPEN), 1017 (OPEN)",
+          "summary": "history's revisions query runs on db.executor() with a bare `?`, so a pool timeout surfaces as OkfError::Database, which maps to HTTP 500; issues #995 ('Store reads through CatalogDb::executor() surface pool timeouts as Database') and #1017 ('Two paths re-probe a store already found down') are both OPEN, so the docs list them as gaps rather than claiming a fix.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/history.rs",
+              "lines": {
+                "start": 50,
+                "end": 56
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:03.690909528Z",
+          "seal": {
+            "by": "server",
+            "mac": "e508b989caa4a42b59b798cfa1547b3ba72fa4f97b9c029e307c35e55ca31280"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The Database-500 gap exists in code (history read) and both issues are open, so the docs describe real, unfixed gaps.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1846"
+          ],
+          "recorded_at": "2026-11-24T16:26:05.682019894Z",
+          "seal": {
+            "by": "server",
+            "mac": "1800baee865f88f4771b8ff2d245a904d4767f5054115f91e3d95f93fbaf108e"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:05.682019894Z",
+      "seal": {
+        "by": "server",
+        "mac": "48b3bf91133631db428b792cdb8d0f296dfc577e8eb684798c8b362ff86b7c84"
+      }
+    },
+    {
+      "id": "CLM-1252",
+      "statement": "The account database holds users' names and emails, credential labels, team and catalog names, access and the account audit, while a store holds a catalog's content, history and catalog audit, so a store is not a secrecy boundary against whoever runs the account database.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md lines 594-603",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 594,
+          "end": 603
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1847",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0041_catalog_schema.sql:1-6; migrations/accounts/0042_catalog_audit.sql:14-22",
+          "summary": "0041: the catalog's own tables move to schema catalog while the registry (catalogs) stays in public; 0042: the store's audit identity columns hold account-database ids as plain values resolved through the account database; the account audit (audit_people etc.) stays in the account database. Consistent with the doc's split.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0042_catalog_audit.sql",
+              "lines": {
+                "start": 14,
+                "end": 22
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:03.766382688Z",
+          "seal": {
+            "by": "server",
+            "mac": "057cadbd880cb1997a8763bb672d64f69fc871720f0988ac86d0a55a62c0987c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Migrations show the registry and account audit in public and the catalog data and catalog audit in schema catalog.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1847"
+          ],
+          "recorded_at": "2026-11-24T16:26:05.758997539Z",
+          "seal": {
+            "by": "server",
+            "mac": "048121bbe2f7a0a2b722a594ae8aae41c0a37773e59e8fe79239d6f71f9cd34b"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:05.758997539Z",
+      "seal": {
+        "by": "server",
+        "mac": "43857fc05d3216654e811caf24c2d0996ff78349d865af347d1dca5aa9db7d3f"
+      }
+    },
+    {
+      "id": "CLM-1253",
+      "statement": "The job queue holds ids, never a catalog's content; and logs and traces carry catalog and store names and error text, never content.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md lines 604-608",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 604,
+          "end": 608
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1848",
+          "kind": "inspection",
+          "locator": "src/mail/queue.rs:154-161; src/error.rs:330-350; src/housekeeping.rs:1138-1147",
+          "summary": "The mail queue's SendMail job holds a rendered Mail (recipient and bodies), a template name and a timestamp, not 'ids'; I did not find a job type that carries catalog content, but also did not check every job payload. Store names are logged on the local half only (store_unavailable) and appear on the exported housekeeping span as okf.store; error text is local-only per split_event, so 'traces carry ... error text' is not what the code does.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/mail/queue.rs",
+              "lines": {
+                "start": 154,
+                "end": 161
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:03.845354251Z",
+          "seal": {
+            "by": "server",
+            "mac": "15c5466752b6d06d5a25ef3fbe3fd0beda6b7792337ba69cb1199835fd9f817e"
+          }
+        },
+        {
+          "id": "EVD-1853",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs:283-296",
+          "summary": "Reworded docs/operations.md:604-609 (8d6df1d). Job payload carries the task, store name and slot (key \"<task>:<store>:<slot>\"), \"the store's name only\", never catalog content; the queue is the account database's. Matches the new job-queue bullet.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 283,
+                "end": 296
+              },
+              "commit": "8d6df1d80b789336fa34039aa292e46dd94b1078"
+            }
+          },
+          "recorded_at": "2026-11-24T16:29:43.094343472Z",
+          "seal": {
+            "by": "server",
+            "mac": "f834e43c32a12278332057757b8a9a26eee7ded31cb1173ba8f543f4e27ccaff"
+          }
+        },
+        {
+          "id": "EVD-1854",
+          "kind": "inspection",
+          "locator": "src/error.rs:330-350",
+          "summary": "store_unavailable logs the store name in the local half of the event only (out of the response and OTLP). Matches \"logs name catalogs and stores (the local log names the store of a StoreUnavailable)\"; the bullet no longer claims anything about exported content and points to the Telemetry section, which exists (docs/operations.md:1363).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/error.rs",
+              "lines": {
+                "start": 330,
+                "end": 350
+              },
+              "commit": "8d6df1d80b789336fa34039aa292e46dd94b1078"
+            }
+          },
+          "recorded_at": "2026-11-24T16:29:43.176784794Z",
+          "seal": {
+            "by": "server",
+            "mac": "074a864d3c09925ff90503693e1470d38711602332c3bc59ebd82120ee2d4f07"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The mail queue job holds recipient and rendered bodies, not 'ids', and exported traces do not carry error text (split_event keeps it local). I did not enumerate every job payload, so the 'never content' half is unverified, and the wording overstates what logs and traces carry. Fix: reword docs/operations.md lines 604-608 to say what is true, for example 'the job queue holds mail jobs and store job names, never a catalog's content; logs carry catalog and store names and error text on the local side only, exported traces carry store names on housekeeping spans', after checking every apalis job payload type.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1848"
+          ],
+          "recorded_at": "2026-11-24T16:26:05.837633140Z",
+          "seal": {
+            "by": "server",
+            "mac": "e515aaeec20ecb4555a23496d24fa4bbdca0d162dc3c224ab735d355e718baed"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "After 8d6df1d the bullets claim only what the code shows: the job payload names a store and a slot (housekeeping.rs:283-296) and the StoreUnavailable store name goes to the local log (error.rs:330-350). The overstated \"never content\" for logs and traces is gone.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1853",
+            "EVD-1854"
+          ],
+          "recorded_at": "2026-11-24T16:29:48.552670815Z",
+          "seal": {
+            "by": "server",
+            "mac": "f2151fb467ddf714b7dc603f5d57b212b00467ffdaded2b0ad049483349c3af3"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:29:48.552670815Z",
+      "seal": {
+        "by": "server",
+        "mac": "6f0cb714adcd00291b97e8bb70291b6db5980e53fd68a2c39d9b6a2d4527567f"
+      }
+    },
+    {
+      "id": "CLM-1254",
+      "statement": "The tools.md intro addition is byte-identical to the text added to src/mcp/reference.rs, and every name it uses (StoreUnavailable, unavailable, the tools named) exists.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/reference/tools.md lines 26-37; src/mcp/reference.rs lines 45-56",
+      "source_anchor": {
+        "path": "docs/reference/tools.md",
+        "lines": {
+          "start": 26,
+          "end": 37
+        },
+        "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+      },
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/reference/tools.md",
+        "src/mcp/reference.rs"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1849",
+          "kind": "log",
+          "locator": "diff of added lines: git diff origin/milestone/958-catalog-stores..HEAD -- docs/reference/tools.md vs -- src/mcp/reference.rs (IDENTICAL)",
+          "summary": "The added lines of docs/reference/tools.md and src/mcp/reference.rs compared with diff, output empty (identical). Names used: StoreUnavailable (error.rs:392), unavailable (search.rs:79, catalogs.rs:96, changesets.rs:90), tools search, list_catalogs, list_changesets, get_concept, read_document, history, cited_by all exist. The reference test (mcp::reference page matches its source) was not run by me.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/reference.rs",
+              "lines": {
+                "start": 45,
+                "end": 56
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:03.921855435Z",
+          "seal": {
+            "by": "server",
+            "mac": "806b9fdc4855fb15a3fd70171b529d8447791d843effedc199a9be1446855365"
+          }
+        },
+        {
+          "id": "EVD-1861",
+          "kind": "inspection",
+          "locator": "src/mcp/reference.rs:52-58; docs/reference/tools.md:36-38",
+          "summary": "After cf2fc37 the reworded bullet is byte-identical in docs/reference/tools.md and the src/mcp/reference.rs string (verified by diff of the two hunks), and it matches changeset_by_handle behaviour.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/reference.rs",
+              "lines": {
+                "start": 52,
+                "end": 58
+              },
+              "commit": "cf2fc37c2ccd5b43386e3a95157b97a3eec6d85b"
+            }
+          },
+          "recorded_at": "2026-11-24T16:35:53.960163317Z",
+          "seal": {
+            "by": "server",
+            "mac": "94d396567f927ba5b81b22e3db19a056d2a6e83bbffbd9027f2f99ac1729c4a1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Text is identical in both files and every name exists. The page-matches-source test was not run by me.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1849"
+          ],
+          "recorded_at": "2026-11-24T16:26:05.915138897Z",
+          "seal": {
+            "by": "server",
+            "mac": "c7fd661c7e9fee0e59c9a7aaab5a96db2fafe89f2e6298d5ae2917e18da974e8"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The tools.md intro and reference.rs text are still identical after cf2fc37, and every name in them exists.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1861"
+          ],
+          "recorded_at": "2026-11-24T16:36:03.817162475Z",
+          "seal": {
+            "by": "server",
+            "mac": "adc60a0e3b1d30143e2426d1ebb7247d67d1e47829ee6d05bc1609800306a3ea"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:36:03.817162475Z",
+      "seal": {
+        "by": "server",
+        "mac": "e80bbb402a79b92ea9f17fc0dd6bf118f6683ad1d6cf9c3d4873cdf7380ec3d6"
+      }
+    },
+    {
+      "id": "CLM-1255",
+      "statement": "The change alters no code behaviour: the only src diff is the string added to src/mcp/reference.rs.",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Extra instruction: no code behaviour may change",
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "src/mcp/reference.rs"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1850",
+          "kind": "log",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD --stat -- src (src/mcp/reference.rs | 12 +++), and the +/- lines of that diff",
+          "summary": "The only file under src changed is src/mcp/reference.rs, 12 insertions, all text inside the REFERENCE doc string literal (the new intro bullets); no deletions, no code line touched.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/reference.rs",
+              "lines": {
+                "start": 42,
+                "end": 58
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:04.002152293Z",
+          "seal": {
+            "by": "server",
+            "mac": "99a4f77ade5979b8452b3a00d2f133fc7d853ba794f2796af427806660e72555"
+          }
+        },
+        {
+          "id": "EVD-1862",
+          "kind": "inspection",
+          "locator": "git diff dfd1b3d..HEAD --stat -- src",
+          "summary": "The only src change in cf2fc37 is src/mcp/reference.rs, 3 insertions and 2 deletions, all inside the doc string literal; no code behaviour changed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/reference.rs",
+              "lines": {
+                "start": 52,
+                "end": 58
+              },
+              "commit": "cf2fc37c2ccd5b43386e3a95157b97a3eec6d85b"
+            }
+          },
+          "recorded_at": "2026-11-24T16:35:54.042100861Z",
+          "seal": {
+            "by": "server",
+            "mac": "f7f0705675e4c20ba52953ee99fa13ef5e55ba0bf610b5d8616a981d5fcb7180"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Only src change is 12 added doc-string lines.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1850"
+          ],
+          "recorded_at": "2026-11-24T16:26:05.990138154Z",
+          "seal": {
+            "by": "server",
+            "mac": "df0e67aa57d61201587e835faff6e96cb947633d95716cf2bdc58ce15963c768"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "cf2fc37 changes only a doc-string literal in src/mcp/reference.rs.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1862"
+          ],
+          "recorded_at": "2026-11-24T16:36:03.895866057Z",
+          "seal": {
+            "by": "server",
+            "mac": "6c276b47309d4b2b1828b285aad973910abb938e491720e31a7278c4ca2bbe15"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:36:03.895866057Z",
+      "seal": {
+        "by": "server",
+        "mac": "adc8c7444866833c2f1345161a4645cc9293aada8110087315574cd9d5482aca"
+      }
+    },
+    {
+      "id": "CLM-1256",
+      "statement": "Every command, flag, setting and route named in the new docs exists: stores list/add/set-default/pin/unpin/migrate with --host --port --database --credential-kind --credential-ref, settings store_max_connections, store_idle_timeout, store_connect_timeout, default_store, search_fanout_max, and routes POST /api/v1/stores and the three unavailable-bearing GET routes.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Extra instruction: every setting, command, route, tool field and error name documented must exist in the source",
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "README.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1851",
+          "kind": "inspection",
+          "locator": "src/cli.rs:536-590; src/config.rs:1059-1069,1109; src/http/api/stores.rs:165-176; src/store/stores.rs credentials kinds",
+          "summary": "StoresCommand lists List/Add/SetDefault/Pin/Unpin/Migrate with --host, --port (default 5432), --database, --credential-kind, --credential-ref; Config has store_max_connections, store_idle_timeout, store_connect_timeout and search_fanout_max; routes /stores, /settings/default_store, /teams/{team}/store exist; credential kinds env, secrets-manager, iam exist. README line 215 key store_max_connections = 8 matches the default.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli.rs",
+              "lines": {
+                "start": 536,
+                "end": 590
+              },
+              "commit": "aa78966c7b773433b4384fac4b0f4bcfd13966fc"
+            }
+          },
+          "recorded_at": "2026-11-24T16:25:04.079194099Z",
+          "seal": {
+            "by": "server",
+            "mac": "d95228550c24f367668be4ff118d633fc075a873ec06ef4561fa2d05a6ca1d7b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All documented commands, flags, settings, routes and credential kinds exist.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1851"
+          ],
+          "recorded_at": "2026-11-24T16:26:06.062881583Z",
+          "seal": {
+            "by": "server",
+            "mac": "d267099d9735edc61167dc7a5b4ab56003fc326139e19ab9c2f202618fc83620"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:23:19.118447111Z",
+      "updated_at": "2026-11-24T16:26:06.062881583Z",
+      "seal": {
+        "by": "server",
+        "mac": "afeb2191cf13274671d9e52a973a119e0f05a047594ee0347f2e23062be36402"
+      }
+    },
+    {
+      "id": "CLM-1257",
+      "statement": "A changeset handle lookup asks the stores in turn, main first, and a handle found before a lost store is reached still resolves (docs/operations.md 'When a store cannot be reached', tools.md intro).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md changeset-handle bullet, cf2fc37",
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "docs/reference/tools.md",
+        "src/mcp/reference.rs"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1856",
+          "kind": "inspection",
+          "locator": "src/mcp/context.rs:1224-1250",
+          "summary": "changeset_by_handle loops over stores_main_first (main first, rest in name order) and returns Ok(Some) at the first store whose by_handle finds the row; a store is only touched when reached, so a handle found earlier never meets the lost store.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 1224,
+                "end": 1250
+              },
+              "commit": "cf2fc37c2ccd5b43386e3a95157b97a3eec6d85b"
+            }
+          },
+          "recorded_at": "2026-11-24T16:35:53.537253103Z",
+          "seal": {
+            "by": "server",
+            "mac": "6f88e3f9d9fb7cb9f72c68c642f23bab2050eb74088e5410ca0e4051ad70da0b"
+          }
+        },
+        {
+          "id": "EVD-1857",
+          "kind": "inspection",
+          "locator": "src/mcp/unavailable_tests.rs:223-265 (not run)",
+          "summary": "Test a_changeset_handle_on_a_lost_store_is_unavailable_and_others_still_resolve asserts that main's handle resolves (found.is_ok()) with store-b made unreachable. I read the assertions; I did not run the test.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 223,
+                "end": 265
+              },
+              "commit": "cf2fc37c2ccd5b43386e3a95157b97a3eec6d85b"
+            }
+          },
+          "recorded_at": "2026-11-24T16:35:53.619523669Z",
+          "seal": {
+            "by": "server",
+            "mac": "4a98944770fd7641d168f182bc3d3744a9b530b677bebe4b1d4cab15376722fa"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "changeset_by_handle returns at the first store holding the handle, and the test asserts main's handle resolves with another store lost.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1856",
+            "EVD-1857"
+          ],
+          "recorded_at": "2026-11-24T16:36:03.509458153Z",
+          "seal": {
+            "by": "server",
+            "mac": "b5854ffec3a380a30f1438677170812bdc7cf7af0289774f156d96e67dfa5193"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:35:38.203978143Z",
+      "updated_at": "2026-11-24T16:36:03.509458153Z",
+      "seal": {
+        "by": "server",
+        "mac": "9186f21a1be320ea3ef2687127ad451ac048b6b950652a156babf2c9ed5d60bd"
+      }
+    },
+    {
+      "id": "CLM-1258",
+      "statement": "A well-formed handle that no store holds fails with StoreUnavailable while a store is lost (it cannot be ruled out), not UnknownChangeset.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md changeset-handle bullet, cf2fc37",
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1858",
+          "kind": "inspection",
+          "locator": "src/mcp/context.rs:1236-1250; src/mcp/unavailable_tests.rs:244-262",
+          "summary": "For a well-formed handle, each store is asked and a lost one returns StoreUnavailable through db(...)? or classify before Ok(None) is reached. The test sends the well-formed all-zero handle and asserts StoreUnavailable (read, not run).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 1236,
+                "end": 1250
+              },
+              "commit": "cf2fc37c2ccd5b43386e3a95157b97a3eec6d85b"
+            }
+          },
+          "recorded_at": "2026-11-24T16:35:53.703205690Z",
+          "seal": {
+            "by": "server",
+            "mac": "fce60e0bc644eee967914a7576ffcd1bbd871718c7a6cf2e494fa0d743b3caab"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "A well-formed handle reaches the store loop, and a lost store errors before Ok(None); the test asserts it for the all-zero handle.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1858"
+          ],
+          "recorded_at": "2026-11-24T16:36:03.585610316Z",
+          "seal": {
+            "by": "server",
+            "mac": "2995d41ba9d4203d7500cde03c5e71674d7b181019d13ea4e440110224332960"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:35:38.203978143Z",
+      "updated_at": "2026-11-24T16:36:03.585610316Z",
+      "seal": {
+        "by": "server",
+        "mac": "43d194d231b28a7054125351de378ded42e5e374fc77b0ab46c0c6e5b8d9eec7"
+      }
+    },
+    {
+      "id": "CLM-1259",
+      "statement": "A malformed handle is refused without asking any store.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md changeset-handle bullet, cf2fc37",
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1859",
+          "kind": "inspection",
+          "locator": "src/mcp/context.rs:1228-1230; src/store/changesets.rs:338-345",
+          "summary": "changeset_by_handle returns Ok(None) before stores_main_first when is_issued_handle is false (not 36 chars of 8-4-4-4-12 lowercase hex); resolve_changeset turns None into UnknownChangeset. No store is opened. No test covers this path (code reading only).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 1228,
+                "end": 1230
+              },
+              "commit": "cf2fc37c2ccd5b43386e3a95157b97a3eec6d85b"
+            }
+          },
+          "recorded_at": "2026-11-24T16:35:53.796136017Z",
+          "seal": {
+            "by": "server",
+            "mac": "a84ef7156a20a7739591e01fa9d5709a8fd9750e0abb6d91a425ab53d8c17867"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The is_issued_handle early return precedes any store access and ends as UnknownChangeset. Code reading only; no test covers it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1859"
+          ],
+          "recorded_at": "2026-11-24T16:36:03.663994687Z",
+          "seal": {
+            "by": "server",
+            "mac": "f201c2fe555376155422e92bb395ac6da62811b7021bad3e3e191bba0d45f1d4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:35:38.203978143Z",
+      "updated_at": "2026-11-24T16:36:03.663994687Z",
+      "seal": {
+        "by": "server",
+        "mac": "886e154f27955154f8968217f7870c061db292c1dfad35ba29c4f3bc297d7133"
       }
     }
   ]

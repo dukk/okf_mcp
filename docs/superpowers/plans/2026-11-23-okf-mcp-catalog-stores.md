@@ -671,6 +671,13 @@ Release 3 is not deployable yet: Task 17 (listeners per store) completes it.
   - what a separate store does and doesn't segregate (spec "Privacy and security").
 - [ ] Tools reference: `unavailable`, and the first-match behaviour.
 
+> **Corrected (issue #978, 2026-11-24).** Shipped: a "Catalog stores" section in `docs/operations.md` (what a store is, adding one, credential kinds, placement, `okf-mcp stores migrate`, connections, the release-3 maintenance window, unreachable stores, what separation does and does not give), a pointer in "Upgrades", `unavailable` in the catalog, search and changeset API rows, and the tools reference's intro (the generated page's text lives in `src/mcp/reference.rs`; the prose is there, not in the page). Differences from the text above:
+>
+> - **The arithmetic counts `main`'s pool.** The formula above, and the Postgres section before this task, left out the pool of the store `main`: it is a pool of its own (P1) inside the account database, so the account database needs `N x (database_max_connections + store_max_connections + 4)` (plus `3 x N` with the feedback worker), and each separate store `N x (store_max_connections + 1)`. The Postgres bullet is corrected.
+> - **Separate stores are documented as refused**, as P8 still stands in the code (`placement::refuse_host_stores_until_task_20`); Task 20 must update "Catalog stores" and "Catalog stores API" in `docs/operations.md` when it lifts the refusal.
+> - **Known gaps are named, not hidden:** #995 (some store reads report `Database`), #1017 (two paths re-probe a down store) and #998 (no retry after a refused login) are listed in the docs as open; when one lands, its sentence in "When a store cannot be reached" or "Adding a store" goes.
+> - The command is `okf-mcp stores migrate`, as Task 14 shipped.
+
 ### Task 20: end-to-end test, smoke test, milestone changelog
 
 **Files:** create `tests/stores.rs`; `changelog/`.

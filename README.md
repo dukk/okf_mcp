@@ -50,7 +50,7 @@ ranked `search`. (Their JSON matches `okf.py`'s, compared as parsed values, whic
 the parity tests check.) Catalogs live in Postgres: every file
 is a row holding its exact bytes and execute bit, with an append-only revision
 history, and each catalog's snapshot is built from its rows on first use, kept within
-a memory budget (`catalog_cache_bytes`) and swapped when the catalog changes. The `okf-mcp` command line administers catalogs and API
+a memory budget (`catalog_cache_bytes`) and swapped when the catalog changes. Each catalog lives on a named store: the schema `catalog` of the account database (`main`, the default) or a database of its own, chosen when the catalog is created and never changed (`docs/operations.md`, "Catalog stores"). The `okf-mcp` command line administers catalogs and API
 keys and imports and exports catalogs, and `okf-mcp serve` serves the catalogs
 over MCP streamable HTTP with bearer-key auth: every read tool, the export and
 import routes and `/healthz`, and the write tools: each connection's edits
@@ -212,6 +212,7 @@ session_idle_timeout = "2h"        # an idle MCP session is closed after this; a
 max_import_bytes = "64MiB"         # uncompressed total of an import
 concept_outline_chars = 20000      # get_concept outlines a longer body
 database_max_connections = 16      # database pool size, per process
+store_max_connections = 8          # pool size per catalog store, per process
 catalog_cache_bytes = "1GiB"         # catalog snapshots kept in memory
 overlay_cache_bytes = "256MiB"       # open changesets' views kept in memory
 maintenance_review_intervals = { pg = "30d" } # per-catalog; default 30d, minimum 1d
