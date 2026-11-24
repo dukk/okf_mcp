@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1283,
+  "next_claim_seq": 1288,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "145ad90c4f1fc0822875ab4995106e2c9b305a44ec14b361ba975433e5d2a58e"
+    "mac": "09feeb8951aac056e1cb0291b8e1dd05d72a7485f891949f9d58e3c8b5f98bfd"
   },
-  "next_evidence_seq": 1886,
+  "next_evidence_seq": 1891,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "c230e6e9c64b03a0c3d2f48733ec4102ef35bfe726704f58edecdd519ee99b83"
+    "mac": "115d62c76273ed535d8c48adf651c69c36bd6e401762e28267182d733478e457"
   },
   "claims": [
     {
@@ -104318,6 +104318,305 @@
       "seal": {
         "by": "server",
         "mac": "c494635c014362b864ea7370c60d4433e7eeea6a8972cc5bd96534ae0072a8f5"
+      }
+    },
+    {
+      "id": "CLM-1283",
+      "statement": "Issue #1023 is delivered: half-made catalog recovery cannot be starved by an unreachable store, each query stays bounded, a regression test and changelog exist, and the plan carries a correction note.",
+      "kind": "functional",
+      "level": "system",
+      "verification_method": "inspection",
+      "source": "issue #1023",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:1023"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1890",
+          "kind": "analysis",
+          "locator": "CLM-1284..CLM-1287",
+          "summary": "Each acceptance item has a supported child claim with its own evidence.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T20:29:57.882591063Z",
+          "seal": {
+            "by": "server",
+            "mac": "188772ee1a8148ee6f48fd196e7dffeb066db8c849ac6fa33fc60789fb3fee70"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All four child claims are supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1890"
+          ],
+          "recorded_at": "2026-11-24T20:30:03.233513908Z",
+          "seal": {
+            "by": "server",
+            "mac": "d6734cf85ec5d47c3a3e246defe9c7b5096227c07fc112274f2911311e242a07"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T20:17:08.781014174Z",
+      "updated_at": "2026-11-24T20:30:03.233513908Z",
+      "seal": {
+        "by": "server",
+        "mac": "6172dc99b629f0fde7761c9bfc3d2ef76610659282578ddb0ad7c6c10d2c981f"
+      }
+    },
+    {
+      "id": "CLM-1284",
+      "statement": "provision_catalogs pages through half-made catalogs with catalogs::pending(created_before, after, skip_stores), skips a store after a StoreUnavailable failure, and returns the first failure.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "source_anchor": {
+        "path": "src/housekeeping.rs",
+        "commit": "668c273693babbc1ba061cf6343178d4a8da3e0a"
+      },
+      "derived_from": [
+        "CLM-1283"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs",
+        "src/store/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:1023"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1886",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs provision_catalogs loop",
+          "summary": "Independent auditor read: the loop pages until an empty page, pushes the store to the skip list on StoreUnavailable, and keeps the first failure with steps.keep/finish; a missing credential maps to StoreUnavailable.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "commit": "668c273693babbc1ba061cf6343178d4a8da3e0a"
+            }
+          },
+          "recorded_at": "2026-11-24T20:17:15.434386315Z",
+          "seal": {
+            "by": "server",
+            "mac": "a470364225d2e4a4969d85d284b9cbaef04ec23e03626e6268517c6ee69d3cd4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Auditor read of the loop and the test trace.",
+          "auditor": "claude-sonnet-5-5 (re-recorded from the auditor's hand-back)",
+          "evidence_ids": [
+            "EVD-1886"
+          ],
+          "recorded_at": "2026-11-24T20:29:49.899528972Z",
+          "seal": {
+            "by": "server",
+            "mac": "7157a66fd8095237300d170e36e23b29e3b4548ef9763037cc9539e88d81f803"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T20:17:08.781014174Z",
+      "updated_at": "2026-11-24T20:29:49.899528972Z",
+      "seal": {
+        "by": "server",
+        "mac": "5bfc410ea36bdfd3a6ed0b3c869100fb9a0aede5b564cad5753d9f7df6b6a6a8"
+      }
+    },
+    {
+      "id": "CLM-1285",
+      "statement": "Every catalogs::pending query returns at most PENDING_BATCH rows (LIMIT bound to PENDING_BATCH).",
+      "kind": "non_functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "source_anchor": {
+        "path": "src/store/catalogs.rs",
+        "commit": "668c273693babbc1ba061cf6343178d4a8da3e0a"
+      },
+      "derived_from": [
+        "CLM-1283"
+      ],
+      "artifacts": [
+        "src/store/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:1023"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1887",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs pending",
+          "summary": "Independent auditor read: the query ends with LIMIT $5 bound to PENDING_BATCH; the cursor and skip filters only narrow it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "commit": "668c273693babbc1ba061cf6343178d4a8da3e0a"
+            }
+          },
+          "recorded_at": "2026-11-24T20:17:15.572804068Z",
+          "seal": {
+            "by": "server",
+            "mac": "55901160c73947153e9eca2f11925e4a327de84978d1b33bcc52372269ca5db5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "LIMIT bound to PENDING_BATCH.",
+          "auditor": "claude-sonnet-5-5 (re-recorded from the auditor's hand-back)",
+          "evidence_ids": [
+            "EVD-1887"
+          ],
+          "recorded_at": "2026-11-24T20:29:49.973119081Z",
+          "seal": {
+            "by": "server",
+            "mac": "a92e16c45bec638d5fac7c8ee622dff2a53bbb3c566cd8a6647d335fe59e16d9"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T20:17:08.781014174Z",
+      "updated_at": "2026-11-24T20:29:49.973119081Z",
+      "seal": {
+        "by": "server",
+        "mac": "703967f4ef7517baee5bc6cc5d90b6aa39a543d63bfa6463700e660d204597e9"
+      }
+    },
+    {
+      "id": "CLM-1286",
+      "statement": "The test half_made_catalogs_on_an_unreachable_store_do_not_starve_a_healthy_store seeds PENDING_BATCH+1 older rows on an unreachable store and one newer row on main, and passes at head.",
+      "kind": "functional",
+      "level": "artifact",
+      "verification_method": "test",
+      "source_anchor": {
+        "path": "src/housekeeping.rs",
+        "commit": "668c273693babbc1ba061cf6343178d4a8da3e0a"
+      },
+      "derived_from": [
+        "CLM-1283"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs"
+      ],
+      "tags": [
+        "from-issue:1023"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1889",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh test on 668c273 (target/i1023-logs/test.4.log)",
+          "summary": "Lib suite 3066 passed, 0 failed, including housekeeping::tests::half_made_catalogs_on_an_unreachable_store_do_not_starve_a_healthy_store and store::catalogs::provision_tests::pending_pages_after_a_cursor_and_leaves_out_skipped_stores. The test failed before the fix (assertion left (false,101) right (true,101), run on the pre-fix code).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T20:29:39.719852081Z",
+          "seal": {
+            "by": "server",
+            "mac": "83f3eef24c8c66bed4ecd9c7f8acc8fb86f4dca284c6366cb5d0ef181d480325"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Gate run passed the test at head; the red run before the fix shows it detects the starvation.",
+          "auditor": "claude-sonnet-5-5 (re-recorded from the auditor's hand-back)",
+          "evidence_ids": [
+            "EVD-1889"
+          ],
+          "recorded_at": "2026-11-24T20:29:49.825593952Z",
+          "seal": {
+            "by": "server",
+            "mac": "0c37ef7125552208774fec12fa7b49b1876b9cc7219ac2dc9c0f9a7ba2d94d13"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T20:17:08.781014174Z",
+      "updated_at": "2026-11-24T20:29:49.825593952Z",
+      "seal": {
+        "by": "server",
+        "mac": "0c0b6a1d4ee162b1d4dfba5fc7c2f8fc465406782b79a0362cd230b7025a948b"
+      }
+    },
+    {
+      "id": "CLM-1287",
+      "statement": "Plan Task 10b carries a dated #1023 correction note and a timestamped changelog entry exists.",
+      "kind": "documentation",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "derived_from": [
+        "CLM-1283"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "changelog/2026-11-24T19-34-01Z-m21-issue-1023-recovery-per-store.md"
+      ],
+      "tags": [
+        "from-issue:1023"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1888",
+          "kind": "inspection",
+          "locator": "plan Task 10b; changelog/2026-11-24T19-34-01Z-m21-issue-1023-recovery-per-store.md",
+          "summary": "Independent auditor read: the Corrected (issue #1023, 2026-11-24) note sits inside Task 10b before Task 11, and the changelog entry matches the diff.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-24T19-34-01Z-m21-issue-1023-recovery-per-store.md",
+              "commit": "668c273693babbc1ba061cf6343178d4a8da3e0a"
+            }
+          },
+          "recorded_at": "2026-11-24T20:17:15.705101952Z",
+          "seal": {
+            "by": "server",
+            "mac": "9cc1a9b1f86f8f565fda669fde2afca0378365e11b5c2e2677f943cfdbc9dbb7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Note and changelog exist.",
+          "auditor": "claude-sonnet-5-5 (re-recorded from the auditor's hand-back)",
+          "evidence_ids": [
+            "EVD-1888"
+          ],
+          "recorded_at": "2026-11-24T20:29:50.049823176Z",
+          "seal": {
+            "by": "server",
+            "mac": "cf1fd04f7b9eedcf324dd0e2ba5f881fac7cc3438b599c8c9949fc73787ca924"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T20:17:08.781014174Z",
+      "updated_at": "2026-11-24T20:29:50.049823176Z",
+      "seal": {
+        "by": "server",
+        "mac": "a4ff83bd06f5c8793b956e39b2d899ff5a25c4abc4fa924903f3d916a804f704"
       }
     }
   ]
