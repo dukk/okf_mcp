@@ -428,11 +428,8 @@ runs, each catalog's generation and the catalog audit
   account database, so a deployment that adds no store keeps one database.
   Every existing catalog is on `main`.
 - A store on **its own database** (location `host`) keeps a team's catalog
-  data apart, for example on another Postgres cluster. **This release refuses
-  to add one**: `POST /api/v1/stores` and `okf-mcp stores add` answer 409 for
-  a `host` store, after checking that it can be reached (a later release of
-  the same milestone enables them). The rest of this section describes what
-  is in place, and marks what applies only once separate stores are enabled.
+  data apart, for example on another Postgres cluster. Add one with
+  `POST /api/v1/stores` or `okf-mcp stores add` ([Adding a store](#adding-a-store)).
 - Each catalog is on exactly one store, chosen when it is created (see
   [Placement](#placement)) and never changed. Nothing moves a catalog between
   stores.
@@ -444,8 +441,7 @@ runs, each catalog's generation and the catalog audit
 
 ### Adding a store
 
-Applies once separate stores are enabled; until then the request is refused
-as above. `okf-mcp stores add NAME --host H [--port 5432] --database D
+`okf-mcp stores add NAME --host H [--port 5432] --database D
 --credential-kind KIND --credential-ref REF`, or `POST /api/v1/stores`
 ([Catalog stores API](#catalog-stores-api)), needs an admin that reaches every
 catalog. Create the database and its login role first; the server creates the
@@ -1976,7 +1972,7 @@ replica that took the request.
 | `okf-mcp team unsuspend NAME` | Lifts the suspension. Prints `lifted the suspension of team NAME`; no change when the team is active |
 | `okf-mcp catalog create NAME --owner TEAM [--display-name TEXT] [--description TEXT]` | `--owner` is required |
 | `okf-mcp catalog update NAME [--display-name TEXT] [--description TEXT]` | At least one flag is required; prints one `updated catalog NAME <field>: "old" -> "new"` line per flag given |
-| `okf-mcp catalog repair-indexes [NAME...] [--missing-only] [--dry-run] [--actor ACTOR]` | Adds the root `index.md`, `log.md`, folder indexes and listings the named catalogs are missing, rewrites old raw (unencoded) concept and folder listings, and publishes them at once. `--missing-only` keeps only catalogs without a root `index.md` (every such catalog when none is named); `--dry-run` writes nothing. Prints, per catalog, its summary, the files written and a note per created file and `TODO` placeholder, then `repaired N of M catalog(s)`. A failing catalog does not stop the others; the command then exits non-zero naming it. Revisions record `ACTOR` (default `okf-mcp/repair-indexes`) and the message `repair indexes` |
+| `okf-mcp catalog repair-indexes [NAME...] [--missing-only] [--dry-run] [--actor ACTOR]` | Adds the root `index.md`, `log.md`, folder indexes and listings the named catalogs are missing, rewrites old raw (unencoded) concept and folder listings, and publishes them at once. `--missing-only` keeps only catalogs without a root `index.md` (every such catalog when none is named); `--dry-run` writes nothing. Prints, per catalog, its summary, the files written and a note per created file and `TODO` placeholder, then `repaired N of M catalog(s)`. It visits every store and repairs each catalog on the store that holds it. A failing catalog or store does not stop the others; the command then exits non-zero naming it. Revisions record `ACTOR` (default `okf-mcp/repair-indexes`) and the message `repair indexes` |
 | `okf-mcp catalog set-owner NAME --team TEAM` | Moves a catalog to another team, or gives a legacy catalog its first owner. Prints `catalog C: owner OLD -> NEW` (`(none)` for a legacy catalog) |
 | `okf-mcp catalog set-member-access NAME --access none\|read\|write` | What members of the owner team reach through their own keys and grants (default `write`). Prints `catalog C: member access OLD -> NEW` |
 | `okf-mcp catalog set-maintenance NAME on\|off` | Lets the maintenance runner check the catalog (`on`, the default) or keeps it out (`off`); see [The maintenance runner](#unlock-before-access). Prints `catalog C: maintenance OLD -> NEW` |
@@ -4141,7 +4137,7 @@ default store) and never changes.
 | Method and path | Key | Does |
 |---|---|---|
 | `GET /api/v1/stores` | admin | `{stores}` in name order: `name`, `location` (`account-database` or `host`), `host`, `port`, `database`, `credential_kind`, `credential_ref` (a variable name, secret ARN or IAM identity, never the credential; all `null` for `main`), `created_at`, `is_default`, `pinned_teams` (a count) |
-| `POST /api/v1/stores` | admin, every catalog | Body `{name, host, port, database, credential_kind, credential_ref}` (`credential_kind` is `env`, `secrets-manager` or `iam`). Opens a connection to the new store first and answers 201 with the store only if that works. 409 when it cannot be reached (the reply names no host, port or credential; the cause is in the server log), when a name or a host, port and database is already used, or while separate stores are not enabled (every `host` store, until the milestone's last task); 422 for a malformed body |
+| `POST /api/v1/stores` | admin, every catalog | Body `{name, host, port, database, credential_kind, credential_ref}` (`credential_kind` is `env`, `secrets-manager` or `iam`). Opens a connection to the new store first and answers 201 with the store only if that works. 409 when it cannot be reached (the reply names no host, port or credential; the cause is in the server log), when a name or a host, port and database is already used, or when the store's schema cannot be migrated; 422 for a malformed body |
 | `PUT /api/v1/settings/default_store` | admin, every catalog | Body `{value}`, a store's name. Answers `{key, value}`. 404 for an unknown store |
 | `PUT /api/v1/teams/{team}/store` | admin, every catalog | Body `{store}`. Pins the team: catalogs it owns are created there from now on. Answers `{team, store, changed}`. 404 for an unknown team or store |
 | `DELETE /api/v1/teams/{team}/store` | admin, every catalog | Removes the pin; answers `{team, store: null, changed}`. 404 for an unknown team |

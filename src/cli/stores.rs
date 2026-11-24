@@ -25,7 +25,7 @@ use crate::stores::Stores;
 /// The text to print.
 ///
 /// # Errors
-/// A store that cannot be reached, is not enabled yet, or is unknown, or a
+/// A store that cannot be reached, is unknown, or a
 /// database error.
 #[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn stores(

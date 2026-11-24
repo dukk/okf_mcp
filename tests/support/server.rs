@@ -57,6 +57,17 @@ pub const OWNER: &str = "tester";
 /// If the migration or the create fails: a broken test setup.
 pub async fn migrate_with_owner(pool: &PgPool) {
     okf_mcp::db::migrate(pool).await.expect("migrations");
+    create_owner(pool).await;
+}
+
+/// Creates [`OWNER`] in a database that is already migrated.
+///
+/// # Arguments
+/// * `pool` - the migrated database.
+///
+/// # Panics
+/// If the create fails: a broken test setup.
+pub async fn create_owner(pool: &PgPool) {
     let owner = users::NewUser {
         name: OWNER,
         display_name: &okf_mcp::labels::DisplayName::default(),
@@ -266,6 +277,31 @@ impl TestServer {
             app,
             shutdown,
             served,
+        }
+    }
+
+    /// Serves an existing, already migrated database, which this server then
+    /// owns: for tests that build the database themselves (an upgrade from
+    /// an older schema) and then need a running server on it.
+    ///
+    /// # Arguments
+    /// * `db` - the database, at the current schema.
+    /// * `config` - the server's settings.
+    ///
+    /// # Returns
+    /// The running server.
+    ///
+    /// # Panics
+    /// If the bind or the load fails.
+    pub async fn start_on(db: TestDb, config: Config) -> Self {
+        let (base, app, shutdown, served) =
+            serve_app(db.pool.clone(), move |_| config, false, None).await;
+        Self {
+            base,
+            app,
+            shutdown,
+            served,
+            db,
         }
     }
 
