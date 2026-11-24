@@ -17,6 +17,15 @@ fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 11, 23, 12, 0, 0).unwrap()
 }
 
+/// Limits for the tests: the database gives up on a wait after a second,
+/// well inside the backstop, which a failing test would only reach after 60 s.
+fn quick() -> Limits {
+    Limits {
+        attempt: Duration::from_secs(30),
+        wait: Duration::from_secs(1),
+    }
+}
+
 fn settings() -> PoolSettings {
     PoolSettings {
         max_connections: 4,
@@ -379,7 +388,7 @@ async fn a_cleanup_attempt_stuck_on_a_lock_fails_without_holding_up_another_stor
     // `second`. The outer timeout only fails the test if the run hangs.
     let report = tokio::time::timeout(
         Duration::from_secs(60),
-        run_bounded(&stores, now(), Duration::from_secs(2)),
+        run_bounded(&stores, now(), quick()),
     )
     .await
     .expect("the run is bounded by the attempt timeout")
@@ -404,6 +413,147 @@ async fn a_cleanup_attempt_stuck_on_a_lock_fails_without_holding_up_another_stor
     stores.forget_all().await;
     assert_eq!(again, Report { done: 1, failed: 0 });
     assert_eq!(state_of(&accounts.pool, on_main).await, "discarded");
+}
+
+/// Two cleanup rows, `main`'s for catalog 1000 and `second`'s for catalog
+/// 2000, each with a `catalog_state` row on its own store.
+async fn two_catalog_cleanups(accounts: &PgPool, second: &PgPool) {
+    add_store_on(accounts, "second", second).await;
+    for pool in [accounts, second] {
+        sqlx::query("INSERT INTO catalog.catalog_state (id) VALUES (1000), (2000)")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO store_cleanups (store, kind, subject, created_at) \
+         VALUES ('main', 'catalog', '1000', now()), ('second', 'catalog', '2000', now())",
+    )
+    .execute(accounts)
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_store_row_lock_fails_that_cleanup_at_the_database_and_another_store_settles() {
+    // Arrange: another connection holds `main`'s `catalog_state` row for
+    // catalog 1000, so deleting it can only wait.
+    let accounts = test_db().await;
+    let second = test_db().await;
+    two_catalog_cleanups(&accounts.pool, &second.pool).await;
+    let mut holder = accounts.pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM catalog.catalog_state WHERE id = 1000 FOR UPDATE")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let stores = registry(&accounts.pool, password_of(&second.url));
+
+    // Act
+    let report = tokio::time::timeout(
+        Duration::from_secs(60),
+        run_bounded(&stores, now(), quick()),
+    )
+    .await
+    .expect("the run is bounded")
+    .unwrap();
+    stores.forget_all().await;
+
+    // Assert: `main`'s row failed (a try counted, row kept, its data still
+    // there) while `second`'s settled.
+    assert_eq!(report, Report { done: 1, failed: 1 });
+    let left: Vec<(String, i32)> = sqlx::query_as("SELECT store, attempts FROM store_cleanups")
+        .fetch_all(&accounts.pool)
+        .await
+        .unwrap();
+    assert_eq!(left, [("main".to_string(), 1)]);
+    assert_eq!(
+        count(
+            &second.pool,
+            "SELECT count(*) FROM catalog.catalog_state WHERE id = 2000"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count(
+            &accounts.pool,
+            "SELECT count(*) FROM catalog.catalog_state WHERE id = 1000"
+        )
+        .await,
+        1
+    );
+    holder.rollback().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_held_default_key_lock_fails_a_catalog_cleanup_and_leaves_a_one_connection_pool_usable() {
+    // Arrange: the accounts pool has one connection. A key whose default
+    // catalog is 1000 is held `FOR UPDATE` by another connection, which the
+    // catalog cleanup's account half needs.
+    let accounts = test_db().await;
+    let second = test_db().await;
+    two_catalog_cleanups(&accounts.pool, &second.pool).await;
+    seed_user(&accounts.pool, "alice", None).await;
+    seed_catalog_owned_by(&accounts.pool, TEST_TEAM).await;
+    let key = key_for(&accounts.pool, "alice", "alice-laptop", false).await;
+    sqlx::query("UPDATE api_keys SET default_catalog_id = (SELECT id FROM catalogs WHERE name = 'shared') WHERE id = $1")
+        .bind(&key)
+        .execute(&accounts.pool)
+        .await
+        .unwrap();
+    let shared = shared_id(&accounts.pool).await;
+    sqlx::query("UPDATE store_cleanups SET subject = $1 WHERE store = 'main'")
+        .bind(shared.to_string())
+        .execute(&accounts.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO catalog.catalog_state (id) VALUES ($1) ON CONFLICT DO NOTHING")
+        .bind(shared)
+        .execute(&accounts.pool)
+        .await
+        .unwrap();
+    let mut holder = accounts.pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM api_keys WHERE id = $1 FOR UPDATE")
+        .bind(&key)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let one_connection = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(accounts.pool.connect_options().as_ref().clone())
+        .await
+        .unwrap();
+    let stores = registry(&one_connection, password_of(&second.url));
+
+    // Act
+    let report = tokio::time::timeout(
+        Duration::from_secs(60),
+        run_bounded(&stores, now(), quick()),
+    )
+    .await
+    .expect("the run is bounded")
+    .unwrap();
+
+    // Assert: the attempt failed and was counted (so the one connection was
+    // free again to count it), `second` settled, and the pool still works
+    // while the holder keeps its lock.
+    assert_eq!(report, Report { done: 1, failed: 1 });
+    let attempts: i32 =
+        sqlx::query_scalar("SELECT attempts FROM store_cleanups WHERE store = 'main'")
+            .fetch_one(&accounts.pool)
+            .await
+            .unwrap();
+    assert_eq!(attempts, 1);
+    let usable = tokio::time::timeout(
+        Duration::from_secs(10),
+        sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&one_connection),
+    )
+    .await
+    .expect("the one connection is free")
+    .unwrap();
+    assert_eq!(usable, 1);
+    holder.rollback().await.unwrap();
+    stores.forget_all().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
