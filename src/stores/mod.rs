@@ -24,6 +24,66 @@ pub use registry::{PoolSettings, Stores, STORE_SEARCH_PATH};
 
 use crate::error::OkfError;
 
+/// The most stores a read across stores talks to at once, so a listing or a
+/// search over many catalogs never opens more than this many connections in
+/// parallel (each store's own pool is bounded by `store_max_connections`).
+pub const READ_CONCURRENCY: usize = 8;
+
+/// How many times `store_connect_timeout` loading a catalog's state from a
+/// store may take (30 s by default) before the store is reported
+/// unavailable: a connection that stalls after it was opened (a lock, a
+/// network that dropped packets) is as unavailable as one that refuses, but
+/// a large catalog legitimately takes longer than one connect.
+pub const STATE_LOAD_TIMEOUT_FACTOR: u32 = 6;
+
+/// Reads a driver error from `store`: a failure to get a connection, a
+/// broken connection or a refused login is [`OkfError::StoreUnavailable`],
+/// anything else the usual conversion. [`CatalogDb::classify`] for a caller
+/// that holds only the store's name.
+///
+/// # Arguments
+/// * `store` - the store the operation ran on.
+/// * `error` - what the driver returned.
+///
+/// # Returns
+/// The error to hand back.
+#[tracing::instrument(level = "trace", skip_all)]
+pub fn classify_store_error(store: &StoreName, error: sqlx::Error) -> OkfError {
+    // A refused login is the store being unreachable to this server (a
+    // rotated secret, an expired token), not a fault in the request;
+    // the credential tasks are told to fetch a fresh login.
+    if credentials::is_auth_failure(&error) {
+        credentials::signal_auth_refused(&error);
+        return OkfError::store_unavailable(store);
+    }
+    match error {
+        sqlx::Error::PoolTimedOut
+        | sqlx::Error::PoolClosed
+        | sqlx::Error::Io(_)
+        | sqlx::Error::Tls(_)
+        | sqlx::Error::WorkerCrashed => OkfError::store_unavailable(store),
+        other => OkfError::from(other),
+    }
+}
+
+/// [`classify_store_error`] for an error already converted with `?`: a
+/// [`OkfError::Database`] from a transport failure becomes
+/// [`OkfError::StoreUnavailable`]; every other error is returned as it is.
+///
+/// # Arguments
+/// * `store` - the store the operation ran on.
+/// * `error` - what the operation returned.
+///
+/// # Returns
+/// The error to hand back.
+#[tracing::instrument(level = "trace", skip_all)]
+pub fn classify_store_failure(store: &StoreName, error: OkfError) -> OkfError {
+    match error {
+        OkfError::Database { source } => classify_store_error(store, source),
+        other => other,
+    }
+}
+
 /// The name of the store every existing catalog is on after migration 0036.
 const MAIN_STORE: &str = "main";
 
@@ -271,21 +331,7 @@ impl CatalogDb {
     /// The error to hand back.
     #[tracing::instrument(level = "trace", skip_all)]
     pub fn classify(&self, error: sqlx::Error) -> OkfError {
-        // A refused login is the store being unreachable to this server (a
-        // rotated secret, an expired token), not a fault in the request;
-        // the credential tasks are told to fetch a fresh login.
-        if credentials::is_auth_failure(&error) {
-            credentials::signal_auth_refused(&error);
-            return OkfError::store_unavailable(&self.store);
-        }
-        match error {
-            sqlx::Error::PoolTimedOut
-            | sqlx::Error::PoolClosed
-            | sqlx::Error::Io(_)
-            | sqlx::Error::Tls(_)
-            | sqlx::Error::WorkerCrashed => OkfError::store_unavailable(&self.store),
-            other => OkfError::from(other),
-        }
+        classify_store_error(&self.store, error)
     }
 
     /// The pool, for store-layer functions that take an executor. Routes and

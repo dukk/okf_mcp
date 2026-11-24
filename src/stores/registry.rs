@@ -535,6 +535,35 @@ impl Stores {
         .await
     }
 
+    /// How long one connect to a store may take (`store_connect_timeout`):
+    /// the bound a read across stores puts on one store's turn, so a store
+    /// that accepts a connection and then stalls is as unavailable as one
+    /// that refuses it.
+    ///
+    /// # Returns
+    /// The bound.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn connect_timeout(&self) -> Duration {
+        self.inner.settings.connect_timeout
+    }
+
+    /// The longest loading one catalog's state from a store may take
+    /// ([`super::STATE_LOAD_TIMEOUT_FACTOR`] times `store_connect_timeout`): the
+    /// bound a read puts on a store whose connection has stalled.
+    ///
+    /// # Returns
+    /// The bound.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn state_load_timeout(&self) -> Duration {
+        self.inner.settings.connect_timeout * super::STATE_LOAD_TIMEOUT_FACTOR
+    }
+
     /// Drops a store's pool, so the next [`Stores::get`] reads the row again
     /// and reconnects (called when a `stores` row changes). A request that
     /// holds the old handle finishes on it.

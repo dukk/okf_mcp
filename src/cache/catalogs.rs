@@ -132,10 +132,15 @@ pub fn weight_of(loaded: &Loaded) -> u32 {
     )
 )]
 fn from_stored_data(error: &OkfError) -> bool {
-    // `!matches!(..)`: every other variant comes from building the data.
+    // `!matches!(..)`: every other variant comes from building the data. A
+    // store that cannot be reached says nothing about the data: it is not
+    // remembered as broken, and the next request tries the store again.
     !matches!(
         error,
-        OkfError::CatalogNotSelected { .. } | OkfError::Database { .. } | OkfError::Busy { .. }
+        OkfError::CatalogNotSelected { .. }
+            | OkfError::Database { .. }
+            | OkfError::Busy { .. }
+            | OkfError::StoreUnavailable { .. }
     )
 }
 
@@ -241,8 +246,16 @@ impl CatalogCache {
         let loaded = self
             .states
             .get_or_load(row.id, || async {
-                let db = self.stores.get(&row.store).await?;
-                CatalogState::load(&db, row).await.map(Arc::new)
+                // Boxed: the load's future is large, and a debug build would
+                // copy it onto the stack at each layer.
+                self.within_store_bound(
+                    &row.store,
+                    Box::pin(async {
+                        let db = self.stores.get(&row.store).await?;
+                        CatalogState::load(&db, row).await.map(Arc::new)
+                    }),
+                )
+                .await
             })
             .await;
         let state = match loaded {
@@ -262,10 +275,15 @@ impl CatalogCache {
         {
             return Ok(state);
         }
-        let refreshed = match self.stores.get(state.store()).await {
-            Ok(db) => state.refresh(&db, rebuilds).await,
-            Err(error) => Err(error),
-        };
+        let refreshed = self
+            .within_store_bound(
+                state.store(),
+                Box::pin(async {
+                    let db = self.stores.get(state.store()).await?;
+                    state.refresh(&db, rebuilds).await
+                }),
+            )
+            .await;
         match refreshed {
             Ok(true) => self.refreshed(row.id).await,
             Ok(false) => {}
@@ -273,6 +291,10 @@ impl CatalogCache {
                 self.states.invalidate(&row.id).await;
                 return Err(error);
             }
+            // An outage is not a stale answer: the catalog has changed and
+            // the store cannot say how, so the read is unavailable (the old
+            // snapshot is still served for any other failure, below).
+            Err(error @ OkfError::StoreUnavailable { .. }) => return Err(error),
             Err(error) => {
                 self.refresh_failed(row.id, row.generation, &row.name, &error)
                     .await
@@ -418,6 +440,36 @@ impl CatalogCache {
             .get_or_load((id, generation), || async { Ok(()) })
             .await
             .ok();
+    }
+
+    /// Runs a read of `store` under the store's bound
+    /// ([`Stores::state_load_timeout`]) and reads its failures as a store
+    /// outage: a transport error from an established connection, a pool that
+    /// cannot hand one out, or a read that stalls past the bound is
+    /// [`OkfError::StoreUnavailable`], not [`OkfError::Database`].
+    ///
+    /// # Arguments
+    /// * `store` - the store the read runs on.
+    /// * `read` - the read.
+    ///
+    /// # Returns
+    /// What `read` returns, with a transport failure or a stall as
+    /// `StoreUnavailable`.
+    ///
+    /// # Errors
+    /// As `read`; [`OkfError::StoreUnavailable`] on a stall.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn within_store_bound<T>(
+        &self,
+        store: &crate::stores::StoreName,
+        read: impl std::future::Future<Output = Result<T, OkfError>>,
+    ) -> Result<T, OkfError> {
+        match tokio::time::timeout(self.stores.state_load_timeout(), read).await {
+            Ok(outcome) => {
+                outcome.map_err(|error| crate::stores::classify_store_failure(store, error))
+            }
+            Err(_) => Err(OkfError::store_unavailable(store)),
+        }
     }
 
     /// Logs a failed load and turns it into the request's answer: a build

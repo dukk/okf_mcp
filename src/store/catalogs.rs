@@ -1616,6 +1616,35 @@ pub async fn rows_by_names<'e>(
     rows.into_iter().map(CatalogRow::try_from).collect()
 }
 
+/// Every catalog placed on `store`, by name: what a read that cannot reach the
+/// store names as unavailable. Read from the account database, so it works
+/// while the store is down.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction on the account database.
+/// * `store` - the store's name.
+///
+/// # Returns
+/// The store's catalogs, ordered by name, with generation 0 (the store holds
+/// the real one).
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.rows_on_store"))]
+pub async fn rows_on_store<'e>(
+    executor: impl PgExecutor<'e>,
+    store: &StoreName,
+) -> Result<Vec<CatalogRow>, OkfError> {
+    let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL AND c.store = $1 ORDER BY c.name"
+    ))
+    .bind(store.as_str())
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter().map(CatalogRow::try_from).collect()
+}
+
 /// The generations of catalogs `ids`, read from a store's `catalog_state`
 /// (the registry rows do not carry them).
 ///

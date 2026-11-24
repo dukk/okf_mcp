@@ -46,6 +46,285 @@ impl TestApp {
     }
 }
 
+impl TestApp {
+    /// Registers a store of its own, a second database on the test's
+    /// server, and places the catalog `name` on it, holding `entries`: the
+    /// catalog is created through the app's registry, so its rows are on the
+    /// new store and its directory row names it. The default placement goes
+    /// back to `main` afterwards, so catalogs made later land there.
+    ///
+    /// # Arguments
+    /// * `store` - the new store's name (a slug).
+    /// * `name` - the catalog's name.
+    /// * `entries` - its files.
+    ///
+    /// # Returns
+    /// The store's name.
+    ///
+    /// # Panics
+    /// If the database, the registration or the import fails: a broken test
+    /// setup.
+    pub(crate) async fn catalog_on_new_store(
+        &self,
+        store: &str,
+        name: &str,
+        entries: &[(&str, &str)],
+    ) -> crate::stores::StoreName {
+        use crate::stores::StoreName;
+
+        let pool = self.app.accounts().executor();
+        let database = self._db.extra_store_database(&store.replace('-', "")).await;
+        let options = pool.connect_options();
+        sqlx::query(
+            "INSERT INTO stores (name, location_kind, host, port, database, \
+             credential_kind, credential_ref, created_at) \
+             VALUES ($1, 'host', $2, $3, $4, 'env', $5, now())",
+        )
+        .bind(store)
+        .bind(options.get_host())
+        .bind(i32::from(options.get_port()))
+        .bind(&database)
+        .bind(crate::db::pg::STORE_PASSWORD_VAR)
+        .execute(pool)
+        .await
+        .expect("register the store");
+        let store = StoreName::parse(store).expect("a valid store name");
+        crate::store::teams::set_store(
+            pool,
+            crate::db::TEST_TEAM,
+            Some(&store),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("place the team on the store");
+        self.catalog_on_store(&store, name, entries).await;
+        store
+    }
+
+    /// Creates catalog `name` on `store` (registered by
+    /// [`TestApp::catalog_on_new_store`]) and imports `entries` into it.
+    ///
+    /// # Arguments
+    /// * `store` - the store.
+    /// * `name` - the catalog's name.
+    /// * `entries` - `(path, content)` pairs.
+    ///
+    /// # Panics
+    /// If the database or the import fails: a broken test setup.
+    pub(crate) async fn catalog_on_store(
+        &self,
+        store: &crate::stores::StoreName,
+        name: &str,
+        entries: &[(&str, &str)],
+    ) {
+        let pool = self.app.accounts().executor();
+        crate::store::teams::set_store(
+            pool,
+            crate::db::TEST_TEAM,
+            Some(store),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("place the team on the store");
+        let new = catalogs::NewCatalog {
+            name,
+            display_name: &crate::labels::DisplayName::default(),
+            description: "",
+            owner_team: crate::db::TEST_TEAM,
+        };
+        catalogs::create_in(self.app.stores(), &new, &AuditActor::cli(), Utc::now())
+            .await
+            .expect("create the catalog on the store");
+        crate::store::teams::set_store(
+            pool,
+            crate::db::TEST_TEAM,
+            None,
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("place the team back on the default store");
+        let options = ImportOptions {
+            replace: false,
+            scope: ImportScope::Everything,
+            expect_generation: None,
+            expect_catalog_id: None,
+            actor: "tester",
+            audit: &AuditActor::cli(),
+            now: Utc::now(),
+        };
+        import(
+            &self.app.stores().get(store).await.expect("open the store"),
+            name,
+            files(entries),
+            &options,
+        )
+        .await
+        .expect("import the files");
+    }
+
+    /// Makes `store` really unreachable: its row now points at a port nothing
+    /// listens on, and its open pool is dropped, so the next connect is
+    /// refused. A new connection, not a flag: what an operator's outage
+    /// looks like to the registry.
+    ///
+    /// # Arguments
+    /// * `store` - a store registered by [`TestApp::catalog_on_new_store`].
+    ///
+    /// # Panics
+    /// If the row cannot be changed.
+    pub(crate) async fn make_unreachable(&self, store: &crate::stores::StoreName) {
+        // A port that was free a moment ago and is closed again now.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind a free port")
+            .local_addr()
+            .expect("its address")
+            .port();
+        sqlx::query("UPDATE stores SET host = '127.0.0.1', port = $2 WHERE name = $1")
+            .bind(store.as_str())
+            .bind(i32::from(closed))
+            .execute(self.app.accounts().executor())
+            .await
+            .expect("repoint the store");
+        self.app.stores().forget(store).await;
+    }
+
+    /// Points `store` at a server that accepts connections and never answers,
+    /// and drops its pool: a connect hangs until the registry's own bound
+    /// ends it, as a store behind a dead network does. Every connection it
+    /// accepts is counted, so a test can tell how many times a call tried
+    /// to reach the store.
+    ///
+    /// # Arguments
+    /// * `store` - a store registered by [`TestApp::catalog_on_new_store`].
+    ///
+    /// # Returns
+    /// The server; dropping it closes the port.
+    ///
+    /// # Panics
+    /// If the port cannot be bound or the row cannot be changed.
+    pub(crate) async fn make_stalled(&self, store: &crate::stores::StoreName) -> StalledStore {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a port");
+        let port = listener.local_addr().expect("its address").port();
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&accepted);
+        let task = tokio::spawn(async move {
+            // Held, not dropped: a dropped socket would refuse, not stall.
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                held.push(socket);
+            }
+        });
+        self.repoint(store, port).await;
+        StalledStore { accepted, task }
+    }
+
+    /// Puts a forwarding proxy in front of `store` and reopens its pool
+    /// through it, so the pool holds connections that [`StoreProxy::stop`]
+    /// can cut: an outage that begins after the pool was established.
+    ///
+    /// # Arguments
+    /// * `store` - a store registered by [`TestApp::catalog_on_new_store`].
+    ///
+    /// # Returns
+    /// The proxy.
+    ///
+    /// # Panics
+    /// If the port cannot be bound, the row cannot be read or changed, or
+    /// the store does not open through the proxy.
+    pub(crate) async fn front_with_a_proxy(&self, store: &crate::stores::StoreName) -> StoreProxy {
+        let (host, port): (String, i32) =
+            sqlx::query_as("SELECT host, port FROM stores WHERE name = $1")
+                .bind(store.as_str())
+                .fetch_one(self.app.accounts().executor())
+                .await
+                .expect("read the store's address");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a port");
+        let proxy_port = listener.local_addr().expect("its address").port();
+        let target = format!("{host}:{port}");
+        let task = tokio::spawn(async move {
+            // Dropping the set aborts every forwarding task, closing their sockets.
+            let mut forwards = tokio::task::JoinSet::new();
+            while let Ok((mut client, _)) = listener.accept().await {
+                let target = target.clone();
+                forwards.spawn(async move {
+                    if let Ok(mut upstream) = tokio::net::TcpStream::connect(target).await {
+                        let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+                    }
+                });
+            }
+        });
+        self.repoint(store, proxy_port).await;
+        // One idle connection through the proxy, so the pool exists.
+        let db = self
+            .app
+            .stores()
+            .get(store)
+            .await
+            .expect("open through the proxy");
+        drop(
+            db.executor()
+                .acquire()
+                .await
+                .expect("a connection through the proxy"),
+        );
+        StoreProxy { task }
+    }
+
+    /// Points `store`'s row at `127.0.0.1:port` and drops its open pool.
+    async fn repoint(&self, store: &crate::stores::StoreName, port: u16) {
+        sqlx::query("UPDATE stores SET host = '127.0.0.1', port = $2 WHERE name = $1")
+            .bind(store.as_str())
+            .bind(i32::from(port))
+            .execute(self.app.accounts().executor())
+            .await
+            .expect("repoint the store");
+        self.app.stores().forget(store).await;
+    }
+}
+
+/// A server that accepts connections and never answers
+/// ([`TestApp::make_stalled`]).
+pub(crate) struct StalledStore {
+    accepted: Arc<std::sync::atomic::AtomicUsize>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl StalledStore {
+    /// How many connections it has accepted so far.
+    pub(crate) fn accepted(&self) -> usize {
+        self.accepted.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Drop for StalledStore {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// A forwarding proxy in front of a store ([`TestApp::front_with_a_proxy`]).
+pub(crate) struct StoreProxy {
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl StoreProxy {
+    /// Takes the store away: every open connection through the proxy is cut
+    /// and its port is closed, so a new connect is refused.
+    pub(crate) async fn stop(self) {
+        self.task.abort();
+        // Finished once the listener and the forwarding tasks are dropped.
+        let _ = self.task.await;
+    }
+}
+
 /// Creates each catalog, imports its files now, and loads the app with the
 /// system clock.
 ///
