@@ -11,7 +11,7 @@ use sqlx::{PgConnection, PgPool};
 use crate::error::OkfError;
 use crate::invalidate::{invalidate, Invalidation};
 use crate::labels::DisplayName;
-use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock, Target};
+use crate::store::audit::{self, Action, AuditActor, CatalogEntry, Entry, People, RowLock, Target};
 use crate::store::catalogs::{is_unique_violation, is_valid_name};
 use crate::store::changesets::{self, ChangesetState};
 use crate::store::passwords::PasswordStamp;
@@ -1654,6 +1654,10 @@ async fn discard_open_changesets(
             .await?
             .into_iter()
             .collect();
+    // The user being deleted, as the entries name them (`audit_people`
+    // keeps the row; `forget_person` clears its name later in this
+    // transaction).
+    let person = audit::resolve_person(conn, user_id).await?;
     let mut discarded = 0;
     for (id, handle, catalog_id, files) in &open {
         // A catalog row cannot be gone while its changeset exists (the
@@ -1663,15 +1667,19 @@ async fn discard_open_changesets(
             continue;
         };
         changesets::set_state(&mut store_tx, *id, ChangesetState::Discarded, now).await?;
-        let teams = audit::catalog_teams(conn, *catalog_id).await?;
-        audit::record(
-            conn,
-            actor,
-            &Entry {
+        // The entry lives on the store, in the transaction that holds the
+        // discards; its account ids are resolved on the deletion's account
+        // transaction, which already holds this user's and its keys' rows.
+        let resolved = audit::resolve_actor(conn, actor, *catalog_id)
+            .await?
+            .about(person);
+        audit::record_catalog(
+            &mut store_tx,
+            &resolved,
+            &CatalogEntry {
                 action: Action::CatalogChangesetDiscarded,
-                target: Target::Catalog(catalog),
-                person: Some(user_id),
-                teams: &teams,
+                catalog_id: *catalog_id,
+                catalog,
                 details: serde_json::json!({
                     "changeset": handle,
                     "files": files,
@@ -3018,7 +3026,7 @@ pub(crate) mod tests {
         assert_eq!(state, "discarded");
         let (target, teams, details): (Option<String>, Vec<i64>, serde_json::Value) =
             sqlx::query_as(
-                "SELECT target_name, teams, details FROM audit_entries \
+                "SELECT target_name, teams, details FROM catalog.catalog_audit_entries \
                  WHERE action = 'catalog.changeset_discarded'",
             )
             .fetch_one(&db.pool)
@@ -3179,7 +3187,7 @@ pub(crate) mod tests {
             ]
         );
         let entries: Vec<(Option<String>, serde_json::Value)> = sqlx::query_as(
-            "SELECT target_name, details FROM audit_entries \
+            "SELECT target_name, details FROM catalog.catalog_audit_entries \
              WHERE action = 'catalog.changeset_discarded' ORDER BY id",
         )
         .fetch_all(&db.pool)

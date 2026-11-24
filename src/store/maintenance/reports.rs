@@ -483,7 +483,7 @@ pub async fn submit(
     if now >= deadline || now >= expiry {
         runs::expire_submission(&mut tx, catalog_id, &run_id, work_id, now, now >= deadline)
             .await?;
-        watch.commit(tx, db, None).await?;
+        watch.commit(tx, None).await?;
         return Err(stale());
     }
     // Do not call generic recovery here: a changed primary with a valid lease
@@ -577,6 +577,6 @@ pub async fn submit(
         &result,
     )
     .await?;
-    watch.commit(tx, db, None).await?;
+    watch.commit(tx, None).await?;
     Ok(result)
 }

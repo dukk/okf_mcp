@@ -3905,12 +3905,31 @@ team by its user's name), `action` (one action name; 400 for an unknown
 one), `actor` (a person, credential id or actor label), `target` (a target
 name, a target person, or a credential id), `since` and `until` (RFC 3339;
 `since` inclusive, `until` exclusive; 400 otherwise), `after` (the cursor:
-entries older than this id; 400 when it is not an integer, or for an owner
-not a cursor issued for that team) and `limit` (1 to 500, default 100). A
-filter that can name nothing (a malformed team, a NUL) matches no entry.
+entries older than this position; 400 when it is not a cursor, a bare entry
+id included, or for an owner not a cursor issued for that team) and `limit`
+(1 to 500, default 100). A filter that can name nothing (a malformed team,
+a NUL) matches no entry.
 
-An entry is `{id, at, action, source, actor, ip, target, teams, details,
-requests}` (a team owner's has no `id`, below): `actor` is `{"kind": "operator"}` or `{"kind": "known", person,
+Where entries live: the six catalog events (`catalog.published`,
+`catalog.imported`, `catalog.repaired`, `catalog.reverted`,
+`catalog.changeset_discarded`, `catalog.maintenance_run`) are written in
+the store of the catalog they are about, in the transaction that makes the
+change, so an entry exists exactly when its change does. Every other action
+is written to the account database, and so are catalog events written
+before stores were split. The log reads the account database and every
+store together and merges them by time, then store, then id, newest
+first, so an entry appears once and a page never skips or repeats one. Ids
+are per source: an entry's `id` is only unique together with its `store`.
+Entries stay readable after their catalog is deleted or moved to another
+team, and names are read from the account database when the page is built,
+so deleting a user clears their name in store entries too. A store that
+cannot be reached fails the request (503) instead of returning a page
+without its entries.
+
+An entry is `{id, store, at, action, source, actor, ip, target, teams,
+details, requests}` (`store` is the name of the store the entry is on, left
+out for the account database; a team owner's has neither `id` nor `store`,
+below): `actor` is `{"kind": "operator"}` or `{"kind": "known", person,
 credential, label, operator}`; `ip` is `null` when not shown; `target` is
 `{kind, name, person}` (`name` is `null` for a user); `teams` are names,
 a personal team shown as its user; `requests` is a `catalog.admin_read`
@@ -3920,13 +3939,15 @@ A team owner never sees an entry id (issue #430). Ids are one sequence
 across the whole server, so the gaps between two of a team's entries would
 show how much every other team did in between. An owner's entries, on the
 page and in the export, have no `id` key, and an owner's `next_after` is an
-opaque string: the next entry's id and the owner's team, encrypted
+opaque string: the next entry's position (time, store and id) and the owner's team, encrypted
 (ChaCha20-Poly1305, a fresh random nonce each time, so two cursors for the
 same place look unrelated) under a server key. Pass it back unchanged as
-`?after=`. It is the only cursor an owner's request accepts: a raw id, an
-altered cursor, or one issued for another team the user owns is 400
-(`InvalidPath`, the same message whatever is wrong) and shows no entries.
-Admins and provisioners keep the integer `id` and an integer `next_after`.
+`?after=`. It is the only cursor an owner's request accepts: a readable
+cursor, an altered cursor, or one issued for another team the user owns is
+400 (`InvalidPath`, the same message whatever is wrong) and shows no
+entries. Admins and provisioners keep the integer `id` and get a readable
+`next_after`, `<microseconds>:<store>:<id>` (the store is empty for the
+account database); treat it as opaque and pass it back as `?after=`.
 
 The key is 32 random bytes the server creates the first time an owner
 reads the log, in the `server_keys` table (row `audit_cursor`), so every
@@ -3940,7 +3961,7 @@ from the first page with Refresh; no entry is lost or shown to anyone else.
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/audit` | admin, every catalog; a team owner's console session with `?team=`; a provisioner | `{entries, next_after, actions}`: entries newest first, at most `limit`; `next_after` is the last entry's id when the page is full (an owner's is an opaque string instead; pass either as `?after=`; a full last page is followed by an empty one), else `null`; `actions` lists every action name |
+| `GET /api/v1/audit` | admin, every catalog; a team owner's console session with `?team=`; a provisioner | `{entries, next_after, actions}`: entries newest first, at most `limit`; `next_after` is the last entry's cursor when the page is full (readable for an admin or a provisioner, sealed for an owner; pass it back as `?after=`; a full last page is followed by an empty one), else `null`; `actions` lists every action name |
 | `GET /api/v1/audit/export` | as `GET /api/v1/audit`, not a provisioner | Every entry the filters select (`after` starts it, an owner's opaque cursor for an owner; `limit` is ignored), newest first, as JSON Lines (`application/x-ndjson`, one entry per line, downloaded as `audit.jsonl`) |
 
 ```sh
@@ -3954,12 +3975,12 @@ as an every-catalog admin), taking the same filters as flags (`--team`,
 `--limit`) and refusing a bad one the same way:
 
 ```sh
-# Newest first, one tab-separated line per entry: id, time, action, actor
+# Newest first, one tab-separated line per entry: cursor, time, action, actor
 # (`person NAME`, else `credential ID`, else the actor label), target
 # (`user NAME`, or `KIND NAME`, then `person NAME` when the entry names one),
 # teams (comma-separated, `-` for none) and the details as JSON. Control
-# characters in names and labels are escaped. Pass a full page's last id as
-# --after for the next page.
+# characters in names and labels are escaped. Pass a full page's last cursor
+# (the first column) as --after for the next page.
 okf-mcp audit list --action user.created --limit 20
 
 # Every matching entry as JSON Lines, the records `GET /api/v1/audit/export`

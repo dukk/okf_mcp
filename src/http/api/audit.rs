@@ -6,10 +6,12 @@
 //! `GET /audit` only). The redaction lives in [`audit::list`], so the CLI
 //! (Task 8b) and these routes cannot drift apart.
 //!
-//! An owner's view carries no value of the global `audit_entries.id`
-//! sequence (issue #430): its records have no `id`, and its `next_after`
-//! is a sealed cursor ([`cursor`]), the only `after` it accepts. Admins and
-//! provisioners page by raw ids, as before.
+//! The log is read from the account database and every store, merged by
+//! time ([`audit::list`]). An owner's view carries no entry id (issue #430):
+//! its records have no `id`, and its `next_after` is a sealed cursor
+//! ([`cursor`]), the only `after` it accepts. Admins and provisioners page
+//! by the readable cursor of [`audit::AuditCursor::to_plain`], and their
+//! records carry the `store` an entry is on.
 
 use std::sync::Arc;
 
@@ -25,7 +27,7 @@ use crate::auth::{CredentialKind, Principal};
 use crate::error::OkfError;
 use crate::http::api::require_every_catalog;
 use crate::http::AppError;
-use crate::store::audit::{self, Action, AuditQuery, AuditRecord, FilterText, Viewer};
+use crate::store::audit::{self, Action, AuditCursor, AuditQuery, AuditRecord, FilterText, Viewer};
 use crate::store::{server_keys, teams};
 
 mod cursor;
@@ -40,7 +42,7 @@ struct AuditParams {
     target: Option<String>,
     since: Option<String>,
     until: Option<String>,
-    /// A raw entry id for an admin or provisioner, a sealed cursor for an
+    /// A readable cursor for an admin or provisioner, a sealed one for an
     /// owner ([`AuditParams::cursor`] tells them apart once the viewer is
     /// known).
     after: Option<String>,
@@ -68,9 +70,10 @@ impl AuditParams {
         })
     }
 
-    /// The `after` cursor as the entry id it stands for: for an admin or a
-    /// provisioner the raw id as sent; for an owner the id sealed in the
-    /// cursor an earlier page of the same team gave it ([`cursor::open`]).
+    /// The `after` cursor as the position it stands for: for an admin or a
+    /// provisioner the readable cursor as sent; for an owner the position
+    /// sealed in the cursor an earlier page of the same team gave it
+    /// ([`cursor::open`]).
     /// An empty value is no cursor.
     ///
     /// # Arguments
@@ -78,16 +81,16 @@ impl AuditParams {
     /// * `viewer` - who reads.
     ///
     /// # Returns
-    /// The entry id, or `None` for no cursor.
+    /// The position, or `None` for no cursor.
     ///
     /// # Errors
     /// 400 ([`OkfError::InvalidPath`]) for an admin's or provisioner's
-    /// value that is not an integer, and for an owner's that is not a
-    /// cursor issued for that team under the current key (a raw id
-    /// included, so an owner cannot probe the sequence);
+    /// value that is not a cursor, and for an owner's that is not one
+    /// issued for that team under the current key (a plain one included,
+    /// so an owner cannot probe the sequences);
     /// [`OkfError::Database`] reading the key.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn cursor(&self, app: &App, viewer: &Viewer) -> Result<Option<i64>, OkfError> {
+    async fn cursor(&self, app: &App, viewer: &Viewer) -> Result<Option<AuditCursor>, OkfError> {
         let Some(after) = self.after.as_deref().filter(|after| !after.is_empty()) else {
             return Ok(None);
         };
@@ -100,28 +103,22 @@ impl AuditParams {
                 .await?;
                 cursor::open(&key, *audit_team, after).map(Some)
             }
-            Viewer::Admin | Viewer::Credential(_) => {
-                after
-                    .parse::<i64>()
-                    .map(Some)
-                    .map_err(|_| OkfError::InvalidPath {
-                        path: "after".to_string(),
-                        reason: format!("{after:?} is not an entry id"),
-                    })
-            }
+            Viewer::Admin | Viewer::Credential(_) => AuditCursor::parse_plain(after).map(Some),
         }
     }
 }
 
-/// A page's `next_after`: a raw entry id for an admin or a provisioner, a
-/// sealed cursor for an owner.
-// `untagged` serializes each variant as its bare value: `42` or `"..."`.
+/// A page's `next_after`: the readable cursor for an admin or a
+/// provisioner, a sealed one for an owner. Both are strings the client
+/// passes back as `after` and treats as opaque.
+// `untagged` serializes each variant as its bare value.
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub(crate) enum NextAfter {
-    /// The last entry's id.
-    Id(i64),
-    /// The last entry's id and the owner's team, sealed ([`cursor::seal`]).
+    /// The last entry's position ([`AuditCursor::to_plain`]).
+    Plain(String),
+    /// The last entry's position and the owner's team, sealed
+    /// ([`cursor::seal`]).
     Sealed(String),
 }
 
@@ -207,7 +204,7 @@ async fn list_audit(
     let mut query = params.query()?;
     let viewer = viewer(&app, &principal, query.team).await?;
     query.after = params.cursor(&app, &viewer).await?;
-    let entries = audit::list(app.accounts().executor(), &viewer, &query, app.labels()).await?;
+    let entries = audit::list(app.stores(), &viewer, &query, app.labels()).await?;
     // A full page may have more after it. `try_from` converts the length,
     // a `usize`, to the `i64` the page size is.
     let full = i64::try_from(entries.len()).is_ok_and(|len| len >= query.page_size());
@@ -220,10 +217,12 @@ async fn list_audit(
             Some(NextAfter::Sealed(cursor::seal(
                 &key,
                 *audit_team,
-                last.cursor,
+                &last.cursor,
             )?))
         }
-        (Some(last), Viewer::Admin | Viewer::Credential(_)) => Some(NextAfter::Id(last.cursor)),
+        (Some(last), Viewer::Admin | Viewer::Credential(_)) => {
+            Some(NextAfter::Plain(last.cursor.to_plain()))
+        }
     };
     Ok(Json(AuditPage {
         entries,
@@ -250,8 +249,7 @@ async fn export_audit(
     let mut query = params.query()?;
     let viewer = viewer(&app, &principal, query.team).await?;
     query.after = params.cursor(&app, &viewer).await?;
-    let body =
-        audit::export_lines(app.accounts().executor(), &viewer, &query, app.labels()).await?;
+    let body = audit::export_lines(app.stores(), &viewer, &query, app.labels()).await?;
     let headers = [
         (header::CONTENT_TYPE, "application/x-ndjson"),
         (

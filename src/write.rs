@@ -27,7 +27,7 @@ use crate::okf::ops::{OpContext, OpOutcome};
 use crate::okf::rules;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
 use crate::overlay::Overlay;
-use crate::store::audit::{self, Action, Entry, Target};
+use crate::store::audit::{self, Action, CatalogEntry};
 use crate::store::changesets::{self, ChangesetState, EntryRow};
 use crate::store::keys::Access;
 
@@ -177,16 +177,19 @@ where
     // Dropping `tx` without `commit()` (any `?` below) rolls everything back:
     // a refused edit leaves no entry behind.
     //
-    // An audited edit records its entry on the account database: an account
-    // transaction wraps the store's (the store commits first, until Task 12
-    // moves the entry into the store transaction).
+    // An audited edit records its entry in the store transaction, from ids
+    // resolved here: an account transaction wraps the store's (the store
+    // commits first).
     let mut account_tx = match audit {
         Some(_) => Some(app.accounts().begin().await?),
         None => None,
     };
+    let mut resolved = None;
     if let Some(account_tx) = account_tx.as_mut() {
         // The entry's users before the changeset, as publish (issue #418).
         crate::store::publish::lock_people(account_tx, &ctx.audit_actor(), state.name()).await?;
+        // Still before the store connection: the entry's account ids.
+        resolved = Some(audit::resolve_actor(account_tx, &ctx.audit_actor(), state.id()).await?);
     }
     // Acquisition order (plan Task 11, issue #970): the account transaction
     // and every account row lock (`lock_people`) come BEFORE the store
@@ -273,22 +276,20 @@ where
             action,
             mut details,
         }),
-        Some(account_tx),
-    ) = (audit, account_tx.as_mut())
+        Some(resolved),
+    ) = (audit, resolved.as_ref())
     {
         details.insert(
             "changeset".to_string(),
             changeset_row.handle.as_str().into(),
         );
-        let teams = audit::catalog_teams(account_tx, state.id()).await?;
-        let entry = Entry {
+        let entry = CatalogEntry {
             action,
-            target: Target::Catalog(state.name()),
-            person: None,
-            teams: &teams,
+            catalog_id: state.id(),
+            catalog: state.name(),
             details: serde_json::Value::Object(details),
         };
-        audit::record(account_tx, &ctx.audit_actor(), &entry, now).await?;
+        audit::record_catalog(&mut tx, resolved, &entry, now).await?;
     }
     tx.commit().await?;
     if let Some(account_tx) = account_tx {

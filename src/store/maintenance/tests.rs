@@ -2434,8 +2434,8 @@ async fn maintenance_deleted_catalog_identity_cannot_replay() {
 /// credential id their actor names (`None` without one).
 async fn run_entries(pool: &PgPool) -> Vec<(serde_json::Value, Option<String>, String)> {
     sqlx::query_as(
-        "SELECT e.details, a.credential_id, e.source FROM audit_entries e \
-         LEFT JOIN audit_credentials a ON a.id = e.actor_credential_ref \
+        "SELECT e.details, a.credential_id, e.source FROM catalog.catalog_audit_entries e \
+         LEFT JOIN public.audit_credentials a ON a.id = e.actor_credential_ref \
          WHERE e.action = 'catalog.maintenance_run' ORDER BY e.id",
     )
     .fetch_all(pool)
@@ -2683,9 +2683,11 @@ async fn a_run_ends_without_waiting_for_its_users_or_credentials_rows() {
         .unwrap();
     let entries = run_entries(&db.pool).await;
     assert_eq!(entries.len(), 1, "{entries:?}");
+    // A plain read sees the row a writer holds, without waiting for it.
     assert_eq!(
-        entries[0].1, None,
-        "the held row is skipped, not waited for"
+        entries[0].1.as_deref(),
+        Some(key.as_str()),
+        "the entry names the key whose row was held"
     );
 }
 

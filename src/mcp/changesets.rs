@@ -607,7 +607,7 @@ pub(crate) async fn discard(
     ctx: &ToolContext,
     params: DiscardParams,
 ) -> Result<Discarded, OkfError> {
-    use crate::store::audit::{self, Entry, Target};
+    use crate::store::audit::{self, CatalogEntry};
     use crate::store::catalogs;
     use crate::store::changesets::{self, ChangesetState};
 
@@ -651,14 +651,18 @@ pub(crate) async fn discard(
         paths.is_none() && changeset.key_id.as_deref() != Some(principal.key_id.as_str());
     // Dropping `tx` without `commit()` (any `?`) rolls back.
     // A recorded close wraps the store transaction in an account one (the
-    // entry's rows); the store commits first, until Task 12.
+    // entry's account ids); the store commits first. The entry itself is
+    // written in the store transaction.
     let mut account_tx = match recorded {
         true => Some(app.accounts().begin().await?),
         false => None,
     };
+    let mut resolved = None;
     if let Some(account_tx) = account_tx.as_mut() {
         // The entry's users before the changeset, as publish (issue #418).
         crate::store::publish::lock_people(account_tx, &ctx.audit_actor(), state.name()).await?;
+        // Still before the store connection: the entry's account ids.
+        resolved = Some(audit::resolve_actor(account_tx, &ctx.audit_actor(), state.id()).await?);
     }
     // Acquisition order (plan Task 11, issue #970): the account transaction
     // and every account row lock (`lock_people`) come BEFORE the store
@@ -683,20 +687,18 @@ pub(crate) async fn discard(
     discarded.closed = paths.is_none();
     if discarded.closed {
         changesets::set_state(&mut tx, changeset.id, ChangesetState::Discarded, now).await?;
-        if let Some(account_tx) = account_tx.as_mut() {
-            let teams = audit::catalog_teams(account_tx, state.id()).await?;
-            let entry = Entry {
+        if let Some(resolved) = resolved.as_ref() {
+            let entry = CatalogEntry {
                 action: Action::CatalogChangesetDiscarded,
-                target: Target::Catalog(state.name()),
-                person: None,
-                teams: &teams,
+                catalog_id: state.id(),
+                catalog: state.name(),
                 details: serde_json::json!({
                     "changeset": changeset.handle,
                     "files": discarded.removed,
                     "reason": "admin",
                 }),
             };
-            audit::record(account_tx, &ctx.audit_actor(), &entry, now).await?;
+            audit::record_catalog(&mut tx, resolved, &entry, now).await?;
         }
     }
     tx.commit().await?;
@@ -1898,7 +1900,7 @@ mod publish_tests {
         body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
         fail_on(
             test.app.accounts().executor(),
-            "BEFORE INSERT ON audit_entries FOR EACH ROW",
+            "BEFORE INSERT ON catalog.catalog_audit_entries FOR EACH ROW",
         )
         .await;
 
@@ -1916,6 +1918,63 @@ mod publish_tests {
             .await
             .unwrap();
         assert_eq!(rows.len(), 1, "no revision was written");
+    }
+
+    /// The count of rows in the account's and the store's audit tables for
+    /// `catalog.published`.
+    async fn published_entries(test: &TestApp) -> (i64, i64) {
+        let pool = test.app.accounts().executor();
+        let account = sqlx::query_scalar(
+            "SELECT count(*) FROM audit_entries WHERE action = 'catalog.published'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let store = sqlx::query_scalar(
+            "SELECT count(*) FROM catalog.catalog_audit_entries WHERE action = 'catalog.published'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        (account, store)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_publish_writes_its_audit_entry_on_the_store() {
+        let test = pg().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
+
+        publish_as(&ctx, &handle, "edit a").await.unwrap();
+
+        assert_eq!(
+            published_entries(&test).await,
+            (0, 1),
+            "the entry is on the store and none is written to the account database"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_publish_writes_no_audit_entry() {
+        use crate::http::api::testing::fail_on;
+        let test = pg().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
+        // The entry is written before the changeset is marked published, so
+        // a failure there rolls the entry back with the revisions.
+        fail_on(
+            test.app.accounts().executor(),
+            "BEFORE UPDATE ON catalog.changesets FOR EACH ROW",
+        )
+        .await;
+
+        let refused = publish_as(&ctx, &handle, "edit a").await;
+
+        assert!(refused.is_err(), "{refused:?}");
+        assert_eq!(published_entries(&test).await, (0, 0));
+        assert_eq!(state_of(&test, &handle).await, ChangesetState::Open);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -3383,7 +3442,7 @@ mod changes_tests {
         );
         fail_on(
             test.app.accounts().executor(),
-            "BEFORE INSERT ON audit_entries FOR EACH ROW",
+            "BEFORE INSERT ON catalog.catalog_audit_entries FOR EACH ROW",
         )
         .await;
 

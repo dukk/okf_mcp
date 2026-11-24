@@ -278,7 +278,7 @@ mod tests {
                 "users",
             ]
         );
-        // The catalog's own tables live in schema `catalog` (0041).
+        // The catalog's own tables live in schema `catalog` (0041; 0042 adds its audit).
         let catalog_tables: Vec<String> = sqlx::query_scalar(
             "SELECT table_name::text FROM information_schema.tables \
              WHERE table_schema = 'catalog' ORDER BY table_name COLLATE \"C\"",
@@ -289,6 +289,7 @@ mod tests {
         assert_eq!(
             catalog_tables,
             [
+                "catalog_audit_entries",
                 "catalog_state",
                 "changeset_entries",
                 "changesets",

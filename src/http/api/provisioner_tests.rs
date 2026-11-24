@@ -919,7 +919,7 @@ async fn an_owner_of_the_users_team_never_sees_provisioner_lookups_or_refusals()
     };
 
     let seen = crate::store::audit::list(
-        test.app.accounts().executor(),
+        test.app.stores(),
         &viewer,
         &crate::store::audit::AuditQuery::default(),
         test.app.labels(),

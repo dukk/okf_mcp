@@ -687,7 +687,7 @@ pub enum FeedbackCommand {
 /// unredacted, as an every-catalog admin does over REST.
 #[derive(Debug, Subcommand)]
 pub enum AuditCommand {
-    /// Entries, newest first, one tab-separated line each: id, time,
+    /// Entries, newest first, one tab-separated line each: cursor, time,
     /// action, actor, target, teams, details.
     List(AuditArgs),
     /// Every matching entry as JSON Lines on stdout, newest first (as
@@ -720,10 +720,10 @@ pub struct AuditArgs {
     /// Before this RFC 3339 time.
     #[arg(long)]
     pub until: Option<String>,
-    /// Only entries older than this id: pass a full page's last id to read
-    /// the next page.
-    #[arg(long, value_name = "ID")]
-    pub after: Option<i64>,
+    /// Only entries older than this cursor: pass a full page's last cursor
+    /// (the first column of `list`) to read the next page.
+    #[arg(long, value_name = "CURSOR")]
+    pub after: Option<String>,
     /// At most this many (`list` only; default 100, at most 500).
     #[arg(long, value_name = "N")]
     pub limit: Option<i64>,
@@ -1119,7 +1119,8 @@ async fn dispatch(
         }
         Command::Audit(command) => {
             let pool = connect(cli.database_url.as_deref(), &config).await?;
-            print!("{}", audit::audit(&pool, &command).await?);
+            let stores = Stores::new(pool, PoolSettings::from_config(&config));
+            print!("{}", audit::audit(&stores, &command).await?);
         }
         Command::Unassigned => {
             let pool = connect(cli.database_url.as_deref(), &config).await?;
