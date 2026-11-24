@@ -1900,12 +1900,24 @@ If the store's commit fails after the account's, the catalog is gone from
 every lookup and its data stays unmarked until the cleanup removes it all the
 same.
 
-Each attempt is bounded: one row on one store may take at most 30 seconds
-(`ATTEMPT_TIMEOUT`, a constant, not a setting), and its transactions set
-`lock_timeout` and `statement_timeout` to 20 seconds. A row held under a lock
-(a changeset another session has `FOR UPDATE`) or a store that has stalled
-is abandoned, rolled back and counted as a failed try like any other, and
-the run goes on to the next row and store.
+Each attempt is bounded, at the database first. Every statement the job
+issues, on the account database and on a store, runs in a transaction that
+sets `lock_timeout` and `statement_timeout` to 20 seconds (`LIMITS.wait`, a
+constant, not a setting), so PostgreSQL itself gives up on a row held under a
+lock (a changeset another session has `FOR UPDATE`, a catalog's `catalog_state`
+row, a default key's row) and rolls the transaction back. A `tokio` timeout of
+30 seconds per row (`LIMITS.attempt`) wraps the attempt as a backstop for what
+the database cannot bound, such as a store that stops answering; dropping a
+future does not cancel its statement, which is why the database bound comes
+first. An attempt that fails either way is counted as a failed try like any
+other, and the run goes on to the next row and store. A catalog's cleanup
+removes the store's data and commits that before it takes the account half, so
+no attempt holds a store connection while it waits for an account one, or the
+reverse. A user's keys are deleted with their `maintenance_runs` and
+changeset references cleared by the cleanup; a maintenance claim and a
+changeset open each hold the key's row `FOR KEY SHARE` until their store
+commit, so the deletion waits for them and the cleanup it owes then finds
+what they wrote.
 
 ### Deletion rules
 

@@ -89,9 +89,30 @@ other paths.
 
 ## Review round 1
 
-- Each cleanup attempt is bounded (`ATTEMPT_TIMEOUT` of 30 s, plus
-  `lock_timeout` and `statement_timeout` of 20 s inside its transactions); a
-  timeout counts as a failed try and the run continues. Documented in
-  `docs/operations.md`.
+- Each cleanup attempt is bounded.
 - The key cleanup history test now seeds a published changeset and a
   maintenance run; the open-changeset discard is its own test.
+
+## Review round 2
+
+- Every statement of the cleanup, on the account side and on a store, runs
+  in a transaction that sets `lock_timeout` and `statement_timeout` to
+  20 s (`LIMITS.wait`); the 30 s `tokio` timeout per row (`LIMITS.attempt`)
+  is only a backstop, since dropping a future does not cancel its statement.
+  There are no autocommit statements on a bare pool, including
+  `note_failure`. A catalog's cleanup commits its store half before it takes
+  the account half. Tests: a held store `catalog_state` row, and a held
+  default-key row with a one-connection account pool that stays usable.
+- `runs::claim` reads the claiming key `FOR KEY SHARE` in the audit target's
+  account transaction (opened before the store connection and kept until
+  after the store commit), as `open_changeset` does, so a user deletion
+  waits for a claim and its cleanup then clears the key from the run.
+  Regression: `a_maintenance_claim_paused_after_its_key_read_never_leaves_a_deleted_key_behind`.
+
+### Mutation checks, round 2
+
+| Mutation | Test that failed |
+|---|---|
+| `lock_key` without `FOR KEY SHARE` | `a_maintenance_claim_paused_after_its_key_read_never_leaves_a_deleted_key_behind` |
+| store half of a catalog cleanup in an unbounded `db.begin()` | `a_store_row_lock_fails_that_cleanup_at_the_database_and_another_store_settles` (hits its 15 s limit) |
+| account half of a catalog cleanup in an unbounded `begin()` | `a_held_default_key_lock_fails_a_catalog_cleanup_and_leaves_a_one_connection_pool_usable` (hits its 15 s limit) |
