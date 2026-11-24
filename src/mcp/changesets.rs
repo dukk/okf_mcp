@@ -849,7 +849,7 @@ pub(crate) async fn discard(
     if let Some(account_tx) = account_tx {
         account_tx.commit().await?;
     }
-    app.overlays().forget(changeset.id).await;
+    app.overlays().forget(changeset.key()).await;
     Ok(discarded)
 }
 
