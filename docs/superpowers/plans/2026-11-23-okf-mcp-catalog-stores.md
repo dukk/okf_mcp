@@ -689,7 +689,8 @@ Release 3 is not deployable yet: Task 17 (listeners per store) completes it.
   4. Run open, edit, publish, history, revert, search across both, export and maintenance.
   5. Assert each catalog's rows exist only on its own store.
   6. Stop store `acme`'s database; assert team B is unaffected and team A gets `StoreUnavailable`.
-- [x] Smoke: deploy release 3 to a disposable environment built from a snapshot of a pre-split database. Follow P10's procedure. Check the adoption, the audit view (old and new entries) and a publish, and record the result in the milestone changelog.
+- [x] Automated upgrade smoke: `the_upgrade_procedure_adopts_a_pre_split_database_and_keeps_its_history` follows P10's procedure on a synthetic pre-split database and checks the adoption, the audit view (old and new entries) and a publish.
+- [ ] Smoke (maintainer): deploy release 3 to a disposable environment built from a snapshot of a real pre-split database. Follow P10's procedure. Check the adoption, the audit view (old and new entries) and a publish, and record the result in the milestone changelog.
 - [x] CLI `repair-indexes` loops over `Stores::all()`; after Task 8 it repairs `main` only (issue #966).
 - [x] Remove P8's restriction on `host` stores once the end-to-end test passes: delete `placement::refuse_host_stores_until_task_20` and its one call in `store::stores::add` (Task 10 marks it), and invert its test: `adding_a_host_store_is_refused_until_enabled` becomes `a_host_store_can_be_added`. Update "Catalog stores API" in `docs/operations.md`, which says host stores are refused.
 - [x] Milestone changelog summarising the epic.
