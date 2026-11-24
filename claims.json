@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1139,
+  "next_claim_seq": 1148,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "e496cfb39c9355205b0d894ddb923d255ae6e1bd2ca12dafa14e96776dfe9ee2"
+    "mac": "9f600f1855f893074bc7219b2532b8895c80f97c0875d386144bc9d8e8a454c9"
   },
-  "next_evidence_seq": 1678,
+  "next_evidence_seq": 1687,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "089c8ce241b46fadf0b18d242ca8db46235f321b4f871273e16abe2af5e76f8f"
+    "mac": "3295e8d849c4c4b1c77d045e39df96e69ac441ff10081aceced45d7f9a3c43c9"
   },
   "claims": [
     {
@@ -92777,6 +92777,568 @@
       "seal": {
         "by": "server",
         "mac": "69b3d3ad7505404453f5ca7e7cb8043907ab851c49677c29983db074db24f4b5"
+      }
+    },
+    {
+      "id": "CLM-1139",
+      "statement": "Every drop in the template build and its recovery (ensure_template's drop of an unmarked account template, build_template's drop of {name}_store) goes through drop_template_on, which runs ALTER DATABASE ... IS_TEMPLATE false when the database exists marked a template, then drops it.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "source": "PR #1008 review 6038261787 inline comment at tests/support/pg.rs:772; review round 3 commit",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/support/pg.rs"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1678",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:735,760,902-913",
+          "summary": "ensure_template (735) and build_template (760) call drop_template_on; drop_template_on selects datistemplate, runs ALTER DATABASE IS_TEMPLATE false if true, then drop_database_on. Remaining drop_database_on callers are line 837 (stale-database sweep, not template build) and 876 (drop_database).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 895,
+                "end": 913
+              },
+              "commit": "c7a2c6f40536848ef84288881f6e4b3be45a3db0"
+            }
+          },
+          "recorded_at": "2026-11-24T11:45:19.749155606Z",
+          "seal": {
+            "by": "server",
+            "mac": "1788f4ce7dce77019bdb93769b61c3b2005d93a615ca2709d142cb75b30b72bb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both template-build drops go through drop_template_on, which unmarks then drops.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1678"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.208959527Z",
+          "seal": {
+            "by": "server",
+            "mac": "7716fd30a166ad590b2e4a5b33f0fe83ed5d6087738091214369b0e5df6273f2"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:23:57.568679001Z",
+      "updated_at": "2026-11-24T11:45:32.208959527Z",
+      "seal": {
+        "by": "server",
+        "mac": "96391b27fa04f6c39d98be4c8c23900801b0ece5563990ce23431eb8cc5aefac"
+      }
+    },
+    {
+      "id": "CLM-1140",
+      "statement": "build_template marks {name}_store a template before marking the account template, and a comment states that the account mark is the commit point ensure_template checks.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "source": "PR #1008 review round 3 brief",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/support/pg.rs"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1679",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:773-785",
+          "summary": "Marking loop iterates [&store_name, name] (store first, account last); the comment above it says the account mark is the commit point ensure_template trusts.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 770,
+                "end": 785
+              },
+              "commit": "c7a2c6f40536848ef84288881f6e4b3be45a3db0"
+            }
+          },
+          "recorded_at": "2026-11-24T11:45:19.819877902Z",
+          "seal": {
+            "by": "server",
+            "mac": "6b5e43114be7757c62a8534a199f801143512d1a1ee19c3f7e76d27bd83eef4b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Loop order store then account, with the commit-point comment.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1679"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.272228628Z",
+          "seal": {
+            "by": "server",
+            "mac": "4eb13939f9082f76c37858ac03d586f224f5f165186ec6d4d428314a3338ff91"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:23:57.568679001Z",
+      "updated_at": "2026-11-24T11:45:32.272228628Z",
+      "seal": {
+        "by": "server",
+        "mac": "1a0187cde17073083ef8b569cec6f9f23048eae1c0ffd090fea125e2a96d2c05"
+      }
+    },
+    {
+      "id": "CLM-1141",
+      "statement": "The test a_build_killed_between_the_two_marks_is_rebuilt in tests/test_database.rs creates an unmarked account template and a marked {name}_store template, calls ensure_template, and asserts it built, both databases are marked templates, and a copy has every migration.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "source": "PR #1008 review 6038261787: requested regression",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/test_database.rs"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1680",
+          "kind": "inspection",
+          "locator": "tests/test_database.rs:169-196",
+          "summary": "Test creates template and {template}_store via create_database, marks only the store IS_TEMPLATE true, calls ensure_template, asserts built, is_template for both, copy migrations == migration_count, and cleans up.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/test_database.rs",
+              "lines": {
+                "start": 169,
+                "end": 196
+              },
+              "commit": "c7a2c6f40536848ef84288881f6e4b3be45a3db0"
+            }
+          },
+          "recorded_at": "2026-11-24T11:45:19.888223563Z",
+          "seal": {
+            "by": "server",
+            "mac": "302925cb57d507426f2713290903a3a7608ed7c5eea400d960f8db5146d8056d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test arranges, acts and asserts exactly as stated.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1680"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.336184212Z",
+          "seal": {
+            "by": "server",
+            "mac": "fba89b4b3c45ad3a1050f8c8a712ba7f8ce379ce457a35d5bd3997b6856c6884"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:23:57.568679001Z",
+      "updated_at": "2026-11-24T11:45:32.336184212Z",
+      "seal": {
+        "by": "server",
+        "mac": "08fb713d0befc3e87a664e56502eea2fa6b7dc04e4c8be81732fd768540f0936"
+      }
+    },
+    {
+      "id": "CLM-1142",
+      "statement": "With build_template's store drop reverted to drop_database_on, a_build_killed_between_the_two_marks_is_rebuilt fails with PostgreSQL error 42809 'cannot drop a template database'; with drop_template_on it passes.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "source": "PR #1008 review round 3 report",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/test_database.rs",
+        "tests/support/pg.rs"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1681",
+          "kind": "log",
+          "locator": "target/i974-logs/narrow-neg.log; target/i974-logs/narrow.log",
+          "summary": "narrow-neg.log: the test FAILED, panicking at tests/test_database.rs:186 (the ensure_template unwrap) with PostgreSQL code 42809 'cannot drop a template database'. narrow.log: same test ok, 11 passed 0 failed. I cannot see the revert itself in the log, but the failure site and error match the claim.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T11:45:19.949943296Z",
+          "seal": {
+            "by": "server",
+            "mac": "13c633ad424bfe9e0d7655782cf682f79fdde4682ce1e96769195a2fc738e543"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "narrow-neg.log shows failure with 42809 at the ensure_template call; narrow.log shows pass. The revert itself is not visible in the log, only its effect.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1681"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.400389517Z",
+          "seal": {
+            "by": "server",
+            "mac": "2f382de6ac2dc00eb22f7fea7209c59b144aa82af2db8c0a4a321a40c66d1b60"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:23:57.568679001Z",
+      "updated_at": "2026-11-24T11:45:32.400389517Z",
+      "seal": {
+        "by": "server",
+        "mac": "6342ada60a923951fa74e7d66ae48f7bdca79c609fc28c481d7e6367d4bc280c"
+      }
+    },
+    {
+      "id": "CLM-1143",
+      "statement": "pg::drop_template drops the account template and then its {name}_store template, each through drop_template_on, and tests/test_database.rs's drop_template cleanup helper calls it.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "source": "PR #1008 review round 3 changelog",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/support/pg.rs",
+        "tests/test_database.rs"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1682",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:889-893; tests/test_database.rs:38-40",
+          "summary": "pg::drop_template calls drop_template_on for name then format!(\"{name}_store\"); the test helper drop_template is a one-line call to pg::drop_template.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 889,
+                "end": 894
+              },
+              "commit": "c7a2c6f40536848ef84288881f6e4b3be45a3db0"
+            }
+          },
+          "recorded_at": "2026-11-24T11:45:20.012751042Z",
+          "seal": {
+            "by": "server",
+            "mac": "1d1b0c8a617d94dfe6d35b55fa8867bba1dc3e031a8484bba8cc9116eb1d4466"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "pg::drop_template drops account then store via drop_template_on; the test helper delegates to it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1682"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.464004009Z",
+          "seal": {
+            "by": "server",
+            "mac": "20e92579ed5d461c9be1f3525fff1d96c89fd256b4e0a733c005d174531bc706"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:23:57.568679001Z",
+      "updated_at": "2026-11-24T11:45:32.464004009Z",
+      "seal": {
+        "by": "server",
+        "mac": "69b5729a03ea2c98d1f1b468b2d77a86f35d8af7fd1921149e23f35a0c9e52a0"
+      }
+    },
+    {
+      "id": "CLM-1144",
+      "statement": "Review round 3 changed only tests/support/pg.rs, tests/test_database.rs and the Task 15 changelog (no src/ file and no plan document).",
+      "kind": "constraint",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "source": "PR #1008 review round 3 brief: keep it to the harness",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/support/pg.rs",
+        "tests/test_database.rs",
+        "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1683",
+          "kind": "analysis",
+          "locator": "git diff --stat 600c254 c7a2c6f",
+          "summary": "Stat lists exactly three files: the Task 15 changelog, tests/support/pg.rs, tests/test_database.rs. No src/ file and no docs/ plan file.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T11:45:20.078349135Z",
+          "seal": {
+            "by": "server",
+            "mac": "c6b9868c8842a3f5b693fe8be3199d294712f3427d7c9dc9258afe292eed0816"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Diff 600c254..c7a2c6f touches only the three named files.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1683"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.527768982Z",
+          "seal": {
+            "by": "server",
+            "mac": "5b332a4b2c2a64f3ec5711cfdd907c729576743a2058efc9ac41aa4107d2f961"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:23:57.568679001Z",
+      "updated_at": "2026-11-24T11:45:32.527768982Z",
+      "seal": {
+        "by": "server",
+        "mac": "277bde324d3a1bff6f9313d8a581cdebc6b0fb7a9e7b5103bf0dc7984fb0a9bd"
+      }
+    },
+    {
+      "id": "CLM-1145",
+      "statement": "The Task 15 changelog has a 'Review round 3 (PR #1008)' section describing drop_template_on, the mark order and commit point, pg::drop_template, and the regression test.",
+      "kind": "documentation",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "source": "PR #1008 review round 3 brief",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1684",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md:72-83",
+          "summary": "Section '## Review round 3 (PR #1008)' covers drop_template_on, the store-first/account-last order with the account mark as commit point, pg::drop_template, and a_build_killed_between_the_two_marks_is_rebuilt.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md",
+              "lines": {
+                "start": 72,
+                "end": 83
+              },
+              "commit": "c7a2c6f40536848ef84288881f6e4b3be45a3db0"
+            }
+          },
+          "recorded_at": "2026-11-24T11:45:20.151092227Z",
+          "seal": {
+            "by": "server",
+            "mac": "4ddf1a1aa3dbf197d5544ae4acdf897ab23a28bacd9ce436bad5650acbbe2a83"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Changelog section exists and covers all four named topics.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1684"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.592105758Z",
+          "seal": {
+            "by": "server",
+            "mac": "06b7a42e21718b8b84888a56ba3ecffa002168550222517371f1037c32fb77b3"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:23:57.568679001Z",
+      "updated_at": "2026-11-24T11:45:32.592105758Z",
+      "seal": {
+        "by": "server",
+        "mac": "5ca3d9e3ec9ff56f14a4b68b2967facafb9971ff1adbbf606c56617b8b89afa8"
+      }
+    },
+    {
+      "id": "CLM-1146",
+      "statement": "On commit c7a2c6f, tools/agentic/gate.sh test passed (exit 0) with 3537 passed, 0 failed, 21 ignored in each of the same and separate modes, after two earlier runs failed only on known flakes (an_absent_name_is_forgotten_after_its_lifetime, #1004; a_secrets_manager_store_opens_and_follows_a_rotated_secret, #1002).",
+      "kind": "functional",
+      "level": "artifact",
+      "verification_method": "test",
+      "source": "PR #1008 review round 3 gate logs",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "target/i974-logs/test.log",
+        "target/i974-logs/test-run1.log",
+        "target/i974-logs/test-run2.log"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1685",
+          "kind": "log",
+          "locator": "target/i974-logs/test.log, test-run1.log, test-run2.log, gate-exit-codes.txt",
+          "summary": "Summing 'test result:' lines in test.log: lines 1-3852 (same mode) 3537 passed 0 failed 21 ignored; lines 3853-end (separate mode, second 'Running unittests src/lib.rs') 3537 passed 0 failed 21 ignored. gate-exit-codes.txt: run3 test=0. test-run1.log fails only an_absent_name_is_forgotten_after_its_lifetime (line 268); test-run2.log fails only a_secrets_manager_store_opens_and_follows_a_rotated_secret (line 6818); each exit 1. Issue numbers #1004/#1002 not checkable from logs.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T11:45:20.216081608Z",
+          "seal": {
+            "by": "server",
+            "mac": "3dbf1b5a486526d68d5ea7f4166ff4ce7897a9a9b7a66762b06ad7e519ce45b8"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Summed counts are 3537/0/21 in each mode, final exit 0, and the two earlier failures are each the single named flaky test. Issue numbers are not verifiable from logs.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1685"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.655044807Z",
+          "seal": {
+            "by": "server",
+            "mac": "23f2126a57e7d0fb254f65c8b23c8c92122171b0406dc2f903a60405266775fe"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:44:24.733522944Z",
+      "updated_at": "2026-11-24T11:45:32.655044807Z",
+      "seal": {
+        "by": "server",
+        "mac": "14d2844465aa7ff7912620dec178a6c86456635d4c1631f67428bd988630ecb9"
+      }
+    },
+    {
+      "id": "CLM-1147",
+      "statement": "On commit c7a2c6f, tools/agentic/gate.sh fmt, lint and dylint each exited 0.",
+      "kind": "functional",
+      "level": "artifact",
+      "verification_method": "test",
+      "source": "PR #1008 review round 3 gate logs",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "target/i974-logs/fmt.log",
+        "target/i974-logs/lint.log",
+        "target/i974-logs/dylint.log"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1686",
+          "kind": "log",
+          "locator": "target/i974-logs/gate-exit-codes.txt; fmt.log; lint.log; dylint.log",
+          "summary": "gate-exit-codes.txt: fmt=0, lint=0, dylint=0. fmt.log shows cargo fmt --check with no diff output; lint.log shows clippy -D warnings and cargo doc finishing clean; dylint.log ends with Finished and no errors. HEAD is c7a2c6f.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T11:45:20.279821737Z",
+          "seal": {
+            "by": "server",
+            "mac": "5f7d2d65135e3d3a14e53ace849301e7b56e4143e2100de345992c9bb086c9f0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Exit codes 0 for fmt, lint and dylint, and the logs show clean output.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1686"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.718836020Z",
+          "seal": {
+            "by": "server",
+            "mac": "43a389b7e1f3c879ccce721930337749e12e2d230c006189131faa099553acb0"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:44:24.733522944Z",
+      "updated_at": "2026-11-24T11:45:32.718836020Z",
+      "seal": {
+        "by": "server",
+        "mac": "bf6a19852161fa306436d10647bd2bd8f1b564767d6527c76d2fd22f6da1a880"
       }
     }
   ]
