@@ -768,7 +768,7 @@ pub(crate) fn spawn_store_feed(start: StoreFeedStart) -> StoreFeed {
 }
 
 #[cfg(test)]
-mod store_feed_tests;
+pub(crate) mod store_feed_tests;
 
 /// Test helpers: what a write sends on the change feed.
 #[cfg(test)]

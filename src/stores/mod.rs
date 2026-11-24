@@ -12,6 +12,7 @@
 use sqlx::postgres::PgPool;
 use sqlx::{Postgres, Transaction};
 
+pub mod bounded;
 mod credentials;
 pub mod placement;
 mod registry;

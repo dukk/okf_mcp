@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use sqlx::{PgConnection, PgExecutor, PgPool};
+use sqlx::{PgConnection, PgExecutor};
 
 use crate::error::OkfError;
 use crate::store::catalogs;
@@ -788,7 +788,7 @@ async fn listed(
 ///   while this write waited"), storing nothing.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `executor` - the store (a pool, or a connection the caller bounded).
 /// * `older_than` - the cutoff.
 /// * `now` - the time (server clock), as their `updated_at`.
 ///
@@ -798,8 +798,8 @@ async fn listed(
 /// # Errors
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.prune_empty"))]
-pub async fn prune_empty(
-    pool: &PgPool,
+pub async fn prune_empty<'e>(
+    executor: impl PgExecutor<'e>,
     older_than: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<u64, OkfError> {
@@ -813,7 +813,7 @@ pub async fn prune_empty(
     )
     .bind(older_than)
     .bind(now)
-    .execute(pool)
+    .execute(executor)
     .await?
     .rows_affected();
     Ok(pruned)
@@ -823,9 +823,12 @@ pub async fn prune_empty(
 /// serves its filter, and a test plans it.
 const OPEN_TOTAL_SQL: &str = "SELECT count(*) FROM changesets WHERE state = 'open'";
 
-/// How many changesets are open, in every catalog. One count over the
+/// How many changesets are open, in every catalog on one store. One count over the
 /// partial index of open rows: the `cluster_stats` housekeeping job stores
-/// it for `okf.changesets.open` (M18 spec Decision 16).
+/// it for `okf.changesets.open` (M18 spec Decision 16), one store at a time.
+///
+/// # Arguments
+/// * `executor` - the store (a pool, or a connection the caller bounded).
 ///
 /// # Returns
 /// The number of open changesets.
@@ -833,8 +836,10 @@ const OPEN_TOTAL_SQL: &str = "SELECT count(*) FROM changesets WHERE state = 'ope
 /// # Errors
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "changesets.open_total"))]
-pub async fn open_total(pool: &PgPool) -> Result<i64, OkfError> {
-    Ok(sqlx::query_scalar(OPEN_TOTAL_SQL).fetch_one(pool).await?)
+pub async fn open_total<'e>(executor: impl PgExecutor<'e>) -> Result<i64, OkfError> {
+    Ok(sqlx::query_scalar(OPEN_TOTAL_SQL)
+        .fetch_one(executor)
+        .await?)
 }
 
 #[cfg(test)]
@@ -844,6 +849,7 @@ mod tests {
     use crate::store::catalogs;
     use crate::store::catalogs::tests::until_a_lock_is_awaited;
     use chrono::{TimeDelta, TimeZone};
+    use sqlx::PgPool;
     use std::time::Duration;
 
     /// Generous: the tests share a loaded machine.

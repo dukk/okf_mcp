@@ -1576,6 +1576,14 @@ mod publish_tests {
         // Counted by the `cluster_stats` housekeeping job, read into the
         // gauge by the ticker (issue #693): one cluster-wide series.
         let count = || async {
+            // The store's count, then the cluster's sum (plan Task 16).
+            crate::housekeeping::run_on_store(
+                crate::housekeeping::Task::ClusterStats,
+                &crate::stores::StoreName::main(),
+                &test.app,
+            )
+            .await
+            .unwrap();
             crate::housekeeping::run(crate::housekeeping::Task::ClusterStats, &test.app)
                 .await
                 .unwrap();

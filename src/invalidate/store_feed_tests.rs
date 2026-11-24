@@ -38,7 +38,7 @@ const NOTE: &str = "---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# A\n"
 const NOTE_EDITED: &str = "---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# A\n\nEdited.\n";
 
 /// Registers store `name` on a new database of its own.
-async fn add_store(db: &crate::db::pg_support::TestDb, name: &str) -> String {
+pub(crate) async fn add_store(db: &crate::db::pg_support::TestDb, name: &str) -> String {
     let database = db.extra_store_database(&name.replace('-', "")).await;
     let options = db.pool.connect_options();
     sqlx::query(
@@ -59,7 +59,7 @@ async fn add_store(db: &crate::db::pg_support::TestDb, name: &str) -> String {
 
 /// Creates catalog `name` on `store` (`None`: the default store) and imports
 /// one note into it (generation 1).
-async fn catalog_on(
+pub(crate) async fn catalog_on(
     stores: &Stores,
     pool: &PgPool,
     name: &str,
