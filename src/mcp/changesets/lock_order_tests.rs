@@ -110,11 +110,11 @@ fn delete_in_task(
 async fn lock_waiters(test: &TestApp, count: i64) {
     let waited = tokio::time::timeout(LOCK_WAIT, async {
         loop {
-            let waiting: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM pg_stat_activity \
-                 WHERE left(datname, length(current_database())) = current_database() \
-                   AND wait_event_type = 'Lock'",
-            )
+            let waiting: i64 = sqlx::query_scalar(concat!(
+                "SELECT count(*) FROM pg_stat_activity WHERE ",
+                crate::test_locks::own_databases!("datname"),
+                " AND wait_event_type = 'Lock'"
+            ))
             .fetch_one(test.app.accounts().executor())
             .await
             .expect("read pg_stat_activity");

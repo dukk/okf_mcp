@@ -45,8 +45,9 @@ Issue #974, Task 15 of `docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores
   one mode twice.
 - The registry of second databases is keyed by host, port and database (`registry_key`), for insertion
   (`register_store`), lookup (`store_options`) and removal (`unregister_store`): every per-test container names
-  its account database `postgres`. `stores_of_same_named_databases_on_distinct_servers_stay_apart` holds two live
-  same-named databases on distinct servers. No other harness state is keyed by database name.
+  its account database `postgres`. `stores_of_same_named_databases_on_distinct_servers_stay_apart` is a unit test of
+  the key: two lazy pools with the same database name on different ports (a fictional host, never connected),
+  registered, looked up and unregistered. It does not start two servers. No other harness state is keyed by database name.
 - In `separate` mode the account database's schema `catalog` is dropped after the account template is built
   (`drop_account_catalog`; the template name carries the mode), so a statement sent to the account pool instead
   of the store's fails with a missing relation instead of reading an empty table. Production keeps the schema in
@@ -54,3 +55,16 @@ Issue #974, Task 15 of `docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores
   separated, so no production code path was exposed. Six tests that check what the account migrations build, or
   the store `main` being the account database, use `TestDb::start_account_layout` (`test_db_account_layout` in
   the lib), which keeps the schema in both modes.
+
+## Review round 2 (PR #1008)
+
+- Lock-wait helpers no longer match a prefix of `current_database()`: a counter without padding made `..._1`
+  match another test's `..._10`. One macro, `crate::test_locks::own_databases!`, keeps the exact name, `{name}_store`
+  and `{name}_x...` (account names end in digits, so no other test's name can match), and replaces all eight
+  filters (`AWAITED_LOCKS`, `wait_for_lock_waiters` in `src/http/api/testing.rs`, the two in `src/mcp/changesets.rs`,
+  `lock_order_tests.rs`, `catalogs_provision_tests.rs`). The test
+  `own_databases_are_the_name_its_store_and_its_extras_and_no_longer_counter` runs the condition over names ending
+  in `_1` and `_10`.
+- The password of `OKF_TEST_STORE_PASSWORD` comes from `server_password`, which parses the server URL and
+  percent-decodes the userinfo (`p%40ss` is `p@ss`), as the connection does. `the_server_password_is_percent_decoded`
+  covers it. `percent-encoding` is a dev-dependency.

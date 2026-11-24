@@ -557,11 +557,11 @@ impl Browser {
 /// lock.
 pub(crate) async fn wait_for_lock_waiters(pool: &PgPool, want: i64) {
     for _ in 0..200 {
-        let waiting: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM pg_stat_activity \
-              WHERE left(datname, length(current_database())) = current_database() \
-                   AND wait_event_type = 'Lock'",
-        )
+        let waiting: i64 = sqlx::query_scalar(concat!(
+            "SELECT count(*) FROM pg_stat_activity WHERE ",
+            crate::test_locks::own_databases!("datname"),
+            " AND wait_event_type = 'Lock'"
+        ))
         .fetch_one(pool)
         .await
         .expect("count the lock waiters");

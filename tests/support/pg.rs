@@ -509,14 +509,26 @@ async fn create_store_database(server_url: &str, name: &str, own_container: bool
 /// first store opens, and every test of the process sets the same value.)
 fn set_store_password_once(server_url: &str) {
     static SET: std::sync::Once = std::sync::Once::new();
-    SET.call_once(|| {
-        let password = server_url
-            .split_once("://")
-            .and_then(|(_, rest)| rest.split_once('@'))
-            .and_then(|(login, _)| login.split_once(':'))
-            .map_or("", |(_, password)| password);
-        std::env::set_var(STORE_PASSWORD_VAR, password);
-    });
+    SET.call_once(|| std::env::set_var(STORE_PASSWORD_VAR, server_password(server_url)));
+}
+
+/// The password `server_url` logs in with, as the connection uses it: the
+/// URL's userinfo is percent-encoded, so `p%40ss` is the password `p@ss`.
+///
+/// # Returns
+/// The decoded password, or an empty string when the URL has none or does
+/// not parse.
+pub fn server_password(server_url: &str) -> String {
+    url::Url::parse(server_url)
+        .ok()
+        .and_then(|parsed| {
+            parsed.password().map(|encoded| {
+                percent_encoding::percent_decode_str(encoded)
+                    .decode_utf8_lossy()
+                    .into_owned()
+            })
+        })
+        .unwrap_or_default()
 }
 
 /// Creates schema `catalog` in an empty database and runs every catalog

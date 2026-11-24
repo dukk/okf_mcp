@@ -3068,10 +3068,11 @@ pub(crate) mod tests {
     /// test server may be shared by other tests, whose waits are not ours.
     /// In `separate` store mode the store is a database named after this
     /// one, so the match is on the name's start.
-    pub(crate) const AWAITED_LOCKS: &str = "SELECT count(*) FROM pg_locks l \
-         JOIN pg_stat_activity a ON a.pid = l.pid \
-         WHERE NOT l.granted \
-         AND left(a.datname, length(current_database())) = current_database()";
+    pub(crate) const AWAITED_LOCKS: &str = concat!(
+        "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
+         WHERE NOT l.granted AND ",
+        crate::test_locks::own_databases!("a.datname")
+    );
 
     /// Waits until some backend is blocked on a lock, so a test knows the
     /// spawned delete (or import) has reached the point it should wait at.

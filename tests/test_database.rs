@@ -231,6 +231,22 @@ fn the_template_name_is_stable_and_valid() {
     assert_eq!(name.len(), "okf_tpl_".len() + 16);
 }
 
+/// The password of a server URL is the decoded one, as the connection uses
+/// it: the store `main`'s `env` credential must equal it.
+#[test]
+fn the_server_password_is_percent_decoded() {
+    assert_eq!(
+        pg::server_password("postgres://tester:p%40ss@localhost:5432"),
+        "p@ss"
+    );
+    assert_eq!(
+        pg::server_password("postgres://postgres:postgres@127.0.0.1:5432"),
+        "postgres"
+    );
+    assert_eq!(pg::server_password("postgres://postgres@localhost"), "");
+    assert_eq!(pg::server_password("not a url"), "");
+}
+
 /// A lazy pool on `database` of the server at `port`: nothing connects.
 fn lazy_pool(port: u16, database: &str) -> sqlx::PgPool {
     let options = sqlx::postgres::PgConnectOptions::new()

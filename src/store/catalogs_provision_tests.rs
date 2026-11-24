@@ -72,9 +72,12 @@ async fn wait_for_waiter_or_end<T>(pool: &PgPool, task: &tokio::task::JoinHandle
         let waiting: Option<String> = sqlx::query_scalar(
             // This test's databases only (the account database and, in
             // `separate` store mode, its store): the server is shared.
-            "SELECT l.locktype FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
-                 WHERE NOT l.granted \
-                 AND left(a.datname, length(current_database())) = current_database() LIMIT 1",
+            concat!(
+                "SELECT l.locktype FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
+                 WHERE NOT l.granted AND ",
+                crate::test_locks::own_databases!("a.datname"),
+                " LIMIT 1"
+            ),
         )
         .fetch_optional(pool)
         .await

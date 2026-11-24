@@ -1692,11 +1692,11 @@ mod publish_tests {
     /// Waits until `count` backends of this database wait on a lock.
     async fn lock_waiters(test: &TestApp, count: i64) {
         for _ in 0..500 {
-            let waiting: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM pg_stat_activity \
-                 WHERE left(datname, length(current_database())) = current_database() \
-                   AND wait_event_type = 'Lock'",
-            )
+            let waiting: i64 = sqlx::query_scalar(concat!(
+                "SELECT count(*) FROM pg_stat_activity WHERE ",
+                crate::test_locks::own_databases!("datname"),
+                " AND wait_event_type = 'Lock'"
+            ))
             .fetch_one(test.app.accounts().executor())
             .await
             .unwrap();
@@ -3169,11 +3169,11 @@ mod changes_tests {
     /// Waits until `count` backends wait on a lock (as `publish_tests` does).
     async fn lock_waiters(test: &TestApp, count: i64) {
         for _ in 0..500 {
-            let waiting: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM pg_stat_activity \
-                 WHERE left(datname, length(current_database())) = current_database() \
-                   AND wait_event_type = 'Lock'",
-            )
+            let waiting: i64 = sqlx::query_scalar(concat!(
+                "SELECT count(*) FROM pg_stat_activity WHERE ",
+                crate::test_locks::own_databases!("datname"),
+                " AND wait_event_type = 'Lock'"
+            ))
             .fetch_one(test.app.accounts().executor())
             .await
             .unwrap();
