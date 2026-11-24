@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1304,
+  "next_claim_seq": 1316,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "f00875666518dd29f1113b8ff24815e9c1427651ab3ce2d4e486379c8d34faad"
+    "mac": "c53abf3417ff157475fa4f50eba965820e9b612b6ffa673e0b02b18091063e44"
   },
-  "next_evidence_seq": 1925,
+  "next_evidence_seq": 1944,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "9e88b15046aa34df5c46d8d82ebd700f7896bc3ac9dbc480a1eea07dd8b83f50"
+    "mac": "10c6092ba5b629c778187545d4078e996828ac5b05ef9ed218f8658bb2af7f66"
   },
   "claims": [
     {
@@ -80931,6 +80931,18 @@
             "by": "server",
             "mac": "b92abcbb285de7d557a8a377d842e7361d1f540cc303c223100e82d09da41400"
           }
+        },
+        {
+          "id": "EVD-1943",
+          "kind": "test",
+          "locator": "housekeeping::tests::provision_catalogs_finishes_or_removes_old_half_made_catalogs_and_spares_young_ones; half_made_catalogs_on_an_unreachable_store_do_not_starve_a_healthy_store (same mode)",
+          "summary": "Both pass at head; the age filter and scheduling are unchanged by the diff (only the per-catalog attempt is wrapped).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T22:18:46.194305552Z",
+          "seal": {
+            "by": "server",
+            "mac": "5d723294bed0572d7f16e635351b2383d842617e4e3758ba21ed8006cba52bdf"
+          }
         }
       ],
       "verdicts": [
@@ -80947,13 +80959,26 @@
             "by": "server",
             "mac": "117a01baf343319c9677dd6d823561ce417e8c874e09436f8a683c8385570408"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head; scheduling and age filter unchanged, tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1943"
+          ],
+          "recorded_at": "2026-11-24T22:18:52.630190605Z",
+          "seal": {
+            "by": "server",
+            "mac": "b39cba0b3a162af3a6d0f4e450ab561461558f5387ac3d7e809af7042febecbb"
+          }
         }
       ],
       "created_at": "2026-11-23T19:51:12.581558775Z",
-      "updated_at": "2026-11-23T19:53:07.405404563Z",
+      "updated_at": "2026-11-24T22:18:52.630190605Z",
       "seal": {
         "by": "server",
-        "mac": "ca2e54c2eacf3f67bad90f91b76bd90ae47675822a125163bb442ff950e39dc1"
+        "mac": "3129010614630b59af2c97ffd6dcc9e64bc8db996f47c86f42abcecf27b027ba"
       }
     },
     {
@@ -81125,6 +81150,18 @@
             "by": "server",
             "mac": "152bd4deaf80d446e7474e5c7670ba2f38cec052ff48f898e749d17c6bcecdfc"
           }
+        },
+        {
+          "id": "EVD-1940",
+          "kind": "test",
+          "locator": "OKF_TEST_STORE=same|separate gate.sh narrow --lib -- provisioning_job create_and_recovery a_create_ a_half_created pending_ (store::catalogs::provision_tests::create_and_recovery_work_on_a_one_connection_pool)",
+          "summary": "At head 97b273a the one-connection-pool test passes in both store modes (32 passed, 0 failed per run); the diff only added a WAIT argument to recover calls in this file. Recovery now opens account_tx then store_tx in the same order as before.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T22:18:45.924430988Z",
+          "seal": {
+            "by": "server",
+            "mac": "e616f6532de691e654099a870369c9354808a1172840f0d931fecdcffc1ac362"
+          }
         }
       ],
       "verdicts": [
@@ -81140,13 +81177,26 @@
             "by": "server",
             "mac": "a7340e336b7ca9b36955ebabb5ba0d4f231fd150b216909c039255e9eb3eb487"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head after the diff touched the recovery code; test passes in both modes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1940"
+          ],
+          "recorded_at": "2026-11-24T22:18:52.373552564Z",
+          "seal": {
+            "by": "server",
+            "mac": "cbbc18489101526e6120a85fbe711c70b3559218314ccd8b201f7cb0c1e1faef"
+          }
         }
       ],
       "created_at": "2026-11-23T19:51:12.581558775Z",
-      "updated_at": "2026-11-23T19:53:07.551779484Z",
+      "updated_at": "2026-11-24T22:18:52.373552564Z",
       "seal": {
         "by": "server",
-        "mac": "40fc76af54abe2bed6b2fee8b4f258ee225a1d65891e982ccbddfe1aab0b218d"
+        "mac": "3bb774e5e143a3a24ae40260ee688e49fa3cda1e6eb5b92cd395f92f38219e6e"
       }
     },
     {
@@ -81214,6 +81264,18 @@
             "by": "server",
             "mac": "c4b7021edc827531d4e9c81dec1adb74bf415a92bb27760ae502c992aa21f862"
           }
+        },
+        {
+          "id": "EVD-1941",
+          "kind": "test",
+          "locator": "same command, both store modes",
+          "summary": "The five named tests (a_half_created_catalog_is_not_visible, provisioning_job_finishes..., provisioning_job_removes..., a_create_stalled_past_the_interval..., a_create_that_waited_behind_recovery_writes_nothing) all pass at head in both modes; the diff added only the WAIT argument and no sleep.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T22:18:46.043799082Z",
+          "seal": {
+            "by": "server",
+            "mac": "ece8c4e02497d4aba609fae0d96e34eff2709e3a9eabb00c3dc0b450078ca1fb"
+          }
         }
       ],
       "verdicts": [
@@ -81230,13 +81292,26 @@
             "by": "server",
             "mac": "d406eae17a0322aaf2cce9402f3497fee7de6fe0d6a730e1c6dc5d19fee5ee5c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head; all five pass in both modes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1941"
+          ],
+          "recorded_at": "2026-11-24T22:18:52.472264564Z",
+          "seal": {
+            "by": "server",
+            "mac": "9a2dee83e8443ba4b9f85fcf8156699d52fbebb0bdf10b8d4a608d96f86c60e0"
+          }
         }
       ],
       "created_at": "2026-11-23T19:51:12.581558775Z",
-      "updated_at": "2026-11-23T19:53:07.640420758Z",
+      "updated_at": "2026-11-24T22:18:52.472264564Z",
       "seal": {
         "by": "server",
-        "mac": "ac175288437249ffedea23a1f69d50b8c98e555682571942f0575493bfd94d54"
+        "mac": "7f49b2785e7e81aa16f9bc659128c39a0c9ce184716688b6cb7bc3152fc05804"
       }
     },
     {
@@ -83022,6 +83097,18 @@
             "by": "server",
             "mac": "71e7f47f8d6e2daddaa08e2cd5acfa630c2115f63daa7d3066035ec322403a7e"
           }
+        },
+        {
+          "id": "EVD-1942",
+          "kind": "test",
+          "locator": "create_and_recovery_work_on_a_one_connection_pool, both store modes at 97b273a",
+          "summary": "Create and recovery still complete on a pool of one connection at head; maintenance-claim half not re-run here (not touched by this diff).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T22:18:46.119485198Z",
+          "seal": {
+            "by": "server",
+            "mac": "455fc64b919e56cb0ebdeaf8f3f622cc483cc67be1a1212ef76d5f878c53177e"
+          }
         }
       ],
       "verdicts": [
@@ -83050,13 +83137,26 @@
             "by": "server",
             "mac": "50dd37e49a81a155f386577a5a0e80ebad1f5a9800dbdf0162ba297a15516f79"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head for the create/recovery half after the diff; still passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1942"
+          ],
+          "recorded_at": "2026-11-24T22:18:52.546216044Z",
+          "seal": {
+            "by": "server",
+            "mac": "4a7d895477c87636e91bbc33d316a66f2c5190a9a4145cc70ea829ad3160eb70"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T23:23:47.645913671Z",
+      "updated_at": "2026-11-24T22:18:52.546216044Z",
       "seal": {
         "by": "server",
-        "mac": "4857893a4e9bdb11f89299306f524f2da186c43e501d8447723858e935e3687e"
+        "mac": "0663ef8c23e47c7d36804f006fb6bcfbc5e5136a82b410eb79cba95d319a22c8"
       }
     },
     {
@@ -106224,6 +106324,813 @@
       "seal": {
         "by": "server",
         "mac": "c90e1f343605fb9ad8cab34d5d176e4799e9debf9614f9144745ee80a0abb48c"
+      }
+    },
+    {
+      "id": "CLM-1304",
+      "statement": "Issue #1028 is delivered: half-created catalog recovery is bounded at the database and per attempt, a timed-out attempt is contained like StoreUnavailable, regression tests, changelog, operations doc and Task 10b note exist.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/1028",
+      "derived_from": [],
+      "artifacts": [
+        "src/housekeeping.rs",
+        "src/store/catalogs.rs",
+        "src/stores/bounded.rs"
+      ],
+      "tags": [
+        "from-issue:1028"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1939",
+          "kind": "analysis",
+          "locator": "children of CLM-1304",
+          "summary": "The ten issue-requirement children (CLM-1305 to CLM-1313) are supported and together cover every acceptance bullet: database bounds, whole-attempt backstop incl. first open, containment, no new setting, the held-lock and stalled-query tests, no sleeps, docs, changelog and plan note. Only the two PR-description claims (CLM-1314, CLM-1315) are not_enough_info and do not bear on the issue's acceptance.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T22:18:02.953729053Z",
+          "seal": {
+            "by": "server",
+            "mac": "7dda16fe345a1f752da2bce86060c02c4bcd64919d30db677e3874a0ebfc4fd8"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The nine issue-requirement children (the evidence summary says ten; it is nine, CLM-1305 to CLM-1313) are supported and cover the acceptance list.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1939"
+          ],
+          "recorded_at": "2026-11-24T22:18:07.685866118Z",
+          "seal": {
+            "by": "server",
+            "mac": "af336590f8f2783c172e199f23ae96cd10f5e2365ae5ce693d71486dd45b988c"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T22:17:05.644225977Z",
+      "updated_at": "2026-11-24T22:18:07.685866118Z",
+      "seal": {
+        "by": "server",
+        "mac": "d601685702a7bc3144dc093109fef4eb14d437a64252e5a4352c3d1a32cad70f"
+      }
+    },
+    {
+      "id": "CLM-1305",
+      "statement": "catalogs::recover runs its account and store transactions through account_tx and store_tx, which set lock_timeout and statement_timeout to the supplied wait, so the pg_advisory_xact_lock wait on the catalog lock is bounded at the database.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #1028 acceptance 1; PR body: \"catalogs::recover(db, catalog, now, wait) runs its account and store transactions through account_tx / store_tx, which SET LOCAL lock_timeout and statement_timeout to wait; this includes the pg_advisory_xact_lock wait.\"",
+      "derived_from": [
+        "CLM-1304"
+      ],
+      "artifacts": [
+        "src/store/catalogs.rs",
+        "src/stores/bounded.rs"
+      ],
+      "tags": [
+        "from-issue:1028"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1925",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:625,643; src/stores/bounded.rs:105-150",
+          "summary": "recover_holding begins its account tx with account_tx(db.accounts(), wait) and store tx with store_tx(db, wait); both call bound_waits (set_config lock_timeout/statement_timeout, local). lock(&mut tx, id) runs after line 643 inside the bounded store tx.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 620,
+                "end": 646
+              },
+              "commit": "97b273a9f8d0e900c9b922c3c54a761a4b5d818f"
+            }
+          },
+          "recorded_at": "2026-11-24T22:17:34.396395300Z",
+          "seal": {
+            "by": "server",
+            "mac": "2ecd4fe19da65caa0d4b3c50d1ed6093b077be07a4bbe5157505b44e97751075"
+          }
+        },
+        {
+          "id": "EVD-1926",
+          "kind": "test",
+          "locator": "OKF_TEST_STORE=same and =separate tools/agentic/gate.sh narrow --lib -- store_tests",
+          "summary": "9 passed, 0 failed in each mode, including a_held_catalog_lock_does_not_starve_a_healthy_store, which only passes if the advisory lock wait gives up with 55P03 within the 500 ms wait.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T22:17:34.472000912Z",
+          "seal": {
+            "by": "server",
+            "mac": "86e1514e55542a41aabf886635d03a1d5c00ee089ff26c70ef94c1f8adee9133"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code uses the bounded transaction helpers for both transactions, and the held-lock test passes only because the advisory lock wait is bounded.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1925",
+            "EVD-1926"
+          ],
+          "recorded_at": "2026-11-24T22:17:55.276695729Z",
+          "seal": {
+            "by": "server",
+            "mac": "94e12c2e1c16d19ecdfb78144962312fa126cc56291fad42594947b30cf121fd"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T22:17:05.644225977Z",
+      "updated_at": "2026-11-24T22:17:55.276695729Z",
+      "seal": {
+        "by": "server",
+        "mac": "fa9604eb91dec7ac881e47e4e94164dca697e8978dd26cab9775cc850977b54e"
+      }
+    },
+    {
+      "id": "CLM-1306",
+      "statement": "provision_catalogs wraps each recovery attempt, including the store open with first-open migration (app.store_db) and catalogs::recover, in one backstop whose limit is the attempt bound.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #1028 acceptance 1; PR body: \"provision_catalogs wraps each attempt (store open with first-open migration, then recovery) in backstop.\"",
+      "derived_from": [
+        "CLM-1304"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs"
+      ],
+      "tags": [
+        "from-issue:1028"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1927",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs:843-848",
+          "summary": "backstop(limits, async { StoreName::parse; app.store_db(&store).await?; catalogs::recover(...) }) wraps the open (registry read, connect, migration) and the recovery together under limits.attempt.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 841,
+                "end": 849
+              },
+              "commit": "97b273a9f8d0e900c9b922c3c54a761a4b5d818f"
+            }
+          },
+          "recorded_at": "2026-11-24T22:17:34.552080434Z",
+          "seal": {
+            "by": "server",
+            "mac": "079d4c17778494ccdf96c801b6aebbb13e9bca8bee2fcf9703db9264174bdfda"
+          }
+        },
+        {
+          "id": "EVD-1928",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib -- the_attempt_backstop_contains_a_wait_the_database_does_not_bound",
+          "summary": "Passes: with attempt 500 ms and wait 120 s the attempt returns Busy and the healthy catalog settles, so the backstop is what bounds it. No test stalls the first-open migration itself; that part is shown by the wrapping code only.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T22:17:34.635141008Z",
+          "seal": {
+            "by": "server",
+            "mac": "8cba8d72d267da97e3b4db38f3ae132865a8d9c05f12f46b131765e10b0d14d0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The open and recovery are inside one backstop and the backstop test shows it fires. Minor gap: no test stalls the migration itself, but the wrapping is the same future.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1927",
+            "EVD-1928"
+          ],
+          "recorded_at": "2026-11-24T22:17:55.352249131Z",
+          "seal": {
+            "by": "server",
+            "mac": "8b23123f3e9298700329ee5181c6cff24a0c27750019ba4090ce3ee87ded8b4f"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T22:17:05.644225977Z",
+      "updated_at": "2026-11-24T22:17:55.352249131Z",
+      "seal": {
+        "by": "server",
+        "mac": "6f4b1e8406ddb230f1b1c62a86247b41d2f5dc1a04d945cadb4710aec1991465"
+      }
+    },
+    {
+      "id": "CLM-1307",
+      "statement": "A recovery failure that is a timeout (OkfError::Busy, SQLSTATE 55P03 or 57014, recognised by stores::bounded::is_timeout) adds the store to the run's skip list, leaves the row pending, and is kept as the task's first failure, exactly as StoreUnavailable is.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #1028 acceptance 1; PR body: \"such an error is contained like StoreUnavailable: the store is skipped for the rest of the run, the row stays pending, the first failure is the task's result.\"",
+      "derived_from": [
+        "CLM-1304"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs",
+        "src/stores/bounded.rs"
+      ],
+      "tags": [
+        "from-issue:1028"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1929",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs:857-870; src/stores/bounded.rs is_timeout; Steps::keep housekeeping.rs:742-745",
+          "summary": "Err arm pushes the store to down when StoreUnavailable or is_timeout; the error is logged and steps.keep (get_or_insert, so first failure wins); the row is untouched. is_timeout matches Busy and Database codes 55P03/57014.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 857,
+                "end": 870
+              },
+              "commit": "97b273a9f8d0e900c9b922c3c54a761a4b5d818f"
+            }
+          },
+          "recorded_at": "2026-11-24T22:17:34.712848319Z",
+          "seal": {
+            "by": "server",
+            "mac": "2f880b15de3afc18cfcebede9b79d8cf8feb9c0eca23fb6821a83d5f2d9df6aa"
+          }
+        },
+        {
+          "id": "EVD-1930",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib -- does_not_starve attempt_backstop half_made (OKF_TEST_STORE=same)",
+          "summary": "5 passed, 0 failed; tests assert Err(is_timeout) / Err(Busy) as the run result, older row unprovisioned, newer provisioned. The 55P03 path is exercised by the held-lock test, the 57014 path only if the table lock test hits statement_timeout (either code satisfies is_timeout); the original StoreUnavailable test also still passes.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T22:17:34.789644367Z",
+          "seal": {
+            "by": "server",
+            "mac": "d802b46f35a266ce98461595b34069d529fd8c38acd9d8a68bdb5ab2db020064"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Error arm treats timeouts like StoreUnavailable and keeps the first failure; tests assert the outcome.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1929",
+            "EVD-1930"
+          ],
+          "recorded_at": "2026-11-24T22:17:55.426833639Z",
+          "seal": {
+            "by": "server",
+            "mac": "53beaa9b9974f527b2a1b8faa23af66fc042e2d6c8101c11f03d14205b03e8d0"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T22:17:05.644225977Z",
+      "updated_at": "2026-11-24T22:17:55.426833639Z",
+      "seal": {
+        "by": "server",
+        "mac": "0d42d8172376c3977121fdf95c3e86a890fd2688bb257f02a62aa9d4b81fd920"
+      }
+    },
+    {
+      "id": "CLM-1308",
+      "statement": "The bounds use existing configuration and add no setting: wait equals store_connect_timeout and the attempt backstop is six times it (30 s with the 5 s default, equal to LIMITS.attempt), with the database bound shorter than the backstop.",
+      "kind": "constraint",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #1028 acceptance 2; PR body: \"No new setting. wait = store_connect_timeout (already used for the registry read); the attempt backstop is six times it (30 s by default, equal to LIMITS.attempt).\"",
+      "derived_from": [
+        "CLM-1304"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs",
+        "src/config.rs"
+      ],
+      "tags": [
+        "from-issue:1028"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1931",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs:783,811-816; src/config.rs:59; src/stores/bounded.rs LIMITS",
+          "summary": "provision_limits: wait = app.stores().connect_timeout() (store_connect_timeout), attempt = wait*6; default 5 s gives 30 s = LIMITS.attempt (30 s). No new config key added in the diff (src/config.rs untouched).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 811,
+                "end": 817
+              },
+              "commit": "97b273a9f8d0e900c9b922c3c54a761a4b5d818f"
+            }
+          },
+          "recorded_at": "2026-11-24T22:17:34.868120781Z",
+          "seal": {
+            "by": "server",
+            "mac": "4e5583c60c1cba59509df07392c48f7e0519f15617b059509ece12482d16b7e4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Limits derive from store_connect_timeout; 5 s x 6 = 30 s equals LIMITS.attempt; no config change.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1931"
+          ],
+          "recorded_at": "2026-11-24T22:17:55.511528601Z",
+          "seal": {
+            "by": "server",
+            "mac": "56025f28e6e84e35b1751549f108198e45dda086004eeb4e77022aa737d92abc"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T22:17:05.644225977Z",
+      "updated_at": "2026-11-24T22:17:55.511528601Z",
+      "seal": {
+        "by": "server",
+        "mac": "2f48862b298551c8e1b79fb69c371c704b41a2124610755268513c5d9689c82e"
+      }
+    },
+    {
+      "id": "CLM-1309",
+      "statement": "A test with an older pending catalog whose catalog advisory lock is held by another connection and a newer pending catalog on a healthy store asserts, without sleeps, that one run settles the newer catalog while the lock is still held, leaves the older row pending, returns a timeout error, and finishes the older after release.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #1028 acceptance 3; PR body test a_held_catalog_lock_does_not_starve_a_healthy_store",
+      "derived_from": [
+        "CLM-1304"
+      ],
+      "artifacts": [
+        "src/housekeeping/store_tests.rs"
+      ],
+      "tags": [
+        "from-issue:1028"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1932",
+          "kind": "test",
+          "locator": "src/housekeeping/store_tests.rs:534-563; cargo test a_held_catalog_lock_does_not_starve_a_healthy_store",
+          "summary": "Holds catalogs::lock on the older id from a second connection, runs recovery, asserts timeout error, newer provisioned, older not, then rolls back and a second run provisions older. Read the assertions; passes in both store modes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping/store_tests.rs",
+              "lines": {
+                "start": 530,
+                "end": 563
+              },
+              "commit": "97b273a9f8d0e900c9b922c3c54a761a4b5d818f"
+            }
+          },
+          "recorded_at": "2026-11-24T22:17:34.947023458Z",
+          "seal": {
+            "by": "server",
+            "mac": "71fc8aa8882515988d4dbd21de027b6697fc2aee430c7d8183e22bba00e187e6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test body and a passing run in both store modes match the statement.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1932"
+          ],
+          "recorded_at": "2026-11-24T22:17:55.587238553Z",
+          "seal": {
+            "by": "server",
+            "mac": "f627bd0a7d75370aea7b2990cae3a2e6755f5c02725c71b36c50a1fa9f708255"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T22:17:05.644225977Z",
+      "updated_at": "2026-11-24T22:17:55.587238553Z",
+      "seal": {
+        "by": "server",
+        "mac": "60f0c852c06c8753420b34c91e56dc2a9fd2e1fc92ff47cfde5e4ca4f0c474e5"
+      }
+    },
+    {
+      "id": "CLM-1310",
+      "statement": "A test holding an ACCESS EXCLUSIVE table lock on the older catalog's store asserts a stalled store query is bounded the same way: the healthy catalog settles, the older row stays pending, the error is a timeout.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #1028 acceptance 3; PR body test a_stalled_store_query_does_not_starve_a_healthy_store",
+      "derived_from": [
+        "CLM-1304"
+      ],
+      "artifacts": [
+        "src/housekeeping/store_tests.rs"
+      ],
+      "tags": [
+        "from-issue:1028"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1933",
+          "kind": "test",
+          "locator": "src/housekeeping/store_tests.rs:566-586; cargo test a_stalled_store_query_does_not_starve_a_healthy_store",
+          "summary": "Holds LOCK TABLE catalog_state IN ACCESS EXCLUSIVE MODE, asserts timeout error, newer provisioned, older pending; passes in both store modes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping/store_tests.rs",
+              "lines": {
+                "start": 564,
+                "end": 587
+              },
+              "commit": "97b273a9f8d0e900c9b922c3c54a761a4b5d818f"
+            }
+          },
+          "recorded_at": "2026-11-24T22:17:35.026403446Z",
+          "seal": {
+            "by": "server",
+            "mac": "cd76eb1df2a14320572fd6087b7e47b43c1794ea5c0482f7f9167190786c2ed4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test body and a passing run match.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1933"
+          ],
+          "recorded_at": "2026-11-24T22:17:55.661663500Z",
+          "seal": {
+            "by": "server",
+            "mac": "0849d6704e932e327dc74cf6dd1ce6ccb8a9a031865e915db0483b8dbd6e66fc"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T22:17:05.644225977Z",
+      "updated_at": "2026-11-24T22:17:55.661663500Z",
+      "seal": {
+        "by": "server",
+        "mac": "1e82542922945ac576ea4a90f6e6afab9b554db7124aa20f0b167d8303a96daa"
+      }
+    },
+    {
+      "id": "CLM-1311",
+      "statement": "A test with a database bound too long to fire (wait 120 s, attempt 500 ms) asserts the attempt backstop drops the attempt as Busy while the healthy catalog still settles.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body test the_attempt_backstop_contains_a_wait_the_database_does_not_bound",
+      "derived_from": [
+        "CLM-1304"
+      ],
+      "artifacts": [
+        "src/housekeeping/store_tests.rs"
+      ],
+      "tags": [
+        "from-issue:1028"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1934",
+          "kind": "test",
+          "locator": "src/housekeeping/store_tests.rs:588-606; cargo test the_attempt_backstop_contains_a_wait_the_database_does_not_bound",
+          "summary": "Limits{attempt 500ms, wait 120s}; asserts Err(OkfError::Busy), newer provisioned, older pending; passes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping/store_tests.rs",
+              "lines": {
+                "start": 588,
+                "end": 606
+              },
+              "commit": "97b273a9f8d0e900c9b922c3c54a761a4b5d818f"
+            }
+          },
+          "recorded_at": "2026-11-24T22:17:35.105797635Z",
+          "seal": {
+            "by": "server",
+            "mac": "42e20e6e10615443d5c8815691cd1ec8191f713d680817ef6d53cf9cfccef232"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test body and a passing run match.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1934"
+          ],
+          "recorded_at": "2026-11-24T22:17:55.735993917Z",
+          "seal": {
+            "by": "server",
+            "mac": "461a2fb842322539af1d2fa05cd0dc8319369caa8c847412ada954ed17d08b4a"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T22:17:05.644225977Z",
+      "updated_at": "2026-11-24T22:17:55.735993917Z",
+      "seal": {
+        "by": "server",
+        "mac": "052d811cd5734200dea2b9666b6a0619baa8dd3473139293691f5f62a0dcbe36"
+      }
+    },
+    {
+      "id": "CLM-1312",
+      "statement": "The three new regression tests use no sleeps as synchronization.",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #1028 acceptance 3; PR body: \"No sleeps.\"",
+      "derived_from": [
+        "CLM-1304"
+      ],
+      "artifacts": [
+        "src/housekeeping/store_tests.rs"
+      ],
+      "tags": [
+        "from-issue:1028"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1935",
+          "kind": "analysis",
+          "locator": "git grep -nEi \"sleep\" src/housekeeping/store_tests.rs",
+          "summary": "The only match in the file is the header comment (line 8, 'Nothing here sleeps to wait'); the new tests (lines 464-606) contain no sleep call. Synchronization is the held lock plus PostgreSQL timeouts, with a 30 s PATIENCE timeout only to fail a hang.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "sleep\\(",
+              "case_insensitive": true,
+              "scope": [
+                "src/housekeeping/store_tests.rs"
+              ],
+              "hits": 0,
+              "commit": "97b273a9f8d0e900c9b922c3c54a761a4b5d818f"
+            }
+          },
+          "recorded_at": "2026-11-24T22:17:35.186286648Z",
+          "seal": {
+            "by": "server",
+            "mac": "36893c557f060369f5ff93bb1818916cf286feae336d4b485442a67e77a658d7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Zero sleep( calls in the test file.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1935"
+          ],
+          "recorded_at": "2026-11-24T22:17:55.808805018Z",
+          "seal": {
+            "by": "server",
+            "mac": "fbc1c4b3016c6f2b4163878319d88487018c2cae71973ea24770beb66f19a952"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T22:17:05.644225977Z",
+      "updated_at": "2026-11-24T22:17:55.808805018Z",
+      "seal": {
+        "by": "server",
+        "mac": "d6c4a1f30e768fa1875934c7d643b699aaef98b39af180f63c1f97706073a17f"
+      }
+    },
+    {
+      "id": "CLM-1313",
+      "statement": "docs/operations.md describes the bounded recovery attempt (lock_timeout and statement_timeout at store_connect_timeout, backstop six times it, store skipped, first failure kept, no separate setting), a dated changelog entry exists, and Task 10b carries a correction note after the #1023 note.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #1028 acceptance 2 and 4",
+      "derived_from": [
+        "CLM-1304"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "changelog/2026-11-24T21-58-24Z-m21-issue-1028-bounded-recovery.md"
+      ],
+      "tags": [
+        "from-issue:1028"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1936",
+          "kind": "inspection",
+          "locator": "docs/operations.md:982-989; docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:384; changelog/2026-11-24T21-58-24Z-m21-issue-1028-bounded-recovery.md",
+          "summary": "operations.md paragraph covers every listed element; plan note sits directly after the #1023 note in Task 10b (line 384 after 382); changelog file exists with timestamped name and matching content (it also says the six-times factor).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 982,
+                "end": 989
+              },
+              "commit": "97b273a9f8d0e900c9b922c3c54a761a4b5d818f"
+            }
+          },
+          "recorded_at": "2026-11-24T22:17:35.266007098Z",
+          "seal": {
+            "by": "server",
+            "mac": "f5891b88436e82cd9a581e0fd861129f204f3c3ddbc05083d3868a389a2f1ff4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All three documents present and consistent with the code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1936"
+          ],
+          "recorded_at": "2026-11-24T22:17:55.886179308Z",
+          "seal": {
+            "by": "server",
+            "mac": "ca8ad8bd9bde80bee643c886ca7696682832758c7417a89243a3b2fe04b9191d"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T22:17:05.644225977Z",
+      "updated_at": "2026-11-24T22:17:55.886179308Z",
+      "seal": {
+        "by": "server",
+        "mac": "776e2e0aa7d5065230f803ec570fb521e80648310987c08368564dd17ad4eda1"
+      }
+    },
+    {
+      "id": "CLM-1314",
+      "statement": "The PR description's statement that gate.sh fmt, lint, dylint and test are all green with 7178 passed and 0 failed across both store modes is true at head.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "source": "PR body: \"gate.sh fmt, lint, dylint, test all green (test: 7178 passed, 0 failed across both store modes).\"",
+      "derived_from": [
+        "CLM-1304"
+      ],
+      "artifacts": [
+        "target/i1028-logs/pr-1028-body.md"
+      ],
+      "tags": [
+        "from-issue:1028"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1937",
+          "kind": "analysis",
+          "locator": "target/i1028-logs/",
+          "summary": "Full gates were not rerun (told not to). Only the narrow store_tests (9 passed per mode) and 5 targeted tests were rerun and passed; the 7178 total, lint and dylint results are unverified.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T22:17:56.043940761Z",
+          "seal": {
+            "by": "server",
+            "mac": "4b5b4c145eb7a375f7ed741d765b48c64e794dcff12d1482832c026cca0aef2a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Auditor was told not to run the full suite; only narrow tests were rerun. Fix: run tools/agentic/gate.sh fmt, lint, dylint and test at head and compare the printed counts with the PR body.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1937"
+          ],
+          "recorded_at": "2026-11-24T22:18:02.800688152Z",
+          "seal": {
+            "by": "server",
+            "mac": "0fe17eb2d6830ab49c79238ace475155e1125be74646356cfc9366bee4f2e466"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T22:17:05.644225977Z",
+      "updated_at": "2026-11-24T22:18:02.800688152Z",
+      "seal": {
+        "by": "server",
+        "mac": "53a3aa6401bcfbc0b7b8107e1667dbd9c9e60da77d484b8d0fb91515a1991c08"
+      }
+    },
+    {
+      "id": "CLM-1315",
+      "statement": "The three regression tests failed before the fix (the run hit the test-level 30 s timeout) and pass after it.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "source": "PR body: \"Regression tests failed before the fix (the run hit the test-level 30 s timeout) and pass after.\"",
+      "derived_from": [
+        "CLM-1304"
+      ],
+      "artifacts": [
+        "src/housekeeping/store_tests.rs"
+      ],
+      "tags": [
+        "from-issue:1028"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1938",
+          "kind": "analysis",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD -- src/housekeeping/store_tests.rs",
+          "summary": "The tests call provision_catalogs_bounded and provision_limits, which exist only in the fix commit, so they cannot compile on the base; failing-before could only be shown against an adapted test, not run as written. The after-fix pass is confirmed (3 of 3 pass).",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T22:17:56.121500971Z",
+          "seal": {
+            "by": "server",
+            "mac": "8d1bc35b33eb0c5b4150208276559f4fa55134d0f3252a6e80d283f760078d9b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Fails-before cannot be reproduced without adapting the tests to the old API. Fix: in a scratch worktree at the base commit, port the three tests to the old provision_catalogs and show they hit the 30 s PATIENCE timeout, or reword the PR body to say they were checked that way.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1938"
+          ],
+          "recorded_at": "2026-11-24T22:18:02.882060622Z",
+          "seal": {
+            "by": "server",
+            "mac": "bf6ceeccd16dd1514c1353ab73aac8c6f3425bf014678d99ee75b9f43dff4902"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T22:17:05.644225977Z",
+      "updated_at": "2026-11-24T22:18:02.882060622Z",
+      "seal": {
+        "by": "server",
+        "mac": "fd0098745e093568b273a34519020ed8188d147b2b29c92cbb800a723feae8b5"
       }
     }
   ]
