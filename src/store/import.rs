@@ -321,8 +321,9 @@ pub async fn import(
             now,
         )
         .await?;
+        // On the store's change feed: sent when the generation commits.
         invalidate(
-            &mut account_tx,
+            &mut tx,
             &[Invalidation::Catalog {
                 id: found.id,
                 generation,

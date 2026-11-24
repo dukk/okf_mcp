@@ -240,7 +240,7 @@ async fn publish_locked(
     // A refusal waited too, so the wait is recorded before `?` returns it.
     app.metrics()
         .publish_lock_wait(state.name(), lock_started.elapsed());
-    let (_publishing, mut account_tx, mut tx, locked, resolved) = locks?;
+    let (_publishing, account_tx, mut tx, locked, resolved) = locks?;
     let now = app.clock().now();
     // Again under the lock: a discard may have emptied it meanwhile.
     let entries = changesets::entries(&mut *tx, locked.id).await?;
@@ -305,9 +305,10 @@ async fn publish_locked(
             };
             // In the store transaction: it commits with the revisions it records.
             audit::record_catalog(&mut tx, &resolved, &entry, now).await?;
-            // Every replica's listener refreshes the catalog once this commits.
+            // In the store transaction too: the message is sent when the generation
+            // commits, on the store's own change feed (Task 17), and only then.
             invalidate(
-                &mut account_tx,
+                &mut tx,
                 &[Invalidation::Catalog {
                     id: state.id(),
                     generation,

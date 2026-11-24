@@ -7,7 +7,7 @@
 //! A payload carries ids and generations only: never a key hash, a person's
 //! name, an email, a label or catalog content.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -19,6 +19,7 @@ use tracing::Instrument;
 use crate::app::App;
 use crate::backoff::Backoff;
 use crate::error::OkfError;
+use crate::stores::StoreName;
 use crate::telemetry::metrics::Metrics;
 use crate::telemetry::subscriber::split_event;
 
@@ -69,6 +70,10 @@ const VERSION: u8 = 1;
 /// The first and longest wait before the listener connects again.
 const BACKOFF_FIRST: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
+
+/// Longest the account listener waits to connect (a store's listener uses
+/// `store_connect_timeout`).
+const ACCOUNT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What changed. Ids only: never a key hash, a person's name or content.
 // `serde(tag = "kind")` writes the variant as a `"kind"` field next to its
@@ -369,33 +374,253 @@ async fn bump_admin_generation(conn: &mut PgConnection) -> Result<(), OkfError> 
     Ok(())
 }
 
-/// Connects a listener on its own one-connection pool, subscribed to
-/// [`CHANNEL`]. sqlx's `connect_with` keeps one connection from the pool it
-/// is given for good, so the main pool would lose a request slot; the small
-/// pool also gives the listener its reconnects.
-///
-/// # Arguments
-/// * `pool` - the main pool, whose connect options the listener copies.
-///
-/// # Errors
-/// [`OkfError::Database`] if the database cannot be reached.
-#[tracing::instrument(level = "debug", skip_all)]
-async fn connect(pool: &PgPool) -> Result<PgListener, OkfError> {
-    let own = PgPoolOptions::new()
-        .max_connections(1)
-        .connect_with((*pool.connect_options()).clone())
-        .await?;
-    let mut listener = PgListener::connect_with(&own).await?;
-    listener.listen(CHANNEL).await?;
-    Ok(listener)
+/// Whose change feed a listener follows.
+#[derive(Clone)]
+enum Scope {
+    /// The account database: every message applies to this replica's caches.
+    Account,
+    /// One store's database. A lost connection or an unreadable payload
+    /// drops only that store's catalogs from the caches.
+    Store {
+        name: StoreName,
+        /// The store's pool, read for its connect options at every connect
+        /// (a rotated credential is picked up); never used to run a query.
+        pool: PgPool,
+        /// Longest a connect may take (`store_connect_timeout`).
+        connect_timeout: Duration,
+    },
 }
 
-/// Listens on [`CHANNEL`] until `shutdown`, applying each message to
-/// `app`. A lost connection (`try_recv` returns `Ok(None)`, already
-/// reconnected) marks every cache stale, since messages sent meanwhile are
-/// lost (spec Decision 12). A connect failure backs off from 1 s to 30 s.
-/// Applying a message or catching up races `shutdown` as well, so a
-/// blocked database cannot hold the shutdown.
+/// One listener: a dedicated connection, subscribed to [`CHANNEL`], and what
+/// to do with what it hears. [`Feed::run`] is the loop both the account
+/// listener and each store's listener run.
+struct Feed {
+    // `Weak`: a store's listener must not keep the replica alive, and ends
+    // when the replica is gone.
+    app: Weak<App>,
+    scope: Scope,
+    // Told after each full catch-up (tests wait on it).
+    caught_up: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl Feed {
+    /// Connects a listener on its own one-connection pool, subscribed to
+    /// [`CHANNEL`]. sqlx's `connect_with` keeps one connection from the pool
+    /// it is given for good, so the pool whose options are copied would lose
+    /// a request slot; the small pool also gives the listener its reconnects.
+    /// The connection is outside the store's pool: it does not count against
+    /// `store_max_connections`.
+    ///
+    /// # Arguments
+    /// * `pool` - the pool whose connect options the listener copies.
+    /// * `connect_timeout` - the longest the connect may take.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`] if the database cannot be reached in time.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn connect(pool: &PgPool, connect_timeout: Duration) -> Result<PgListener, OkfError> {
+        let own = PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(connect_timeout)
+            .connect_with((*pool.connect_options()).clone())
+            .await?;
+        let mut listener = PgListener::connect_with(&own).await?;
+        listener.listen(CHANNEL).await?;
+        Ok(listener)
+    }
+
+    /// Connects this feed's listener.
+    ///
+    /// # Returns
+    /// The listener, or `None` once the replica is gone.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`] if the database cannot be reached.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn open(&self) -> Result<Option<PgListener>, OkfError> {
+        match &self.scope {
+            Scope::Account => {
+                let Some(app) = self.app.upgrade() else {
+                    return Ok(None);
+                };
+                Self::connect(app.accounts().executor(), ACCOUNT_CONNECT_TIMEOUT)
+                    .await
+                    .map(Some)
+            }
+            Scope::Store {
+                pool,
+                connect_timeout,
+                ..
+            } => Self::connect(pool, *connect_timeout).await.map(Some),
+        }
+    }
+
+    /// What a fresh or repaired connection does: anything sent while there
+    /// was none is lost, so the caches this feed covers are made to reread.
+    ///
+    /// # Returns
+    /// `false` once the replica is gone.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn catch_up(&self) -> bool {
+        let Some(app) = self.app.upgrade() else {
+            return false;
+        };
+        match &self.scope {
+            Scope::Account => app.apply_reconnect().await,
+            Scope::Store { name, .. } => app.apply_store_reconnect(name).await,
+        }
+        true
+    }
+
+    /// Tells the test hook, if there is one, that a catch-up finished.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "calls a hook")
+    )]
+    fn signal(&self) {
+        if let Some(caught_up) = &self.caught_up {
+            caught_up();
+        }
+    }
+
+    /// Applies one notification: a payload that cannot be read is treated
+    /// as a reconnect, for safety (spec "Error handling"). The received
+    /// count and the lag are recorded after the message is applied, so the
+    /// lag is the time from send until this replica's caches had the change.
+    ///
+    /// # Returns
+    /// The lag recorded, or `None` for an unreadable payload (already caught
+    /// up) or once the replica is gone.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn apply_payload(&self, payload: &str) -> Option<Duration> {
+        let metrics = Metrics::global();
+        let app = self.app.upgrade()?;
+        let Some(message) = Message::parse(payload) else {
+            metrics.invalidation_unreadable();
+            self.catch_up().await;
+            return None;
+        };
+        let kind = message.invalidation.kind();
+        // `parent: None`: a background root, like each housekeeping job.
+        let span =
+            tracing::info_span!(parent: None, "okf.invalidate.apply", okf.invalidation.kind = kind);
+        app.apply(&message).instrument(span).await;
+        let lag = message.lag(Utc::now().timestamp_millis());
+        metrics.invalidation_received(kind, lag);
+        Some(lag)
+    }
+
+    /// Words for the log: which feed this is.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "names a scope")
+    )]
+    fn label(&self) -> &'static str {
+        match self.scope {
+            Scope::Account => "the change feed",
+            Scope::Store { .. } => "a store's change feed",
+        }
+    }
+
+    /// Listens until `shutdown`, applying each message to the replica. A
+    /// lost connection (`try_recv` returns `Ok(None)`, already reconnected)
+    /// makes the covered caches reread, since messages sent meanwhile are
+    /// lost (spec Decision 12). A connect failure backs off from 1 s to
+    /// 30 s, and never blocks another feed. Applying a message or catching
+    /// up races `shutdown` as well, so a blocked database cannot hold the
+    /// shutdown.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "long-lived loop; each message gets its own root span"
+        )
+    )]
+    async fn run(self, shutdown: CancellationToken) {
+        let mut backoff = Backoff::new(BACKOFF_FIRST, BACKOFF_MAX);
+        loop {
+            let connected = tokio::select! {
+                () = shutdown.cancelled() => return,
+                connected = self.open() => connected,
+            };
+            let mut listener = match connected {
+                Ok(Some(listener)) => listener,
+                Ok(None) => return,
+                Err(error) => {
+                    // A store's name is operator detail: for the local log only.
+                    match &self.scope {
+                        Scope::Account => split_event!(
+                            warn,
+                            { kind = error.kind(), },
+                            { %error, },
+                            "the change feed could not connect; trying again"
+                        ),
+                        Scope::Store { name, .. } => split_event!(
+                            warn,
+                            { kind = error.kind(), },
+                            { store = %name, %error, },
+                            "a store's change feed could not connect; trying again"
+                        ),
+                    }
+                    tokio::select! {
+                        () = shutdown.cancelled() => return,
+                        () = tokio::time::sleep(backoff.next_delay()) => continue,
+                    }
+                }
+            };
+            // A fresh connection: anything sent while we had none is lost.
+            // Applying can wait on locks and reads, so it races shutdown too:
+            // a blocked apply must not keep the process from stopping.
+            match shutdown.run_until_cancelled(self.catch_up()).await {
+                None | Some(false) => return,
+                Some(true) => {}
+            }
+            self.signal();
+            backoff.reset();
+            loop {
+                tokio::select! {
+                    () = shutdown.cancelled() => return,
+                    received = listener.try_recv() => match received {
+                        Ok(Some(notification)) => {
+                            match shutdown
+                                .run_until_cancelled(self.apply_payload(notification.payload()))
+                                .await
+                            {
+                                None => return,
+                                // `Some(None)`: unreadable, so it caught up (or the
+                                // replica is gone, and the next catch-up ends us).
+                                Some(None) => self.signal(),
+                                Some(Some(_lag)) => {}
+                            }
+                        }
+                        // The connection was lost. Connect again through the outer
+                        // loop, which finishes `LISTEN` before the catch-up, so a
+                        // commit after the catch-up's reads is delivered, not missed.
+                        Ok(None) => {
+                            tracing::warn!("{} was lost; connecting again", self.label());
+                            break;
+                        }
+                        // A failure sqlx could not repair: connect again.
+                        Err(error) => {
+                            let error = OkfError::from(error);
+                            split_event!(
+                                warn,
+                                { kind = error.kind(), },
+                                { %error, },
+                                "a change feed connection failed; connecting again"
+                            );
+                            break;
+                        }
+                    },
+                }
+            }
+        }
+    }
+}
+
+/// Listens on [`CHANNEL`] of the account database until `shutdown`, applying
+/// each message to `app`: a lost connection makes every cache reread, and a
+/// connect failure backs off from 1 s to 30 s.
 ///
 /// # Arguments
 /// * `app` - the replica's shared state.
@@ -433,111 +658,117 @@ async fn listen_signalling(
     shutdown: CancellationToken,
     caught_up: Option<Arc<tokio::sync::Notify>>,
 ) {
-    let signal = || {
-        if let Some(caught_up) = &caught_up {
-            caught_up.notify_one();
-        }
+    let feed = Feed {
+        app: Arc::downgrade(&app),
+        scope: Scope::Account,
+        caught_up: caught_up
+            .map(|notify| Arc::new(move || notify.notify_one()) as Arc<dyn Fn() + Send + Sync>),
     };
-    let mut backoff = Backoff::new(BACKOFF_FIRST, BACKOFF_MAX);
-    loop {
-        let connected = tokio::select! {
-            () = shutdown.cancelled() => return,
-            connected = connect(app.accounts().executor()) => connected,
-        };
-        let mut listener = match connected {
-            Ok(listener) => listener,
-            Err(error) => {
-                split_event!(
-                    warn,
-                    { kind = error.kind(), },
-                    { %error, },
-                    "the change feed could not connect; trying again"
-                );
-                tokio::select! {
-                    () = shutdown.cancelled() => return,
-                    () = tokio::time::sleep(backoff.next_delay()) => continue,
-                }
-            }
-        };
-        // A fresh connection: anything sent while we had none is lost.
-        // Applying can wait on locks and reads, so it races shutdown too:
-        // a blocked apply must not keep the process from stopping.
-        if shutdown
-            .run_until_cancelled(app.apply_reconnect())
-            .await
-            .is_none()
-        {
-            return;
-        }
-        signal();
-        backoff.reset();
-        loop {
-            tokio::select! {
-                () = shutdown.cancelled() => return,
-                received = listener.try_recv() => match received {
-                    Ok(Some(notification)) => {
-                        match shutdown
-                            .run_until_cancelled(apply_payload(&app, notification.payload()))
-                            .await
-                        {
-                            None => return,
-                            // `Some(None)`: unreadable, so `apply_payload` caught up.
-                            Some(None) => signal(),
-                            Some(Some(_lag)) => {}
-                        }
-                    }
-                    // The connection was lost. Connect again through the outer
-                    // loop, which finishes `LISTEN` before the catch-up, so a
-                    // commit after the catch-up's reads is delivered, not missed.
-                    Ok(None) => {
-                        tracing::warn!("the change feed connection was lost; connecting again");
-                        break;
-                    }
-                    // A failure sqlx could not repair: connect again.
-                    Err(error) => {
-                        let error = OkfError::from(error);
-                        split_event!(
-                            warn,
-                            { kind = error.kind(), },
-                            { %error, },
-                            "the change feed connection failed; connecting again"
-                        );
-                        break;
-                    }
-                },
-            }
-        }
+    // `app` stays held here, so the weak handle upgrades for as long as the
+    // account listener runs.
+    feed.run(shutdown).await;
+    drop(app);
+}
+
+/// A running listener on one store's database (Task 17): dropping it
+/// cancels the task, which closes the listener's connection and does not
+/// reconnect. The registry holds one per opened store, so forgetting a store
+/// ends it.
+#[derive(Debug)]
+pub(crate) struct StoreFeed {
+    stop: CancellationToken,
+    // Not awaited: the task ends by itself once `stop` is cancelled.
+    #[cfg(test)]
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for StoreFeed {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "a Drop impl")
+    )]
+    fn drop(&mut self) {
+        self.stop.cancel();
     }
 }
 
-/// Parses one payload and applies it; one that cannot be read is treated as
-/// a reconnect, for safety (spec "Error handling"). The received count and
-/// the lag are recorded after the message is applied, so the lag is the
-/// time from send until this replica's caches had the change.
+impl StoreFeed {
+    /// Tests: whether the listener's task has ended.
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "a test hook")
+    )]
+    pub(crate) fn is_finished(&self) -> bool {
+        self.task
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished)
+    }
+
+    /// Tests: cancels the listener (by dropping it) and returns its task,
+    /// to await its end.
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "a test hook")
+    )]
+    pub(crate) fn into_task(mut self) -> tokio::task::JoinHandle<()> {
+        self.task.take().expect("the task is taken once")
+    }
+}
+
+/// What starting a store's listener needs.
+pub(crate) struct StoreFeedStart {
+    /// The replica the messages are applied to.
+    pub(crate) app: Weak<App>,
+    /// The store's name.
+    pub(crate) name: StoreName,
+    /// The store's pool, whose connect options the listener copies.
+    pub(crate) pool: PgPool,
+    /// Longest one connect may take (`store_connect_timeout`).
+    pub(crate) connect_timeout: Duration,
+    /// Cancelled when the server shuts down.
+    pub(crate) shutdown: CancellationToken,
+    /// Tests: told after each catch-up.
+    pub(crate) caught_up: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+/// Starts the listener on one store's database. It follows the store's own
+/// `NOTIFY`s (a publish, import or repair on it sends [`Invalidation::Catalog`]
+/// from the store's transaction), and stops when the returned [`StoreFeed`]
+/// is dropped or `shutdown` is cancelled. A store that cannot be reached
+/// retries on its own task, with backoff, and delays nothing else.
 ///
 /// # Arguments
-/// * `app` - the replica's shared state.
-/// * `payload` - the `NOTIFY` payload.
+/// * `start` - the replica, store and pool.
 ///
 /// # Returns
-/// The lag recorded, or `None` for an unreadable payload.
+/// The handle that owns the listener.
 #[tracing::instrument(level = "debug", skip_all)]
-async fn apply_payload(app: &App, payload: &str) -> Option<Duration> {
-    let metrics = Metrics::global();
-    let Some(message) = Message::parse(payload) else {
-        metrics.invalidation_unreadable();
-        app.apply_reconnect().await;
-        return None;
+pub(crate) fn spawn_store_feed(start: StoreFeedStart) -> StoreFeed {
+    let stop = start.shutdown.child_token();
+    let feed = Feed {
+        app: start.app,
+        scope: Scope::Store {
+            name: start.name,
+            pool: start.pool,
+            connect_timeout: start.connect_timeout,
+        },
+        caught_up: start.caught_up,
     };
-    let kind = message.invalidation.kind();
-    // `parent: None`: a background root, like each housekeeping job.
-    let span =
-        tracing::info_span!(parent: None, "okf.invalidate.apply", okf.invalidation.kind = kind);
-    app.apply(&message).instrument(span).await;
-    let lag = message.lag(Utc::now().timestamp_millis());
-    metrics.invalidation_received(kind, lag);
-    Some(lag)
+    let task = tokio::spawn(feed.run(stop.clone()));
+    // Without tests the task is detached: `stop` is all that reaches it.
+    #[cfg(not(test))]
+    drop(task);
+    StoreFeed {
+        stop,
+        #[cfg(test)]
+        task: Some(task),
+    }
 }
+
+#[cfg(test)]
+mod store_feed_tests;
 
 /// Test helpers: what a write sends on the change feed.
 #[cfg(test)]
@@ -602,27 +833,42 @@ pub(crate) mod testing {
         pool: &PgPool,
         write: impl Future<Output = T>,
     ) -> (T, Vec<Invalidation>) {
-        let mut listener = PgListener::connect_with(pool).await.expect("listener");
-        listener.listen(CHANNEL).await.expect("LISTEN");
-        let output = write.await;
-        sqlx::query("SELECT pg_notify($1, $2)")
-            .bind(CHANNEL)
-            .bind(END)
-            .execute(pool)
-            .await
-            .expect("send the end marker");
-        let mut got = Vec::new();
-        loop {
-            let notification = tokio::time::timeout(WAIT, listener.recv())
-                .await
-                .expect("the end marker within the wait")
-                .expect("receive a notification");
-            if notification.payload() == END {
-                return (output, got);
-            }
-            let message = Message::parse(notification.payload()).expect("a readable payload");
-            got.push(message.invalidation);
+        // The account database, and the store `main` when it is another
+        // database (`OKF_TEST_STORE=separate`): a publish, import or repair
+        // sends its catalog message from the store's transaction.
+        let store = crate::db::store_pool(pool);
+        let mut pools = vec![pool.clone()];
+        if !crate::stores::same_database(pool, &store) {
+            pools.push(store);
         }
+        let mut listeners = Vec::with_capacity(pools.len());
+        for pool in &pools {
+            let mut listener = PgListener::connect_with(pool).await.expect("listener");
+            listener.listen(CHANNEL).await.expect("LISTEN");
+            listeners.push(listener);
+        }
+        let output = write.await;
+        let mut got = Vec::new();
+        for (pool, listener) in pools.iter().zip(&mut listeners) {
+            sqlx::query("SELECT pg_notify($1, $2)")
+                .bind(CHANNEL)
+                .bind(END)
+                .execute(pool)
+                .await
+                .expect("send the end marker");
+            loop {
+                let notification = tokio::time::timeout(WAIT, listener.recv())
+                    .await
+                    .expect("the end marker within the wait")
+                    .expect("receive a notification");
+                if notification.payload() == END {
+                    break;
+                }
+                let message = Message::parse(notification.payload()).expect("a readable payload");
+                got.push(message.invalidation);
+            }
+        }
+        (output, got)
     }
 
     /// Runs `write` and applies every change-feed message it committed to
@@ -1079,8 +1325,12 @@ mod tests {
             .await
             .unwrap();
         let applying = tokio::spawn({
-            let app = Arc::clone(&app);
-            async move { apply_payload(&app, &payload).await }
+            let feed = Feed {
+                app: Arc::downgrade(&app),
+                scope: Scope::Account,
+                caught_up: None,
+            };
+            async move { feed.apply_payload(&payload).await }
         });
         tokio::time::sleep(Duration::from_millis(400)).await;
         assert!(!applying.is_finished(), "the apply must be blocked");

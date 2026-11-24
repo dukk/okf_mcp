@@ -1452,6 +1452,19 @@ impl App {
         self.reload_settings().await;
     }
 
+    /// What a store's change feed does when its connection was lost or a
+    /// payload could not be read: messages sent meanwhile are gone, so the
+    /// directory drops the rows of that store's catalogs and rereads them on
+    /// next use. Nothing else is touched: another store's catalogs, the
+    /// credentials, labels, settings and the pools stay as they are.
+    ///
+    /// # Arguments
+    /// * `store` - the store whose feed was interrupted.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn apply_store_reconnect(&self, store: &crate::stores::StoreName) {
+        self.directory.drop_store(store).await;
+    }
+
     /// M16 bridge (spec Decision 14): remove in the release after 0.23.
     ///
     /// What an M16 replica's announcement means here: an older replica
