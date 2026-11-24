@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1208,
+  "next_claim_seq": 1217,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "98ed3e5ed57ffbce9d5f3d99097e5b3e1f5a49d463b7a822b324ddbc53e439b3"
+    "mac": "daff91ac86f324f038afc77936591accd21d2862792cddb00e791961dc0c5fe6"
   },
-  "next_evidence_seq": 1781,
+  "next_evidence_seq": 1809,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "7da9b548de7cb245cb675d2c5fa7019799c6908dafffeb2836e96430ae09179e"
+    "mac": "a7bda9d18458d0661dfef7eb0bac5283c35cb50485776cfd0b416c8ac5bffce1"
   },
   "claims": [
     {
@@ -96970,6 +96970,18 @@
             "by": "server",
             "mac": "e4e21bb85d115380a8fe8746a0900169334f490151ab2e16ec9512bcce1aac17"
           }
+        },
+        {
+          "id": "EVD-1808",
+          "kind": "analysis",
+          "locator": "children of CLM-1188",
+          "summary": "Every active child is supported, including CLM-1204 after d622c98; CLM-1193 is retired and replaced by CLM-1216.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T15:13:31.772616193Z",
+          "seal": {
+            "by": "server",
+            "mac": "166d8dab91efa43f842f471b7c3307a74fa96ca7168c216e3a52037673d01a28"
+          }
         }
       ],
       "verdicts": [
@@ -96998,13 +97010,37 @@
             "by": "server",
             "mac": "34413630f641f1bdf4444f045388c63dc4c5092eca157c2acf3f91beb7e5f3ad"
           }
+        },
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Every child is supported except CLM-1204 (a call probes a lost store once), which is not_enough_info after the round: list_catalogs loads rows through the app, not the call's down set, so the race path may probe a lost store more than once per call. Fix: make list_catalogs load rows through ctx.listed_state and add a two-catalog test where the store fails only at state load, then re-audit CLM-1204 and this parent.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [],
+          "recorded_at": "2026-11-24T15:08:15.773796360Z",
+          "seal": {
+            "by": "server",
+            "mac": "d9f00a6495903b24422b2ce32ebd6ebd9a8feb4bbb2b95b75e77e433c03024f5"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All active children are supported after CLM-1204 was re-audited on d622c98.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1808"
+          ],
+          "recorded_at": "2026-11-24T15:13:35.137446599Z",
+          "seal": {
+            "by": "server",
+            "mac": "9a96d5b128dee703baf41369f994b3278da92418dca20ad25dd2a12b2fff8120"
+          }
         }
       ],
       "created_at": "2026-11-24T14:28:46.499664433Z",
-      "updated_at": "2026-11-24T14:33:53.838806306Z",
+      "updated_at": "2026-11-24T15:13:35.137446599Z",
       "seal": {
         "by": "server",
-        "mac": "0eab752af0ed8eb1e0d2ecd4461e9c420eabf2fc13772079cadc872c83050c23"
+        "mac": "1ea1570c8633ae97b9ac77d61a4acd073f43668e3509d3d533b61e72e67df23a"
       }
     },
     {
@@ -97050,6 +97086,28 @@
             "by": "server",
             "mac": "f25002162f626f59f22ee1bed70248ee38cd7fb8afc184ffc4552ba3750748bc"
           }
+        },
+        {
+          "id": "EVD-1804",
+          "kind": "test",
+          "locator": "target/i977-logs/narrow9.log (search_returns_other_stores_results_and_names_the_unavailable_catalog ... ok; the two review-round tests also return home's hit plus unavailable [remote])",
+          "summary": "Re-run on head after the round: all 11 tests in mcp::unavailable_tests pass, including the search test and the two search scenarios the round added (dropped connections, stalled query), which assert hits from the reachable catalog and unavailable == [remote].",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 72,
+                "end": 92
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:07:16.115550065Z",
+          "seal": {
+            "by": "server",
+            "mac": "a5877880f0ed3e4d1b23c8f38bc90b57553fb39eb81b5106d559023ebc621dc5"
+          }
         }
       ],
       "verdicts": [
@@ -97065,13 +97123,26 @@
             "by": "server",
             "mac": "864df54630e3f4322b53650154767c15c20a994bbdd741abf17d8930ef9b944e"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Search tests, including the round's two, pass on head.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1804"
+          ],
+          "recorded_at": "2026-11-24T15:08:00.176829883Z",
+          "seal": {
+            "by": "server",
+            "mac": "5bc25e1a342b40fc9333e998a319890cc784f20d85c8d0f50a23ed58687dcdf6"
+          }
         }
       ],
       "created_at": "2026-11-24T14:28:46.499664433Z",
-      "updated_at": "2026-11-24T14:30:22.504239381Z",
+      "updated_at": "2026-11-24T15:08:00.176829883Z",
       "seal": {
         "by": "server",
-        "mac": "ff0d98e8de28a9275522c226d5e99c00ccf80470f129e1a5974208e0b5270e4b"
+        "mac": "f42f3ae60951f26ed39d3694143bb3b91b04002cdfc8bbf4d347a6b442a0b4be"
       }
     },
     {
@@ -97117,6 +97188,28 @@
             "by": "server",
             "mac": "dc43a9e649909f131177f0acd4a0cb4542e1fe5ac9815209be96c6a0040d3826"
           }
+        },
+        {
+          "id": "EVD-1805",
+          "kind": "test",
+          "locator": "target/i977-logs/narrow9.log (list_catalogs_leaves_out_and_names_the_unavailable_catalog ... ok; list_catalogs_probes_a_lost_selected_store_once ... ok)",
+          "summary": "Re-run on head after the round: list_catalogs still leaves out the lost store's catalog and names it in unavailable (the round added only mark_down calls in src/mcp/catalogs.rs:131-144).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 126,
+                "end": 148
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:07:16.227461112Z",
+          "seal": {
+            "by": "server",
+            "mac": "d9ac81c207f8ca63f361d6c778629cf607124d8def2d988b56f5c7233af4019b"
+          }
         }
       ],
       "verdicts": [
@@ -97132,13 +97225,26 @@
             "by": "server",
             "mac": "8a2d9aafe76fc23174d699324cefa5a7a9d98ae021bdc539e08cefa6eabaa09c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "list_catalogs tests pass on head.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1805"
+          ],
+          "recorded_at": "2026-11-24T15:08:01.222440807Z",
+          "seal": {
+            "by": "server",
+            "mac": "ca45917367a6d31625fbbaea024362af7e1e870572d058de81f3c1e067a48f74"
+          }
         }
       ],
       "created_at": "2026-11-24T14:28:46.499664433Z",
-      "updated_at": "2026-11-24T14:30:22.608807116Z",
+      "updated_at": "2026-11-24T15:08:01.222440807Z",
       "seal": {
         "by": "server",
-        "mac": "233b23c73bbb548fb25db48a891f59cdfe30fb8ed5bdf92266f4cdbc7c4c7c91"
+        "mac": "aef71cac88a4970090e9526789c64a90e15bef68a4a4ef0d963e7c9bdfd8951b"
       }
     },
     {
@@ -97184,6 +97290,28 @@
             "by": "server",
             "mac": "7e12d8b9a8e1e8c37280be86db57cf0f3bd5fe701e55d326a10249c4da3d6df1"
           }
+        },
+        {
+          "id": "EVD-1798",
+          "kind": "test",
+          "locator": "target/i977-logs/narrow9.log (an_unnamed_console_search_probes_a_lost_store_once ... ok); src/http/api/search.rs:130-175",
+          "summary": "On head, the console search over a catalog on a stalled store returns 200 with unavailable == [remote] (asserted at unavailable_tests.rs:314-315); every_reachable still keeps a page-unavailable row (now after mark_down) and tolerates StoreUnavailable from listed_state. GET /catalogs code was not changed in the round.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/search.rs",
+              "lines": {
+                "start": 130,
+                "end": 175
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:07:08.924466278Z",
+          "seal": {
+            "by": "server",
+            "mac": "42068559699827c922e4bdb6579aabe1134f94b87ec341340b4d33aa4b2d8592"
+          }
         }
       ],
       "verdicts": [
@@ -97199,13 +97327,26 @@
             "by": "server",
             "mac": "6f6f1f1f961b9c5d54e0420664c9c58b0b3542ced470c2256f1139492c8f38fd"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Console search still returns 200 with unavailable on a stalled store (test on head); GET /catalogs code unchanged by the round.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1798"
+          ],
+          "recorded_at": "2026-11-24T15:07:50.000958080Z",
+          "seal": {
+            "by": "server",
+            "mac": "55d6a9ceae838c8384a2f0d6d3acb60baafef09fa5930406398b9545241b2dcb"
+          }
         }
       ],
       "created_at": "2026-11-24T14:28:46.499664433Z",
-      "updated_at": "2026-11-24T14:30:22.733575232Z",
+      "updated_at": "2026-11-24T15:07:50.000958080Z",
       "seal": {
         "by": "server",
-        "mac": "9906da689df7654b082a1c84398b0c137079e0394e7fc99d484296215b7a85bb"
+        "mac": "ec87fef716aace2faa4f5e51ad271df91ccd97b86c65a657c77bd3be043fa1f8"
       }
     },
     {
@@ -97296,7 +97437,9 @@
         "from-issue:977"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Superseded by CLM-1216: after review round 1 a stalled state load is bounded by 6 x store_connect_timeout (Stores::state_load_timeout), not store_connect_timeout; the code and docs/operations.md are consistent, the old wording was not.",
+        "retired_at": "2026-11-24T15:08:09.508468257Z"
       },
       "evidence": [
         {
@@ -97320,6 +97463,28 @@
             "by": "server",
             "mac": "f2ec00ad924c329b360435a56572db46150656eba23107751106c83714e2d00f"
           }
+        },
+        {
+          "id": "EVD-1797",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:506-518; src/cache/catalogs.rs:456-466; docs/operations.md:124",
+          "summary": "State loads are now bounded by state_load_timeout = 6 x store_connect_timeout (30 s by default), not store_connect_timeout, and docs/operations.md says so. The claim's wording (state loads bounded by store_connect_timeout per store) no longer matches the code; only an outright connect failure stays at 1x.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 506,
+                "end": 518
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:07:08.786170527Z",
+          "seal": {
+            "by": "server",
+            "mac": "ff89149b0a4e07438e1062dabc987d401e1ae9fe33674b60330b2355c537c55a"
+          }
         }
       ],
       "verdicts": [
@@ -97335,13 +97500,26 @@
             "by": "server",
             "mac": "b717fa1f0c263ee69c82f4d6863fe5d99ba1a270b72640f8c03abff5bdabd8c9"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "As worded, the claim says state loads are bounded by store_connect_timeout; after the round a stalled state load is bounded by 6 x store_connect_timeout (Stores::state_load_timeout), as docs/operations.md now states. The code is what the PR intends; the claim is out of date. Fix: retire this claim and keep the replacement that states 1x for the probe and fan-out and 6x for state loads.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1797"
+          ],
+          "recorded_at": "2026-11-24T15:07:49.704464904Z",
+          "seal": {
+            "by": "server",
+            "mac": "624f9aa1ecaa5452eae62fc7d5d444de6b978cf4041e96a10f49b9baa5d204b8"
+          }
         }
       ],
       "created_at": "2026-11-24T14:28:46.499664433Z",
-      "updated_at": "2026-11-24T14:30:22.928014274Z",
+      "updated_at": "2026-11-24T15:08:09.508468257Z",
       "seal": {
         "by": "server",
-        "mac": "7f4a15423f14c65add939d377b4b0d9bed105bf948ada085b4ce7c97ac79f379"
+        "mac": "028fdd7e176c7d580a776dc311d2d56770cb93dfc06900fdc5be29e51aadab3d"
       }
     },
     {
@@ -97522,6 +97700,28 @@
             "by": "server",
             "mac": "d8777ca9f14a0a82a9d7a10d2d15ead355cfa52c36df1038e3f31b6ab313814e"
           }
+        },
+        {
+          "id": "EVD-1799",
+          "kind": "inspection",
+          "locator": "src/mcp/context.rs:1127-1139,1195-1246; target/i977-logs/narrow9.log (a_changeset_handle_on_a_lost_store_is_unavailable_and_others_still_resolve ... ok)",
+          "summary": "resolve_changeset calls changeset_by_handle, which iterates stores_main_first (Stores::all sorted with main first) and propagates StoreUnavailable from app.store_db or a classified mid-query failure; the changed anchor lines only shifted with the milestone merge (the round touched context.rs only at mark_down). Test passes on head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 1195,
+                "end": 1246
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:07:09.016421115Z",
+          "seal": {
+            "by": "server",
+            "mac": "123384555164ec8551588793d142c45d6e0e6f3579668bf5d3704b9d21525e07"
+          }
         }
       ],
       "verdicts": [
@@ -97537,13 +97737,26 @@
             "by": "server",
             "mac": "8b742b4e59109aa415e52f7546cac61a43f34b07f6f1ef9d8cb6d2b7d5f30958"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Lookup still iterates every store, main first, and a lost store ends it with StoreUnavailable; test passes on head.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1799"
+          ],
+          "recorded_at": "2026-11-24T15:07:50.149993287Z",
+          "seal": {
+            "by": "server",
+            "mac": "b06b329f56acf42dadce64c4faeba2ccec5b83640032f3477c998035c11e85db"
+          }
         }
       ],
       "created_at": "2026-11-24T14:28:46.499664433Z",
-      "updated_at": "2026-11-24T14:30:23.153919252Z",
+      "updated_at": "2026-11-24T15:07:50.149993287Z",
       "seal": {
         "by": "server",
-        "mac": "ddb4108eba1cc106176dfd1300a8448eacc4da6f7b3adc6f4ff605e4834b90c2"
+        "mac": "dc32276d61e4bd98432d58d7dfbf93405d3b6b9c292238a67f19ce273d24bb2a"
       }
     },
     {
@@ -97722,6 +97935,28 @@
             "by": "server",
             "mac": "9bebef68cd2793fe85044e8d0835e77295cb185612445a0f0571819ab71f0cc6"
           }
+        },
+        {
+          "id": "EVD-1800",
+          "kind": "inspection",
+          "locator": "src/mcp/testing.rs:140-165; src/mcp/unavailable_tests.rs:40-47",
+          "summary": "make_unreachable still repoints the store's row at a closed port and forgets its pool (unchanged; the anchor changed because the round added make_stalled and front_with_a_proxy below it). The tests still wrap calls in bounded() (a timeout) with no sleeps in the three named tests; all 11 tests pass on head (narrow9.log).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/testing.rs",
+              "lines": {
+                "start": 140,
+                "end": 165
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:07:09.156262993Z",
+          "seal": {
+            "by": "server",
+            "mac": "16f1f7296d4b9ada75629d9d321cb7767c4535de6cb4000a406bf0e9d582f1b1"
+          }
         }
       ],
       "verdicts": [
@@ -97737,13 +97972,26 @@
             "by": "server",
             "mac": "8a6e912a318817af941e0ff1d9ded0a9d0e327b98700802524c27c9df204083a"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Helper unchanged in behavior; the named tests still make the store really unreachable and are bounded by timeouts.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1800"
+          ],
+          "recorded_at": "2026-11-24T15:07:50.415847431Z",
+          "seal": {
+            "by": "server",
+            "mac": "551968d1522540b13025f919937c44fa863b1b1296320de1a1e3a810789b6689"
+          }
         }
       ],
       "created_at": "2026-11-24T14:28:46.499664433Z",
-      "updated_at": "2026-11-24T14:30:23.371880258Z",
+      "updated_at": "2026-11-24T15:07:50.415847431Z",
       "seal": {
         "by": "server",
-        "mac": "f119a7a636c785b3970b05d6f33128f50c73843f0ee5fe51ba50aa2ad9ad995d"
+        "mac": "83a0d5d9dc216d38a679431f5ab41fafee1fb754591d7b86951af3021d027d0a"
       }
     },
     {
@@ -97850,6 +98098,24 @@
             "by": "server",
             "mac": "6240ca6a965386ba8de77409c8ff4b7592079b17fb9c8bd01442b9a7ae116794"
           }
+        },
+        {
+          "id": "EVD-1801",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T13-38-53Z-m21-task-18-reads-across-stores.md; git diff --name-status origin/milestone/958-catalog-stores..HEAD",
+          "summary": "The diff against the milestone adds exactly one changelog file (A, the task-18 entry) and it still has Added, Changed and Notes sections; the round only added a Notes line and reworded another.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-24T13-38-53Z-m21-task-18-reads-across-stores.md",
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:07:09.240554339Z",
+          "seal": {
+            "by": "server",
+            "mac": "823fc6df43c9127204a862847094e61130ff3427c489125a32f7b1516e006c88"
+          }
         }
       ],
       "verdicts": [
@@ -97865,13 +98131,26 @@
             "by": "server",
             "mac": "f0c61ffecd92c4bfb2dd3f8a50fdcccac502358b774679b66bae3ae9db901c2c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "One changelog file added by the diff, with the three sections.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1801"
+          ],
+          "recorded_at": "2026-11-24T15:07:50.581099042Z",
+          "seal": {
+            "by": "server",
+            "mac": "43154185594c4646bf764435e362a14989710cdae0cf75c06dadbe4960d819a1"
+          }
         }
       ],
       "created_at": "2026-11-24T14:28:46.499664433Z",
-      "updated_at": "2026-11-24T14:30:23.518777292Z",
+      "updated_at": "2026-11-24T15:07:50.581099042Z",
       "seal": {
         "by": "server",
-        "mac": "8bd78c871f82647d4a0e61476fda844599a0bbdc9656ab0cd29c1485560f389e"
+        "mac": "45f334438bd89e3e513ee3195377e0fe77c610303080cb2f0be736f2310910a1"
       }
     },
     {
@@ -97916,6 +98195,28 @@
             "by": "server",
             "mac": "02d8226d1c0d37ef0d29aaa8d40d31395df1cbd9c431d3f3c76c5714d31a7302"
           }
+        },
+        {
+          "id": "EVD-1802",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:651-660",
+          "summary": "The plan's Task 18 still carries '> **Corrected (issue #977, 2026-11-24).** Shipped:' and the round appended a 'Review round 1' bullet describing mark_down, classification and the 6x bound.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 650,
+                "end": 660
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:07:09.323383629Z",
+          "seal": {
+            "by": "server",
+            "mac": "f0f3049654275203952b998ae5b45535a15f0a711f903f612b50596afc6c1454"
+          }
         }
       ],
       "verdicts": [
@@ -97931,13 +98232,26 @@
             "by": "server",
             "mac": "03b77c37174ce1cf210e8272d1310d71dc1d28a6955513916695f14df31de050"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The dated correction note is still present, with the round's bullet.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1802"
+          ],
+          "recorded_at": "2026-11-24T15:07:50.739595596Z",
+          "seal": {
+            "by": "server",
+            "mac": "4f34eb69c479c84b886210ae45c3491f2f1ebeb16b2c0b723ffcb2c9223c5a65"
+          }
         }
       ],
       "created_at": "2026-11-24T14:28:46.499664433Z",
-      "updated_at": "2026-11-24T14:30:23.600813088Z",
+      "updated_at": "2026-11-24T15:07:50.739595596Z",
       "seal": {
         "by": "server",
-        "mac": "3b9a61005fa2a8f7838c5436424cdc06e0971a9fc3c2e47fa1257fcad2f418cc"
+        "mac": "c70797b8279c34aeeba422b639dbc67ad74d5382ab2d072aad1cda482c93e72b"
       }
     },
     {
@@ -98052,6 +98366,94 @@
             "by": "server",
             "mac": "043b15157b30820986f9806e425a05a507701e8482fa8316c631c45107392400"
           }
+        },
+        {
+          "id": "EVD-1795",
+          "kind": "inspection",
+          "locator": "src/mcp/catalogs.rs:134-147 vs src/mcp/context.rs:1300-1340; src/app.rs:1174-1183",
+          "summary": "list_catalogs loads each listed row with ctx.app().listed_state (App level), not ctx.listed_state, so it ignores the call's down set. When a store passes the page's generation probe but a state load then fails with StoreUnavailable (the after-pool-open case this round added), mark_down is called only after that row; a second catalog of the same store in the page is not in page.unavailable and calls app.listed_state again, spending another connect attempt (registry does not remember failed opens). The page-found-down path (console search, list_catalogs) is covered by tests; this race path is not tested.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/catalogs.rs",
+              "lines": {
+                "start": 126,
+                "end": 147
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:49.823447716Z",
+          "seal": {
+            "by": "server",
+            "mac": "3606617857b919774bdbdf451b7f774e258a418039d84b238374203706ee23ea"
+          }
+        },
+        {
+          "id": "EVD-1796",
+          "kind": "test",
+          "locator": "target/i977-logs/narrow9.log; target/i977-logs/revertA.log; src/mcp/unavailable_tests.rs:285-338",
+          "summary": "Two tests count connections a stalled listener accepts and assert one probe's worth for an unnamed console search and for list_catalogs with the lost store selected; both pass on head. Only the console-search test fails when the seeding is reverted (revertA.log); the list_catalogs one passes either way.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 285,
+                "end": 338
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:49.890843225Z",
+          "seal": {
+            "by": "server",
+            "mac": "66f1c2f82c23821781d1cb5017ec58964189b3e8a9b41b840b3c42e2c070f7a0"
+          }
+        },
+        {
+          "id": "EVD-1806",
+          "kind": "inspection",
+          "locator": "src/mcp/catalogs.rs:137 (ctx.listed_state); src/mcp/context.rs:1300-1340 (listed_state -> held_state checks and updates the down set)",
+          "summary": "At d622c98 list loads each row through ctx.listed_state, so a StoreUnavailable from one catalog marks the store down (held_state) and the next catalog on that store returns StoreUnavailable from the down set without connecting. The re-probe path recorded earlier is closed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/catalogs.rs",
+              "lines": {
+                "start": 134,
+                "end": 146
+              },
+              "commit": "d622c9845464f81344b9a8d4e892c3925e3a2ed6"
+            }
+          },
+          "recorded_at": "2026-11-24T15:13:26.236853991Z",
+          "seal": {
+            "by": "server",
+            "mac": "e233914f9671650804d200b6a8d3f4b87e84d4d9e275a3c6d64352a06287cf11"
+          }
+        },
+        {
+          "id": "EVD-1807",
+          "kind": "test",
+          "locator": "target/i977-logs/narrow10.log (12 passed, list_catalogs_spends_one_bound_on_a_store_that_fails_at_the_state_load ... ok); target/i977-logs/revertC.log (fails with the old call: took 3.645s for a load bound of 1.8s)",
+          "summary": "Test (unavailable_tests.rs:403-443) puts two catalogs on one store that answers the page probe but has its documents locked, so each state load stalls to the 1.8 s bound, and asserts unavailable == [remote-1, remote-2] and elapsed < 1.5 x bound. Passes on head; with the old app-level call it takes 3.6 s (two bounds), so it discriminates the fix. It measures time spent, not connections accepted, which is the same cost for this stall.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 403,
+                "end": 443
+              },
+              "commit": "d622c9845464f81344b9a8d4e892c3925e3a2ed6"
+            }
+          },
+          "recorded_at": "2026-11-24T15:13:26.311110796Z",
+          "seal": {
+            "by": "server",
+            "mac": "2054c20cc66da29d594159532f58913e7f6b42f380b4e0280cbd20a0e9f9fd6a"
+          }
         }
       ],
       "verdicts": [
@@ -98067,13 +98469,41 @@
             "by": "server",
             "mac": "646e0b03fee013d37d52de538494772a332f962b7e7db14d47ab63b29e2a7300"
           }
+        },
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Page-found-down stores are probed once (tests; the console one discriminates). But list_catalogs loads rows through ctx.app().listed_state, which ignores the call's down set, so when a store passes the page probe and then fails at state load, each further catalog of that store in the page can spend another connect attempt; by reading only, untested, and I could not run code. The universal claim is therefore not settled. Fix: make list_catalogs load rows through ctx.listed_state (which honors and updates the down set) and add a test with two catalogs on a store whose state load fails after a successful page probe, asserting one probe's worth of connections.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1795",
+            "EVD-1796"
+          ],
+          "recorded_at": "2026-11-24T15:07:49.842567936Z",
+          "seal": {
+            "by": "server",
+            "mac": "0c2bdf8ddcb620c8513fe087d2e38b1e253229ac8909895203d81ab9d717ea4b"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The race path is closed in code (list uses ctx.listed_state) and a test that fails with the old call (3.6 s vs 1.8 s bound) and passes on head covers it; the page-found-down paths remain covered by the console-search and list_catalogs tests.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1806",
+            "EVD-1807"
+          ],
+          "recorded_at": "2026-11-24T15:13:31.703003287Z",
+          "seal": {
+            "by": "server",
+            "mac": "f2ee4f2404165e65d382dd40c3acd4b9f80ca6e2c5052dd5abb7b24791b18d4e"
+          }
         }
       ],
       "created_at": "2026-11-24T14:28:46.499664433Z",
-      "updated_at": "2026-11-24T14:30:23.749071177Z",
+      "updated_at": "2026-11-24T15:13:31.703003287Z",
       "seal": {
         "by": "server",
-        "mac": "14d6991260e67c11e4955dda7eda10bcefc2a126ead91bb4d150aea9d71d7d21"
+        "mac": "29bc2613681cf94bef66b45fe148e318f20e3f479829fe3770092d4670ce5fd9"
       }
     },
     {
@@ -98274,6 +98704,28 @@
             "by": "server",
             "mac": "5a96cdc24fb7bf36883cb72d581ee5b394f4a2e104da0cac6787db8c97fb6d20"
           }
+        },
+        {
+          "id": "EVD-1803",
+          "kind": "inspection",
+          "locator": "src/stores/mod.rs:25-37,86-88",
+          "summary": "READ_CONCURRENCY has its own doc and sits at line 30; the MAIN_STORE doc ('The name of the store every existing catalog is on...') is on const MAIN_STORE at line 88; the new STATE_LOAD_TIMEOUT_FACTOR has its own doc. No doc is attached to the wrong item.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 25,
+                "end": 37
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:07:09.415578487Z",
+          "seal": {
+            "by": "server",
+            "mac": "62715ef21e2df58a130aee2a3e828309c97d5c60bb9be2c9de5065a4b85b2311"
+          }
         }
       ],
       "verdicts": [
@@ -98302,13 +98754,766 @@
             "by": "server",
             "mac": "899aaa4ea087a89aac9cac9c38774e94acfeec9d6459cb232fc33b949fab47ff"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "At head each doc comment is on its own item (the earlier refuting evidence was fixed by the docs commit and then new consts were added with their own docs).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1803"
+          ],
+          "recorded_at": "2026-11-24T15:07:58.533569307Z",
+          "seal": {
+            "by": "server",
+            "mac": "1f2930a973ec420f7df77688c35fee1bef0cf29d2e1505785dbde0e51a2ac99e"
+          }
         }
       ],
       "created_at": "2026-11-24T14:28:46.499664433Z",
-      "updated_at": "2026-11-24T14:33:49.672432165Z",
+      "updated_at": "2026-11-24T15:07:58.533569307Z",
       "seal": {
         "by": "server",
-        "mac": "11cdf8b23bdcbfe6655c8fdbca167161a4e1f53968d4b3e74eab05c2564f6a1a"
+        "mac": "bb09119783e83e13429d0cd3204e85f467a5221e0178a074f56bc0c669063e5e"
+      }
+    },
+    {
+      "id": "CLM-1208",
+      "statement": "The console search (`every_reachable` in src/http/api/search.rs) seeds the call's ToolContext down set with `ToolContext::mark_down` for each page-unavailable catalog, so its selection and state loads do not probe the lost store again: an unnamed `GET /search` makes one probe's worth of connections to a stalled store.",
+      "kind": "performance",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: the page reads of the console search and `list_catalogs` tell the call's `ToolContext` which stores are down (`ToolContext::mark_down`), so selection and state loads skip them",
+      "derived_from": [
+        "CLM-1204"
+      ],
+      "artifacts": [
+        "src/http/api/search.rs",
+        "src/mcp/context.rs",
+        "src/mcp/unavailable_tests.rs"
+      ],
+      "tags": [
+        "from-issue:977",
+        "pr-description",
+        "review-round-1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1781",
+          "kind": "inspection",
+          "locator": "src/http/api/search.rs:157-165; src/mcp/context.rs:1329-1331",
+          "summary": "every_reachable calls ctx.mark_down(row) for each row in page.unavailable before pushing the name; ToolContext::held_state returns store_unavailable without connecting when the row's store is in the down set, and select passes the set as known_down.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/search.rs",
+              "lines": {
+                "start": 157,
+                "end": 165
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:14.859608122Z",
+          "seal": {
+            "by": "server",
+            "mac": "52695ac181c0f2ee3b65f4c66d62ad334a24988ecc3e4a602a704204ee68aac0"
+          }
+        },
+        {
+          "id": "EVD-1782",
+          "kind": "test",
+          "locator": "target/i977-logs/narrow9.log (an_unnamed_console_search_probes_a_lost_store_once ... ok, 11 passed); target/i977-logs/revertA.log (seeding reverted: left 2, right 1 at unavailable_tests.rs:316)",
+          "summary": "Test at src/mcp/unavailable_tests.rs:306-322 counts connections a stalled listener accepts during GET /search and asserts equality with one probe (measured beforehand). It passes on head (narrow9.log) and fails with 2 vs 1 when the mark_down seeding is reverted (revertA.log), so it discriminates the seeding.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 305,
+                "end": 322
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:14.931711778Z",
+          "seal": {
+            "by": "server",
+            "mac": "a7455d6a11453df022d697baa56628e91b6582f569cd577dd1b191f5c27c22e4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code seeds the down set and the count test passes on head and fails (2 vs 1) with the seeding reverted, so the test shows the seeding is what holds the single probe.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1781",
+            "EVD-1782"
+          ],
+          "recorded_at": "2026-11-24T15:07:48.364534412Z",
+          "seal": {
+            "by": "server",
+            "mac": "bca825ccfbd1ddc4ea65c7f2e4a836c8e0fb799cad361e4e778dafedeb19c255"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T15:05:43.151903466Z",
+      "updated_at": "2026-11-24T15:07:48.364534412Z",
+      "seal": {
+        "by": "server",
+        "mac": "3a09c9b6f84639f5fdf45c4cd674713065b5bfe84c6f2b362d890347e7444f0d"
+      }
+    },
+    {
+      "id": "CLM-1209",
+      "statement": "MCP `list_catalogs` (src/mcp/catalogs.rs `list`) calls `ToolContext::mark_down` for each catalog the page found unavailable and for one whose store went away during `listed_state`, and the selection that follows skips known-down stores (`resolve_or_unavailable` with the down set).",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: the page reads of the console search and `list_catalogs` tell the call's `ToolContext` which stores are down (`ToolContext::mark_down`)",
+      "derived_from": [
+        "CLM-1204"
+      ],
+      "artifacts": [
+        "src/mcp/catalogs.rs",
+        "src/mcp/context.rs",
+        "src/cache/directory.rs"
+      ],
+      "tags": [
+        "from-issue:977",
+        "pr-description",
+        "review-round-1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1783",
+          "kind": "inspection",
+          "locator": "src/mcp/catalogs.rs:126-147; src/mcp/context.rs:441-447; src/cache/directory.rs:384-408",
+          "summary": "list marks down each page-unavailable row and a row whose listed_state fails with StoreUnavailable; ctx.select(None) then reads the down set into resolve_or_unavailable, which returns StoreUnavailable (so Lookup::Unavailable from the account row, no store connect) for a catalog on a known-down store.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/catalogs.rs",
+              "lines": {
+                "start": 126,
+                "end": 147
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:15.005102959Z",
+          "seal": {
+            "by": "server",
+            "mac": "0746b0f51e120d6ed1643a894767b9b4c3bfc1bf63d2e435e7a4fbb9eb139e01"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "By reading: list marks down page-unavailable rows and a StoreUnavailable row, and select consults the down set. Supported by inspection only; no test discriminates it (the list_catalogs probe test passes without the seeding).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1783"
+          ],
+          "recorded_at": "2026-11-24T15:07:48.587154382Z",
+          "seal": {
+            "by": "server",
+            "mac": "fb138280d3dd7a2b8dbdb7d064decfa04b05e50788a3b37232992524d07df9ea"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T15:05:43.151903466Z",
+      "updated_at": "2026-11-24T15:07:48.587154382Z",
+      "seal": {
+        "by": "server",
+        "mac": "99ad7f138ccaf76fbe4d469d9bdcd5e1d5f683be7efd8e860dbd7e4b7b4991ce"
+      }
+    },
+    {
+      "id": "CLM-1210",
+      "statement": "`list_catalogs` with a lost store as the selected catalog makes one probe's worth of connections to a stalled store (test `list_catalogs_probes_a_lost_selected_store_once`).",
+      "kind": "performance",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: A call probes a lost store once, not once per catalog",
+      "derived_from": [
+        "CLM-1204"
+      ],
+      "artifacts": [
+        "src/mcp/unavailable_tests.rs",
+        "src/mcp/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:977",
+        "pr-description",
+        "review-round-1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1784",
+          "kind": "test",
+          "locator": "target/i977-logs/narrow9.log (list_catalogs_probes_a_lost_selected_store_once ... ok); src/mcp/unavailable_tests.rs:323-338",
+          "summary": "The test makes a stalled store the default (selected) catalog, calls list, asserts unavailable == [remote] and accepted connections == one probe. It passes on head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 323,
+                "end": 338
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:15.078833902Z",
+          "seal": {
+            "by": "server",
+            "mac": "4187849017972321300f6d8db618094db5ba1c421e2ff58efa050ea5ad1199ba"
+          }
+        },
+        {
+          "id": "EVD-1785",
+          "kind": "log",
+          "locator": "target/i977-logs/revertA.log (list_catalogs_probes_a_lost_selected_store_once ... ok with the seeding reverted)",
+          "summary": "The same test also passes in revertA.log, where the seeding was reverted, so it does not discriminate the list_catalogs mark_down calls: no second probe happens in that scenario with or without them. It supports only the outcome (one probe), not that the seeding is what holds it.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 323,
+                "end": 338
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:15.150887517Z",
+          "seal": {
+            "by": "server",
+            "mac": "e9da1e372d302396b7ece7303219b8328c3894a18f2585aabda54450bdb5cb27"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test asserts one probe's worth of connections and passes on head. The outcome is supported by the test; that the seeding causes it is not (the test also passes with the seeding reverted, revertA.log).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1784"
+          ],
+          "recorded_at": "2026-11-24T15:07:48.718952840Z",
+          "seal": {
+            "by": "server",
+            "mac": "e3edb8a6500fc5d1d035ac16e15f6c1d1d92c6a503d1438dca8c8e397bbe0b59"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T15:05:43.151903466Z",
+      "updated_at": "2026-11-24T15:07:48.718952840Z",
+      "seal": {
+        "by": "server",
+        "mac": "2d7c7aef3923286494942403cb2cef3b0312b0c4d49b18681a91783048aba852"
+      }
+    },
+    {
+      "id": "CLM-1211",
+      "statement": "A store that goes away after its pool opened (an existing pool whose connections drop) is reported as `StoreUnavailable`, not `Database`, on the catalog state load and refresh path: `CatalogCache::get` wraps both in `within_store_bound`, which maps the failure with `stores::classify_store_failure`.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: A store that goes away after its pool opened is unavailable too: `CatalogCache::get` reads a transport failure from an open pool as `StoreUnavailable` (`stores::classify_store_failure`)",
+      "derived_from": [
+        "CLM-1188"
+      ],
+      "artifacts": [
+        "src/cache/catalogs.rs",
+        "src/stores/mod.rs",
+        "src/mcp/unavailable_tests.rs",
+        "src/mcp/testing.rs"
+      ],
+      "tags": [
+        "from-issue:977",
+        "pr-description",
+        "review-round-1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1786",
+          "kind": "inspection",
+          "locator": "src/cache/catalogs.rs:246-290,441-466; src/stores/mod.rs:60-85",
+          "summary": "get wraps the state load (stores.get + CatalogState::load) and the refresh (stores.get + state.refresh) in within_store_bound, which maps Err through classify_store_failure; that turns OkfError::Database{source} into classify_store_error(store, source): PoolTimedOut, PoolClosed, Io, Tls, WorkerCrashed and auth failures become StoreUnavailable, others stay Database.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/catalogs.rs",
+              "lines": {
+                "start": 441,
+                "end": 466
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:33.453793466Z",
+          "seal": {
+            "by": "server",
+            "mac": "bdb71294d3c21581b7bfa716e3e33e3c3bf3eebdc8388782785ee6498a8cdae3"
+          }
+        },
+        {
+          "id": "EVD-1787",
+          "kind": "test",
+          "locator": "target/i977-logs/narrow9.log (a_store_that_goes_away_after_its_pool_opened_is_unavailable_not_a_database_error ... ok); target/i977-logs/revertB.log (fails with the cache change reverted)",
+          "summary": "Test (unavailable_tests.rs:340-368) opens the pool through a TCP proxy, then stops the proxy so established connections are cut and the port refuses; a search over home and remote must return only home's hit and unavailable == [remote] (a Database error would fail the call). Passes on head; fails when the CatalogCache change is reverted (revertB.log), so it discriminates.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 340,
+                "end": 368
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:33.527796981Z",
+          "seal": {
+            "by": "server",
+            "mac": "484ba37051b49c1c1c138b6dd2f0f26400c3041acc5a2a020109b6860e84a78e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code classifies on load and refresh; the proxy test cuts an established pool and passes on head, failing when the change is reverted.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1786",
+            "EVD-1787"
+          ],
+          "recorded_at": "2026-11-24T15:07:48.821595271Z",
+          "seal": {
+            "by": "server",
+            "mac": "6d7e3358e192441361dc495350ab94076099b5c26821d605539547017ba58848"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T15:05:43.151903466Z",
+      "updated_at": "2026-11-24T15:07:48.821595271Z",
+      "seal": {
+        "by": "server",
+        "mac": "d86c57f453a3fc3c24e89b9a8410ea738eb7b28f83f8dd0d8ff239e60c7beff1"
+      }
+    },
+    {
+      "id": "CLM-1212",
+      "statement": "A state load or refresh whose query stalls on an open connection is bounded by `Stores::state_load_timeout` (6 x `store_connect_timeout`) and ends as `StoreUnavailable`, so a search names the catalog in `unavailable` and returns the other hits.",
+      "kind": "performance",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: bounds a state load and refresh by 6 times `store_connect_timeout` (`Stores::state_load_timeout`)",
+      "derived_from": [
+        "CLM-1188"
+      ],
+      "artifacts": [
+        "src/cache/catalogs.rs",
+        "src/stores/registry.rs",
+        "src/stores/mod.rs",
+        "src/mcp/unavailable_tests.rs"
+      ],
+      "tags": [
+        "from-issue:977",
+        "pr-description",
+        "review-round-1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1788",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:506-518; src/cache/catalogs.rs:456-466; src/stores/mod.rs:31-37",
+          "summary": "state_load_timeout = connect_timeout * STATE_LOAD_TIMEOUT_FACTOR (6); within_store_bound runs the read under tokio::time::timeout of that and maps elapsed to OkfError::store_unavailable(store), for both load and refresh in CatalogCache::get.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/catalogs.rs",
+              "lines": {
+                "start": 456,
+                "end": 466
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:33.599924659Z",
+          "seal": {
+            "by": "server",
+            "mac": "d75229859b95b2abc523a2126184a3ba842c33a64dbd672ec16b586b5444c825"
+          }
+        },
+        {
+          "id": "EVD-1789",
+          "kind": "test",
+          "locator": "target/i977-logs/narrow9.log (a_store_whose_query_stalls_is_unavailable_within_the_bound ... ok); target/i977-logs/revertB.log (Elapsed in bounded() with the change reverted)",
+          "summary": "Test (unavailable_tests.rs:370-400) holds ACCESS EXCLUSIVE lock on documents so the load's query waits on a live connection, with store_connect_timeout 300 ms; the search must finish inside the test's bounded() wrapper with unavailable == [remote] and one hit. Passes on head; with the change reverted it times out (revertB.log), so it discriminates the bound.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 370,
+                "end": 400
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:33.674139075Z",
+          "seal": {
+            "by": "server",
+            "mac": "2e3d5133e8b3457894e88a09b150bb554969a44a6678f645b7f3d7943e19a39d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code bounds load and refresh at 6 x connect timeout; the lock-stall test passes on head and times out when reverted.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1788",
+            "EVD-1789"
+          ],
+          "recorded_at": "2026-11-24T15:07:48.948610809Z",
+          "seal": {
+            "by": "server",
+            "mac": "1b7c29c06e42fa0beb02f4c65f547c7af72937d65c0c7fba1fa8e06e989f3277"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T15:05:43.151903466Z",
+      "updated_at": "2026-11-24T15:07:48.948610809Z",
+      "seal": {
+        "by": "server",
+        "mac": "1a8edc69a6586fbdce7b458f10bb31940b58b3189f85a96ba35f0e44c3ac4f10"
+      }
+    },
+    {
+      "id": "CLM-1213",
+      "statement": "`StoreUnavailable` is not remembered as a catalog whose stored data does not build: `from_stored_data` returns false for it, so a failed load or refresh is retried at the next request.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: no longer remembers `StoreUnavailable` as a catalog that does not build",
+      "derived_from": [
+        "CLM-1188"
+      ],
+      "artifacts": [
+        "src/cache/catalogs.rs",
+        "src/cache/catalogs_tests.rs"
+      ],
+      "tags": [
+        "from-issue:977",
+        "pr-description",
+        "review-round-1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1790",
+          "kind": "inspection",
+          "locator": "src/cache/catalogs.rs:134-146,470-500",
+          "summary": "from_stored_data's matches! list now includes OkfError::StoreUnavailable, so load_failed returns the error without remember_broken, and refresh_failed logs retry 'at the next request'.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/catalogs.rs",
+              "lines": {
+                "start": 134,
+                "end": 146
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:33.748326911Z",
+          "seal": {
+            "by": "server",
+            "mac": "7ea316f5a4c0687eddd93337ad02025049c0742f98f0d428d8b4104db0c83654"
+          }
+        },
+        {
+          "id": "EVD-1792",
+          "kind": "analysis",
+          "locator": "src/cache/catalogs_tests.rs:665-685 (only_data_failures_are_remembered_as_broken)",
+          "summary": "The unit test of from_stored_data asserts CatalogNotSelected, Database and Busy are not remembered and bad data is, but has no StoreUnavailable case; the diff did not touch the file. This claim rests on code reading, not on a test.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/cache/catalogs_tests.rs",
+              "lines": {
+                "start": 665,
+                "end": 685
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:49.601519001Z",
+          "seal": {
+            "by": "server",
+            "mac": "9dd1a2a82cf1e1ca3e2b4665dc88ac0d2bdbfac2f21a0efb9af036dcc938ba3a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "from_stored_data excludes StoreUnavailable, so load_failed does not remember it. Supported by reading only (integrity 2): the existing unit test has no StoreUnavailable case.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1790"
+          ],
+          "recorded_at": "2026-11-24T15:07:49.164109961Z",
+          "seal": {
+            "by": "server",
+            "mac": "c60076ea18a8b3d4b5bc1f743d9f0d6796162e994dc51f70cbb8fc41e21235cf"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T15:05:43.151903466Z",
+      "updated_at": "2026-11-24T15:07:49.164109961Z",
+      "seal": {
+        "by": "server",
+        "mac": "18cb569bf64f921658b4396c49344980d5e61a20ae3ddab7735e10b5e6cba1de"
+      }
+    },
+    {
+      "id": "CLM-1214",
+      "statement": "The PR body's scope statement holds: the catalog state load/refresh path is fixed, while store reads through `CatalogDb::executor()` elsewhere still report `Database` for a transport failure and are tracked in open issue #995.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: Fixed in this PR: the catalog state load/refresh path. Not fixed here: the other store reads that report `Database` for a transport failure, which stay in #995.",
+      "derived_from": [
+        "CLM-1188"
+      ],
+      "artifacts": [
+        "src/cache/catalogs.rs",
+        "src/store/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:977",
+        "pr-description",
+        "review-round-1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1791",
+          "kind": "inspection",
+          "locator": "gh issue view 995 (OPEN); src/cache/catalogs.rs:441-466 (only call site of classify_store_failure)",
+          "summary": "Issue #995 is open and describes about 48 store-layer call sites that pass db.executor() and convert the driver error with ?, giving Database for a pool timeout. In the code, classify_store_failure has one non-test caller, within_store_bound in CatalogCache::get; db.classify is used only in a few other places (changeset lookup, directory probe, cleanups, audit commit). The PR's scope statement matches.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "classify_store_failure",
+              "scope": [
+                "src"
+              ],
+              "hits": 2,
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:33.875450488Z",
+          "seal": {
+            "by": "server",
+            "mac": "b9bb018bf7da8fd47bf8db4b4645502791d54b1f8ba4781ac1ca6f2ba57197a9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "#995 is open and describes exactly the remaining Database-for-transport sites; the fix is confined to CatalogCache::get.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1791"
+          ],
+          "recorded_at": "2026-11-24T15:07:49.350901449Z",
+          "seal": {
+            "by": "server",
+            "mac": "b308c5b54242acc0af4406edca3b4a69a9888381eafba7c475cc950ef015e8f6"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T15:05:43.151903466Z",
+      "updated_at": "2026-11-24T15:07:49.350901449Z",
+      "seal": {
+        "by": "server",
+        "mac": "d41f0861f648b556bd85b76f91f517a3c8df346ffd3268217fc6c98c8c04aa30"
+      }
+    },
+    {
+      "id": "CLM-1215",
+      "statement": "The changelog entry's Notes and docs/operations.md (`store_connect_timeout` row) describe the review-round behavior accurately: probe once per call via the page reads, the after-pool-open classification, the 6 x `store_connect_timeout` state-load bound, StoreUnavailable not remembered, and #995.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "changelog/2026-11-24T13-38-53Z-m21-task-18-reads-across-stores.md Notes; docs/operations.md store_connect_timeout row",
+      "derived_from": [
+        "CLM-1188"
+      ],
+      "artifacts": [
+        "changelog/2026-11-24T13-38-53Z-m21-task-18-reads-across-stores.md",
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:977",
+        "review-round-1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1793",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T13-38-53Z-m21-task-18-reads-across-stores.md:16-21; docs/operations.md:124",
+          "summary": "Changelog Notes say the page reads of the console search and list_catalogs tell the ToolContext which stores are down (matches search.rs/catalogs.rs mark_down), the after-pool-open classification and 6 x store_connect_timeout bound via Stores::state_load_timeout (matches catalogs.rs/registry.rs), StoreUnavailable not remembered (matches from_stored_data), and #995 (open). operations.md row says loading a catalog from a store may take 6 times store_connect_timeout before it is reported unavailable (matches STATE_LOAD_TIMEOUT_FACTOR = 6). One imprecision: 'costs a call at most one probe' is untrue for the narrow race where listed_state in list_catalogs fails for several catalogs of one store (see the claim on probing once).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-24T13-38-53Z-m21-task-18-reads-across-stores.md",
+              "lines": {
+                "start": 16,
+                "end": 21
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:49.673936550Z",
+          "seal": {
+            "by": "server",
+            "mac": "ddb4df9d79ecf253a4a84e5f9ff4a6541a8669cd191d7bc861f03efad5a7002f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Each described behavior matches the code and the 6x figure matches STATE_LOAD_TIMEOUT_FACTOR. The changelog's 'at most one probe' wording is slightly broader than the code in the narrow race recorded on the probe-once claim.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1793"
+          ],
+          "recorded_at": "2026-11-24T15:07:49.470553108Z",
+          "seal": {
+            "by": "server",
+            "mac": "9473982901e7f3d18688c518ec6a3535608fda5c41305a5eebfca5d40d914e89"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T15:05:43.151903466Z",
+      "updated_at": "2026-11-24T15:07:49.470553108Z",
+      "seal": {
+        "by": "server",
+        "mac": "6db06cb8272c4f72c20d13180ea882bd99ac02b13d6ef37c275d874723d02475"
+      }
+    },
+    {
+      "id": "CLM-1216",
+      "statement": "The wait on an unreachable store is bounded by `store_connect_timeout` per store in the generation probe and the changeset fan-out, and a state load on a store that stalls after connecting is bounded by 6 x `store_connect_timeout`; none waits unboundedly.",
+      "kind": "performance",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #977: bounded wait; PR body: each within `store_connect_timeout`; state loads bound by `Stores::state_load_timeout`",
+      "derived_from": [
+        "CLM-1188"
+      ],
+      "artifacts": [
+        "src/cache/directory.rs",
+        "src/mcp/changesets.rs",
+        "src/cache/catalogs.rs",
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:977",
+        "review-round-1"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1794",
+          "kind": "analysis",
+          "locator": "src/cache/directory.rs:291-327; src/mcp/changesets.rs:270-290; src/cache/catalogs.rs:456-466; src/stores/registry.rs:506-518",
+          "summary": "Generation probe and changeset fan-out wrap each store read in tokio::time::timeout(connect_timeout) (existing evidence EVD-1759), and the state load/refresh in CatalogCache::get is now under state_load_timeout (6 x connect_timeout); stores.get itself is bounded by connect_timeout. Tests a_store_whose_query_stalls_is_unavailable_within_the_bound pass on head and time out when the change is reverted (revertB.log). Remaining unbounded read paths are the ones issue #995 lists, which this claim does not cover (merging reads only).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/catalogs.rs",
+              "lines": {
+                "start": 456,
+                "end": 466
+              },
+              "commit": "2af0086d4fc4544aeee99b2c1c82e46e772e4ef9"
+            }
+          },
+          "recorded_at": "2026-11-24T15:06:49.745819227Z",
+          "seal": {
+            "by": "server",
+            "mac": "e5d451f34209bd1382bb90c82666c5ea452e6e4602ecb0f6f097c18980e69b56"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Each merging path has an explicit bound (1x for probe and fan-out, 6x for state load) matching docs; the stall test confirms the 6x path.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1794"
+          ],
+          "recorded_at": "2026-11-24T15:07:49.591606632Z",
+          "seal": {
+            "by": "server",
+            "mac": "50ae75a22b251273f25b99f198be45d822e2a85d1111085701c4ae3c7037ec65"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T15:05:43.151903466Z",
+      "updated_at": "2026-11-24T15:07:49.591606632Z",
+      "seal": {
+        "by": "server",
+        "mac": "2465bcbe2bf1bd309eb9c10c2dacdea2be762f6d90e96b039d2702e7639235d0"
       }
     }
   ]
