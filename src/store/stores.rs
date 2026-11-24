@@ -263,16 +263,26 @@ pub async fn summaries(executor: &PgPool) -> Result<Vec<StoreSummary>, OkfError>
         .collect()
 }
 
-/// Adds a store: checks that it can be opened and is a database of its own,
-/// migrates it, then writes its row (`insert`, below).
+/// Adds a store: refuses a taken name or location, checks that it can be
+/// opened and is a database of its own, migrates it, then writes its row
+/// (`insert`, below).
 ///
-/// The connection check runs first and holds no transaction (a connection
-/// on the account pool is never held while a store's pool connects). It
-/// refuses the account database under another host name (it holds the
-/// account tables) and a database whose identity row names another store (a
-/// second host name for a registered store). Then the
-/// store's schema is migrated, which writes its identity row, so the
-/// database answers to this name before the row exists.
+/// First a transaction takes two advisory locks (the name; the host, port
+/// and database) and refuses a name or location that already has a row, so a
+/// request that is bound to fail never touches the target database. The
+/// transaction writes nothing and is kept to the end: one account connection
+/// is held while the store's pool connects, and adds of one name or one
+/// database run one at a time.
+///
+/// Then the connection check refuses the account database under another host
+/// name (it holds the account tables) and a database whose identity row names
+/// another registered store (a second host name for it). Then the store's
+/// schema is migrated, which writes its identity row, so the database answers
+/// to this name before the row exists. If the add fails after that (the
+/// insert fails, or the process dies), the identity names a store with no
+/// row; the next `add` of that database, under any name, replaces it, and
+/// the locks make sure no other add is mid-way on it. So a retry, or an add
+/// under a corrected name, succeeds and no manual repair is needed.
 ///
 /// # Arguments
 /// * `pool` - the account database.
@@ -299,6 +309,10 @@ pub async fn add(
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<StoreSummary, OkfError> {
+    // Held to the end: the locks last as long as this transaction, which
+    // writes nothing.
+    let mut reservation = pool.begin().await?;
+    refuse_known_conflicts(&mut reservation, &row).await?;
     stores
         .check(row.clone())
         .await
@@ -315,7 +329,70 @@ pub async fn add(
                 }
             }
         })?;
-    insert(pool, row, actor, now).await
+    let added = insert(pool, row, actor, now).await;
+    // Rolls back: nothing was written, and the locks go.
+    reservation.rollback().await?;
+    added
+}
+
+/// Takes this add's two advisory locks on `reservation` (one on the name,
+/// one on the host, port and database, always in that order) and refuses a
+/// name or a location that already has a row, before the target database is
+/// touched. Another add of the same name or the same database waits here,
+/// then finds the winner's row and is refused without a side effect.
+///
+/// # Errors
+/// [`OkfError::Refused`] for a name or location already in use;
+/// [`OkfError::Database`] for a failed read.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "stores.refuse_known_conflicts"))]
+async fn refuse_known_conflicts(
+    reservation: &mut sqlx::PgConnection,
+    row: &StoreRow,
+) -> Result<(), OkfError> {
+    let StoreLocation::Host {
+        host,
+        port,
+        database,
+        ..
+    } = &row.location
+    else {
+        // `insert` refuses it.
+        return Ok(());
+    };
+    for key in [
+        format!("okf.store-add.name:{}", row.name),
+        format!(
+            "okf.store-add.location:{}:{port}/{database}",
+            host.to_lowercase()
+        ),
+    ] {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(key)
+            .execute(&mut *reservation)
+            .await?;
+    }
+    let (name_taken, location_taken): (bool, bool) = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM stores WHERE name = $1), \
+                EXISTS (SELECT 1 FROM stores WHERE lower(host) = lower($2) AND port = $3 \
+                        AND database = $4)",
+    )
+    .bind(row.name.as_str())
+    .bind(host)
+    .bind(i32::from(*port))
+    .bind(database)
+    .fetch_one(&mut *reservation)
+    .await?;
+    if name_taken {
+        return Err(OkfError::Refused {
+            reason: format!("store {} already exists", row.name),
+        });
+    }
+    if location_taken {
+        return Err(OkfError::Refused {
+            reason: "another store already uses that host, port and database".to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// A store that could not be opened, as [`add`] refuses it: without the
@@ -744,6 +821,105 @@ mod tests {
             "{refused:?}"
         );
         assert_eq!(store_names(&db.pool).await, ["main"]);
+    }
+
+    /// The identity row of `target`'s database, if it has one.
+    async fn owner_of(target: &crate::db::pg_support::TestDb) -> Option<String> {
+        let mut connection = target.pool.acquire().await.unwrap();
+        crate::db::store_owner(&mut connection).await.unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_taken_name_is_refused_before_the_database_is_claimed() {
+        let db = crate::db::test_db().await;
+        let fresh = crate::db::pg_support::TestDb::start().await;
+        let (_, taken) = reachable(&db, "shared-1");
+        insert(&db.pool, taken, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+        let (stores, row) = reachable_on(&db, &fresh, "shared-1");
+
+        let refused = add(&db.pool, &stores, row, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&refused, OkfError::Refused { reason } if reason.contains("already exists")),
+            "{refused:?}"
+        );
+        assert_eq!(owner_of(&fresh).await, None, "the database was claimed");
+        // The corrected name takes the database.
+        let (stores, row) = reachable_on(&db, &fresh, "shared-2");
+        add(&db.pool, &stores, row, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+        assert_eq!(owner_of(&fresh).await.as_deref(), Some("shared-2"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_taken_location_is_refused_before_the_database_is_claimed() {
+        let db = crate::db::test_db().await;
+        let target = crate::db::pg_support::TestDb::start().await;
+        // Registered, but never opened: its identity row does not exist yet.
+        let (stores, first) = reachable_on(&db, &target, "shared-1");
+        insert(&db.pool, first, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+        let (_, second) = reachable_on(&db, &target, "shared-2");
+
+        let refused = add(&db.pool, &stores, second, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&refused, OkfError::Refused { reason } if reason.contains("host, port")),
+            "{refused:?}"
+        );
+        assert_eq!(owner_of(&target).await, None, "the database was claimed");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_database_claimed_by_an_unregistered_store_can_be_added_again() {
+        let db = crate::db::test_db().await;
+        let target = crate::db::pg_support::TestDb::start().await;
+        // An add that died after its migration: the identity names a store
+        // with no row.
+        let (stores, ghost) = reachable_on(&db, &target, "ghost");
+        stores.prepare(ghost).await.unwrap();
+        assert_eq!(owner_of(&target).await.as_deref(), Some("ghost"));
+        let (_, row) = reachable_on(&db, &target, "shared-1");
+
+        add(&db.pool, &stores, row, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+
+        assert_eq!(store_names(&db.pool).await, ["main", "shared-1"]);
+        assert_eq!(owner_of(&target).await.as_deref(), Some("shared-1"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_adds_of_one_name_leave_the_loser_database_unclaimed() {
+        let db = crate::db::test_db().await;
+        let first = crate::db::pg_support::TestDb::start().await;
+        let second = crate::db::pg_support::TestDb::start().await;
+        let (stores, one) = reachable_on(&db, &first, "shared-1");
+        let (_, two) = reachable_on(&db, &second, "shared-1");
+        let actor = AuditActor::cli();
+
+        let (one, two) = tokio::join!(
+            add(&db.pool, &stores, one, &actor, Utc::now()),
+            add(&db.pool, &stores, two, &actor, Utc::now()),
+        );
+
+        // Exactly one wins, whichever the scheduler ran first.
+        let (winner, loser) = match (one, two) {
+            (Ok(_), Err(_)) => (&first, &second),
+            (Err(_), Ok(_)) => (&second, &first),
+            (one, two) => panic!("expected one winner: {one:?} {two:?}"),
+        };
+        assert_eq!(owner_of(winner).await.as_deref(), Some("shared-1"));
+        assert_eq!(owner_of(loser).await, None, "the loser was claimed");
+        assert_eq!(store_names(&db.pool).await, ["main", "shared-1"]);
     }
 
     #[tokio::test(flavor = "multi_thread")]

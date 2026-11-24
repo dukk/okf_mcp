@@ -840,7 +840,9 @@ impl Stores {
     /// the cause is logged on the local side only);
     /// [`OkfError::Refused`] if the database holds the account tables (it is
     /// the account database under another name) or its identity row names
-    /// another store (a second name for a database already registered);
+    /// another store that is registered (a second name for a database
+    /// already registered; an identity naming a store that has no row is a
+    /// leftover of a failed add and is not refused);
     /// [`OkfError::Database`] if the reads fail.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn check(&self, row: StoreRow) -> Result<(), OkfError> {
@@ -849,14 +851,18 @@ impl Stores {
         let open = Box::pin(self.open_row(row))
             .await
             .map_err(|_failure| OkfError::store_unavailable(&name))?;
-        let checked = refuse_a_taken_database(&open.db).await;
+        let checked = refuse_a_taken_database(&self.inner.accounts, &open.db).await;
         open.db.executor().close().await;
         checked
     }
 
     /// Migrates the database of a store that has no row yet, so its
     /// identity row names it before the row is stored ([`Stores::check`]
-    /// first). The pool is closed again and nothing is cached.
+    /// first). An identity row naming a store that has no row is a leftover
+    /// of an add that failed after this step, and is replaced by this
+    /// store's name: the caller must hold the add's location lock
+    /// ([`crate::store::stores::add`]), so no other add is mid-way on this
+    /// database. The pool is closed again and nothing is cached.
     ///
     /// # Arguments
     /// * `row` - the row about to be stored.
@@ -875,7 +881,10 @@ impl Stores {
         let open = Box::pin(self.open_row(row))
             .await
             .map_err(|_failure| OkfError::store_unavailable(&name))?;
-        let migrated = migrate_on(&open.db).await;
+        let migrated = match reclaim_orphaned_identity(&self.inner.accounts, &open.db).await {
+            Ok(()) => migrate_on(&open.db).await,
+            Err(error) => Err(error),
+        };
         open.db.executor().close().await;
         migrated
     }
@@ -954,7 +963,7 @@ async fn migrate_on(db: &CatalogDb) -> Result<StoreMigration, OkfError> {
 /// [`OkfError::Refused`] naming why (and the other store's name, which an
 /// admin may see); [`OkfError::Database`] if a read fails.
 #[tracing::instrument(level = "debug", skip_all)]
-async fn refuse_a_taken_database(db: &CatalogDb) -> Result<(), OkfError> {
+async fn refuse_a_taken_database(accounts: &PgPool, db: &CatalogDb) -> Result<(), OkfError> {
     let mut connection = db.executor().acquire().await?;
     if db::holds_account_tables(&mut connection).await? {
         return Err(OkfError::Refused {
@@ -963,11 +972,48 @@ async fn refuse_a_taken_database(db: &CatalogDb) -> Result<(), OkfError> {
         });
     }
     match db::store_owner(&mut connection).await? {
-        Some(owner) if owner != db.store().as_str() => Err(OkfError::Refused {
-            reason: format!("that database already belongs to store {owner}"),
-        }),
+        Some(owner) if owner != db.store().as_str() && store_has_row(accounts, &owner).await? => {
+            Err(OkfError::Refused {
+                reason: format!("that database already belongs to store {owner}"),
+            })
+        }
         Some(_) | None => Ok(()),
     }
+}
+
+/// Whether the account database has a row for store `name`.
+///
+/// # Errors
+/// [`OkfError::Database`] if the read fails.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "stores.has_row"))]
+async fn store_has_row(accounts: &PgPool, name: &str) -> Result<bool, OkfError> {
+    Ok(
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM stores WHERE name = $1)")
+            .bind(name)
+            .fetch_one(accounts)
+            .await?,
+    )
+}
+
+/// Replaces an identity row that names a store with no row (a leftover of
+/// an add that failed after its migration) with `db`'s own store name, so
+/// the migration that follows claims the database. An identity naming a
+/// registered store is left for the migration to refuse.
+///
+/// # Errors
+/// [`OkfError::Database`] if a read or the write fails.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn reclaim_orphaned_identity(accounts: &PgPool, db: &CatalogDb) -> Result<(), OkfError> {
+    let mut connection = db.executor().acquire().await?;
+    let owner = db::store_owner(&mut connection).await?;
+    let result = match owner {
+        Some(owner) if owner != db.store().as_str() && !store_has_row(accounts, &owner).await? => {
+            db::replace_store_identity(&mut connection, db.store()).await
+        }
+        Some(_) | None => Ok(()),
+    };
+    connection.return_to_pool().await;
+    result
 }
 
 #[cfg(test)]

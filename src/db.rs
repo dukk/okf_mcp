@@ -415,6 +415,24 @@ pub async fn store_owner(conn: &mut PgConnection) -> Result<Option<String>, OkfE
     )
 }
 
+/// Replaces a database's identity row with `store`: a reclaim of a database
+/// whose previous claimant was never registered. The caller has checked that
+/// the old name has no row and holds the add's location lock.
+///
+/// # Errors
+/// [`OkfError::Database`] (or `Busy`) for a driver error.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "db.replace_store_identity"))]
+pub async fn replace_store_identity(
+    conn: &mut PgConnection,
+    store: &StoreName,
+) -> Result<(), OkfError> {
+    sqlx::query("UPDATE catalog.store_identity SET name = $1")
+        .bind(store.as_str())
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 /// Whether a database holds the account tables (`public.stores`): it is the
 /// account database, whatever name reached it.
 ///
