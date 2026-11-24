@@ -1257,24 +1257,24 @@ pub async fn prune(pool: &PgPool, before: DateTime<Utc>) -> Result<u64, OkfError
 /// * `store` - the store to prune.
 /// * `before` - the cut-off: now, minus the retention, minus a margin.
 /// * `retention_days` - the `audit_retention_days` setting.
+/// * `wait` - the bound at the database (`lock_timeout` and
+///   `statement_timeout`) on the delete, so background work never waits on a
+///   lock without limit ([`crate::stores::bounded`]).
 ///
 /// # Returns
 /// How many entries went.
 ///
 /// # Errors
-/// [`OkfError::Database`] or [`OkfError::StoreUnavailable`], which delete
-/// nothing.
+/// [`OkfError::Database`] (a lock or statement past `wait` included) or
+/// [`OkfError::StoreUnavailable`], which delete nothing.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.prune_catalog"))]
 pub async fn prune_catalog(
     store: &CatalogDb,
     before: DateTime<Utc>,
     retention_days: i64,
+    wait: std::time::Duration,
 ) -> Result<u64, OkfError> {
-    let mut tx = store
-        .executor()
-        .begin()
-        .await
-        .map_err(|error| store.classify(error))?;
+    let mut tx = crate::stores::bounded::store_tx(store, wait).await?;
     // `set_config(.., true)` is `SET LOCAL` with a bindable value.
     sqlx::query("SELECT set_config('okf.audit_retention_days', $1, true)")
         .bind(retention_days.to_string())

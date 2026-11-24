@@ -1139,9 +1139,30 @@ async fn housekeeping_runs_each_slot_once_across_two_serving_replicas() {
             .iter()
             .filter(|(key, ..)| key.starts_with(&format!("{}:", task.as_str())))
             .collect();
-        // Within a minute or two only `cluster_stats` can reach a second slot.
+        // Within a minute or two only the every-minute tasks can reach a
+        // second slot: at most three slots for each cluster or store job
+        // (the key without its slot, `<task>` or `<task>:<store>`).
         assert!(!slots.is_empty(), "{task:?}: {jobs:?}");
-        assert!(slots.len() <= 3, "{task:?}: {jobs:?}");
+        let mut series: Vec<&str> = slots
+            .iter()
+            .filter_map(|(key, ..)| key.rsplit_once(':').map(|(series, _)| series))
+            .collect();
+        series.sort_unstable();
+        for name in &series {
+            let count = series.iter().filter(|other| *other == name).count();
+            assert!(count <= 3, "{task:?}: {jobs:?}");
+        }
+        // Tasks on catalog data have a job on the store `main` (plan Task 16).
+        assert_eq!(
+            series.contains(&format!("{}:main", task.as_str()).as_str()),
+            task.runs_per_store(),
+            "{task:?}: {jobs:?}"
+        );
+        assert_eq!(
+            series.contains(&task.as_str()),
+            task.runs_on_cluster(),
+            "{task:?}: {jobs:?}"
+        );
         assert!(
             slots
                 .iter()

@@ -737,7 +737,15 @@ two). What `[redis]` does not share:
   minute; see [Store cleanup](#store-cleanup)). Every replica's ticker pushes each
   task's current slot once a minute; a unique key per slot makes the other
   replicas' pushes no-ops, so each slot runs once, on whichever replica's
-  worker takes it. A failed job is retried twice with a backoff; a slot
+  worker takes it. The work on catalog data runs as one job per catalog
+  store, keyed `<task>:<store>:<slot>` (cluster jobs are `<task>:<slot>`):
+  `prune_changesets`, the store half of `prune_audit` (each store's
+  catalog events, past the same `audit_retention_days`) and the open
+  changeset count of `cluster_stats`. The ticker reads the `stores` table on
+  every push, so a store added while the replicas run gets its jobs within a
+  minute. A store that is down fails only its own jobs, which are retried;
+  every statement of a store job runs under a 20 s `lock_timeout` and
+  `statement_timeout`, so a held lock never keeps a worker waiting. A failed job is retried twice with a backoff; a slot
   missed while every replica was down is not caught up, and the next slot
   does the same work. `okf_housekeeping_runs_total` counts the runs. A
   replica looks a slot up before pushing it, so a slot already scheduled
@@ -768,6 +776,9 @@ two). What `[redis]` does not share:
 - **Cluster gauges.** `okf_changesets_open` and `okf_mail_queue_depth` come
   from the `cluster_stats` row, which every replica reads once a minute, so
   all replicas report the same value: use `max()` across replicas.
+  `okf_changesets_open` is the sum of each store's last count
+  (`cluster_store_stats`), so a store that cannot be reached contributes the
+  count it had when it was last reached.
 - **`okf_mcp_sessions_active`** counts the sessions each replica holds. A
   session restored on a second replica counts there too, so the sum over
   replicas can exceed the number of live sessions.
