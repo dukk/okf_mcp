@@ -746,7 +746,10 @@ two). What `[redis]` does not share:
   minute. A store that is down fails only its own jobs, which are retried.
   A store job's own prune, count and write statements run under a 20 s
   `lock_timeout` and `statement_timeout`, so a held lock doesn't keep a
-  worker waiting; a 30 s backstop covers the whole job. Finding and opening
+  worker waiting. Each step of a job (opening the store, the prune, the
+  count, the account write) also has its own 30 s `tokio` backstop, so a
+  job of several steps can run longer than 30 s in all, but no one step
+  can. Finding and opening
   the store is bounded by `store_connect_timeout` instead, and a store's
   first-open migrations by the backstop alone, since a migration can
   legitimately run long. A failed job is retried twice with a backoff; a slot

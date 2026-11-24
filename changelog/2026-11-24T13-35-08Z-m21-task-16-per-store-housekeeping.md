@@ -24,8 +24,10 @@
 - `housekeeping::schedule` takes a `&Housekeeping` job; `Housekeeping` carries an
   optional `store`, and `run_on_store` runs a job's store half. A store job's
   own prune, count and write statements run under `lock_timeout` and
-  `statement_timeout` (20 s), with a 30 s `tokio` backstop over the whole job.
-  Three things are bounded differently: the registry reads that find and open
+  `statement_timeout` (20 s). Each step of a job (opening the store, the
+  prune, the store count, the account write) also has its own 30 s `tokio`
+  backstop, so a job with several steps can take longer than 30 s in all,
+  but no single step can. Three things are bounded differently: the registry reads that find and open
   the store use `store_connect_timeout`, a store's first-open migrations have
   only the backstop, and `prune_audit`'s settings read uses its own timeout.
   No job holds an account and a store transaction at once.
