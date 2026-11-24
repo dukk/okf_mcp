@@ -390,11 +390,11 @@ async fn a_cleanup_attempt_stuck_on_a_lock_fails_without_holding_up_another_stor
     // Act: `main` sorts first, so it is attempted (and abandoned) before
     // `second`. The outer timeout only fails the test if the run hangs.
     let report = tokio::time::timeout(
-        Duration::from_secs(60),
+        Duration::from_secs(15),
         run_bounded(&stores, now(), quick()),
     )
     .await
-    .expect("the run is bounded by the attempt timeout")
+    .expect("the database bound ends the attempt long before the 30 s backstop")
     .unwrap();
 
     // Assert: the stuck row counts a failed try and stays; the other
@@ -453,11 +453,11 @@ async fn a_store_row_lock_fails_that_cleanup_at_the_database_and_another_store_s
 
     // Act
     let report = tokio::time::timeout(
-        Duration::from_secs(60),
+        Duration::from_secs(15),
         run_bounded(&stores, now(), quick()),
     )
     .await
-    .expect("the run is bounded")
+    .expect("the database bound ends the attempt long before the 30 s backstop")
     .unwrap();
     stores.forget_all().await;
 
@@ -530,11 +530,11 @@ async fn a_held_default_key_lock_fails_a_catalog_cleanup_and_leaves_a_one_connec
 
     // Act
     let report = tokio::time::timeout(
-        Duration::from_secs(60),
+        Duration::from_secs(15),
         run_bounded(&stores, now(), quick()),
     )
     .await
-    .expect("the run is bounded")
+    .expect("the database bound ends the attempt long before the 30 s backstop")
     .unwrap();
 
     // Assert: the attempt failed and was counted (so the one connection was
