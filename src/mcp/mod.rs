@@ -20,6 +20,8 @@ pub(crate) mod history;
 mod labels_tests;
 pub(crate) mod maintenance;
 #[cfg(test)]
+mod overlay_stores_tests;
+#[cfg(test)]
 mod reference;
 pub(crate) mod reports;
 mod restructure;

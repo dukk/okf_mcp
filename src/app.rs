@@ -33,6 +33,7 @@ use crate::overlay::Overlays;
 use crate::shared;
 use crate::store::audit::{self, AccessKind, AccessRecord, ProvisionerUse};
 use crate::store::catalogs::{CatalogGeneration, CatalogRow};
+use crate::store::changesets::ChangesetKey;
 use crate::store::settings::{self, Settings};
 use crate::store::{catalogs, unlocks};
 use crate::stores::{AccountDb, CatalogDb, PoolSettings, StoreName, Stores};
@@ -93,7 +94,7 @@ pub struct App {
     overlays: Overlays,
     // Each changeset's writers, queued in this process before they take a
     // pooled connection (`write::apply`).
-    write_queue: KeyedLocks,
+    write_queue: KeyedLocks<ChangesetKey>,
     // The in-process half of each catalog's publish lock (design
     // "Publish"), by catalog id: here rather than in `CatalogState`, so
     // every state of one catalog shares it (M18 Decision 4).
@@ -1048,7 +1049,7 @@ impl App {
     /// turn on one changeset hold no pooled connection.
     ///
     /// # Returns
-    /// The locks, keyed by changeset id.
+    /// The locks, keyed by [`ChangesetKey`] (store-local ids collide).
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -1056,7 +1057,7 @@ impl App {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    pub fn write_queue(&self) -> &KeyedLocks {
+    pub fn write_queue(&self) -> &KeyedLocks<ChangesetKey> {
         &self.write_queue
     }
 
