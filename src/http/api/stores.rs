@@ -198,7 +198,7 @@ async fn list_stores(
 /// # Errors
 /// 403 unless the caller is an admin reaching every catalog; 409 when the
 /// store cannot be reached with these settings (the reply names no host,
-/// port or credential), when separate stores are not enabled yet, or for a
+/// port or credential), or for a
 /// name or host, port and database already in use; 422 for a malformed
 /// body; 500 for a database failure.
 #[tracing::instrument(level = "debug", skip_all)]

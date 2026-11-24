@@ -270,8 +270,7 @@ pub async fn summaries(executor: &PgPool) -> Result<Vec<StoreSummary>, OkfError>
 /// on the account pool is never held while a store's pool connects). It
 /// refuses the account database under another host name (it holds the
 /// account tables) and a database whose identity row names another store (a
-/// second host name for a registered store). Until Task 20 a `host` store is
-/// then refused ([`placement::refuse_host_stores_until_task_20`]). Last, the
+/// second host name for a registered store). Then the
 /// store's schema is migrated, which writes its identity row, so the
 /// database answers to this name before the row exists.
 ///
@@ -289,7 +288,7 @@ pub async fn summaries(executor: &PgPool) -> Result<Vec<StoreSummary>, OkfError>
 /// [`OkfError::Refused`] when the store cannot be reached with these
 /// settings (the reply names no host, port or credential; the cause is
 /// logged locally), when it is the account database or another store's
-/// database, when host stores are not enabled yet, when its schema cannot be
+/// database, when its schema cannot be
 /// migrated, or when the name or the host, port and database is already
 /// used; [`OkfError::Database`], a failed audit write included.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "stores.add"))]
@@ -304,7 +303,6 @@ pub async fn add(
         .check(row.clone())
         .await
         .map_err(unreachable_refused)?;
-    placement::refuse_host_stores_until_task_20(&row.location)?;
     stores
         .prepare(row.clone())
         .await
@@ -688,11 +686,53 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn adding_a_host_store_is_refused_until_enabled() {
+    async fn a_host_store_can_be_added() {
         let db = crate::db::test_db().await;
-        // An empty database of its own, so it is the P8 refusal and not the
-        // connection or identity check.
+        // An empty database of its own: adding the store migrates it.
         let target = crate::db::pg_support::TestDb::start().await;
+        let (stores, row) = reachable_on(&db, &target, "shared-1");
+
+        let added = add(&db.pool, &stores, row, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+
+        assert_eq!(added.row.name.as_str(), "shared-1");
+        assert_eq!(store_names(&db.pool).await, ["main", "shared-1"]);
+        // The new store's database was migrated to the embedded versions and
+        // answers to its name.
+        let mut connection = target.pool.acquire().await.unwrap();
+        assert_eq!(
+            crate::db::store_owner(&mut connection).await.unwrap(),
+            Some("shared-1".to_string())
+        );
+        let applied: Vec<i64> =
+            sqlx::query_scalar("SELECT version FROM catalog._sqlx_migrations ORDER BY version")
+                .fetch_all(&mut *connection)
+                .await
+                .unwrap();
+        let embedded: Vec<i64> = crate::db::CATALOG_MIGRATOR
+            .iter()
+            .filter(|migration| !migration.migration_type.is_down_migration())
+            .map(|migration| migration.version)
+            .collect();
+        assert_eq!(applied, embedded);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_whose_schema_cannot_be_migrated_leaves_no_row() {
+        let db = crate::db::test_db().await;
+        let target = crate::db::pg_support::TestDb::start().await;
+        // A table the baseline migration creates (not `catalog_state`, whose
+        // presence would be taken for an adoptable schema), already there with another
+        // shape: the migration fails part way.
+        sqlx::query("CREATE SCHEMA catalog")
+            .execute(&target.pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE catalog.documents (unrelated int)")
+            .execute(&target.pool)
+            .await
+            .unwrap();
         let (stores, row) = reachable_on(&db, &target, "shared-1");
 
         let refused = add(&db.pool, &stores, row, &AuditActor::cli(), Utc::now())
@@ -700,13 +740,10 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            matches!(&refused, OkfError::Refused { reason } if reason.contains("not enabled")),
+            matches!(&refused, OkfError::Refused { reason } if reason.contains("migrated")),
             "{refused:?}"
         );
         assert_eq!(store_names(&db.pool).await, ["main"]);
-        // Refused before the migration: the database is left as it was.
-        let mut connection = target.pool.acquire().await.unwrap();
-        assert_eq!(crate::db::store_owner(&mut connection).await.unwrap(), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]

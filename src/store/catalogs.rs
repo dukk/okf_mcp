@@ -150,9 +150,9 @@ pub(crate) async fn create(
     now: DateTime<Utc>,
 ) -> Result<Catalog, OkfError> {
     let (catalog, store) = register(pool, new, actor, now).await?;
-    // Placement chooses `main` until a host store can be added (Task 20).
-    // Stop, leaving the half-created row for the recovery task, rather than
-    // write a catalog's files to the wrong store.
+    // This test-only form opens `main` alone. Stop, leaving the half-created
+    // row for the recovery task, rather than write a catalog's files to the
+    // wrong store.
     if store != StoreName::main() {
         return Err(OkfError::Refused {
             reason: format!(

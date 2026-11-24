@@ -29,7 +29,7 @@ use crate::store::audit::{self, Action, AuditActor, CatalogEntry, People};
 use crate::store::catalogs::{self, CatalogGeneration};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::store::import::{existing_rows, ExistingRow};
-use crate::stores::{AccountDb, CatalogDb};
+use crate::stores::{AccountDb, CatalogDb, StoreName};
 
 /// The `revisions.message` of a repair.
 pub const REPAIR_MESSAGE: &str = "repair indexes";
@@ -283,7 +283,8 @@ async fn write_files(
 ///
 /// # Arguments
 /// * `accounts` - the account database (the catalogs).
-/// * `db` - the store holding their documents.
+/// * `db` - the store holding their documents; only the catalogs placed on
+///   it are listed.
 ///
 /// # Returns
 /// Their names, sorted (in the database's order, as the one joined statement
@@ -297,8 +298,10 @@ pub async fn missing_root_index(
     db: &CatalogDb,
 ) -> Result<Vec<String>, OkfError> {
     let catalogs: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, name FROM catalogs WHERE provisioned_at IS NOT NULL AND deleted_at IS NULL ORDER BY name",
+        "SELECT id, name FROM catalogs \
+         WHERE provisioned_at IS NOT NULL AND deleted_at IS NULL AND store = $1 ORDER BY name",
     )
+    .bind(db.store().as_str())
     .fetch_all(accounts.executor())
     .await?;
     if catalogs.is_empty() {
@@ -321,6 +324,37 @@ pub async fn missing_root_index(
         .filter(|(id, _)| !with_index.contains(id))
         .map(|(_, name)| name)
         .collect())
+}
+
+/// Which of `names` live on `store`: the catalogs of that name placed on it,
+/// in the order given. A name that is no live catalog counts as `main`'s, so
+/// the repair of it fails on one store, with the error it always gave.
+///
+/// # Arguments
+/// * `accounts` - the account database (the catalogs).
+/// * `store` - the store.
+/// * `names` - the catalogs named on the command line.
+///
+/// # Returns
+/// The names placed on `store`.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "repair.placed_on"))]
+pub async fn placed_on(
+    accounts: &AccountDb,
+    store: &StoreName,
+    names: &[String],
+) -> Result<Vec<String>, OkfError> {
+    Ok(sqlx::query_scalar(
+        "SELECT t.name FROM unnest($2::text[]) WITH ORDINALITY AS t(name, position) \
+         LEFT JOIN catalogs c ON c.name = t.name AND c.deleted_at IS NULL \
+         WHERE COALESCE(c.store, 'main') = $1 ORDER BY t.position",
+    )
+    .bind(store.as_str())
+    .bind(names)
+    .fetch_all(accounts.executor())
+    .await?)
 }
 
 #[cfg(test)]

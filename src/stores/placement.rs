@@ -11,7 +11,6 @@ use sqlx::PgConnection;
 use super::StoreName;
 use crate::error::OkfError;
 use crate::store::decode_column;
-use crate::store::stores::StoreLocation;
 
 /// The `server_settings` key that names the default store.
 pub const DEFAULT_STORE_KEY: &str = "default_store";
@@ -70,31 +69,6 @@ pub async fn default_store(conn: impl sqlx::PgExecutor<'_>) -> Result<StoreName,
         value.as_str().and_then(|name| StoreName::parse(name).ok()),
         "server_settings.default_store",
     )
-}
-
-/// Refuses a store whose database is not the account database, until
-/// Task 20 enables separate stores (plan decision P8): while any catalog
-/// code still assumes `main`, a catalog placed elsewhere would be broken.
-///
-/// This is the one place that refusal lives. **Task 20 deletes this
-/// function and its one call in `store::stores::add`.**
-///
-/// # Arguments
-/// * `location` - where the store being added keeps its database.
-///
-/// # Errors
-/// [`OkfError::Refused`] for a `host` store.
-#[cfg_attr(
-    dylint_lib = "hyp_tracing",
-    allow(uninstrumented_fn, reason = "a pure check of a value, no I/O")
-)]
-pub fn refuse_host_stores_until_task_20(location: &StoreLocation) -> Result<(), OkfError> {
-    match location {
-        StoreLocation::AccountDatabase => Ok(()),
-        StoreLocation::Host { .. } => Err(OkfError::Refused {
-            reason: "separate stores are not enabled yet".to_string(),
-        }),
-    }
 }
 
 #[cfg(test)]
@@ -318,19 +292,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(default_store(&db.pool).await.unwrap(), StoreName::main());
-    }
-
-    #[test]
-    fn only_host_stores_are_refused_until_task_20() {
-        let host = StoreLocation::Host {
-            host: "db.example.internal".to_string(),
-            port: 5432,
-            database: "okf".to_string(),
-            credential_kind: crate::store::stores::CredentialKind::Env,
-            credential_ref: "SOME_VAR".to_string(),
-        };
-
-        assert!(refuse_host_stores_until_task_20(&host).is_err());
-        assert!(refuse_host_stores_until_task_20(&StoreLocation::AccountDatabase).is_ok());
     }
 }

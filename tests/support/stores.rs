@@ -2,6 +2,9 @@
 //! pool: the `main` store is the account database, or the second database
 //! in `OKF_TEST_STORE=separate` mode.
 
+// Each crate that includes this file uses a different part of it.
+#![allow(dead_code)]
+
 use chrono::{DateTime, Utc};
 use okf_mcp::config::Config;
 use okf_mcp::error::OkfError;
@@ -58,4 +61,56 @@ pub async fn create_catalog(
     let created = catalogs::create_in(&stores, new, actor, now).await;
     stores.forget_all().await;
     created
+}
+
+/// A forwarding TCP proxy in front of a store's database: the way a test
+/// takes "the store's database" away after the server holds open
+/// connections to it. Stopping it cuts every connection through it and
+/// closes its port, so a new connect is refused, as when a database host
+/// goes down.
+pub struct StoreProxy {
+    /// The proxy's port on `127.0.0.1`.
+    pub port: u16,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl StoreProxy {
+    /// Starts a proxy that forwards every connection to `target`.
+    ///
+    /// # Arguments
+    /// * `target` - `host:port` of the database being fronted.
+    ///
+    /// # Returns
+    /// The running proxy.
+    ///
+    /// # Panics
+    /// If no port can be bound.
+    pub async fn start(target: String) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a port");
+        let port = listener.local_addr().expect("its address").port();
+        let task = tokio::spawn(async move {
+            // Dropping the set aborts every forwarding task, which closes
+            // their sockets (a Rust task is dropped, not left running).
+            let mut forwards = tokio::task::JoinSet::new();
+            while let Ok((mut client, _)) = listener.accept().await {
+                let target = target.clone();
+                forwards.spawn(async move {
+                    if let Ok(mut upstream) = tokio::net::TcpStream::connect(target).await {
+                        let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+                    }
+                });
+            }
+        });
+        Self { port, task }
+    }
+
+    /// Takes the database away: every open connection is cut and the port
+    /// is closed.
+    pub async fn stop(self) {
+        self.task.abort();
+        // Finished once the listener and the forwarding tasks are dropped.
+        let _ = self.task.await;
+    }
 }

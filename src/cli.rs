@@ -1461,16 +1461,7 @@ async fn run_catalog(
             dry_run,
             actor,
         } => {
-            // `main` only: it is the only store that can hold catalogs until
-            // the milestone's last task lifts the restriction on separate
-            // stores (plan decision P8), which makes this a loop over
-            // `Stores::all`.
-            let store = stores.get(&StoreName::main()).await?;
-            let (targets, skipped) =
-                repair_targets(&AccountDb::new(pool.clone()), &store, names, missing_only).await?;
-            for name in &skipped {
-                println!("skipped {name}: it has a root index.md, or does not exist");
-            }
+            let accounts = AccountDb::new(pool.clone());
             let audit = AuditActor::cli();
             let options = repair::RepairOptions {
                 dry_run,
@@ -1478,10 +1469,40 @@ async fn run_catalog(
                 audit: &audit,
                 now: clock.now(),
             };
-            print!(
-                "{}",
-                repair_catalogs(&store, &targets, &options, changed).await?
-            );
+            // Every store in turn (only those holding a named catalog, when
+            // names are given): a catalog is repaired on the store that
+            // holds it. A store that fails does not stop the others; the
+            // failures are reported together at the end.
+            let mut failures = Vec::new();
+            for store_name in stores.all().await? {
+                let outcome = async {
+                    // Named catalogs are placed from the account database, so a
+                    // store holding none of them is never opened (it may be down).
+                    if !names.is_empty()
+                        && repair::placed_on(&accounts, &store_name, &names)
+                            .await?
+                            .is_empty()
+                    {
+                        return Ok(String::new());
+                    }
+                    let store = stores.get(&store_name).await?;
+                    let (targets, skipped) =
+                        repair_targets(&accounts, &store, names.clone(), missing_only).await?;
+                    for name in &skipped {
+                        println!("skipped {name}: it has a root index.md, or does not exist");
+                    }
+                    if targets.is_empty() {
+                        return Ok(String::new());
+                    }
+                    repair_catalogs(&store, &targets, &options, changed).await
+                }
+                .await;
+                match outcome {
+                    Ok(report) => print!("{report}"),
+                    Err(error) => failures.push(format!("store {store_name}: {error:#}")),
+                }
+            }
+            anyhow::ensure!(failures.is_empty(), "{}", failures.join("\n"));
         }
     }
     Ok(())
@@ -1491,8 +1512,10 @@ async fn run_catalog(
 ///
 /// # Arguments
 /// * `accounts` - the account database (the catalogs).
-/// * `db` - the store holding their documents.
-/// * `names` - the catalogs named on the command line.
+/// * `db` - the store holding their documents; only the catalogs placed on
+///   it are considered.
+/// * `names` - the catalogs named on the command line (those placed on
+///   other stores are left to those stores' turn).
 /// * `missing_only` - keep only catalogs without a root `index.md` (every
 ///   such catalog when none is named).
 ///
@@ -1516,14 +1539,18 @@ async fn repair_targets(
             "name the catalogs to repair, or pass --missing-only for every catalog \
              without a root index.md"
         );
-        return Ok((names, Vec::new()));
+        return Ok((
+            repair::placed_on(accounts, db.store(), &names).await?,
+            Vec::new(),
+        ));
     }
     let missing = repair::missing_root_index(accounts, db).await?;
     if names.is_empty() {
         return Ok((missing, Vec::new()));
     }
     // `partition` splits one list in two by a test, like two comprehensions.
-    Ok(names.into_iter().partition(|name| missing.contains(name)))
+    let here = repair::placed_on(accounts, db.store(), &names).await?;
+    Ok(here.into_iter().partition(|name| missing.contains(name)))
 }
 
 /// Repairs each catalog in turn, carrying on past one that fails, and
@@ -3127,6 +3154,240 @@ mod tests {
             })
         ));
         assert!(without_replace.is_err(), "--only-machinery needs --replace");
+    }
+
+    /// Issue #979 (M21 Task 20): `catalog repair-indexes` loops over every
+    /// store, repairing each catalog on the store that holds it, and names
+    /// given for a catalog on another store are not repaired on `main`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn repair_indexes_repairs_a_catalog_on_each_store() {
+        // Arrange: `on-main` on `main` and `on-b` on a host store of its own,
+        // both without a root `index.md`.
+        let db = crate::db::test_db().await;
+        let database = db.extra_store_database("b").await;
+        let options = db.pool.connect_options();
+        sqlx::query(
+            "INSERT INTO stores (name, location_kind, host, port, database, \
+             credential_kind, credential_ref, created_at) \
+             VALUES ('store-b', 'host', $1, $2, $3, 'env', $4, now())",
+        )
+        .bind(options.get_host())
+        .bind(i32::from(options.get_port()))
+        .bind(&database)
+        .bind(crate::db::pg::STORE_PASSWORD_VAR)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let store_b = StoreName::parse("store-b").unwrap();
+        let stores = Stores::new(
+            db.pool.clone(),
+            PoolSettings::from_config(&crate::config::Config::default()),
+        );
+        for (name, pin) in [("on-main", None), ("on-b", Some(&store_b))] {
+            crate::store::teams::set_store(
+                &db.pool,
+                crate::db::TEST_TEAM,
+                pin,
+                &AuditActor::cli(),
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+            let new = catalogs::NewCatalog {
+                name,
+                display_name: &DisplayName::default(),
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            };
+            let created =
+                catalogs::create_in(&stores, &new, &AuditActor::cli(), chrono::Utc::now())
+                    .await
+                    .unwrap();
+            let placed: String = sqlx::query_scalar("SELECT store FROM catalogs WHERE id = $1")
+                .bind(created.id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+            let handle = stores
+                .get(&StoreName::parse(&placed).unwrap())
+                .await
+                .unwrap();
+            for statement in [
+                "DELETE FROM catalog.revisions WHERE catalog_id = $1",
+                "DELETE FROM catalog.documents WHERE catalog_id = $1",
+            ] {
+                sqlx::query(statement)
+                    .bind(created.id)
+                    .execute(handle.executor())
+                    .await
+                    .unwrap();
+            }
+        }
+        // Act
+        run(
+            cli(
+                Some(db.url.clone()),
+                Command::Catalog(CatalogCommand::RepairIndexes {
+                    names: Vec::new(),
+                    missing_only: true,
+                    dry_run: false,
+                    actor: "okf-mcp/repair-indexes".to_string(),
+                }),
+            ),
+            fixed_now(),
+        )
+        .await
+        .unwrap();
+
+        // Assert: each store holds the root index of its own catalog only.
+        for (store, name) in [(StoreName::main(), "on-main"), (store_b, "on-b")] {
+            let held: Vec<i64> = sqlx::query_scalar(
+                "SELECT DISTINCT catalog_id FROM catalog.documents WHERE path = 'index.md'",
+            )
+            .fetch_all(stores.get(&store).await.unwrap().executor())
+            .await
+            .unwrap();
+            assert_eq!(
+                held,
+                [crate::db::catalog_id(&db.pool, name).await],
+                "{store}"
+            );
+        }
+        stores.forget_all().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_targeted_repair_never_opens_a_store_holding_none_of_the_names() {
+        // Arrange: `on-main` without a root index, and a registered store
+        // that nothing listens on (a closed port).
+        let db = crate::db::test_db().await;
+        sqlx::query(
+            "INSERT INTO stores (name, location_kind, host, port, database, \
+             credential_kind, credential_ref, created_at) \
+             VALUES ('store-down', 'host', 'localhost', 1, 'down', 'env', $1, now())",
+        )
+        .bind(crate::db::pg::STORE_PASSWORD_VAR)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let stores = Stores::new(
+            db.pool.clone(),
+            PoolSettings::from_config(&crate::config::Config::default()),
+        );
+        let new = catalogs::NewCatalog {
+            name: "on-main",
+            display_name: &DisplayName::default(),
+            description: "",
+            owner_team: crate::db::TEST_TEAM,
+        };
+        let created = catalogs::create_in(&stores, &new, &AuditActor::cli(), chrono::Utc::now())
+            .await
+            .unwrap();
+        for statement in [
+            "DELETE FROM catalog.revisions WHERE catalog_id = $1",
+            "DELETE FROM catalog.documents WHERE catalog_id = $1",
+        ] {
+            sqlx::query(statement)
+                .bind(created.id)
+                .execute(&crate::db::store_pool(&db.pool))
+                .await
+                .unwrap();
+        }
+
+        // Act: repair the one named catalog.
+        let outcome = run(
+            cli(
+                Some(db.url.clone()),
+                Command::Catalog(CatalogCommand::RepairIndexes {
+                    names: vec!["on-main".to_string()],
+                    missing_only: false,
+                    dry_run: false,
+                    actor: "okf-mcp/repair-indexes".to_string(),
+                }),
+            ),
+            fixed_now(),
+        )
+        .await;
+
+        // Assert: it succeeded without the down store, and wrote the index.
+        outcome.unwrap();
+        let written: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM catalog.documents WHERE catalog_id = $1 AND path = 'index.md'",
+        )
+        .bind(created.id)
+        .fetch_one(&crate::db::store_pool(&db.pool))
+        .await
+        .unwrap();
+        assert_eq!(written, 1);
+        stores.forget_all().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unavailable_store_does_not_stop_the_repair_of_the_stores_after_it() {
+        // Arrange: `a-down` (sorts before `main`) on a closed port, and
+        // `on-main` without a root index.
+        let db = crate::db::test_db().await;
+        sqlx::query(
+            "INSERT INTO stores (name, location_kind, host, port, database, \
+             credential_kind, credential_ref, created_at) \
+             VALUES ('a-down', 'host', 'localhost', 1, 'down', 'env', $1, now())",
+        )
+        .bind(crate::db::pg::STORE_PASSWORD_VAR)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let stores = Stores::new(
+            db.pool.clone(),
+            PoolSettings::from_config(&crate::config::Config::default()),
+        );
+        let new = catalogs::NewCatalog {
+            name: "on-main",
+            display_name: &DisplayName::default(),
+            description: "",
+            owner_team: crate::db::TEST_TEAM,
+        };
+        let created = catalogs::create_in(&stores, &new, &AuditActor::cli(), chrono::Utc::now())
+            .await
+            .unwrap();
+        for statement in [
+            "DELETE FROM catalog.revisions WHERE catalog_id = $1",
+            "DELETE FROM catalog.documents WHERE catalog_id = $1",
+        ] {
+            sqlx::query(statement)
+                .bind(created.id)
+                .execute(&crate::db::store_pool(&db.pool))
+                .await
+                .unwrap();
+        }
+
+        // Act: repair every catalog without a root index.
+        let outcome = run(
+            cli(
+                Some(db.url.clone()),
+                Command::Catalog(CatalogCommand::RepairIndexes {
+                    names: Vec::new(),
+                    missing_only: true,
+                    dry_run: false,
+                    actor: "okf-mcp/repair-indexes".to_string(),
+                }),
+            ),
+            fixed_now(),
+        )
+        .await;
+
+        // Assert: the command reports the down store, and `main` was still repaired.
+        let error = format!("{:#}", outcome.unwrap_err());
+        assert!(error.contains("store a-down"), "{error}");
+        assert!(!error.contains("store main"), "{error}");
+        let written: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM catalog.documents WHERE catalog_id = $1 AND path = 'index.md'",
+        )
+        .bind(created.id)
+        .fetch_one(&crate::db::store_pool(&db.pool))
+        .await
+        .unwrap();
+        assert_eq!(written, 1);
+        stores.forget_all().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

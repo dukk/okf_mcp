@@ -358,7 +358,7 @@ Each release ends deployable: after Task 6 (types only, rolling), after Task 10b
   - `PUT /api/v1/settings/default_store`;
   - `PUT` and `DELETE /api/v1/teams/{team}/store` (pin and unpin).
 
-  The CLI has the same commands under `okf-mcp stores`. Adding a store first checks it can connect, and refuses otherwise. Until Task 20, adding a store with location `host` is also refused with a message saying separate stores aren't enabled yet (P8). The check is one function, so Task 20 can remove it in one place. A store that is the default or pinned by a team cannot be removed, and no removal endpoint is built (YAGNI).
+  The CLI has the same commands under `okf-mcp stores`. Adding a store first checks it can connect, and refuses otherwise. Task 20 removed the refusal of a `host` store that P8 had kept until then. A store that is the default or pinned by a team cannot be removed, and no removal endpoint is built (YAGNI).
 - [ ] New audit actions: `store.added`, `setting.default_store_changed`, `team.store_pinned`, `team.store_unpinned`. `target_kind` gains `store`, with `target_name` set to the store's name; migration 0036 (Task 7) widens the checks for it.
 - [ ] Tests: `a_new_catalog_lands_on_the_default_store`; `a_team_pin_wins_over_the_default`; `changing_the_default_moves_new_catalogs_only`; `adding_an_unreachable_store_is_refused`; `adding_a_host_store_is_refused_until_enabled`; `store_admin_endpoints_refuse_non_admin_credentials`; `every_store_change_is_audited`.
 
@@ -682,17 +682,25 @@ Release 3 is not deployable yet: Task 17 (listeners per store) completes it.
 
 **Files:** create `tests/stores.rs`; `changelog/`.
 
-- [ ] `tests/stores.rs`:
+- [x] `tests/stores.rs`:
   1. Start a server with the account database and two stores.
   2. Pin team A to store `acme`.
   3. Create catalogs for team A and for team B.
   4. Run open, edit, publish, history, revert, search across both, export and maintenance.
   5. Assert each catalog's rows exist only on its own store.
   6. Stop store `acme`'s database; assert team B is unaffected and team A gets `StoreUnavailable`.
-- [ ] Smoke: deploy release 3 to a disposable environment built from a snapshot of a pre-split database. Follow P10's procedure. Check the adoption, the audit view (old and new entries) and a publish, and record the result in the milestone changelog.
-- [ ] CLI `repair-indexes` loops over `Stores::all()`; after Task 8 it repairs `main` only (issue #966).
-- [ ] Remove P8's restriction on `host` stores once the end-to-end test passes: delete `placement::refuse_host_stores_until_task_20` and its one call in `store::stores::add` (Task 10 marks it), and invert its test: `adding_a_host_store_is_refused_until_enabled` becomes `a_host_store_can_be_added`. Update "Catalog stores API" in `docs/operations.md`, which says host stores are refused.
-- [ ] Milestone changelog summarising the epic.
+- [x] Automated upgrade smoke: `the_upgrade_procedure_adopts_a_pre_split_database_and_keeps_its_history` follows P10's procedure on a synthetic pre-split database and checks the adoption, the audit view (old and new entries) and a publish.
+- [ ] Smoke (maintainer): deploy release 3 to a disposable environment built from a snapshot of a real pre-split database. Follow P10's procedure. Check the adoption, the audit view (old and new entries) and a publish, and record the result in the milestone changelog.
+- [x] CLI `repair-indexes` loops over `Stores::all()`; after Task 8 it repairs `main` only (issue #966).
+- [x] Remove P8's restriction on `host` stores once the end-to-end test passes: delete `placement::refuse_host_stores_until_task_20` and its one call in `store::stores::add` (Task 10 marks it), and invert its test: `adding_a_host_store_is_refused_until_enabled` becomes `a_host_store_can_be_added`. Update "Catalog stores API" in `docs/operations.md`, which says host stores are refused.
+- [x] Milestone changelog summarising the epic.
+
+> **Corrected (issue #979, 2026-11-24).** Shipped as `tests/stores.rs` (two tests, plus the smoke) and the other steps, with these differences:
+>
+> - **The end-to-end test adds `acme` through `stores::add` as a `host` store, behind a forwarding proxy** (`tests/support/stores.rs`, `StoreProxy`), because the in-crate helpers (`TestApp::make_stalled`, `front_with_a_proxy`, `catalog_on_store`) are `pub(crate)` and an integration test cannot call them. "Stop `acme`'s database" is stopping the proxy, which cuts every connection and closes the port. The outage assertions run after `TestServer::restart`, so the server holds no loaded catalog state: a loaded state is served from memory and a merged search would still return it. (Task 18's `unavailable` therefore needs a state that is not loaded; a search over a catalog already in memory does not meet the store.)
+> - **The smoke is a test**, `the_upgrade_procedure_adopts_a_pre_split_database_and_keeps_its_history`: the database is built by `MIGRATOR.run_to(35)` (the migrations of `main`, identical to `migrations/accounts/0001-0035`), seeded by SQL at the old schema, then `okf-mcp migrate` runs through `cli::run`, the registry migrates `main` (what `stores migrate` does; `cli::run` installs the telemetry subscriber once per process, so a test runs one subcommand), and a server on it publishes. It is not a run against a real snapshot, which the maintainer still owes.
+> - **CLI `repair-indexes` repairs each catalog on the store that holds it.** `repair::missing_root_index` is scoped to the store it is given, and `repair::placed_on` routes explicit names (an unknown name counts as `main`'s and fails there as before). A store that fails does not stop the others.
+> - **P8 is lifted by deleting `placement::refuse_host_stores_until_task_20` and its call**, and `a_host_store_can_be_added` asserts the migrated schema and identity row (Task 14's note); `a_store_whose_schema_cannot_be_migrated_leaves_no_row` covers the failure.
 
 ## Self-review
 
