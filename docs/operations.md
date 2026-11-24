@@ -351,14 +351,15 @@ reads the same file as the server, with no extra flags.
   up to `database_max_connections` (16 by default) for requests, plus 1 for
   the change-feed listener (it holds one connection for the life of the
   process, on its own one-connection pool, so it never takes a request slot),
-  plus one more per catalog store the replica has opened whose database is not
-  the account database (that store's own change-feed listener, held while its
-  pool is open and outside `store_max_connections`; a store inside the account
-  database has none, the account listener hears it), plus up to 3 for the worker pool that the mail and housekeeping workers
+  plus `store_max_connections` for the pool of the store `main`, which is in
+  the account database, plus up to 3 for the worker pool that the mail and housekeeping workers
   share (the feedback worker, if on, has its own 3). For N replicas that is
-  `N x (database_max_connections + 4)`, plus `3 x N` with the feedback worker
-  on, plus `N x (store_max_connections + 1)` for each separate store (the pool
-  and its listener). Keep the database's `max_connections` above that, with
+  `N x (database_max_connections + store_max_connections + 4)`, plus `3 x N`
+  with the feedback worker on, plus `N x (store_max_connections + 1)` on the
+  database of each separate store (its pool and its change-feed listener, held
+  while the pool is open and outside `store_max_connections`; a store inside
+  the account database has no listener, the account listener hears it). See
+  [Catalog stores](#catalog-stores). Keep the database's `max_connections` above that, with
   room for the command line, `okf-mcp migrate` and your own tools.
 - **Two schemas.** okf's tables are in `public`; the mail queue is apalis'
   `apalis` schema, which `migrate` sets up after okf's migrations, with its
@@ -412,6 +413,202 @@ With a CloudNativePG `Cluster` named `okf-mcp-db`:
 Backups belong to the database, not the server. With CloudNativePG, use the
 barman-cloud plugin: WAL archiving and base backups to the site's object
 store (section 9).
+
+## Catalog stores
+
+A **store** is a named place where catalogs keep their data. The account
+database holds everything about people and access (users, teams, keys,
+grants, sessions, settings, the registry of catalogs and stores, and the
+audit of account actions). A store holds the catalogs' own data in a schema
+named `catalog`: documents and their revisions, changesets, maintenance
+runs, each catalog's generation and the catalog audit
+(`catalog.catalog_audit_entries`).
+
+- **`main`** is the store every deployment has. Its schema is inside the
+  account database, so a deployment that adds no store keeps one database.
+  Every existing catalog is on `main`.
+- A store on **its own database** (location `host`) keeps a team's catalog
+  data apart, for example on another Postgres cluster. **This release refuses
+  to add one**: `POST /api/v1/stores` and `okf-mcp stores add` answer 409 for
+  a `host` store, after checking that it can be reached (a later release of
+  the same milestone enables them). The rest of this section describes what
+  is in place, and marks what applies only once separate stores are enabled.
+- Each catalog is on exactly one store, chosen when it is created (see
+  [Placement](#placement)) and never changed. Nothing moves a catalog between
+  stores.
+- Every store, `main` included, has a connection pool of its own, opened on
+  its first use, and each pool's `search_path` is fixed at connect (`catalog`
+  for a store, `public` for the account database). A query for account tables
+  sent to a store, or the reverse, fails with "relation does not exist", even
+  when the store is inside the account database.
+
+### Adding a store
+
+Applies once separate stores are enabled; until then the request is refused
+as above. `okf-mcp stores add NAME --host H [--port 5432] --database D
+--credential-kind KIND --credential-ref REF`, or `POST /api/v1/stores`
+([Catalog stores API](#catalog-stores-api)), needs an admin that reaches every
+catalog. Create the database and its login role first; the server creates the
+`catalog` schema and its tables itself. The add:
+
+1. connects to the new database (a store that cannot be reached is refused,
+   and the reply names no host, port or credential; the log has the cause);
+2. refuses a database that holds the account tables (the account database
+   under another host name) or whose `catalog.store_identity` names another
+   store: each physical database answers to one store name, whatever host
+   name reached it, so adding the same database twice under two names is
+   refused;
+3. migrates it (`migrations/catalog/`: the baseline, then the identity row)
+   and stores the row. Every replica then drops any pool it had for that name.
+
+The stores table never holds a password. `credential_ref` says where to get
+it:
+
+| `credential_kind` | `credential_ref` | The login |
+|---|---|---|
+| `env` | The name of an environment variable holding the password. Set it on every replica and on the host that runs `okf-mcp stores migrate` | Host, port and database come from the row and the password from the variable; the user, TLS settings and other connection options are the account database's own (the account database's password is never sent to another host) |
+| `secrets-manager` | A secret's ARN, for example `arn:aws:secretsmanager:eu-west-1:111122223333:secret:okf/acme-AbCdEf`. The secret's value is JSON with `username` and `password` (the format RDS-managed secrets use) | The secret's `username` and `password`. Read when the pool opens, and again when the database refuses a login |
+| `iam` | The database user the token is signed for (the user must be allowed to log in with IAM) | The server signs a short-lived RDS IAM token with the AWS credentials it runs with (the same chain as the mail sender's SES client) and replaces the pool's token every 10 minutes and when a login is refused. The token is signed for the region in an RDS host name (`name.id.REGION.rds.amazonaws.com`); for any other host name (a proxy, a CNAME) the server's own region is used, and there is no per-store region setting |
+
+A refused login fails the request that met it with `StoreUnavailable`; the
+pool then takes the refreshed credential, so a later request works. A
+rotation can therefore cost one failed request per replica (issue #998
+tracks a retry). The AWS credentials are used only for `secrets-manager` and
+`iam` stores.
+
+### Placement
+
+A new catalog goes on its owner team's pin if the team has one, else on the
+**default store** (the `default_store` setting, `main` until changed).
+`okf-mcp stores set-default STORE`, `stores pin TEAM STORE` and `stores unpin
+TEAM` change that, and each change is audited. Changing the default or a pin
+affects catalogs created afterwards only: existing catalogs stay where they
+are. `stores list` shows each store, which one is the default, its credential
+kind and reference, and how many teams are pinned to it. There is no command
+or route to remove a store.
+
+### Migrating stores
+
+A store's schema migrations (`migrations/catalog/`, history in
+`catalog._sqlx_migrations`) run automatically the first time a process opens
+that store's pool, under an advisory lock, so replicas starting together
+migrate once. A store whose migration fails, or whose identity names another
+store, is `StoreUnavailable` for that process (logged with the store's name);
+nothing is cached, so the next request tries again, and no other store is
+affected.
+
+`okf-mcp stores migrate` migrates every store now, in name order, trying all
+of them. It prints one line per store: the name, a tab, then `up to date`,
+`<n> applied`, `adopted, <n> applied` or `failed: <error> (the log has the
+cause)`. If any failed, it exits with an error ending `<n> of <m> stores could
+not be migrated`. Run it as a deploy step beside `okf-mcp migrate` (which
+migrates the account database and adopts `main`) when you want a failure to
+stop a rollout instead of showing up on the first request.
+
+### Connections
+
+A process holds, at most:
+
+- on the account database: `database_max_connections` for requests, 1 for the
+  change-feed listener, up to 3 for the mail and housekeeping workers (3 more
+  for the feedback worker, when on), and **`store_max_connections` for the
+  pool of the store `main`**, which is inside it;
+- on each separate store's database it has opened: `store_max_connections`,
+  and 1 for that store's change-feed listener, which is outside that limit.
+
+For N replicas, each database must allow at least:
+
+| Database | Connections |
+|---|---|
+| Account | `N x (database_max_connections + store_max_connections + 4)`, plus `3 x N` with the feedback worker |
+| Each separate store | `N x (store_max_connections + 1)` |
+
+With the defaults (16 and 8) and 3 replicas, the account database needs 84 and
+a separate store 27. These are upper bounds: a store's pool opens on first
+use and closes a connection idle for `store_idle_timeout`. Leave room for the
+command line, `okf-mcp migrate`, `okf-mcp stores migrate` and your own tools.
+
+### Upgrading to the release with separate stores
+
+The release that moves the catalog tables from `public` to the `catalog`
+schema (account migrations `0041_catalog_schema` and `0042_catalog_audit`)
+removes tables and columns that older replicas still query. **It is not a
+rolling upgrade**; use a maintenance window:
+
+1. **Snapshot the database** (section 9). Migrations are forward-only; the
+   snapshot is the way back.
+2. **Scale `serve` to zero**, every replica, so no older binary runs against
+   the database.
+3. **Run `okf-mcp migrate`** with the new image. It applies the account
+   migrations, then adopts `main`: it records the catalog baseline as already
+   applied, because the moved tables exist, and writes `main`'s identity row.
+   Then run `okf-mcp stores migrate`; it should report `main` as `up to date`.
+4. **Start the new release.**
+
+Catalog audit entries written before the upgrade stay in the account audit
+table, and the audit log reads them and the newer ones as one list, each
+exactly once ([Audit API](#audit-api)). The earlier releases of the milestone
+(registry, placement) upgrade rolling as usual, because every catalog is still
+on `main`. To go back, restore the snapshot.
+
+### When a store cannot be reached
+
+A request that needs a store that does not answer within
+`store_connect_timeout` fails with `StoreUnavailable` (HTTP 503, MCP error
+`StoreUnavailable`: "the catalog's data is temporarily unavailable; retry
+later"). The message never names the store; the log does. Catalogs on other
+stores are unaffected. A call remembers a store it found down and does not
+spend another timeout on it (with the gaps below). Loading a catalog from a
+store may take up to 6 times the timeout before the store is reported
+unavailable.
+
+- **Writes** to a catalog on a lost store fail with `StoreUnavailable`. So
+  does any changeset-handle lookup while a store is down, since a handle does
+  not say which store holds it: an unknown handle fails the same way until the
+  store answers.
+- **Merging reads** return what they could and name the rest: `search`,
+  `list_catalogs`, `list_changesets` without `catalog`, `GET /api/v1/search`,
+  `GET /api/v1/catalogs`, `GET /api/v1/changesets` and the console's search
+  add `unavailable`, a sorted list of catalog ids (only catalogs the caller
+  reaches), omitted when every store answered.
+- **First-match reads** (`get_concept`, `read_document` and `history`
+  without `catalog`) walk the connection's selection in order. They answer
+  from a catalog before the first lost store; if none of those has the
+  document, they fail with `StoreUnavailable` instead of `NotFound` or an
+  answer from a later catalog, because the catalog on the lost store might
+  have held it. Catalogs after the lost one are not consulted.
+- **`cited_by`** fails with `StoreUnavailable` if any selected catalog's store
+  is lost; it does not merge.
+- A catalog in memory whose refresh finds its store lost is unavailable too;
+  it is not served from its stale copy.
+- **Housekeeping** runs per store, so a lost store fails only its own jobs;
+  `okf_changesets_open` carries its last count. `GET /healthz` checks the
+  account database only, so a lost store does not make a replica unready.
+
+Known gaps, each tracked as an issue: some reads on an already open store pool
+report a timeout as a database error (HTTP 500) instead of `StoreUnavailable`
+(#995), and two paths probe a store already found down again within one call
+(#1017). Treat a 500 from a catalog on a separate store whose database is
+down as the same outage.
+
+### What a separate store does and does not separate
+
+A catalog's content, history and catalog audit (paths, commit messages) are
+only in its store's database. That is all a store separates. These stay
+shared, so a store is not a secrecy boundary against whoever runs the server
+or the account database:
+
+- the **account database** holds users' names and emails, credential labels,
+  team and catalog **names**, who may reach them, and the audit of account
+  actions, which names catalogs and teams;
+- the **job queue** holds ids, never a catalog's content;
+- every replica's **in-memory caches** hold the content of the catalogs it
+  has read, from whichever store;
+- **logs and traces** carry catalog and store names and error text, never
+  content ([Telemetry](#telemetry)).
+
+Say which of these a deployment shares when you describe a store as
+segregated.
 
 ## Redis
 
@@ -4180,7 +4377,7 @@ whole body and scrolls to that heading.
 | `GET /api/v1/catalogs/{catalog}/revisions/{n}/{path}` | read | `text` at revision `n` (null for a deletion or non-text bytes) and a unified `diff` from revision `n-1` |
 | `GET /api/v1/catalogs/{catalog}/documents/{path}` | read | `read_document` (any `index.md` or `log.md`, the root `AGENTS.md`) plus `body_html` |
 | `GET /api/v1/catalogs/{catalog}/recent-changes?limit=&after=` | read | The catalog's published revisions, newest first: `{catalog, catalog_label, changes, next_after}`, each change `{path, title, description, revision, op, actor, actor_label, message, at}` (`title` and `description` as the catalog has the document now; null for a deletion or a document gone since), content left out. Revisions sharing a time come by path, then revision, both descending. `limit` 1..=200 (default 50; outside is 409); `after` is the previous page's `next_after` (an unknown or malformed one is 404); `next_after` is `null` on the last page |
-| `GET /api/v1/search?q=&catalogs=&limit=` | read | The `search` tool. `catalogs` is comma-separated and defaults to every catalog the key reaches, if it reaches at most `search_fanout_max` (25); past that, leaving `catalogs` out is a 400 (`InvalidPath`, "name the catalogs to search (at most 25 are searched by default)"). Naming more than `search_fanout_max` distinct catalogs is also a 400 (`InvalidPath`, "name at most 25 catalogs to search at once"); a repeated name counts once. A named catalog it does not reach is a 404. Each hit also has `snippet_text`: the text of the snippet's block from its line on, without markdown syntax, cut to 160 characters with an ellipsis (null without a snippet) |
+| `GET /api/v1/search?q=&catalogs=&limit=` | read | The `search` tool. `catalogs` is comma-separated and defaults to every catalog the key reaches, if it reaches at most `search_fanout_max` (25); past that, leaving `catalogs` out is a 400 (`InvalidPath`, "name the catalogs to search (at most 25 are searched by default)"). Naming more than `search_fanout_max` distinct catalogs is also a 400 (`InvalidPath`, "name at most 25 catalogs to search at once"); a repeated name counts once. A named catalog it does not reach is a 404. Each hit also has `snippet_text`: the text of the snippet's block from its line on, without markdown syntax, cut to 160 characters with an ellipsis (null without a snippet). `unavailable` lists the catalogs left out because their store could not be reached (absent when empty); the others still answer |
 
 A catalog the key does not reach, or that does not exist, is 404 on all
 eight.
@@ -4198,7 +4395,7 @@ curl -s -H "Authorization: Bearer $OKF_MCP_KEY" \
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/catalogs?after=&limit=` | any | One page of the catalogs the key reaches, by name (see [Catalog listings are paginated](#catalog-listings-are-paginated)), as `{catalogs, next}`, each catalog with `name`, `display_name`, `label` (the display name, else the description, else "Untitled catalog"), `description`, `owner_team` (`null` when unassigned), `owner_team_label`, `files`, `concepts`, `generation` (of the loaded snapshot, what `expect_generation` compares against), `last_change` (`null` when empty), `suspended` (`{team, notice}` while its owner team is suspended, otherwise `null`: a suspended catalog is listed, never hidden; see [Suspending a team](#suspending-a-team)) and `maintenance` (`on` or `off`) |
+| `GET /api/v1/catalogs?after=&limit=` | any | One page of the catalogs the key reaches, by name (see [Catalog listings are paginated](#catalog-listings-are-paginated)), as `{catalogs, next}`, each catalog with `name`, `display_name`, `label` (the display name, else the description, else "Untitled catalog"), `description`, `owner_team` (`null` when unassigned), `owner_team_label`, `files`, `concepts`, `generation` (of the loaded snapshot, what `expect_generation` compares against), `last_change` (`null` when empty), `suspended` (`{team, notice}` while its owner team is suspended, otherwise `null`: a suspended catalog is listed, never hidden; see [Suspending a team](#suspending-a-team)) and `maintenance` (`on` or `off`). When a store cannot be reached, `unavailable` lists the ids of this page's catalogs left out because of it ([When a store cannot be reached](#when-a-store-cannot-be-reached)); it is absent otherwise |
 | `POST /api/v1/catalogs` | admin, every catalog | `{name, display_name, description, owner}` (`display_name` and `description` optional, `display_name` checked as for users; `owner` required, a team's name). 201 with the new catalog's summary; 403 for a key granted named catalogs, since it would not reach the new one; 404 for an unknown owner; 409 for an invalid or taken name; 422 without `owner` or for a refused `display_name` |
 | `PATCH /api/v1/catalogs/{catalog}` | admin on the catalog; an owner of its owner team signed in to the console; a provisioner | `{display_name?, description?}`, at least one (`deny_unknown_fields`). Answers `{name, previous, description, previous_display_name, display_name, label}`. 422 for a refused `display_name`. The CLI is `catalog update` |
 | `GET /api/v1/labels?after=&limit=` | any credential; not a provisioner | `{users, teams, catalogs, next}`, each of the first three a map from id to label. `catalogs` is one page of the catalogs the caller reaches (paginated as `GET /api/v1/catalogs`; labels shared within a page are told apart). Every caller, an admin that reaches every catalog included, gets its own user, its teams and the owner teams of the catalogs on its page. The console reads it to show labels where an answer names something by id (see [Display names and labels](#display-names-and-labels)) |
@@ -4336,7 +4533,7 @@ a drawer opened again meanwhile.
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/changesets?catalog=` | read | The key's own open changesets; an admin's: every key's. `catalog` is optional (absent or empty: every catalog the key reaches; an unreached one is 404). As `list_changesets`: `changeset`, `catalog`, `key`, `key_name`, `actor`, `created`, `last_change`, `idle`, `paths` |
+| `GET /api/v1/changesets?catalog=` | read | The key's own open changesets; an admin's: every key's. `catalog` is optional (absent or empty: every catalog the key reaches; an unreached one is 404). As `list_changesets`: `changeset`, `catalog`, `key`, `key_name`, `actor`, `created`, `last_change`, `idle`, `paths`, plus `unavailable` (catalog ids on a store that could not be reached, absent when empty) |
 | `GET /api/v1/changesets/{handle}/diff` | owner or admin | As `pending_changes`: `{catalog, changeset, files}`, each file with its unified `diff`. 404 for another key's handle; 409 once published or discarded |
 | `POST /api/v1/changesets/{handle}/publish` | write (owner) or admin | As `publish`, with the body `{"message": "..."}`: `{catalog, catalog_label, changeset, published, revisions, warnings, replayed}`, each revision `{path, revision, op}`. `published: false` means the changeset held no entries and stays open; `published: true` with no revisions means every edit matched the published text, and it is closed. The revisions and the `catalog.published` entry are the caller's (an admin's own, when it publishes another key's changeset). 404 for another key's handle or an unknown one; 403 for a suspended or locked catalog, or the maintenance runner where maintenance is off; 409 for a blank message (`Refused`), a published or discarded handle (`Refused`) or a conflict (`Conflict`, with `files`: `path`, `base_revision`, `current_revision`); 422 for lint errors in the changed files (`LintFailed`, with `errors` and `warnings`) or a body without `message`. A refused publish leaves the changeset open and unchanged |
 | `DELETE /api/v1/changesets/{handle}` | write (owner) or admin | As `discard` without `paths`: drops every entry and closes the handle for good (`{catalog, changeset, removed, closed}`). An admin closing another key's changeset is recorded in the [audit log](#audit-log). 404 for another key's handle; 409 once published or discarded |
@@ -4791,6 +4988,10 @@ take the server out of service. Alert on the `error` log line, not on
    `RollingUpdate` (section 5), the new pod starts beside the old ones and
    each pod is replaced once the new one is ready.
 
+- **The release that adds separate catalog stores is not a rolling
+  upgrade.** It moves tables between schemas; follow [Upgrading to the
+  release with separate stores](#upgrading-to-the-release-with-separate-stores)
+  (snapshot, scale to zero, migrate, start).
 - **Migrations are forward-only.** Once a new version has migrated the
   database, an older binary refuses to start against it. To roll back past a
   migration, restore the database from a backup taken before the upgrade

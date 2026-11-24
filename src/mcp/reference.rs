@@ -42,6 +42,18 @@ How a session usually goes:
 - When the person asks you to remember something, save it to the catalog (under a fitting
   folder) rather than only in the conversation; asking is their consent, so don't ask again.
   Don't save what they didn't ask you to keep.
+- A catalog's data lives on a store, and a store can be unreachable (a separate database that
+  is down). Then a call that needs it fails with `StoreUnavailable` (retry later; the message
+  never names the store), and the other catalogs keep working:
+  - A read that merges catalogs (`search`, `list_catalogs`, `list_changesets` without
+    `catalog`) answers from the others and lists the left-out catalog ids in `unavailable`
+    (absent when every store answered). Say so to the person: those catalogs were not searched.
+  - A read that answers from the first selected catalog holding the document (`get_concept`,
+    `read_document` and `history` without `catalog`) answers from a catalog before the first
+    unreachable one. If none of those has it, it fails with `StoreUnavailable` rather than
+    `NotFound`, because the unreachable catalog might hold it: retry, or pass `catalog`.
+  - A write, `cited_by` (it does not merge) and a changeset handle lookup fail with
+    `StoreUnavailable` while any store they need is down.
 
 A tool is one of five kinds:
 
