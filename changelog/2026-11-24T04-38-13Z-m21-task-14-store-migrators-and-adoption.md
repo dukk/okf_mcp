@@ -10,8 +10,10 @@ database records the one store it belongs to.
 
 - `migrations/catalog/0001_baseline.sql`: the `catalog` schema exactly as
   0041 and 0042 leave it, generated from a schema-only dump of a database
-  migrated through 0042 and rewritten as readable SQL. A dump of a database
-  built from it matches the original dump line for line.
+  migrated through 0042 and rewritten as readable SQL. When it was written,
+  a pg_dump 17 schema dump of a database built from it matched the original
+  dump; `adopted_schema_equals_a_fresh_store_schema` keeps checking the
+  schemas are equal, through catalog queries.
 - `migrations/catalog/0002_store_identity.sql`: `catalog.store_identity`,
   at most one row, the name of the store the database belongs to.
 - `db::CATALOG_MIGRATOR` (history in `catalog._sqlx_migrations`) and
