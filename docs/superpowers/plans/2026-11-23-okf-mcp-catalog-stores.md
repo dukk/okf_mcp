@@ -282,6 +282,8 @@ Each release ends deployable: after Task 6 (types only, rolling), after Task 10b
 > - `AccountDb::of(&pool)` is the test-only account-side twin of `CatalogDb::main_of`.
 > - Line numbers in the bullets above are those at `22c07f7`.
 
+> **Corrected (epic #958 close-out, 2026-11-24).** `user_catalogs_with_open_changesets_after_the_split` no longer exists: Task 13 (#972, PR #1005) replaced the user deletion path with the two-step deletion and `store_cleanups`, which removed `open_changeset_catalogs` together with its test. The deletion path is covered by Task 13's tests (`src/store/cleanups_tests.rs`).
+
 ### Task 6: every remaining caller picks a side; `App::pool()` goes
 
 **Files:** every remaining production user of `App::pool()` (HTTP API, sign-in, OAuth, OIDC, passkeys, mail, feedback, housekeeping, CLI, telemetry, invalidate).

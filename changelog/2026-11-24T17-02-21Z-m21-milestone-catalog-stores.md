@@ -28,7 +28,7 @@ Catalog data (documents, revisions, changesets, maintenance, catalog audit entri
 | 17 cache signalling per store | #975 | #1010 |
 | 18 reads across stores | #977 | #1013 |
 | 19 docs | #978 | #1018 |
-| 20 end-to-end, smoke, P8 lifted | #979 | this PR |
+| 20 end-to-end, smoke, P8 lifted | #979 | #1019 |
 
 Also merged on the milestone branch: #991 and #1016 (syncs of `main`). The PR numbers come from `gh pr list --base milestone/958-catalog-stores --state merged`.
 
@@ -43,4 +43,4 @@ Also merged on the milestone branch: #991 and #1016 (syncs of `main`). The PR nu
 
 ## Before release 3
 
-Follow "Upgrading to the release with separate stores" in `docs/operations.md`: snapshot, scale `serve` to zero, `okf-mcp migrate`, `okf-mcp stores migrate`, start. The smoke test above covers the procedure on a database built at the old schema; a run on a real snapshot is still to be done by the maintainer.
+Follow "Upgrading to the release with separate stores" in `docs/operations.md`: snapshot, scale `serve` to zero, `okf-mcp migrate`, `okf-mcp stores migrate`, start. The automated smoke test, `the_upgrade_procedure_adopts_a_pre_split_database_and_keeps_its_history` in `tests/stores.rs` (described in `changelog/2026-11-24T17-02-20Z-m21-task-20-stores-end-to-end.md`), covers the procedure on a database built at the old schema; a run on a real snapshot is still to be done by the maintainer.

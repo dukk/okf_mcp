@@ -250,18 +250,23 @@ same database together.
 
 ## Migrating today's database
 
-Three releases, each deployable alone:
+Three releases, each deployable alone (release 2 ships in two deploys,
+2 and 2b; see below):
 
 1. **Types only.** `AccountDb` and `CatalogDb` both wrap the one pool, and
    every call site moves to the right one. No schema change and no change
    in behaviour. This is most of the code.
-2. **Registry, stores and placement.** One account migration adds
+2. **Registry, stores and placement.** Account migrations 0036-0040 add
    `stores` (seeded with `main`, location `account-database`), the
    `default_store` setting (`main`), `teams.store`, and `catalogs.store` and
    `provisioned_at` (existing catalogs: `main`, provisioned as of the
    migration, with no backfill of every row). Routing now goes through the registry; everything still
-   lands on `main`.
-3. **The split.** One account migration moves the catalog tables into
+   lands on `main`. Release 2 ends by hiding unprovisioned catalogs from
+   every by-name reader; the two-step create, the first code to write a
+   NULL `provisioned_at`, is release 2b, rolled out only once release 2 is
+   on every replica, so no replica that still shows unprovisioned rows
+   meets one (P11).
+3. **The split.** Account migrations 0041-0043 move the catalog tables into
    schema `catalog` with `ALTER TABLE ... SET SCHEMA` (metadata only),
    creates `catalog.catalog_state` from `catalogs.generation`, drops the
    foreign keys that cross the line, replaces the maintenance audit
