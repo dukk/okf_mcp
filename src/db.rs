@@ -530,7 +530,21 @@ pub(crate) async fn catalog_id(accounts: &PgPool, name: &str) -> i64 {
 /// A migrated throwaway database for one test, with [`TEST_USER`].
 #[cfg(test)]
 pub(crate) async fn test_db() -> pg_support::TestDb {
-    let db = pg_support::TestDb::start_migrated().await;
+    with_fixture_user(pg_support::TestDb::start_migrated().await).await
+}
+
+/// As [`test_db`], with schema `catalog` in the account database in every
+/// `OKF_TEST_STORE` mode ([`pg_support::TestDb::start_account_layout`]): for
+/// a test of what the account migrations build, or of the store `main` being
+/// the account database.
+#[cfg(test)]
+pub(crate) async fn test_db_account_layout() -> pg_support::TestDb {
+    with_fixture_user(pg_support::TestDb::start_account_layout().await).await
+}
+
+/// Creates [`TEST_USER`] in `db`.
+#[cfg(test)]
+async fn with_fixture_user(db: pg_support::TestDb) -> pg_support::TestDb {
     let fixture = crate::store::users::NewUser {
         name: TEST_USER,
         display_name: &crate::labels::DisplayName::default(),
@@ -1738,7 +1752,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn maintenance_schema_rejects_cross_catalog_and_duplicate_live_claims() {
-        let db = test_db().await;
+        let db = test_db_account_layout().await;
         let now = chrono::Utc::now();
         let first: i64 = sqlx::query_scalar(
             "INSERT INTO catalogs (name, created_at) VALUES ('first', $1) RETURNING id",
@@ -2015,7 +2029,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn constraints_hold() {
-        let db = test_db().await;
+        let db = test_db_account_layout().await;
         let catalog: i64 = sqlx::query_scalar(
             "INSERT INTO catalogs (name, created_at) VALUES ('pg', $1) RETURNING id",
         )
@@ -2424,7 +2438,7 @@ mod tests {
     async fn adopted_schema_equals_a_fresh_store_schema() {
         // The account database as 0041 and 0042 leave it, then adopted by
         // `migrate` (what `okf-mcp migrate` runs).
-        let adopted = test_db().await;
+        let adopted = test_db_account_layout().await;
         undo_adoption(&adopted.pool).await;
         migrate(&adopted.pool).await.unwrap();
         // An empty database migrated as a new store.
@@ -2474,7 +2488,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn adoption_runs_once_under_concurrent_starts() {
-        let db = test_db().await;
+        let db = test_db_account_layout().await;
         undo_adoption(&db.pool).await;
         const STARTS: usize = 4;
 
@@ -2704,7 +2718,7 @@ mod tests {
     /// reads `pg_constraint`, so a constraint the migration missed fails it.
     #[tokio::test(flavor = "multi_thread")]
     async fn no_foreign_key_crosses_between_schemas() {
-        let db = pg_support::TestDb::start_migrated().await;
+        let db = pg_support::TestDb::start_account_layout().await;
         let foreign_keys = |crossing: bool| {
             let pool = db.pool.clone();
             async move {

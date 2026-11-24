@@ -122,6 +122,45 @@ async fn adopt_catalog(connection: &mut PgConnection) -> Result<(), sqlx::Error>
     Ok(())
 }
 
+/// Runs the account, catalog (adoption) and apalis migrations on `pool`'s
+/// database, as `okf_mcp::db::migrate` does.
+///
+/// # Panics
+/// If a migration fails: a test environment problem.
+async fn migrate_in_place(pool: &PgPool) {
+    MIGRATOR.run(pool).await.expect("migrations apply");
+    let mut connection = pool.acquire().await.expect("a connection");
+    adopt_catalog(&mut connection)
+        .await
+        .expect("catalog migrations apply");
+    drop(connection);
+    apalis_migrator()
+        .run(pool)
+        .await
+        .expect("apalis migrations apply");
+}
+
+/// In [`StoreMode::Separate`], removes schema `catalog` (the tables the
+/// account migrations built) from the account database, so that a statement
+/// sent to the account pool instead of the store's fails with "relation does
+/// not exist" instead of reading nothing. Does nothing in
+/// [`StoreMode::Same`], where the account database is the store.
+///
+/// Production keeps the schema in a separated deployment's account database
+/// (release 3 removes it in a later migration), but nothing reads it there:
+/// every catalog statement goes to the store's pool.
+///
+/// # Panics
+/// If the statement fails: a test environment problem.
+async fn drop_account_catalog(connection: &mut PgConnection) {
+    if store_mode() == StoreMode::Separate {
+        sqlx::query("DROP SCHEMA catalog CASCADE")
+            .execute(connection)
+            .await
+            .expect("drop the account database's catalog schema");
+    }
+}
+
 /// apalis-postgres' migrations (schema `apalis`, history in
 /// `apalis._sqlx_migrations`), which `okf_mcp::db::migrate` runs after
 /// [`MIGRATOR`].
@@ -204,6 +243,20 @@ impl TestDb {
         Self::create(false).await
     }
 
+    /// Creates a database migrated as production's release one leaves it:
+    /// the account database holds schema `catalog` (the store `main`) in
+    /// every [`StoreMode`], with no second database. For tests of the
+    /// account migrations' own schema and of the store `main` being the
+    /// account database.
+    ///
+    /// # Panics
+    /// As [`TestDb::start`], or if a migration fails.
+    pub async fn start_account_layout() -> Self {
+        let test_db = Self::create(false).await;
+        migrate_in_place(&test_db.pool).await;
+        test_db
+    }
+
     /// Creates a migrated database, a copy of the server's template.
     ///
     /// # Panics
@@ -239,16 +292,9 @@ impl TestDb {
             .await
             .expect("connect to the test database");
         if migrated && container.is_some() {
-            MIGRATOR.run(&pool).await.expect("migrations apply");
+            migrate_in_place(&pool).await;
             let mut connection = pool.acquire().await.expect("a connection");
-            adopt_catalog(&mut connection)
-                .await
-                .expect("catalog migrations apply");
-            drop(connection);
-            apalis_migrator()
-                .run(&pool)
-                .await
-                .expect("apalis migrations apply");
+            drop_account_catalog(&mut connection).await;
         }
         let (store_database, registry_key) = match migrated && store_mode() == StoreMode::Separate {
             true => {
@@ -613,6 +659,8 @@ pub fn template_name() -> String {
     // Names the layout of the templates too: a server that kept an older
     // template without a store template builds a new one.
     hasher.update(b"account-and-store-templates");
+    // The account template of `separate` mode has no schema `catalog`.
+    hasher.update([u8::from(store_mode() == StoreMode::Separate)]);
     let catalog = catalog_migrator();
     for migration in MIGRATOR
         .iter()
@@ -703,6 +751,7 @@ async fn build_template(
     let mut template = PgConnection::connect(&format!("{server_url}/{name}")).await?;
     MIGRATOR.run(&mut template).await?;
     adopt_catalog(&mut template).await?;
+    drop_account_catalog(&mut template).await;
     apalis_migrator().run(&mut template).await?;
     // A copy needs the template to have no connections.
     template.close().await?;

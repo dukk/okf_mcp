@@ -273,7 +273,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn migrate_stores_reports_an_unreachable_store_and_continues() {
-        let db = test_db().await;
+        let db = crate::db::test_db_account_layout().await;
         crate::db::main_in_the_account_database(&db.pool).await;
         // An empty database for a new store, on the same server and login.
         let fresh = crate::db::pg_support::TestDb::start().await;
