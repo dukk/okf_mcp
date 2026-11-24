@@ -490,7 +490,7 @@ mod tests {
             .bind(path.as_bytes())
             .bind(deleted.then_some(at))
             .bind(at)
-            .execute(&db.pool)
+            .execute(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
         }

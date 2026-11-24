@@ -1,5 +1,6 @@
 //! Store handles for the integration tests, which hold only the account
-//! pool: the `main` store is the account database.
+//! pool: the `main` store is the account database, or the second database
+//! in `OKF_TEST_STORE=separate` mode.
 
 use chrono::{DateTime, Utc};
 use okf_mcp::config::Config;
@@ -29,7 +30,7 @@ pub fn main_store(accounts: &PgPool) -> CatalogDb {
                     .map(|_| ())
             })
         })
-        .connect_lazy_with((*accounts.connect_options()).clone());
+        .connect_lazy_with(crate::support::pg::store_options(accounts));
     CatalogDb::new(StoreName::main(), pool, AccountDb::new(accounts.clone()))
 }
 

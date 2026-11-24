@@ -842,6 +842,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn an_exhausted_open_pool_is_store_unavailable_without_naming_the_store() {
         let db = crate::db::test_db().await;
+        crate::db::main_in_the_account_database(&db.pool).await;
         let stores = Stores::with_environment(
             db.pool.clone(),
             PoolSettings {
@@ -1917,6 +1918,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_store_whose_database_belongs_to_another_is_unavailable_and_others_still_open() {
         let db = crate::db::test_db().await;
+        crate::db::main_in_the_account_database(&db.pool).await;
         let stores = env_stores(&db, &db);
         // `main` opens first, so the account database's identity row names it.
         stores.get(&StoreName::main()).await.unwrap();

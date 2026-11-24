@@ -110,10 +110,11 @@ fn delete_in_task(
 async fn lock_waiters(test: &TestApp, count: i64) {
     let waited = tokio::time::timeout(LOCK_WAIT, async {
         loop {
-            let waiting: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM pg_stat_activity \
-                 WHERE datname = current_database() AND wait_event_type = 'Lock'",
-            )
+            let waiting: i64 = sqlx::query_scalar(concat!(
+                "SELECT count(*) FROM pg_stat_activity WHERE ",
+                crate::test_locks::own_databases!("datname"),
+                " AND wait_event_type = 'Lock'"
+            ))
             .fetch_one(test.app.accounts().executor())
             .await
             .expect("read pg_stat_activity");
@@ -682,7 +683,7 @@ async fn a_changeset_opened_while_its_key_is_deleted_is_refused_and_leaves_nothi
     let under_key: i64 =
         sqlx::query_scalar("SELECT count(*) FROM catalog.changesets WHERE key_id = $1")
             .bind(&key_id)
-            .fetch_one(test.app.accounts().executor())
+            .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
             .await
             .expect("count the changesets");
     assert_eq!(under_key, 0);

@@ -47,7 +47,7 @@ async fn half_made(pool: &PgPool, name: &str) -> (Catalog, Pending) {
 async fn document_count(pool: &PgPool, id: i64) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM catalog.documents WHERE catalog_id = $1")
         .bind(id)
-        .fetch_one(pool)
+        .fetch_one(&crate::db::store_pool(pool))
         .await
         .unwrap()
 }
@@ -70,9 +70,14 @@ async fn wait_for_waiter_or_end<T>(pool: &PgPool, task: &tokio::task::JoinHandle
             return false;
         }
         let waiting: Option<String> = sqlx::query_scalar(
-            // This test's database only: the server is shared.
-            "SELECT l.locktype FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
-                 WHERE NOT l.granted AND a.datname = current_database() LIMIT 1",
+            // This test's databases only (the account database and, in
+            // `separate` store mode, its store): the server is shared.
+            concat!(
+                "SELECT l.locktype FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
+                 WHERE NOT l.granted AND ",
+                crate::test_locks::own_databases!("a.datname"),
+                " LIMIT 1"
+            ),
         )
         .fetch_optional(pool)
         .await
@@ -107,7 +112,7 @@ async fn a_half_created_catalog_is_not_visible() {
         Err(OkfError::CatalogNotSelected { .. })
     ));
     let mut conn = db.pool.acquire().await.unwrap();
-    let mut store = db.pool.acquire().await.unwrap();
+    let mut store = db.store().acquire().await.unwrap();
     assert!(matches!(
         lock_by_name(&mut conn, &mut store, "half").await,
         Err(OkfError::CatalogNotSelected { .. })
@@ -126,7 +131,7 @@ async fn create_leaves_a_whole_catalog_and_announces_it_once() {
         .unwrap();
 
     assert_eq!(find(&db.pool, "whole").await.unwrap(), made);
-    assert_eq!(document_count(&db.pool, made.id).await, 2);
+    assert_eq!(document_count(&db.store(), made.id).await, 2);
     let created = entries(&db.pool, "catalog.created").await;
     assert_eq!(created.len(), 1, "{created:?}");
     let provisioned: Option<DateTime<Utc>> =
@@ -152,7 +157,7 @@ async fn provisioning_job_finishes_a_catalog_whose_store_side_exists() {
 
     assert_eq!(outcome, Recovery::Finished);
     assert_eq!(find(&db.pool, "stopped").await.unwrap().id, catalog.id);
-    assert_eq!(document_count(&db.pool, catalog.id).await, 2);
+    assert_eq!(document_count(&db.store(), catalog.id).await, 2);
     assert!(entries(&db.pool, "catalog.deleted").await.is_empty());
     // Nothing is left to recover, and a second look changes nothing.
     assert!(pending_rows(&db.pool).await.is_empty());
@@ -178,7 +183,7 @@ async fn provisioning_job_removes_a_catalog_whose_store_side_never_happened() {
 
     assert_eq!(outcome, Recovery::Removed);
     assert!(!row_exists(&db.pool, catalog.id).await);
-    assert_eq!(document_count(&db.pool, catalog.id).await, 0);
+    assert_eq!(document_count(&db.store(), catalog.id).await, 0);
     // The failed create is in the audit details, for the owner team.
     let deleted = entries(&db.pool, "catalog.deleted").await;
     assert_eq!(deleted.len(), 1, "{deleted:?}");
@@ -255,7 +260,7 @@ async fn a_create_stalled_past_the_interval_is_not_removed_while_it_holds_the_lo
     assert!(waited, "recovery should wait for the create's lock");
     assert_eq!(outcome, Recovery::Finished, "it saw the create's data");
     assert_eq!(find(&db.pool, "slow").await.unwrap().id, catalog.id);
-    assert_eq!(document_count(&db.pool, catalog.id).await, 2);
+    assert_eq!(document_count(&db.store(), catalog.id).await, 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -293,7 +298,7 @@ async fn a_create_that_waited_behind_recovery_writes_nothing() {
     assert!(waited, "the create should wait for recovery's lock");
     assert!(matches!(aborted, Err(OkfError::Busy { .. })), "{aborted:?}");
     assert!(!row_exists(&db.pool, catalog.id).await);
-    assert_eq!(document_count(&db.pool, catalog.id).await, 0);
+    assert_eq!(document_count(&db.store(), catalog.id).await, 0);
 }
 
 /// The pool rule: a create and a recovery each need one connection at a

@@ -2054,7 +2054,7 @@ mod tests {
                  VALUES ($1, '../escape.md', '', false, 1, now(), 'test')",
             )
             .bind(again.id)
-            .execute(&db.pool)
+            .execute(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
         })

@@ -169,14 +169,14 @@ async fn store_audit_prune_honours_the_passed_retention_and_its_floor() {
                          'cli:test', true, 'pg')",
             )
             .bind(i32::try_from(days).unwrap())
-            .execute(&pool)
+            .execute(&crate::db::store_pool(&pool))
             .await
             .unwrap();
         }
     };
     let count = || async {
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM catalog.catalog_audit_entries")
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap()
     };
@@ -465,7 +465,7 @@ async fn forgetting_a_person_clears_their_name_in_store_entries_too() {
     assert!(person.starts_with("deleted user #"), "{person}");
     let stored: String =
         sqlx::query_scalar("SELECT row_to_json(e)::text FROM catalog.catalog_audit_entries e")
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert!(

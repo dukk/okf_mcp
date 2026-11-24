@@ -108,6 +108,8 @@ mod tests {
     use crate::store::audit::AuditActor;
     use crate::store::catalogs::{self, NewCatalog};
     use crate::store::{stores, teams};
+    use crate::stores::registry::PoolSettings;
+    use crate::stores::{CatalogDb, Stores};
 
     /// Adds a `host` store row, as a later task's `add` will, so a catalog
     /// can be placed on it. The catalog's starter files still go into the
@@ -218,6 +220,93 @@ mod tests {
         assert_eq!(old, "main");
         assert_eq!(still, "main");
         assert_eq!(new, "shared-1");
+    }
+
+    /// How many rows each table of schema `catalog` holds, by table name,
+    /// except the migration history and the identity row, which opening a
+    /// store writes whatever catalogs it holds.
+    async fn catalog_row_counts(db: &CatalogDb) -> Vec<(String, i64)> {
+        let tables: Vec<String> = sqlx::query_scalar(
+            "SELECT table_name::text FROM information_schema.tables \
+             WHERE table_schema = 'catalog' AND table_type = 'BASE TABLE' \
+             AND table_name NOT IN ('_sqlx_migrations', 'store_identity') ORDER BY 1",
+        )
+        .fetch_all(db.executor())
+        .await
+        .unwrap();
+        let mut counts = Vec::with_capacity(tables.len());
+        for table in tables {
+            // The name came from the catalog, not from a caller.
+            let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT count(*) FROM catalog.\"{table}\""
+            )))
+            .fetch_one(db.executor())
+            .await
+            .unwrap();
+            counts.push((table, count));
+        }
+        counts
+    }
+
+    #[tokio::test]
+    async fn isolation_a_catalog_on_store_b_writes_nothing_to_store_a() {
+        let db = test_db().await;
+        // Store `b` is a database of its own, reached through the registry
+        // as a `host` store; store `a` is `main`, whichever database that is.
+        let database = db.extra_store_database("b").await;
+        let options = db.pool.connect_options();
+        sqlx::query(
+            "INSERT INTO stores (name, location_kind, host, port, database, \
+             credential_kind, credential_ref, created_at) \
+             VALUES ('store-b', 'host', $1, $2, $3, 'env', $4, now())",
+        )
+        .bind(options.get_host())
+        .bind(i32::from(options.get_port()))
+        .bind(&database)
+        .bind(crate::db::pg::STORE_PASSWORD_VAR)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let store_b = StoreName::parse("store-b").unwrap();
+        teams::set_store(
+            &db.pool,
+            TEST_TEAM,
+            Some(&store_b),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let stores = Stores::new(
+            db.pool.clone(),
+            PoolSettings::from_config(&crate::config::Config::default()),
+        );
+        let store_a_before =
+            catalog_row_counts(&stores.get(&StoreName::main()).await.unwrap()).await;
+
+        let new = NewCatalog {
+            name: "on-b",
+            display_name: &DisplayName::default(),
+            description: "",
+            owner_team: TEST_TEAM,
+        };
+        catalogs::create_in(&stores, &new, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+
+        let store_a_after =
+            catalog_row_counts(&stores.get(&StoreName::main()).await.unwrap()).await;
+        let store_b_after = catalog_row_counts(&stores.get(&store_b).await.unwrap()).await;
+        assert_eq!(store_a_after, store_a_before);
+        assert!(
+            store_b_after.iter().any(|(_, count)| *count > 0),
+            "the catalog's files and state are on store b: {store_b_after:?}"
+        );
+        assert!(
+            store_a_before.iter().all(|(_, count)| *count == 0),
+            "store a held nothing to begin with: {store_a_before:?}"
+        );
+        stores.forget_all().await;
     }
 
     #[tokio::test]

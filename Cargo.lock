@@ -3032,6 +3032,7 @@ dependencies = [
  "opentelemetry-prometheus",
  "opentelemetry-proto",
  "opentelemetry_sdk",
+ "percent-encoding",
  "prometheus",
  "prost",
  "pulldown-cmark",

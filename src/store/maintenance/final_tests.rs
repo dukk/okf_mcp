@@ -31,8 +31,8 @@ async fn maintenance_final_candidate_queries_are_constant_with_growth() {
                 .await;
             }
         }
-        sqlx::query("INSERT INTO catalog.maintenance_runs (id,catalog_id,credential_id,actor,state,deadline,created_at,ended_at,primary_count) SELECT path,$1,'fixture','fixture','completed',$2,$2,$2,4 FROM catalog.documents WHERE catalog_id=$1 ON CONFLICT DO NOTHING").bind(catalog).bind(t0()).execute(&db.pool).await.unwrap();
-        sqlx::query("INSERT INTO catalog.maintenance_work (id,run_id,catalog_id,path,revision,lanes,outcome,assessment,lease_token,lease_expires_at,attempted_at,ended_at) SELECT path || revision,path,$1,path,revision,ARRAY['changed','aging'],'completed','not_assessed','fixture',$2,$2,$2 FROM catalog.revisions WHERE catalog_id=$1 ON CONFLICT DO NOTHING").bind(catalog).bind(t0()).execute(&db.pool).await.unwrap();
+        sqlx::query("INSERT INTO catalog.maintenance_runs (id,catalog_id,credential_id,actor,state,deadline,created_at,ended_at,primary_count) SELECT path,$1,'fixture','fixture','completed',$2,$2,$2,4 FROM catalog.documents WHERE catalog_id=$1 ON CONFLICT DO NOTHING").bind(catalog).bind(t0()).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
+        sqlx::query("INSERT INTO catalog.maintenance_work (id,run_id,catalog_id,path,revision,lanes,outcome,assessment,lease_token,lease_expires_at,attempted_at,ended_at) SELECT path || revision,path,$1,path,revision,ARRAY['changed','aging'],'completed','not_assessed','fixture',$2,$2,$2 FROM catalog.revisions WHERE catalog_id=$1 ON CONFLICT DO NOTHING").bind(catalog).bind(t0()).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
         let mut tx = db.store().begin().await.unwrap();
         // Force sequential scans so the measurement counts relation passes, not
         // planner-dependent per-row index probes. No wall-clock threshold.
@@ -346,7 +346,7 @@ async fn maintenance_final_lock_probe_ignores_stale_activity_text() {
 async fn maintenance_final_recreated_hint_skips_null_history() {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md", "unrelated.md"]).await;
-    sqlx::query("INSERT INTO catalog.revisions (catalog_id,path,revision,op,content,executable,actor,message,created_at) VALUES ($1,'a.md',2,'delete',NULL,false,'test','delete',$2)").bind(catalog).bind(t0()).execute(&db.pool).await.unwrap();
+    sqlx::query("INSERT INTO catalog.revisions (catalog_id,path,revision,op,content,executable,actor,message,created_at) VALUES ($1,'a.md',2,'delete',NULL,false,'test','delete',$2)").bind(catalog).bind(t0()).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let text = "---\ntype: Note\nverified:\n  - at: '2026-11-06T12:00:00Z'\n---\nBody\n";
     revision(&db.pool, catalog, "a.md", 3, t0(), text).await;
     let result = runs::claim(
@@ -421,7 +421,7 @@ async fn maintenance_final_edits_preserve_attempt_fairness() {
     )
     .bind(catalog)
     .bind(t0() + Duration::seconds(1))
-    .execute(&db.pool)
+    .execute(&crate::db::store_pool(&db.pool))
     .await
     .unwrap();
     for rev in 3..=5 {
@@ -599,7 +599,7 @@ async fn maintenance_final_completed_close_acknowledges_without_rewriting_histor
             .await
             .is_err());
         }
-        let receipt = sqlx::query("SELECT request,response FROM catalog.maintenance_requests WHERE operation='close' AND idempotency_key=$1").bind(run).fetch_one(&db.pool).await.unwrap();
+        let receipt = sqlx::query("SELECT request,response FROM catalog.maintenance_requests WHERE operation='close' AND idempotency_key=$1").bind(run).fetch_one(&crate::db::store_pool(&db.pool)).await.unwrap();
         assert_eq!(
             receipt.get::<serde_json::Value, _>("request")["rationale"],
             "acknowledged"
@@ -664,7 +664,7 @@ async fn an_ended_runs_entry_survives_the_catalogs_deletion_before_it_is_written
         "SELECT target_name, details->>'run' FROM catalog.catalog_audit_entries \
          WHERE action = 'catalog.maintenance_run'",
     )
-    .fetch_all(&db.pool)
+    .fetch_all(&crate::db::store_pool(&db.pool))
     .await
     .unwrap();
     assert_eq!(entries, vec![("pg".to_string(), "run-1".to_string())]);

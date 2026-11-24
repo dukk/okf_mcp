@@ -483,7 +483,7 @@ async fn pending_changes_refuses_a_snapshot_behind_a_base_it_cannot_catch_up_to(
     let handle = open(&on_a).await;
     edit(&on_a, &handle, "/index.md", "- systems", "- the systems").await;
     sqlx::query("UPDATE catalog.changeset_entries SET base_revision = base_revision + 5")
-        .execute(a.app.accounts().executor())
+        .execute(&crate::db::store_pool(a.app.accounts().executor()))
         .await
         .expect("move the base ahead");
 
@@ -536,7 +536,7 @@ async fn an_edit_on_a_lagging_replica_records_the_fresh_base_and_publishes_clean
          JOIN catalog.changesets c ON c.id = e.changeset_id WHERE c.handle = $1",
     )
     .bind(&handle)
-    .fetch_one(a.app.accounts().executor())
+    .fetch_one(&crate::db::store_pool(a.app.accounts().executor()))
     .await
     .expect("the entry");
     assert_eq!(

@@ -721,7 +721,7 @@ mod tests {
             "SELECT count(*) FROM catalog.documents WHERE catalog_id = $1 AND deleted_at IS NULL",
         )
         .bind(catalog.id)
-        .fetch_one(test.app.accounts().executor())
+        .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
         (generation, live)
@@ -913,7 +913,7 @@ mod tests {
              CREATE TRIGGER break_the_refresh AFTER UPDATE OF generation ON catalog.catalog_state \
                  FOR EACH ROW EXECUTE FUNCTION break_the_refresh();",
         )
-        .execute(test.app.accounts().executor())
+        .execute(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
         let import = || {
@@ -935,7 +935,7 @@ mod tests {
             "DROP TRIGGER break_the_refresh ON catalog.catalog_state; \
              DELETE FROM catalog.documents WHERE path = '../escape.md';",
         )
-        .execute(test.app.accounts().executor())
+        .execute(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
         test.app.catch_up_catalogs().await;
@@ -976,12 +976,12 @@ mod tests {
              VALUES ($1, '../escape.md', '', false, 1, now(), 'test')",
         )
         .bind(id)
-        .execute(test.app.accounts().executor())
+        .execute(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
         sqlx::query("UPDATE catalog.catalog_state SET generation = generation + 1 WHERE id = $1")
             .bind(id)
-            .execute(test.app.accounts().executor())
+            .execute(&crate::db::store_pool(test.app.accounts().executor()))
             .await
             .unwrap();
         test.app.catch_up_catalogs().await;
@@ -1037,11 +1037,12 @@ mod tests {
 
         let (status, report) =
             import_with(&test, "?replace=true&only_machinery=true", archive).await;
+        let catalog_id = crate::db::catalog_id(test.app.accounts().executor(), "pg").await;
         let kept: Vec<u8> = sqlx::query_scalar(
-            "SELECT content FROM catalog.documents WHERE path = 'a.md' \
-             AND catalog_id = (SELECT id FROM catalogs WHERE name = 'pg')",
+            "SELECT content FROM catalog.documents WHERE path = 'a.md' AND catalog_id = $1",
         )
-        .fetch_one(test.app.accounts().executor())
+        .bind(catalog_id)
+        .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
 

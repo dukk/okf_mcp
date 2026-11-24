@@ -70,12 +70,23 @@ fn registry(accounts: &PgPool, password: String) -> Stores {
     Stores::with_environment(
         accounts.clone(),
         settings(),
-        Arc::new(move |name| (name == "STORE_PASSWORD").then(|| password.clone())),
+        Arc::new(move |name| {
+            (name == "STORE_PASSWORD")
+                .then(|| password.clone())
+                .or_else(|| crate::db::pg_support::harness_password(name))
+        }),
     )
 }
 
+/// The one number `sql` selects, from the store when it reads a table of
+/// schema `catalog` and from `pool` otherwise.
 async fn count(pool: &PgPool, sql: &'static str) -> i64 {
-    sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+    let pool = if sql.contains(" catalog.") {
+        crate::db::store_pool(pool)
+    } else {
+        pool.clone()
+    };
+    sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap()
 }
 
 /// Opens a changeset of `key` in catalog `catalog_id` on `store_pool`.
@@ -101,7 +112,7 @@ async fn open_on(store_pool: &PgPool, catalog_id: i64, key: &str) -> i64 {
 async fn state_of(pool: &PgPool, changeset: i64) -> String {
     sqlx::query_scalar("SELECT state FROM catalog.changesets WHERE id = $1")
         .bind(changeset)
-        .fetch_one(pool)
+        .fetch_one(&crate::db::store_pool(pool))
         .await
         .unwrap()
 }
@@ -128,7 +139,12 @@ async fn deleting_a_key_discards_its_changesets_on_every_store() {
     seed_catalog_owned_by(&accounts.pool, TEST_TEAM).await;
     let key = key_for(&accounts.pool, "alice", "alice-laptop", false).await;
     let on_main = open_on(&accounts.pool, shared_id(&accounts.pool).await, &key).await;
-    add_store_on(&accounts.pool, "second", &second.pool).await;
+    add_store_on(
+        &accounts.pool,
+        "second",
+        &crate::db::store_pool(&second.pool),
+    )
+    .await;
     let remote_id: i64 = sqlx::query_scalar(
         "INSERT INTO catalogs (name, created_at, store, provisioned_at) \
          VALUES ('remote', now(), 'second', now()) RETURNING id",
@@ -138,10 +154,10 @@ async fn deleting_a_key_discards_its_changesets_on_every_store() {
     .unwrap();
     sqlx::query("INSERT INTO catalog.catalog_state (id) VALUES ($1)")
         .bind(remote_id)
-        .execute(&second.pool)
+        .execute(&crate::db::store_pool(&second.pool))
         .await
         .unwrap();
-    let on_second = open_on(&second.pool, remote_id, &key).await;
+    let on_second = open_on(&crate::db::store_pool(&second.pool), remote_id, &key).await;
 
     // Act
     delete_alice(&accounts.pool).await;
@@ -154,7 +170,10 @@ async fn deleting_a_key_discards_its_changesets_on_every_store() {
     assert_eq!(owed, 2);
     assert_eq!(report, Report { done: 2, failed: 0 });
     assert_eq!(state_of(&accounts.pool, on_main).await, "discarded");
-    assert_eq!(state_of(&second.pool, on_second).await, "discarded");
+    assert_eq!(
+        state_of(&crate::db::store_pool(&second.pool), on_second).await,
+        "discarded"
+    );
     assert_eq!(
         count(&accounts.pool, "SELECT count(*) FROM store_cleanups").await,
         0
@@ -179,7 +198,11 @@ async fn cleanup_retries_an_unreachable_store_without_blocking_others() {
     .await
     .unwrap();
     delete_alice(&db.pool).await;
-    let stores = Stores::with_environment(db.pool.clone(), settings(), Arc::new(|_| None));
+    let stores = Stores::with_environment(
+        db.pool.clone(),
+        settings(),
+        Arc::new(crate::db::pg_support::harness_password),
+    );
 
     // Act
     let first = run(&stores, now()).await.unwrap();
@@ -228,7 +251,12 @@ async fn a_cleanup_whose_failure_cannot_be_counted_never_stops_another_store() {
     seed_user(&accounts.pool, "alice", None).await;
     seed_catalog_owned_by(&accounts.pool, TEST_TEAM).await;
     let key = key_for(&accounts.pool, "alice", "alice-laptop", false).await;
-    add_store_on(&accounts.pool, "second", &second.pool).await;
+    add_store_on(
+        &accounts.pool,
+        "second",
+        &crate::db::store_pool(&second.pool),
+    )
+    .await;
     let remote_id: i64 = sqlx::query_scalar(
         "INSERT INTO catalogs (name, created_at, store, provisioned_at) \
          VALUES ('remote', now(), 'second', now()) RETURNING id",
@@ -238,10 +266,10 @@ async fn a_cleanup_whose_failure_cannot_be_counted_never_stops_another_store() {
     .unwrap();
     sqlx::query("INSERT INTO catalog.catalog_state (id) VALUES ($1)")
         .bind(remote_id)
-        .execute(&second.pool)
+        .execute(&crate::db::store_pool(&second.pool))
         .await
         .unwrap();
-    let on_second = open_on(&second.pool, remote_id, &key).await;
+    let on_second = open_on(&crate::db::store_pool(&second.pool), remote_id, &key).await;
     delete_alice(&accounts.pool).await;
     let holder = hold_cleanup_rows_of(&accounts.pool, "main").await;
     let stores = registry(&accounts.pool, password_of(&second.url));
@@ -259,7 +287,10 @@ async fn a_cleanup_whose_failure_cannot_be_counted_never_stops_another_store() {
     // Assert, with the lock still held: `second` settled; `main`'s row is
     // kept as it was, its try uncounted.
     assert_eq!(report, Report { done: 1, failed: 1 });
-    assert_eq!(state_of(&second.pool, on_second).await, "discarded");
+    assert_eq!(
+        state_of(&crate::db::store_pool(&second.pool), on_second).await,
+        "discarded"
+    );
     assert_eq!(
         cleanup_rows(&accounts.pool).await,
         [("main".to_string(), 0)]
@@ -299,7 +330,11 @@ async fn an_unreachable_store_whose_failures_cannot_be_counted_never_stops_anoth
     .unwrap();
     delete_alice(&db.pool).await;
     let holder = hold_cleanup_rows_of(&db.pool, "down").await;
-    let stores = Stores::with_environment(db.pool.clone(), settings(), Arc::new(|_| None));
+    let stores = Stores::with_environment(
+        db.pool.clone(),
+        settings(),
+        Arc::new(crate::db::pg_support::harness_password),
+    );
 
     // Act: `down` sorts before `main`.
     let report = tokio::time::timeout(
@@ -328,7 +363,7 @@ async fn rows_that_keep_failing_do_not_starve_the_rest_of_their_store() {
         "INSERT INTO catalog.catalog_state (id) SELECT g FROM generate_series(1000, 1099) g \
          UNION ALL SELECT 2000",
     )
-    .execute(&db.pool)
+    .execute(&crate::db::store_pool(&db.pool))
     .await
     .unwrap();
     sqlx::query(
@@ -405,7 +440,7 @@ async fn a_key_cleanup_keeps_the_stores_history_and_clears_the_key_from_it() {
     let published = open_on(&db.pool, catalog_id, &key).await;
     sqlx::query("UPDATE catalog.changesets SET state = 'published' WHERE id = $1")
         .bind(published)
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     sqlx::query(
@@ -416,7 +451,7 @@ async fn a_key_cleanup_keeps_the_stores_history_and_clears_the_key_from_it() {
     .bind(catalog_id)
     .bind(&key)
     .bind(now())
-    .execute(&db.pool)
+    .execute(&crate::db::store_pool(&db.pool))
     .await
     .unwrap();
     let naming_the_key = |sql: &'static str| {
@@ -425,7 +460,7 @@ async fn a_key_cleanup_keeps_the_stores_history_and_clears_the_key_from_it() {
         async move {
             sqlx::query_scalar::<_, i64>(sql)
                 .bind(key)
-                .fetch_one(&pool)
+                .fetch_one(&crate::db::store_pool(&pool))
                 .await
                 .unwrap()
         }
@@ -485,7 +520,12 @@ async fn a_cleanup_attempt_stuck_on_a_lock_fails_without_holding_up_another_stor
     seed_catalog_owned_by(&accounts.pool, TEST_TEAM).await;
     let key = key_for(&accounts.pool, "alice", "alice-laptop", false).await;
     let on_main = open_on(&accounts.pool, shared_id(&accounts.pool).await, &key).await;
-    add_store_on(&accounts.pool, "second", &second.pool).await;
+    add_store_on(
+        &accounts.pool,
+        "second",
+        &crate::db::store_pool(&second.pool),
+    )
+    .await;
     let remote_id: i64 = sqlx::query_scalar(
         "INSERT INTO catalogs (name, created_at, store, provisioned_at) \
          VALUES ('remote', now(), 'second', now()) RETURNING id",
@@ -495,12 +535,12 @@ async fn a_cleanup_attempt_stuck_on_a_lock_fails_without_holding_up_another_stor
     .unwrap();
     sqlx::query("INSERT INTO catalog.catalog_state (id) VALUES ($1)")
         .bind(remote_id)
-        .execute(&second.pool)
+        .execute(&crate::db::store_pool(&second.pool))
         .await
         .unwrap();
-    let on_second = open_on(&second.pool, remote_id, &key).await;
+    let on_second = open_on(&crate::db::store_pool(&second.pool), remote_id, &key).await;
     delete_alice(&accounts.pool).await;
-    let mut holder = accounts.pool.begin().await.unwrap();
+    let mut holder = crate::db::store_pool(&accounts.pool).begin().await.unwrap();
     sqlx::query("SELECT id FROM catalog.changesets WHERE id = $1 FOR UPDATE")
         .bind(on_main)
         .execute(&mut *holder)
@@ -521,7 +561,10 @@ async fn a_cleanup_attempt_stuck_on_a_lock_fails_without_holding_up_another_stor
     // Assert: the stuck row counts a failed try and stays; the other
     // store's row finished.
     assert_eq!(report, Report { done: 1, failed: 1 });
-    assert_eq!(state_of(&second.pool, on_second).await, "discarded");
+    assert_eq!(
+        state_of(&crate::db::store_pool(&second.pool), on_second).await,
+        "discarded"
+    );
     let left: Vec<(String, i32)> = sqlx::query_as("SELECT store, attempts FROM store_cleanups")
         .fetch_all(&accounts.pool)
         .await
@@ -545,7 +588,7 @@ async fn two_catalog_cleanups(accounts: &PgPool, second: &PgPool) {
     add_store_on(accounts, "second", second).await;
     for pool in [accounts, second] {
         sqlx::query("INSERT INTO catalog.catalog_state (id) VALUES (1000), (2000)")
-            .execute(pool)
+            .execute(&crate::db::store_pool(pool))
             .await
             .unwrap();
     }
@@ -564,8 +607,8 @@ async fn a_store_row_lock_fails_that_cleanup_at_the_database_and_another_store_s
     // catalog 1000, so deleting it can only wait.
     let accounts = test_db().await;
     let second = test_db().await;
-    two_catalog_cleanups(&accounts.pool, &second.pool).await;
-    let mut holder = accounts.pool.begin().await.unwrap();
+    two_catalog_cleanups(&accounts.pool, &crate::db::store_pool(&second.pool)).await;
+    let mut holder = crate::db::store_pool(&accounts.pool).begin().await.unwrap();
     sqlx::query("SELECT id FROM catalog.catalog_state WHERE id = 1000 FOR UPDATE")
         .execute(&mut *holder)
         .await
@@ -592,7 +635,7 @@ async fn a_store_row_lock_fails_that_cleanup_at_the_database_and_another_store_s
     assert_eq!(left, [("main".to_string(), 1)]);
     assert_eq!(
         count(
-            &second.pool,
+            &crate::db::store_pool(&second.pool),
             "SELECT count(*) FROM catalog.catalog_state WHERE id = 2000"
         )
         .await,
@@ -616,7 +659,7 @@ async fn a_held_default_key_lock_fails_a_catalog_cleanup_and_leaves_a_one_connec
     // catalog cleanup's account half needs.
     let accounts = test_db().await;
     let second = test_db().await;
-    two_catalog_cleanups(&accounts.pool, &second.pool).await;
+    two_catalog_cleanups(&accounts.pool, &crate::db::store_pool(&second.pool)).await;
     seed_user(&accounts.pool, "alice", None).await;
     seed_catalog_owned_by(&accounts.pool, TEST_TEAM).await;
     let key = key_for(&accounts.pool, "alice", "alice-laptop", false).await;
@@ -633,7 +676,7 @@ async fn a_held_default_key_lock_fails_a_catalog_cleanup_and_leaves_a_one_connec
         .unwrap();
     sqlx::query("INSERT INTO catalog.catalog_state (id) VALUES ($1) ON CONFLICT DO NOTHING")
         .bind(shared)
-        .execute(&accounts.pool)
+        .execute(&crate::db::store_pool(&accounts.pool))
         .await
         .unwrap();
     let mut holder = accounts.pool.begin().await.unwrap();
@@ -750,7 +793,7 @@ async fn a_maintenance_claim_paused_after_its_key_read_never_leaves_a_deleted_ke
     let naming_it: i64 =
         sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_runs WHERE key_id = $1")
             .bind(&key)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(naming_it, 0);

@@ -756,6 +756,12 @@ or stop nothing):
     export TEST_PG_URL=$(scripts/test-pg.sh up okf-mcp-test-pg)
     scripts/test-pg.sh down okf-mcp-test-pg      # when done
 
+`just test` runs the suite twice, once for each store mode of the test
+harness: `OKF_TEST_STORE=same` (the default; the catalog data lives in the
+account database) and `OKF_TEST_STORE=separate` (the store `main` is a second
+database, copied from its own template and registered as a `host` store).
+`OKF_TEST_STORE=separate cargo test` runs one mode by hand.
+
 Without `TEST_PG_URL` (a plain `cargo test`), every test starts its own
 container (via `testcontainers`) and removes it when done, which is several
 hundred containers per run. Without Docker the tests fail at once with "is

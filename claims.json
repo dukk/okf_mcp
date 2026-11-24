@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1110,
+  "next_claim_seq": 1148,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "01b960ce5fe73af9281819b8cadfe679bda21e17b1ea14b982b535420271ff9a"
+    "mac": "9f600f1855f893074bc7219b2532b8895c80f97c0875d386144bc9d8e8a454c9"
   },
-  "next_evidence_seq": 1642,
+  "next_evidence_seq": 1687,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "ad0963d7026c5be9e786ee28a548f118e1fd7c302132ad4db993c51e2185a77f"
+    "mac": "3295e8d849c4c4b1c77d045e39df96e69ac441ff10081aceced45d7f9a3c43c9"
   },
   "claims": [
     {
@@ -6814,6 +6814,28 @@
             "by": "server",
             "mac": "89ef5fc1473a0f577c47a008b2f9c3ef3c22a748b50cdfbd556b6b42dd0fd041"
           }
+        },
+        {
+          "id": "EVD-1660",
+          "kind": "inspection",
+          "locator": "justfile:23 (test: test-worker)",
+          "summary": "Re-read at head 037974a: `test` still depends on test-worker, and gate.sh test still runs `just test`; the claim's text does not mention the cargo test invocation.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "justfile",
+              "lines": {
+                "start": 23,
+                "end": 24
+              },
+              "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+            }
+          },
+          "recorded_at": "2026-11-24T07:00:38.416884509Z",
+          "seal": {
+            "by": "server",
+            "mac": "7b0fd1485e52a5c86d396a916685e9ef0363a8882823e1024b709b8cf199d8f2"
+          }
         }
       ],
       "verdicts": [
@@ -6842,13 +6864,26 @@
             "by": "server",
             "mac": "3fe6cbd4f237048a615a602dc1707679a8f7f1257aca4a741709c4232b821cec"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited after the justfile and README hunks: the ordering claim still holds.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1660"
+          ],
+          "recorded_at": "2026-11-24T07:00:43.587765703Z",
+          "seal": {
+            "by": "server",
+            "mac": "0a34e5e84b2752f7ffdb05381170507691b81484915eb69c9384d5be25d15aed"
+          }
         }
       ],
       "created_at": "2026-11-21T19:06:36.900182326Z",
-      "updated_at": "2026-11-21T21:32:26.484257153Z",
+      "updated_at": "2026-11-24T07:00:43.587765703Z",
       "seal": {
         "by": "server",
-        "mac": "7a01dc323cb5ac83f33bbe225036970d27cb155e3b38bb7b3e4e797560d0689e"
+        "mac": "a15c058b5022dec9f12e403cf3647ecd073a9425979424dd4af373eaf640d107"
       }
     },
     {
@@ -19058,7 +19093,9 @@
         "area:readme-b"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Superseded: issue #974 changed the justfile test recipe body, so the literal command in the statement no longer matches. Replaced by a claim worded for the new recipe.",
+        "retired_at": "2026-11-24T07:01:10.272183532Z"
       },
       "evidence": [
         {
@@ -19082,6 +19119,28 @@
             "by": "server",
             "mac": "d4fde51fdd89b2fdf8dbad3bc00ac224dda5573cdfac1add61d5da5f125e84d3"
           }
+        },
+        {
+          "id": "EVD-1659",
+          "kind": "inspection",
+          "locator": "justfile:23-24",
+          "summary": "test still depends on test-worker first, but the body is now `scripts/test-pg.sh run bash -c '... cargo test ...; OKF_TEST_STORE=separate cargo test ...'`, no longer the literal `scripts/test-pg.sh run cargo test` the claim states; the other recipes are unchanged.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "justfile",
+              "lines": {
+                "start": 23,
+                "end": 24
+              },
+              "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+            }
+          },
+          "recorded_at": "2026-11-24T07:00:38.347843279Z",
+          "seal": {
+            "by": "server",
+            "mac": "c111c68fc9132f8f128fd17870fe566e400309fc26d4ba81275094309e92ddec"
+          }
         }
       ],
       "verdicts": [
@@ -19097,13 +19156,26 @@
             "by": "server",
             "mac": "3f3be60d5c06f319f879411721009fc9fd687a36e520167d6717f22de6fc14b8"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "The change rewrote the test recipe's body, so the statement's literal command no longer matches. Behavior (test-worker first, then the suite) is intact and extended. Fix: retire CLM-0228 and add a replacement claim saying the justfile test recipe runs test-worker first, then scripts/test-pg.sh run with cargo test in same mode and then OKF_TEST_STORE=separate.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1659"
+          ],
+          "recorded_at": "2026-11-24T07:00:43.525947183Z",
+          "seal": {
+            "by": "server",
+            "mac": "3b3079c481929994b7df5c264e19af46a4d2b058d9596b9814f001c618e7ac28"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:17.608189865Z",
-      "updated_at": "2026-11-21T19:10:10.985579508Z",
+      "updated_at": "2026-11-24T07:01:10.272183532Z",
       "seal": {
         "by": "server",
-        "mac": "a9a896a8a919acc6af53b3690398e998f7428b844126eca6abd866edde4968b5"
+        "mac": "c5e5469a62f765715dbd0929821c6dc33385351ca5219bbef437ce13e3c84cdd"
       }
     },
     {
@@ -90811,6 +90883,2462 @@
       "seal": {
         "by": "server",
         "mac": "9864c158679d9a5e64b4f74b07bfcf2c875bd140f7cf084718aa2b6e38311f37"
+      }
+    },
+    {
+      "id": "CLM-1110",
+      "statement": "Issue #974 (M21.15): the test harness gains a separate-store mode and the suite runs in both modes, with the isolation test, gates, changelog and plan correction.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/974",
+      "derived_from": [],
+      "artifacts": [
+        "tests/support/pg.rs",
+        "justfile"
+      ],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [],
+      "verdicts": [],
+      "created_at": "2026-11-24T06:59:16.365698120Z",
+      "updated_at": "2026-11-24T06:59:16.365698120Z",
+      "seal": {
+        "by": "server",
+        "mac": "c6617494939c47794cf71fe1e68d82093ec4fd0e7ba050d755082a87fbd72a2e"
+      }
+    },
+    {
+      "id": "CLM-1111",
+      "statement": "TestDb has a store mode chosen by OKF_TEST_STORE: `same` (default, the store is the account database) or `separate`; any other value panics.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #974 / plan Task 15: `OKF_TEST_STORE=same` (default) or `separate`",
+      "source_anchor": {
+        "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "lines": {
+          "start": 592,
+          "end": 592
+        },
+        "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+      },
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/support/pg.rs"
+      ],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1642",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:271-312",
+          "summary": "StoreMode {Same, Separate}; store_mode() maps unset/\"\"/same to Same, \"separate\" to Separate and panics on any other value; start_migrated (line 253) calls separate_store only in Separate mode.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 271,
+                "end": 312
+              },
+              "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+            }
+          },
+          "recorded_at": "2026-11-24T06:59:32.486696317Z",
+          "seal": {
+            "by": "server",
+            "mac": "b012c7760108bd1db102a8a4ac85a54fb924e3652a104df28ab6e1ec5722b510"
+          }
+        },
+        {
+          "id": "EVD-1651",
+          "kind": "test",
+          "locator": "OKF_TEST_STORE=same and =separate cargo test --jobs 4 --lib isolation_a_catalog_on_store_b",
+          "summary": "Both values are accepted and run the suite (gate-test.log runs the default and separate; both 3533 passed). The panic on a typo is by inspection only; no test of it.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T06:59:51.538788991Z",
+          "seal": {
+            "by": "server",
+            "mac": "578be61f76c4dcbc34555c6a469a911b2761f48bd9e8ec98bf2e2c09dad2a372"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "store_mode code matches; both modes run.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1642",
+            "EVD-1651"
+          ],
+          "recorded_at": "2026-11-24T07:00:10.832164021Z",
+          "seal": {
+            "by": "server",
+            "mac": "e7f3db0d2c28d4529f15fe904e31dcc9354e2e898cb81deec7adb1bd54ea0885"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T06:59:16.365698120Z",
+      "updated_at": "2026-11-24T07:00:10.832164021Z",
+      "seal": {
+        "by": "server",
+        "mac": "91c673885097dfbc32c745a1252cd3a38a3d9ad13571864e451c315b51133f4b"
+      }
+    },
+    {
+      "id": "CLM-1112",
+      "statement": "In separate mode the harness copies a second database from a store template and registers it as the store `main` with location_kind `host` and credential_kind `env`.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"`separate` copies a second database from a store template (catalog schema, no identity row) and registers it as the store `main` with location `host` and credential kind `env`.\"",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/support/pg.rs"
+      ],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1643",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:366-405 (separate_store)",
+          "summary": "separate_store creates `<account db>_store` from the store template, then UPDATEs stores row main to location_kind 'host', host/port/database set, credential_kind 'env', credential_ref OKF_TEST_STORE_PASSWORD.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 366,
+                "end": 405
+              },
+              "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+            }
+          },
+          "recorded_at": "2026-11-24T06:59:32.563757954Z",
+          "seal": {
+            "by": "server",
+            "mac": "da7e43de231dee3716b9c68ca73a6d37e6661e603e86d3b3e92bf5c413f983fa"
+          }
+        },
+        {
+          "id": "EVD-1644",
+          "kind": "test",
+          "locator": "OKF_TEST_STORE=separate cargo test --jobs 4 --lib isolation_a_catalog_on_store_b (1 passed)",
+          "summary": "The test reaches main through the registry (Stores::get) in separate mode and passes; whole suite also passes in separate mode (gate-test.log, 3533 passed 0 failed).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T06:59:32.627289724Z",
+          "seal": {
+            "by": "server",
+            "mac": "574f7e4473a3296db99a7c3e1e167440aabd76f8fa9b7f20a6a803ccf5ffd4da"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "separate_store UPDATE sets host/env on main; the isolation test and suite pass in that mode.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1643",
+            "EVD-1644"
+          ],
+          "recorded_at": "2026-11-24T07:00:10.905205201Z",
+          "seal": {
+            "by": "server",
+            "mac": "bcce50439e216856d423f01b3fb85345154b9ea752c563147d795a93fe690715"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T06:59:16.365698120Z",
+      "updated_at": "2026-11-24T07:00:10.905205201Z",
+      "seal": {
+        "by": "server",
+        "mac": "2dfb0167e0877560f63dc3dd4601f02643792a33eb5b8a8e03ad38f7c909e0ae"
+      }
+    },
+    {
+      "id": "CLM-1113",
+      "statement": "The store template schema has the catalog schema and migrations but no store_identity row, so a copy can be opened as any store.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Issue #974 comment (Task 14 heads-up): build the separate-mode store template without an identity row",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/support/pg.rs"
+      ],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1645",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:446-458 (build_store_schema)",
+          "summary": "Creates schema catalog, runs every catalog migration, then DELETEs the store_identity row so the first open writes the name; the template builder and own-container path both use it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 446,
+                "end": 458
+              },
+              "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+            }
+          },
+          "recorded_at": "2026-11-24T06:59:32.693818117Z",
+          "seal": {
+            "by": "server",
+            "mac": "163a8da804b0a2580e46cb58b288417d8b7e74fec13f9fcd73d5e8e0c7adca41"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "build_store_schema deletes the identity row after migrating; the suite passing with stores opened as main and store-b confirms copies open under any name.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1645"
+          ],
+          "recorded_at": "2026-11-24T07:00:10.967096784Z",
+          "seal": {
+            "by": "server",
+            "mac": "aab671a26c31744a4f0b37803062d92ab6129a477e238497b7ff9a7ab9cc57da"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T06:59:16.365698120Z",
+      "updated_at": "2026-11-24T07:00:10.967096784Z",
+      "seal": {
+        "by": "server",
+        "mac": "10c91d151521822d816eb9a53ea0830612cbcb772cb00e282789c9112da3129a"
+      }
+    },
+    {
+      "id": "CLM-1114",
+      "statement": "`just test` runs the whole suite in `same` mode and then in `separate` mode, and fails if either run failed.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "demonstration",
+      "source": "PR body: \"`just test` (so `gate.sh test`) runs the suite in `same` and then `separate` mode, in one container; the gate timeout is unchanged.\"",
+      "source_anchor": {
+        "path": "justfile",
+        "lines": {
+          "start": 16,
+          "end": 24
+        },
+        "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+      },
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "justfile",
+        "tools/agentic/gate.sh"
+      ],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1646",
+          "kind": "inspection",
+          "locator": "justfile:16-24",
+          "summary": "test recipe runs `status=0; cargo test || status=1; OKF_TEST_STORE=separate cargo test || status=1; exit $status` inside scripts/test-pg.sh run (one container); gate.sh test runs `just test`.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "justfile",
+              "lines": {
+                "start": 16,
+                "end": 24
+              },
+              "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+            }
+          },
+          "recorded_at": "2026-11-24T06:59:32.763155832Z",
+          "seal": {
+            "by": "server",
+            "mac": "9ac2f65e2e51c1eb22690bfb37c234a4e7fde896e47004cf2f80eeddec2ebc6f"
+          }
+        },
+        {
+          "id": "EVD-1647",
+          "kind": "log",
+          "locator": "target/i974-logs/gate-test.log lines 124, 127, 3850",
+          "summary": "Log shows the recipe line, then two `Running unittests src/lib.rs` blocks (line 127 and 3850), i.e. two full runs; rc file is 0.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T06:59:32.822935616Z",
+          "seal": {
+            "by": "server",
+            "mac": "dd47489d6da2ed2074942c349f36e090c3eaa87699358dbbff501418dd721756"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Recipe text and the log's two full runs show both modes execute and the exit status accumulates failures.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1646",
+            "EVD-1647"
+          ],
+          "recorded_at": "2026-11-24T07:00:11.028601166Z",
+          "seal": {
+            "by": "server",
+            "mac": "232531e58037f024329ec082e7092f83ae046f009cc4729fc2de7ac457598d32"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T06:59:16.365698120Z",
+      "updated_at": "2026-11-24T07:00:11.028601166Z",
+      "seal": {
+        "by": "server",
+        "mac": "8884b26ea8cc155be20f63393e12196e2bca7859e15b51ad68449e7c1f86426a"
+      }
+    },
+    {
+      "id": "CLM-1115",
+      "statement": "The gate's test timeout is unchanged (75m) while the doubled run took 649 s.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"the gate timeout is unchanged\" and \"pass, 649 s\"",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tools/agentic/gate.sh"
+      ],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1648",
+          "kind": "log",
+          "locator": "target/i974-logs/gate-test.start, gate-test.end; tools/agentic/gate.sh header",
+          "summary": "end 1795503444 minus start 1795502795 = 649 s. gate.sh table still lists test at 75m; the diff only adds a note to that line, no timeout value changed.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T06:59:32.887337370Z",
+          "seal": {
+            "by": "server",
+            "mac": "5efacf4b7f3b19d215217edec1f958dc78c9b08e942e9694bcd0425bf216fa63"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Timestamps give 649 s; no timeout value changed in gate.sh.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1648"
+          ],
+          "recorded_at": "2026-11-24T07:00:11.089578865Z",
+          "seal": {
+            "by": "server",
+            "mac": "41d82f59441ea84d3a069b3d53134c1235daa169c5fa438bb9509caa39813ab7"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T06:59:16.365698120Z",
+      "updated_at": "2026-11-24T07:00:11.089578865Z",
+      "seal": {
+        "by": "server",
+        "mac": "68fdee2d9163ff66e9b7a5351dcf185137b82d517ebbcfc1b943cf83850e8e90"
+      }
+    },
+    {
+      "id": "CLM-1116",
+      "statement": "The test isolation_a_catalog_on_store_b_writes_nothing_to_store_a exists in src/stores/placement.rs, creates a catalog on a second store and asserts store a's catalog tables are unchanged while store b's gained rows; it passes in both modes.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #974 Validation: named test `isolation_a_catalog_on_store_b_writes_nothing_to_store_a`; PR body \"New test ... in src/stores/placement.rs\"",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "src/stores/placement.rs"
+      ],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1649",
+          "kind": "inspection",
+          "locator": "src/stores/placement.rs:225-310",
+          "summary": "Registers store-b as a host store, pins the team to it, snapshots store a's catalog table counts, creates a catalog via catalogs::create_in, then asserts a_after == a_before, b has some nonzero count, and a started with all zero counts.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/placement.rs",
+              "lines": {
+                "start": 225,
+                "end": 310
+              },
+              "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+            }
+          },
+          "recorded_at": "2026-11-24T06:59:32.954058153Z",
+          "seal": {
+            "by": "server",
+            "mac": "65080768fb607eefe33b83462a8c7165d394401c459929b570697436fd55c7b3"
+          }
+        },
+        {
+          "id": "EVD-1650",
+          "kind": "test",
+          "locator": "OKF_TEST_STORE=same|separate cargo test --jobs 4 --lib isolation_a_catalog_on_store_b",
+          "summary": "Reran on head 037974a: 1 passed in same mode, 1 passed in separate mode (also ok in both runs of gate-test.log).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T06:59:33.016926821Z",
+          "seal": {
+            "by": "server",
+            "mac": "e7366d6e33e3bca6f0d7c737199d7d4f827991e1297b1d7ba04e0e25b8670ea7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Assertions read, and the test reran green in both modes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1649",
+            "EVD-1650"
+          ],
+          "recorded_at": "2026-11-24T07:00:11.151027886Z",
+          "seal": {
+            "by": "server",
+            "mac": "da128dad8ec93faad52b0bb78edbbd4617a868aa1e60e024b776ca295baffa22"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T06:59:16.365698120Z",
+      "updated_at": "2026-11-24T07:00:11.151027886Z",
+      "seal": {
+        "by": "server",
+        "mac": "bc4567afbc8eecb4638a3280232c2e820112f2524b1dceb5285c0a1133fafafe"
+      }
+    },
+    {
+      "id": "CLM-1117",
+      "statement": "No production (non-test) code changed except the test-only CatalogDb::main_in.",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"No production code changed except the test-only `CatalogDb::main_in`.\"",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "src"
+      ],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1652",
+          "kind": "analysis",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD -- src (all hunks classified)",
+          "summary": "Every hunk in src/ is in a #[cfg(test)] module or helper (*_tests.rs, mod tests/testing, cfg(test) fns in db.rs, store/mod.rs, store/catalogs.rs, src/test_locks.rs, src/http/api/testing.rs) or is the cfg(test) CatalogDb::main_in at src/stores/mod.rs:311-313; no non-test src hunk found.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 295,
+                "end": 320
+              },
+              "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+            }
+          },
+          "recorded_at": "2026-11-24T06:59:51.603324125Z",
+          "seal": {
+            "by": "server",
+            "mac": "ba4a613f1d07f97ba26967e472e898a84c8d0570811647386bd7212d6960b207"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All src hunks classified as test-only.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1652"
+          ],
+          "recorded_at": "2026-11-24T07:00:11.212524417Z",
+          "seal": {
+            "by": "server",
+            "mac": "dffffe3feed35ac2d27ffcd58c1c431400e16112f8e1602bf73d6300df51f184"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T06:59:16.365698120Z",
+      "updated_at": "2026-11-24T07:00:11.212524417Z",
+      "seal": {
+        "by": "server",
+        "mac": "5065bc97cdbd3223381e77eebb1b89862fc50fd274b39a72c7456a0e99fb1ab6"
+      }
+    },
+    {
+      "id": "CLM-1118",
+      "statement": "gate.sh test on the final code commit passed in 649 s with 3533 passed, 0 failed, 21 ignored in each of the two modes.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"`gate.sh test` on the final code commit: pass, 649 s. Same mode: 3533 passed, 0 failed, 21 ignored. Separate mode: 3533 passed, 0 failed, 21 ignored.\"",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "target/i974-logs/gate-test.log"
+      ],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1653",
+          "kind": "log",
+          "locator": "target/i974-logs/gate-test.log (sum of `test result` lines per run), gate-test.rc, .start, .end",
+          "summary": "rc=0; 649 s (1795503444-1795502795, start equals the commit time of 037974a); run 1 (from line 127) 3533 passed 0 failed 21 ignored, run 2 (from line 3850) 3533/0/21. Working tree is clean at 037974a, so the log describes this code.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T06:59:51.664001033Z",
+          "seal": {
+            "by": "server",
+            "mac": "9f142d8e9a4b55cdc0d877e8aab6a413d151b6e25b80016dec6afbf541ebe8cb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "I recomputed the totals from the log; I did not rerun the full suite as instructed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1653"
+          ],
+          "recorded_at": "2026-11-24T07:00:11.273729498Z",
+          "seal": {
+            "by": "server",
+            "mac": "99f89daadc03e859f9fc3a0750cf9c83815759b640c35898374828ad7f813897"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T06:59:16.365698120Z",
+      "updated_at": "2026-11-24T07:00:11.273729498Z",
+      "seal": {
+        "by": "server",
+        "mac": "9b0bd4bf746dd14e345855e7dcee58ea3fd43146e31f112a1141de8aceb821d2"
+      }
+    },
+    {
+      "id": "CLM-1119",
+      "statement": "gate.sh fmt, lint and dylint pass on the change.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"`gate.sh fmt`, `lint`, `dylint`: pass.\"",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "target/i974-logs"
+      ],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1654",
+          "kind": "log",
+          "locator": "target/i974-logs/gate-fmt.log, gate-lint.log, gate-dylint.log",
+          "summary": "fmt log ends after `cargo fmt --all --check` with no diff; lint log ends with cargo doc Finished; dylint log ends with Finished. No exit-code files exist for these three, so pass is read from the log tails, not rerun by me.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T06:59:51.725863066Z",
+          "seal": {
+            "by": "server",
+            "mac": "d45be5b1c3257753da722c27a5e37d23b05846bcadcc0b8ad0b0e16461147496"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The logs show the commands finished but no exit codes were saved and I was told not to run the full gates; the logs also predate no-change confirmation only by tail inspection. Fix: rerun tools/agentic/gate.sh fmt, lint and dylint and record their exit codes (or save rc files) on the head commit.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [],
+          "recorded_at": "2026-11-24T07:00:11.335962632Z",
+          "seal": {
+            "by": "server",
+            "mac": "8de76842eb185c1beae12297c2ce9a53e09f4a61c61a20fc4054d4eecf8311e6"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T06:59:16.365698120Z",
+      "updated_at": "2026-11-24T07:00:11.335962632Z",
+      "seal": {
+        "by": "server",
+        "mac": "deda795a58b9a2955b8ee968acfa5b8b06f70505009ad8a676a95e914578a610"
+      }
+    },
+    {
+      "id": "CLM-1120",
+      "statement": "Plan Task 15 carries a dated `Corrected (issue #974)` note and open question 1 (gate time) is marked answered.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"Plan Task 15 carries a dated `Corrected (issue #974)` note; open question 1 (gate time) is answered.\"",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1655",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:596 and :686",
+          "summary": "Line 596 is `Corrected (issue #974, 2026-11-24)` under Task 15; line 686 open question 1 ends with the Answered by Task 15 note.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 596,
+                "end": 596
+              },
+              "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+            }
+          },
+          "recorded_at": "2026-11-24T06:59:51.792335039Z",
+          "seal": {
+            "by": "server",
+            "mac": "43152a829802460d2679077328e023a932147c6afde2e4f77f1e2f124a701867"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both notes are present.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1655"
+          ],
+          "recorded_at": "2026-11-24T07:00:11.397715704Z",
+          "seal": {
+            "by": "server",
+            "mac": "879755e724bda078a547682b8a3db3de278a0856f67085902b899db1d962024d"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T06:59:16.365698120Z",
+      "updated_at": "2026-11-24T07:00:11.397715704Z",
+      "seal": {
+        "by": "server",
+        "mac": "978cd8e371892c12c1a746c86d5ea1a3110612b5a8a13b3d856a48d90332fd88"
+      }
+    },
+    {
+      "id": "CLM-1121",
+      "statement": "A dated changelog entry for Task 15 exists under changelog/.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #974 Validation: \"A changelog entry\"",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "changelog"
+      ],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1656",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md",
+          "summary": "Timestamped changelog file added in the diff, describing Added/Changed/Notes of Task 15.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md",
+              "lines": {
+                "start": 1,
+                "end": 10
+              },
+              "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+            }
+          },
+          "recorded_at": "2026-11-24T06:59:51.858366469Z",
+          "seal": {
+            "by": "server",
+            "mac": "65156345402f19c76b8430d949f9743681797a4b466abcb95a9da0b9181c9296"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The file exists.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1656"
+          ],
+          "recorded_at": "2026-11-24T07:00:11.458963135Z",
+          "seal": {
+            "by": "server",
+            "mac": "48924dda0963f4c75c14cf60fe1587fd4b56bcaa62795d1fdf152dc50bb29090"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T06:59:16.365698120Z",
+      "updated_at": "2026-11-24T07:00:11.458963135Z",
+      "seal": {
+        "by": "server",
+        "mac": "3372c498efad6214395b5abf4c6b0060912b52c9bb4cc6ca5d1bf0cda7ec5f0b"
+      }
+    },
+    {
+      "id": "CLM-1122",
+      "statement": "Lock-wait helpers on catalog locks match the store database as well as the account database (the datname prefix match), and statements joining registry tables to catalog.* tables became two queries.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"cross-database joins became two queries, and lock-wait helpers see the store database\"",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "src"
+      ],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Superseded by CLM-1138: the datname prefix match it describes was replaced by own_databases! in c31f3ac.",
+        "retired_at": "2026-11-24T08:06:18.745946504Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1657",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:1291-1307, 3070-3078 (AWAITED_LOCKS); src/http/api/testing.rs:559-566; src/mcp/changesets.rs lock_waiters",
+          "summary": "Lock-wait helpers on catalog locks (AWAITED_LOCKS, wait_for_lock_waiters, mcp lock_waiters) use `left(datname, length(current_database())) = current_database()`; test_generation and housekeeping fixup became two queries (catalog_id from the registry, then the store). Remaining `datname = current_database()` filters (src/db.rs:1597, housekeeping.rs:1211, oidc.rs:859, oauth codes/tokens, invalidate, mail) concern account-database tables, not catalog locks.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 1291,
+                "end": 1307
+              },
+              "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+            }
+          },
+          "recorded_at": "2026-11-24T06:59:51.923879888Z",
+          "seal": {
+            "by": "server",
+            "mac": "9ce59dcff468ad3f47e4648ca91963d6404906cd6482527b8dc4fc2809fc1ebe"
+          }
+        },
+        {
+          "id": "EVD-1677",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:3068-3078 at c31f3ac",
+          "summary": "The datname prefix match in the statement is gone: AWAITED_LOCKS and the other helpers now use own_databases! (exact name, _store, _x). EVD-1657's quoted left() filter no longer exists.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 3068,
+                "end": 3078
+              },
+              "commit": "c31f3acba2dbda89399131e7893e1f7ec6cf0c87"
+            }
+          },
+          "recorded_at": "2026-11-24T08:06:01.713225640Z",
+          "seal": {
+            "by": "server",
+            "mac": "d466eead3f5c4a912f42f4def594c6d92b4d0e8ca71cb30e805b5746fa1be307"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Catalog-lock helpers updated; leftovers concern account tables.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1657"
+          ],
+          "recorded_at": "2026-11-24T07:00:11.520218825Z",
+          "seal": {
+            "by": "server",
+            "mac": "20215a3ed5259a739c8c094960af0580134e81c957f42dcad77676cc05a0bb50"
+          }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "Statement says the helpers use a datname prefix match; c31f3ac replaced it with exact-name matching.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1677"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.883141573Z",
+          "seal": {
+            "by": "server",
+            "mac": "cc382cf900d966bfc6f724eddbd11452c29979d4bd421982d616d1a85256608e"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T06:59:16.365698120Z",
+      "updated_at": "2026-11-24T08:06:18.745946504Z",
+      "seal": {
+        "by": "server",
+        "mac": "b40d843c92e78cf2c8ce9ca5a692fd4bbf8f6f2bec55e664d6eb584a0a174696"
+      }
+    },
+    {
+      "id": "CLM-1123",
+      "statement": "Every test that failed only in separate mode assumed one database, and none was a production bug.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "PR body: \"Every test that failed only in `separate` mode assumed one database; none was a production bug.\"",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1658",
+          "kind": "analysis",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD -- src; target/i974-logs/*.fail.txt",
+          "summary": "The final diff has no production change, consistent with no production bug fix. But the per-failure root causes (target/i974-logs/lib*.fail.txt, int1.fail.txt, same1.fail.txt) were not individually traced by me, and the earlier failing runs are not reproducible on this head.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T06:59:51.982827108Z",
+          "seal": {
+            "by": "server",
+            "mac": "5beb94caf70d4690bbae51b8b550995d06bedafe9a5f66e9ef64351d713d5837"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "No production change is consistent with it, but each failure's cause was not traced. Fix: soften the PR sentence to \"the fixes were all in test code; no production code changed\", or attach the per-failure causes from the fail.txt logs.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [],
+          "recorded_at": "2026-11-24T07:00:11.581154554Z",
+          "seal": {
+            "by": "server",
+            "mac": "981c551152130c8b442a618b80261ffd718868424774c5407df1e3b36ce2ae91"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T06:59:16.365698120Z",
+      "updated_at": "2026-11-24T07:00:11.581154554Z",
+      "seal": {
+        "by": "server",
+        "mac": "83abeb88291261370299d0907349158220c25267265491d8e13594441277b179"
+      }
+    },
+    {
+      "id": "CLM-1124",
+      "statement": "The justfile test recipe depends on test-worker (so it runs first), then runs scripts/test-pg.sh run with cargo test in the default (same) store mode and then OKF_TEST_STORE=separate cargo test, exiting nonzero if either failed.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Replaces CLM-0228 after issue #974 (https://github.com/hypotheosis/okf_mcp/issues/974) changed the justfile test recipe",
+      "source_anchor": {
+        "path": "justfile",
+        "lines": {
+          "start": 16,
+          "end": 24
+        },
+        "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+      },
+      "derived_from": [
+        "CLM-0003"
+      ],
+      "artifacts": [
+        "justfile"
+      ],
+      "tags": [
+        "from-issue:974"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1661",
+          "kind": "inspection",
+          "locator": "justfile:23-24",
+          "summary": "Line 23 is `test: test-worker`; line 24 is `scripts/test-pg.sh run bash -c 'status=0; cargo test || status=1; OKF_TEST_STORE=separate cargo test || status=1; exit $status'`, so both runs happen and the exit status is nonzero if either fails.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "justfile",
+              "lines": {
+                "start": 23,
+                "end": 24
+              },
+              "commit": "037974a7ca89109b4318d7109f7ade9dc6eaf12e"
+            }
+          },
+          "recorded_at": "2026-11-24T07:01:18.200675475Z",
+          "seal": {
+            "by": "server",
+            "mac": "f040ed932d4f20290ca9174069d878497377ef29527b0bd47710bf24966d22e2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "I read justfile:23-24 myself: the dependency and the two-run recipe match the statement exactly.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1661"
+          ],
+          "recorded_at": "2026-11-24T07:01:21.567287480Z",
+          "seal": {
+            "by": "server",
+            "mac": "0df7fd8fd2ba45b930e64d58dec66d0c5577e2d937411b3c832468d9821009b4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T07:01:14.858037807Z",
+      "updated_at": "2026-11-24T07:01:21.567287480Z",
+      "seal": {
+        "by": "server",
+        "mac": "3f969544c916850048d17618a1e47310aaad6de73c7df5b5b9a4031ced31be74"
+      }
+    },
+    {
+      "id": "CLM-1125",
+      "statement": "justfile `test` recipe runs OKF_TEST_STORE=same cargo test first, then OKF_TEST_STORE=separate cargo test, accumulating exit status.",
+      "kind": "functional",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "source_anchor": {
+        "path": "justfile",
+        "lines": {
+          "start": 23,
+          "end": 24
+        },
+        "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1662",
+          "kind": "inspection",
+          "locator": "justfile:24",
+          "summary": "Recipe runs same then separate, each `|| status=1`, then `exit $status`.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "justfile",
+              "lines": {
+                "start": 23,
+                "end": 24
+              },
+              "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+            }
+          },
+          "recorded_at": "2026-11-24T07:32:15.897898431Z",
+          "seal": {
+            "by": "server",
+            "mac": "06d85e2b0b4cbc7b0c9f68c76bc0653573db79104eaaa09c0b6661a11ef469a7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Recipe text matches.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1662"
+          ],
+          "recorded_at": "2026-11-24T07:32:24.674521336Z",
+          "seal": {
+            "by": "server",
+            "mac": "1655ecb39dbabc8208d6f7160121a754321b7ae17f8701e6b3682ef7d8483717"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T07:32:04.724442008Z",
+      "updated_at": "2026-11-24T07:32:24.674521336Z",
+      "seal": {
+        "by": "server",
+        "mac": "d0f739b763e9cdb524bf12862ee9bcccf9bd9f10a0897c5ed8deaa7c2d10944c"
+      }
+    },
+    {
+      "id": "CLM-1126",
+      "statement": "tests/support/pg.rs keys the SEPARATE_STORES registry by host:port/database via registry_key in register_store, store_options and unregister_store (called from Database::drop); no other harness state is keyed by bare database name.",
+      "kind": "functional",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "source_anchor": {
+        "path": "tests/support/pg.rs",
+        "lines": {
+          "start": 362,
+          "end": 425
+        },
+        "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1663",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:366-420,556",
+          "summary": "register_store inserts, store_options looks up, unregister_store(key) removes, all via registry_key (host:port/db); Database::drop calls unregister_store. Only other statics (SHARED_TEMPLATE, NEXT_START, Once) are not name-keyed maps.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 362,
+                "end": 425
+              },
+              "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+            }
+          },
+          "recorded_at": "2026-11-24T07:32:15.962730313Z",
+          "seal": {
+            "by": "server",
+            "mac": "fb0f57cb7a4ef55815237410e0568f67a66be84d27fb0a197010f6e4786e3ba7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All three operations key via registry_key; drop unregisters; no other name-keyed state found.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1663"
+          ],
+          "recorded_at": "2026-11-24T07:32:24.737478700Z",
+          "seal": {
+            "by": "server",
+            "mac": "5642e4cc058907abd358216ee0f79df62e7875124c5c7fe23623230fb6c30ebd"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T07:32:04.724442008Z",
+      "updated_at": "2026-11-24T07:32:24.737478700Z",
+      "seal": {
+        "by": "server",
+        "mac": "35cac0a15e14cc806962225fb3a2a16474deca6b5069e84e775f012dd2bdcdd1"
+      }
+    },
+    {
+      "id": "CLM-1127",
+      "statement": "Test stores_of_same_named_databases_on_distinct_servers_stay_apart registers two same-named databases on distinct ports and asserts they stay apart after one unregisters, and passes.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "source_anchor": {
+        "path": "tests/test_database.rs",
+        "lines": {
+          "start": 248,
+          "end": 285
+        },
+        "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1664",
+          "kind": "test",
+          "locator": "cargo test --jobs 4 --test test_database stores_of_same",
+          "summary": "Ran it: 1 passed, 0 failed. Test code registers ports 15432/15433 both named postgres, asserts separation and that unregistering first leaves second intact.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/test_database.rs",
+              "lines": {
+                "start": 248,
+                "end": 285
+              },
+              "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+            }
+          },
+          "recorded_at": "2026-11-24T07:32:16.029781866Z",
+          "seal": {
+            "by": "server",
+            "mac": "11543a4506929c7f44c8fff92e7959fddce93ac4a0104b8e8ae0c850d90b9de7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test exists as described and passed when run.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1664"
+          ],
+          "recorded_at": "2026-11-24T07:32:24.800156833Z",
+          "seal": {
+            "by": "server",
+            "mac": "999e532ea02b89a0c453223882245f96b6f16399ff278796aec1abc992484594"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T07:32:04.724442008Z",
+      "updated_at": "2026-11-24T07:32:24.800156833Z",
+      "seal": {
+        "by": "server",
+        "mac": "79da926a08ea514728ea6ca069eabb50a745787d1a98569043b75ae8a0789ee6"
+      }
+    },
+    {
+      "id": "CLM-1128",
+      "statement": "In separate mode the account database's catalog schema is dropped (drop_account_catalog) for both the template build and the own-container path, and template_name includes the mode.",
+      "kind": "functional",
+      "level": "component",
+      "verification_method": "inspection",
+      "source_anchor": {
+        "path": "tests/support/pg.rs",
+        "lines": {
+          "start": 155,
+          "end": 165
+        },
+        "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1665",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:155,295-297,754,657-665",
+          "summary": "drop_account_catalog is a no-op unless Separate; called after migrate_in_place in the own-container branch (295-297) and in template build (754); template_name hashes a mode byte.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 155,
+                "end": 165
+              },
+              "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+            }
+          },
+          "recorded_at": "2026-11-24T07:32:16.100044453Z",
+          "seal": {
+            "by": "server",
+            "mac": "ebe7ac8c4690e8126cf698112badcb6a597094082a48106044e7f8933ffdd325"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both paths call drop_account_catalog; mode is in template hash.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1665"
+          ],
+          "recorded_at": "2026-11-24T07:32:24.864173832Z",
+          "seal": {
+            "by": "server",
+            "mac": "b118b9c1cd64ece9598d56fcfeb7881aa15a22a992c7d8cdc65ebb64b36c6809"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T07:32:04.724442008Z",
+      "updated_at": "2026-11-24T07:32:24.864173832Z",
+      "seal": {
+        "by": "server",
+        "mac": "3ec3a62b64f425dea34537a837b810228b2b97308218fdaa2cf5aca23dff8823"
+      }
+    },
+    {
+      "id": "CLM-1129",
+      "statement": "TestDb::start_account_layout keeps the catalog schema, and six tests (five in src/db.rs, one in src/cli/stores.rs) use it.",
+      "kind": "functional",
+      "level": "component",
+      "verification_method": "inspection",
+      "source_anchor": {
+        "path": "tests/support/pg.rs",
+        "lines": {
+          "start": 254,
+          "end": 258
+        },
+        "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1666",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:254; src/db.rs:541,1754,2031,2438,2490,2720; src/cli/stores.rs:275",
+          "summary": "start_account_layout = create(false) + migrate_in_place, no drop. Five db.rs tests use it (four via test_db_account_layout, no_foreign_key_crosses directly) and the stores.rs test uses test_db_account_layout.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 254,
+                "end": 258
+              },
+              "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+            }
+          },
+          "recorded_at": "2026-11-24T07:32:16.165673358Z",
+          "seal": {
+            "by": "server",
+            "mac": "8172d3e71ad9062dc3bd51160e1d86539db4460ac4ae914f58b6f1736f0b1201"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "No drop in start_account_layout; six named tests use it directly or via helper.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1666"
+          ],
+          "recorded_at": "2026-11-24T07:32:24.926868104Z",
+          "seal": {
+            "by": "server",
+            "mac": "027e046a016ea15cc783f58ea022893ce9e8590c3fb175186125d2cee67d88c4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T07:32:04.724442008Z",
+      "updated_at": "2026-11-24T07:32:24.926868104Z",
+      "seal": {
+        "by": "server",
+        "mac": "b6f6d59bdbb724370f726e87ccd7863bfeecffd7e6cfd8ed756a2d2d9d17d6a6"
+      }
+    },
+    {
+      "id": "CLM-1130",
+      "statement": "The final gate.sh test run (gate3-test.log) passed in both store modes with 0 failures.",
+      "kind": "functional",
+      "level": "system",
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1667",
+          "kind": "log",
+          "locator": "target/i974-logs/gate3-test.log, gate3-test.rc",
+          "summary": "rc file is 0; all 56 'test result' lines are ok with 0 failed, summing 7068 passed and 42 ignored; two sets of lib/bin/doc-test runs (lines 126 and 3850) show both modes ran; no FAILED lines.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T07:32:16.228060860Z",
+          "seal": {
+            "by": "server",
+            "mac": "27be8344d63db3d94beacda226f47598d761cd7e5cf02b8025bc4ec330cf1d51"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Log and rc show a green run with two mode passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1667"
+          ],
+          "recorded_at": "2026-11-24T07:32:24.989241476Z",
+          "seal": {
+            "by": "server",
+            "mac": "3478b8da625411eb3b154cffa1e5fec0e65c132d34c84a710f32812ae69532fc"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T07:32:04.724442008Z",
+      "updated_at": "2026-11-24T07:32:24.989241476Z",
+      "seal": {
+        "by": "server",
+        "mac": "7fb33d5d269de961ad187a821a7ee8fb8f962c47411f019b68c51ccd8fb533b9"
+      }
+    },
+    {
+      "id": "CLM-1131",
+      "statement": "The macro own_databases! in src/test_locks.rs yields a condition that matches only the exact database name, name||'_store', and names whose first length(name)+2 characters equal name||'_x'; it does not match a longer-counter name such as ..._10 for database ..._1.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [
+        "src/test_locks.rs"
+      ],
+      "tags": [
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1668",
+          "kind": "inspection",
+          "locator": "src/test_locks.rs:25-50",
+          "summary": "Macro expands to (col = db OR col = db||'_store' OR left(col, length(db)+2) = db||'_x'). No prefix-only branch; ..._10 vs ..._1 matches none of the three (not equal, not ..._1_store, third 2 chars past name are '0'/'_'... differ from '_x').",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/test_locks.rs",
+              "lines": {
+                "start": 25,
+                "end": 50
+              },
+              "commit": "c31f3acba2dbda89399131e7893e1f7ec6cf0c87"
+            }
+          },
+          "recorded_at": "2026-11-24T08:06:01.101131924Z",
+          "seal": {
+            "by": "server",
+            "mac": "c7e58796504ae134b0f94bbfca6f1981250d0bdbe169f64b2f69f6346b9f3b62"
+          }
+        },
+        {
+          "id": "EVD-1669",
+          "kind": "test",
+          "locator": "target/i974-logs/gate6-test.log (own_databases test)",
+          "summary": "The unit test evaluating the macro in Postgres over _1/_10/_11 names ran in the green gate (0 failed in all 56 test result lines).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T08:06:01.167345689Z",
+          "seal": {
+            "by": "server",
+            "mac": "c3102056807271fea1bde50485a2b98c4059031b94fc647a2a0d122c5029445e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Macro text and passing test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1668",
+            "EVD-1669"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.369910468Z",
+          "seal": {
+            "by": "server",
+            "mac": "93ecf54f77a14440cf8c97e787af0bf912af430ad40265c0f5687823b1611f33"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:13.369910468Z",
+      "seal": {
+        "by": "server",
+        "mac": "825ba6ab15496739de678e05ef802e47b104581e7ffbe4adafa007dd892c1f16"
+      }
+    },
+    {
+      "id": "CLM-1132",
+      "statement": "No lock-wait filter on pg_stat_activity.datname in src/ still uses a prefix match; all eight former prefix filters use own_databases!.",
+      "kind": "functional",
+      "level": "component",
+      "verification_method": "inspection",
+      "derived_from": [],
+      "artifacts": [
+        "src"
+      ],
+      "tags": [
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Wrong count (six filters, not eight); restated accurately as CLM-1133.",
+        "retired_at": "2026-11-24T08:06:18.810736894Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1670",
+          "kind": "analysis",
+          "locator": "git show c31f3ac -- src; git grep length(current_database c31f3ac~1",
+          "summary": "Before the commit there were six prefix filters in code (testing.rs:562, changesets.rs:1697 and 3174, lock_order_tests.rs:115, catalogs.rs:3074, catalogs_provision_tests.rs:77), not eight. The commit and its changelog say eight; the count is wrong, though all six now use own_databases!.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-24T08:06:01.230322263Z",
+          "seal": {
+            "by": "server",
+            "mac": "b664dd78d366fd3c69e4418f69d7e422304e4c820b9721d06756aa6b93bd3d6d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Only six prefix filters existed, not eight; the count in the commit message and changelog is wrong (superseded by CLM-1133 for the substance).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1670"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.436814036Z",
+          "seal": {
+            "by": "server",
+            "mac": "6c75dc775c8c07d59e23caa09e9ee365499cabd632d0ef7a28d6566b575a6f8f"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:18.810736894Z",
+      "seal": {
+        "by": "server",
+        "mac": "6181428b785d93486816bf2f677bc7803418a051010f6e7d4d7f633c9b3bbee1"
+      }
+    },
+    {
+      "id": "CLM-1133",
+      "statement": "No lock-wait filter on pg_stat_activity.datname in src/ still uses a prefix match (left(datname, length(current_database()))), and every former prefix filter uses own_databases!.",
+      "kind": "functional",
+      "level": "component",
+      "verification_method": "inspection",
+      "derived_from": [],
+      "artifacts": [
+        "src"
+      ],
+      "tags": [
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1671",
+          "kind": "inspection",
+          "locator": "git grep over src and tests at c31f3ac",
+          "summary": "Zero hits for a left()/length(current_database()) prefix match on datname in src; the six former prefix filters (testing.rs, changesets.rs x2, lock_order_tests.rs, catalogs.rs, catalogs_provision_tests.rs) now call own_databases!. Remaining datname filters are exact datname = current_database().",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "length\\(current_database|left\\([a-z.]*datname",
+              "scope": [
+                "src",
+                "tests"
+              ],
+              "hits": 0,
+              "commit": "c31f3acba2dbda89399131e7893e1f7ec6cf0c87"
+            }
+          },
+          "recorded_at": "2026-11-24T08:06:01.315189285Z",
+          "seal": {
+            "by": "server",
+            "mac": "70fc1aec39f9839b2cf0677f59bf3ea21bc2cb97e5c5bad6d9965dae2178ad05"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Zero-hit search and diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1671"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.500657443Z",
+          "seal": {
+            "by": "server",
+            "mac": "f3dfc656408e4008aaec46c05252d36fc9d7e8a6d74f8d5422b136d6931065d3"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:13.500657443Z",
+      "seal": {
+        "by": "server",
+        "mac": "0b44785773b13410ac9649ff0c7578dea9e0407cef76e2595ad8ccb62ae233f4"
+      }
+    },
+    {
+      "id": "CLM-1134",
+      "statement": "Test own_databases_are_the_name_its_store_and_its_extras_and_no_longer_counter in src/test_locks.rs covers names ending in _1 and _10.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "derived_from": [],
+      "artifacts": [
+        "src/test_locks.rs"
+      ],
+      "tags": [
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1672",
+          "kind": "inspection",
+          "locator": "src/test_locks.rs:207-235",
+          "summary": "Test checks databases r_test_5_9_1 and r_test_5_9_10 over names incl. _1, _10, _11, and their _store/_xa variants, asserting exact kept sets.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/test_locks.rs",
+              "lines": {
+                "start": 207,
+                "end": 235
+              },
+              "commit": "c31f3acba2dbda89399131e7893e1f7ec6cf0c87"
+            }
+          },
+          "recorded_at": "2026-11-24T08:06:01.379419603Z",
+          "seal": {
+            "by": "server",
+            "mac": "494883abde86b8c8a5d39d756b345b4c50f4bf9fe6149b821ee9274baed04c0a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test body covers _1 and _10.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1672"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.564071378Z",
+          "seal": {
+            "by": "server",
+            "mac": "7872e511a21e90a8e5ad55d09c6d6b10e44a5eb0fe64821d49c87d209b87e087"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:13.564071378Z",
+      "seal": {
+        "by": "server",
+        "mac": "8a78c5d890b2bdca078242943930aaad863880c00f60b696be0a83d575220629"
+      }
+    },
+    {
+      "id": "CLM-1135",
+      "statement": "tests/support/pg.rs server_password parses the URL with url::Url and percent-decodes the password, and set_store_password_once uses it; test the_server_password_is_percent_decoded in tests/test_database.rs asserts p%40ss decodes to p@ss.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "derived_from": [],
+      "artifacts": [
+        "tests/support/pg.rs",
+        "tests/test_database.rs"
+      ],
+      "tags": [
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1673",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:510-535; tests/test_database.rs:237-247",
+          "summary": "set_store_password_once calls server_password; server_password parses with url and percent_decode_str (line ~526); test asserts p%40ss -> p@ss plus empty-password and invalid-URL cases.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 510,
+                "end": 535
+              },
+              "commit": "c31f3acba2dbda89399131e7893e1f7ec6cf0c87"
+            }
+          },
+          "recorded_at": "2026-11-24T08:06:01.450055844Z",
+          "seal": {
+            "by": "server",
+            "mac": "a01f7874a10cfeb99a49ee70144b83f9453706952368758c70db17282524cb96"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and test as claimed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1673"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.628634908Z",
+          "seal": {
+            "by": "server",
+            "mac": "591412fb1b06b01b0bd6e885e23510527ae8b635f9be657efe0e366b7a1816db"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:13.628634908Z",
+      "seal": {
+        "by": "server",
+        "mac": "55605952bd98c77314b6a6edae73821ca25ad49bf7fa2e2fd542f4ca70a786b6"
+      }
+    },
+    {
+      "id": "CLM-1136",
+      "statement": "The changelog describes stores_of_same_named_databases_on_distinct_servers_stay_apart as a unit test with lazy pools that never connect and does not claim two live servers.",
+      "kind": "documentation",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "derived_from": [],
+      "artifacts": [
+        "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md"
+      ],
+      "tags": [
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1674",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md:47-51",
+          "summary": "Says it is a unit test of the key using two lazy pools on different ports (fictional host, never connected) and that it does not start two servers.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md",
+              "lines": {
+                "start": 47,
+                "end": 51
+              },
+              "commit": "c31f3acba2dbda89399131e7893e1f7ec6cf0c87"
+            }
+          },
+          "recorded_at": "2026-11-24T08:06:01.520041463Z",
+          "seal": {
+            "by": "server",
+            "mac": "e74a97a3a2556b42feefb7ef5900b286789ae4ec1340579e4fbc3f5668b72020"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Changelog text matches.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1674"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.691449961Z",
+          "seal": {
+            "by": "server",
+            "mac": "cd72ded2758570dcdb7a85c32491878fa4ca05dd23539dbf080470ac0b64ca88"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:13.691449961Z",
+      "seal": {
+        "by": "server",
+        "mac": "c6070dca31342ac21751ea8df1b1fa6ffedbe759314b7a116d777ce6770d4bf5"
+      }
+    },
+    {
+      "id": "CLM-1137",
+      "statement": "The final gate.sh test passed in both store modes with 0 failed.",
+      "kind": "functional",
+      "level": "system",
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [
+        "target/i974-logs/gate6-test.log"
+      ],
+      "tags": [
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1675",
+          "kind": "log",
+          "locator": "target/i974-logs/gate6-test.rc, gate6-test.log",
+          "summary": "rc file contains 0; log has 56 'test result' lines, none lacking '0 failed' (checked with grep).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T08:06:01.580371508Z",
+          "seal": {
+            "by": "server",
+            "mac": "9af6cd3da82c051a8dfcf6b8d339e2a971b914faafcca8c9e09a848ef75890d6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "rc 0, 56 result lines all 0 failed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1675"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.754612596Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d5e5a189823808adb63bfa36537ea0781da0d42a832c8b578179a8afc898df4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:13.754612596Z",
+      "seal": {
+        "by": "server",
+        "mac": "3765dc8c16a4d9817fac1b434cf65df1f1c13f7853430e613197ee6fe6008ea2"
+      }
+    },
+    {
+      "id": "CLM-1138",
+      "statement": "Lock-wait helpers on catalog locks (AWAITED_LOCKS, wait_for_lock_waiters, the two in changesets.rs, lock_order_tests, catalogs_provision_tests) match the account database, its _store and its _x databases through own_databases!, not a datname prefix match; statements joining registry tables to catalog.* tables became two queries.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "src"
+      ],
+      "tags": [
+        "from-issue:974",
+        "audit-c31f3ac"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1676",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:3074; src/http/api/testing.rs:562; src/mcp/changesets.rs:1697,3174; lock_order_tests.rs:115; catalogs_provision_tests.rs:78",
+          "summary": "All six helpers use own_databases!; no prefix match remains; the two-query change from the earlier commit is unchanged by c31f3ac.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 3068,
+                "end": 3078
+              },
+              "commit": "c31f3acba2dbda89399131e7893e1f7ec6cf0c87"
+            }
+          },
+          "recorded_at": "2026-11-24T08:06:01.643791213Z",
+          "seal": {
+            "by": "server",
+            "mac": "1ae230c6265a4493bbefa184b7a47b3d5489ed2386e65e4e0b6a775700bac938"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Replacement for stale CLM-1122.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1676"
+          ],
+          "recorded_at": "2026-11-24T08:06:13.816705177Z",
+          "seal": {
+            "by": "server",
+            "mac": "96f39853f932e8999d451bf26d0b7ad7a1b691f80fe27ad80bbe34d8bdf928fd"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T08:05:41.806253408Z",
+      "updated_at": "2026-11-24T08:06:13.816705177Z",
+      "seal": {
+        "by": "server",
+        "mac": "69b3d3ad7505404453f5ca7e7cb8043907ab851c49677c29983db074db24f4b5"
+      }
+    },
+    {
+      "id": "CLM-1139",
+      "statement": "Every drop in the template build and its recovery (ensure_template's drop of an unmarked account template, build_template's drop of {name}_store) goes through drop_template_on, which runs ALTER DATABASE ... IS_TEMPLATE false when the database exists marked a template, then drops it.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "source": "PR #1008 review 6038261787 inline comment at tests/support/pg.rs:772; review round 3 commit",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/support/pg.rs"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1678",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:735,760,902-913",
+          "summary": "ensure_template (735) and build_template (760) call drop_template_on; drop_template_on selects datistemplate, runs ALTER DATABASE IS_TEMPLATE false if true, then drop_database_on. Remaining drop_database_on callers are line 837 (stale-database sweep, not template build) and 876 (drop_database).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 895,
+                "end": 913
+              },
+              "commit": "c7a2c6f40536848ef84288881f6e4b3be45a3db0"
+            }
+          },
+          "recorded_at": "2026-11-24T11:45:19.749155606Z",
+          "seal": {
+            "by": "server",
+            "mac": "1788f4ce7dce77019bdb93769b61c3b2005d93a615ca2709d142cb75b30b72bb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both template-build drops go through drop_template_on, which unmarks then drops.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1678"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.208959527Z",
+          "seal": {
+            "by": "server",
+            "mac": "7716fd30a166ad590b2e4a5b33f0fe83ed5d6087738091214369b0e5df6273f2"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:23:57.568679001Z",
+      "updated_at": "2026-11-24T11:45:32.208959527Z",
+      "seal": {
+        "by": "server",
+        "mac": "96391b27fa04f6c39d98be4c8c23900801b0ece5563990ce23431eb8cc5aefac"
+      }
+    },
+    {
+      "id": "CLM-1140",
+      "statement": "build_template marks {name}_store a template before marking the account template, and a comment states that the account mark is the commit point ensure_template checks.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "source": "PR #1008 review round 3 brief",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/support/pg.rs"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1679",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:773-785",
+          "summary": "Marking loop iterates [&store_name, name] (store first, account last); the comment above it says the account mark is the commit point ensure_template trusts.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 770,
+                "end": 785
+              },
+              "commit": "c7a2c6f40536848ef84288881f6e4b3be45a3db0"
+            }
+          },
+          "recorded_at": "2026-11-24T11:45:19.819877902Z",
+          "seal": {
+            "by": "server",
+            "mac": "6b5e43114be7757c62a8534a199f801143512d1a1ee19c3f7e76d27bd83eef4b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Loop order store then account, with the commit-point comment.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1679"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.272228628Z",
+          "seal": {
+            "by": "server",
+            "mac": "4eb13939f9082f76c37858ac03d586f224f5f165186ec6d4d428314a3338ff91"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:23:57.568679001Z",
+      "updated_at": "2026-11-24T11:45:32.272228628Z",
+      "seal": {
+        "by": "server",
+        "mac": "1a0187cde17073083ef8b569cec6f9f23048eae1c0ffd090fea125e2a96d2c05"
+      }
+    },
+    {
+      "id": "CLM-1141",
+      "statement": "The test a_build_killed_between_the_two_marks_is_rebuilt in tests/test_database.rs creates an unmarked account template and a marked {name}_store template, calls ensure_template, and asserts it built, both databases are marked templates, and a copy has every migration.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "source": "PR #1008 review 6038261787: requested regression",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/test_database.rs"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1680",
+          "kind": "inspection",
+          "locator": "tests/test_database.rs:169-196",
+          "summary": "Test creates template and {template}_store via create_database, marks only the store IS_TEMPLATE true, calls ensure_template, asserts built, is_template for both, copy migrations == migration_count, and cleans up.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/test_database.rs",
+              "lines": {
+                "start": 169,
+                "end": 196
+              },
+              "commit": "c7a2c6f40536848ef84288881f6e4b3be45a3db0"
+            }
+          },
+          "recorded_at": "2026-11-24T11:45:19.888223563Z",
+          "seal": {
+            "by": "server",
+            "mac": "302925cb57d507426f2713290903a3a7608ed7c5eea400d960f8db5146d8056d"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test arranges, acts and asserts exactly as stated.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1680"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.336184212Z",
+          "seal": {
+            "by": "server",
+            "mac": "fba89b4b3c45ad3a1050f8c8a712ba7f8ce379ce457a35d5bd3997b6856c6884"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:23:57.568679001Z",
+      "updated_at": "2026-11-24T11:45:32.336184212Z",
+      "seal": {
+        "by": "server",
+        "mac": "08fb713d0befc3e87a664e56502eea2fa6b7dc04e4c8be81732fd768540f0936"
+      }
+    },
+    {
+      "id": "CLM-1142",
+      "statement": "With build_template's store drop reverted to drop_database_on, a_build_killed_between_the_two_marks_is_rebuilt fails with PostgreSQL error 42809 'cannot drop a template database'; with drop_template_on it passes.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "source": "PR #1008 review round 3 report",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/test_database.rs",
+        "tests/support/pg.rs"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1681",
+          "kind": "log",
+          "locator": "target/i974-logs/narrow-neg.log; target/i974-logs/narrow.log",
+          "summary": "narrow-neg.log: the test FAILED, panicking at tests/test_database.rs:186 (the ensure_template unwrap) with PostgreSQL code 42809 'cannot drop a template database'. narrow.log: same test ok, 11 passed 0 failed. I cannot see the revert itself in the log, but the failure site and error match the claim.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T11:45:19.949943296Z",
+          "seal": {
+            "by": "server",
+            "mac": "13c633ad424bfe9e0d7655782cf682f79fdde4682ce1e96769195a2fc738e543"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "narrow-neg.log shows failure with 42809 at the ensure_template call; narrow.log shows pass. The revert itself is not visible in the log, only its effect.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1681"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.400389517Z",
+          "seal": {
+            "by": "server",
+            "mac": "2f382de6ac2dc00eb22f7fea7209c59b144aa82af2db8c0a4a321a40c66d1b60"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:23:57.568679001Z",
+      "updated_at": "2026-11-24T11:45:32.400389517Z",
+      "seal": {
+        "by": "server",
+        "mac": "6342ada60a923951fa74e7d66ae48f7bdca79c609fc28c481d7e6367d4bc280c"
+      }
+    },
+    {
+      "id": "CLM-1143",
+      "statement": "pg::drop_template drops the account template and then its {name}_store template, each through drop_template_on, and tests/test_database.rs's drop_template cleanup helper calls it.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "inspection",
+      "source": "PR #1008 review round 3 changelog",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/support/pg.rs",
+        "tests/test_database.rs"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1682",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:889-893; tests/test_database.rs:38-40",
+          "summary": "pg::drop_template calls drop_template_on for name then format!(\"{name}_store\"); the test helper drop_template is a one-line call to pg::drop_template.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 889,
+                "end": 894
+              },
+              "commit": "c7a2c6f40536848ef84288881f6e4b3be45a3db0"
+            }
+          },
+          "recorded_at": "2026-11-24T11:45:20.012751042Z",
+          "seal": {
+            "by": "server",
+            "mac": "1d1b0c8a617d94dfe6d35b55fa8867bba1dc3e031a8484bba8cc9116eb1d4466"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "pg::drop_template drops account then store via drop_template_on; the test helper delegates to it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1682"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.464004009Z",
+          "seal": {
+            "by": "server",
+            "mac": "20e92579ed5d461c9be1f3525fff1d96c89fd256b4e0a733c005d174531bc706"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:23:57.568679001Z",
+      "updated_at": "2026-11-24T11:45:32.464004009Z",
+      "seal": {
+        "by": "server",
+        "mac": "69b5729a03ea2c98d1f1b468b2d77a86f35d8af7fd1921149e23f35a0c9e52a0"
+      }
+    },
+    {
+      "id": "CLM-1144",
+      "statement": "Review round 3 changed only tests/support/pg.rs, tests/test_database.rs and the Task 15 changelog (no src/ file and no plan document).",
+      "kind": "constraint",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "source": "PR #1008 review round 3 brief: keep it to the harness",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "tests/support/pg.rs",
+        "tests/test_database.rs",
+        "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1683",
+          "kind": "analysis",
+          "locator": "git diff --stat 600c254 c7a2c6f",
+          "summary": "Stat lists exactly three files: the Task 15 changelog, tests/support/pg.rs, tests/test_database.rs. No src/ file and no docs/ plan file.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T11:45:20.078349135Z",
+          "seal": {
+            "by": "server",
+            "mac": "c6b9868c8842a3f5b693fe8be3199d294712f3427d7c9dc9258afe292eed0816"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Diff 600c254..c7a2c6f touches only the three named files.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1683"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.527768982Z",
+          "seal": {
+            "by": "server",
+            "mac": "5b332a4b2c2a64f3ec5711cfdd907c729576743a2058efc9ac41aa4107d2f961"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:23:57.568679001Z",
+      "updated_at": "2026-11-24T11:45:32.527768982Z",
+      "seal": {
+        "by": "server",
+        "mac": "277bde324d3a1bff6f9313d8a581cdebc6b0fb7a9e7b5103bf0dc7984fb0a9bd"
+      }
+    },
+    {
+      "id": "CLM-1145",
+      "statement": "The Task 15 changelog has a 'Review round 3 (PR #1008)' section describing drop_template_on, the mark order and commit point, pg::drop_template, and the regression test.",
+      "kind": "documentation",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "source": "PR #1008 review round 3 brief",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1684",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md:72-83",
+          "summary": "Section '## Review round 3 (PR #1008)' covers drop_template_on, the store-first/account-last order with the account mark as commit point, pg::drop_template, and a_build_killed_between_the_two_marks_is_rebuilt.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-24T06-46-31Z-m21-task-15-test-harness-separate-store.md",
+              "lines": {
+                "start": 72,
+                "end": 83
+              },
+              "commit": "c7a2c6f40536848ef84288881f6e4b3be45a3db0"
+            }
+          },
+          "recorded_at": "2026-11-24T11:45:20.151092227Z",
+          "seal": {
+            "by": "server",
+            "mac": "4ddf1a1aa3dbf197d5544ae4acdf897ab23a28bacd9ce436bad5650acbbe2a83"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Changelog section exists and covers all four named topics.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1684"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.592105758Z",
+          "seal": {
+            "by": "server",
+            "mac": "06b7a42e21718b8b84888a56ba3ecffa002168550222517371f1037c32fb77b3"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:23:57.568679001Z",
+      "updated_at": "2026-11-24T11:45:32.592105758Z",
+      "seal": {
+        "by": "server",
+        "mac": "5ca3d9e3ec9ff56f14a4b68b2967facafb9971ff1adbbf606c56617b8b89afa8"
+      }
+    },
+    {
+      "id": "CLM-1146",
+      "statement": "On commit c7a2c6f, tools/agentic/gate.sh test passed (exit 0) with 3537 passed, 0 failed, 21 ignored in each of the same and separate modes, after two earlier runs failed only on known flakes (an_absent_name_is_forgotten_after_its_lifetime, #1004; a_secrets_manager_store_opens_and_follows_a_rotated_secret, #1002).",
+      "kind": "functional",
+      "level": "artifact",
+      "verification_method": "test",
+      "source": "PR #1008 review round 3 gate logs",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "target/i974-logs/test.log",
+        "target/i974-logs/test-run1.log",
+        "target/i974-logs/test-run2.log"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1685",
+          "kind": "log",
+          "locator": "target/i974-logs/test.log, test-run1.log, test-run2.log, gate-exit-codes.txt",
+          "summary": "Summing 'test result:' lines in test.log: lines 1-3852 (same mode) 3537 passed 0 failed 21 ignored; lines 3853-end (separate mode, second 'Running unittests src/lib.rs') 3537 passed 0 failed 21 ignored. gate-exit-codes.txt: run3 test=0. test-run1.log fails only an_absent_name_is_forgotten_after_its_lifetime (line 268); test-run2.log fails only a_secrets_manager_store_opens_and_follows_a_rotated_secret (line 6818); each exit 1. Issue numbers #1004/#1002 not checkable from logs.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T11:45:20.216081608Z",
+          "seal": {
+            "by": "server",
+            "mac": "3dbf1b5a486526d68d5ea7f4166ff4ce7897a9a9b7a66762b06ad7e519ce45b8"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Summed counts are 3537/0/21 in each mode, final exit 0, and the two earlier failures are each the single named flaky test. Issue numbers are not verifiable from logs.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1685"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.655044807Z",
+          "seal": {
+            "by": "server",
+            "mac": "23f2126a57e7d0fb254f65c8b23c8c92122171b0406dc2f903a60405266775fe"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:44:24.733522944Z",
+      "updated_at": "2026-11-24T11:45:32.655044807Z",
+      "seal": {
+        "by": "server",
+        "mac": "14d2844465aa7ff7912620dec178a6c86456635d4c1631f67428bd988630ecb9"
+      }
+    },
+    {
+      "id": "CLM-1147",
+      "statement": "On commit c7a2c6f, tools/agentic/gate.sh fmt, lint and dylint each exited 0.",
+      "kind": "functional",
+      "level": "artifact",
+      "verification_method": "test",
+      "source": "PR #1008 review round 3 gate logs",
+      "derived_from": [
+        "CLM-1110"
+      ],
+      "artifacts": [
+        "target/i974-logs/fmt.log",
+        "target/i974-logs/lint.log",
+        "target/i974-logs/dylint.log"
+      ],
+      "tags": [
+        "from-issue:974",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1686",
+          "kind": "log",
+          "locator": "target/i974-logs/gate-exit-codes.txt; fmt.log; lint.log; dylint.log",
+          "summary": "gate-exit-codes.txt: fmt=0, lint=0, dylint=0. fmt.log shows cargo fmt --check with no diff output; lint.log shows clippy -D warnings and cargo doc finishing clean; dylint.log ends with Finished and no errors. HEAD is c7a2c6f.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T11:45:20.279821737Z",
+          "seal": {
+            "by": "server",
+            "mac": "5f7d2d65135e3d3a14e53ace849301e7b56e4143e2100de345992c9bb086c9f0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Exit codes 0 for fmt, lint and dylint, and the logs show clean output.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1686"
+          ],
+          "recorded_at": "2026-11-24T11:45:32.718836020Z",
+          "seal": {
+            "by": "server",
+            "mac": "43a389b7e1f3c879ccce721930337749e12e2d230c006189131faa099553acb0"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T11:44:24.733522944Z",
+      "updated_at": "2026-11-24T11:45:32.718836020Z",
+      "seal": {
+        "by": "server",
+        "mac": "bf6a19852161fa306436d10647bd2bd8f1b564767d6527c76d2fd22f6da1a880"
       }
     }
   ]

@@ -593,6 +593,15 @@ CREATE TRIGGER catalog_audit_entries_no_truncate BEFORE TRUNCATE ON catalog.cata
 - [ ] `gate.sh test` runs the suite once in each mode. If that doubles the gate's run time beyond its timeout, run the catalog-heavy test binaries in `separate` mode only, and record the choice here.
 - [ ] Tests: the existing suite in both modes; `isolation_a_catalog_on_store_b_writes_nothing_to_store_a`.
 
+> **Corrected (issue #974, 2026-11-24).** Done as written: `just test` (so `gate.sh test`) runs the whole suite in `same` mode and then in `separate` mode, in one container; the gate timeout is unchanged (measured run times are in `changelog/*-m21-task-15-*.md`: a warm run is about 5 minutes per mode, far inside the 75 minutes), so no binary is left out and open question 1 is answered: both modes, every gate. What a later task needs to know:
+>
+> - `TestDb::store()` and `crate::db::store_pool(&account_pool)` are the pool of the store `main` (the account database in `same` mode, the second database in `separate` mode). A test statement on a `catalog.*` table must use one of them, never `&db.pool`; a statement that joins `catalogs`, `users` or `audit_*` to a `catalog.*` table must become two queries (`crate::db::catalog_id(&pool, name)` gives a catalog's id). Integration tests use `server.db.store()` or `support::pg::store_pool`.
+> - The second database is named `<account database>_store`, is registered as `main` with an `env` credential whose variable is `OKF_TEST_STORE_PASSWORD` (set once per process from the server URL), and is built from its own template without an identity row (`db::migrate_store`'s schema); the first open of the store writes the identity `main`. Further stores for a test: `TestDb::extra_store_database(suffix)` (a copy of the same template, dropped with the test); Task 17's and Task 20's tests use it.
+> - A registry built with `Stores::with_environment` needs `pg_support::harness_password` as (part of) its environment, or `main` is unavailable in `separate` mode; a test of the release-one layout starts with `crate::db::main_in_the_account_database(&pool)`.
+> - `CatalogDb::main_in` (test-only) reads the registered options through `pg::store_options`, so it reaches the store in either mode.
+> - A lock-wait helper that filters `pg_stat_activity` on `datname = current_database()` must also see the store database, and must not match another test's (a prefix match would: `..._1` matches `..._10`): use `crate::test_locks::own_databases!("datname")`, the exact name, `{name}_store` and `{name}_x...`.
+> - `src/store/maintenance/tests.rs::the_maintenance_run_entrys_findings_count_reads_one_run_by_index` now drops the other `catalog_id` index inside its transaction: on an empty table the planner's choice between the two depends on index creation order, which differs between the account migrations and the catalog baseline.
+
 Release 3 is not deployable yet: Task 17 (listeners per store) completes it.
 
 ## After the split
@@ -674,5 +683,5 @@ Release 3 is not deployable yet: Task 17 (listeners per store) completes it.
 
 ## Open questions for the maintainer
 
-1. **Gate time.** Running the suite in both store modes may double `gate.sh test`. Is that acceptable, or should `separate` mode run only in the milestone PR's gates? Task 15 decides by default if no answer comes.
+1. **Gate time.** Running the suite in both store modes may double `gate.sh test`. Is that acceptable, or should `separate` mode run only in the milestone PR's gates? Task 15 decides by default if no answer comes. *Answered by Task 15 (issue #974): both modes in every `gate.sh test`, as measured it fits the timeout.*
 2. **Adding a store in production** needs network reach and a database user on the target cluster. That infrastructure work is outside this repo and isn't a task here.

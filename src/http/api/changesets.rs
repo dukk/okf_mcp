@@ -241,13 +241,15 @@ mod tests {
 
     /// The (actor, message) of `path`'s revision `revision` in `main`.
     async fn revision_of(test: &TestApp, path: &str, revision: i32) -> (String, String) {
+        let accounts = test.app.accounts().executor();
         sqlx::query_as(
-            "SELECT r.actor, r.message FROM catalog.revisions r JOIN catalogs c ON c.id = r.catalog_id \
-             WHERE c.name = 'main' AND r.path = $1 AND r.revision = $2",
+            "SELECT actor, message FROM catalog.revisions \
+             WHERE catalog_id = $1 AND path = $2 AND revision = $3",
         )
+        .bind(crate::db::catalog_id(accounts, "main").await)
         .bind(path)
         .bind(revision)
-        .fetch_one(test.app.accounts().executor())
+        .fetch_one(&crate::db::store_pool(accounts))
         .await
         .expect("the revision exists")
     }

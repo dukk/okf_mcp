@@ -12,6 +12,43 @@ use std::time::Duration;
 
 use sqlx::{PgConnection, PgPool};
 
+/// A SQL condition on the column `$column` (a literal such as `"datname"`):
+/// true for this test's own databases and no other test's. These are the
+/// account database (`current_database()`, or the SQL expression `$database`),
+/// its store `{name}_store` and the databases `{name}_x...` that
+/// `TestDb::extra_store_database` makes in `separate` store mode.
+///
+/// A prefix match is not enough: every test database name ends in a counter
+/// without padding, so `..._1` would match `..._10` and `..._11` of another
+/// test made in the same second. The conditions here are an exact name, an
+/// exact `_store` suffix and an `_x` child (account names end in digits).
+macro_rules! own_databases {
+    ($column:literal) => {
+        $crate::test_locks::own_databases!($column, "current_database()")
+    };
+    ($column:literal, $database:literal) => {
+        concat!(
+            "(",
+            $column,
+            " = ",
+            $database,
+            " OR ",
+            $column,
+            " = ",
+            $database,
+            " || '_store'",
+            " OR left(",
+            $column,
+            ", length(",
+            $database,
+            ") + 2) = ",
+            $database,
+            " || '_x')"
+        )
+    };
+}
+pub(crate) use own_databases;
+
 /// How long a helper waits for the lock wait it looks for.
 const WAIT_LIMIT: Duration = Duration::from_secs(10);
 
@@ -100,6 +137,13 @@ pub(crate) async fn wait_row_lock_waiter(
     table: &str,
     limit: Duration,
 ) -> Option<i32> {
+    // A table of schema `catalog` lives in the store's database, which is a
+    // database of its own in `OKF_TEST_STORE=separate` mode.
+    let pool = &if table.starts_with("catalog.") {
+        crate::db::store_pool(pool)
+    } else {
+        pool.clone()
+    };
     tokio::time::timeout(limit, async {
         loop {
             let pid: Option<i32> = sqlx::query_scalar(
@@ -144,6 +188,48 @@ pub(crate) async fn expect_row_lock_waiter(pool: &PgPool, holder: i32, table: &s
 mod tests {
     use super::*;
     use crate::db::test_db;
+
+    /// Which of `names` the condition keeps for the database `database`.
+    async fn kept_by_own_databases(pool: &PgPool, database: &str, names: &[&str]) -> Vec<String> {
+        let sql = concat!(
+            "SELECT n FROM unnest($1::text[]) AS n WHERE ",
+            own_databases!("n", "$2::text"),
+            " ORDER BY n"
+        );
+        sqlx::query_scalar(sql)
+            .bind(names)
+            .bind(database)
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn own_databases_are_the_name_its_store_and_its_extras_and_no_longer_counter() {
+        let db = test_db().await;
+        let names = [
+            "r_test_5_9_1",
+            "r_test_5_9_1_store",
+            "r_test_5_9_1_xa",
+            "r_test_5_9_10",
+            "r_test_5_9_10_store",
+            "r_test_5_9_10_xa",
+            "r_test_5_9_11",
+            "r_test_5_9",
+        ];
+
+        let kept_for_1 = kept_by_own_databases(&db.pool, "r_test_5_9_1", &names).await;
+        let kept_for_10 = kept_by_own_databases(&db.pool, "r_test_5_9_10", &names).await;
+
+        assert_eq!(
+            kept_for_1,
+            ["r_test_5_9_1", "r_test_5_9_1_store", "r_test_5_9_1_xa"]
+        );
+        assert_eq!(
+            kept_for_10,
+            ["r_test_5_9_10", "r_test_5_9_10_store", "r_test_5_9_10_xa"]
+        );
+    }
 
     /// Starts a session that waits for a `FOR SHARE` lock on `lock_probe_a`'s
     /// row while the returned transaction holds it `FOR UPDATE`.

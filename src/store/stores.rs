@@ -529,6 +529,7 @@ mod tests {
     #[tokio::test]
     async fn main_is_the_account_database_row() {
         let db = crate::db::test_db().await;
+        crate::db::main_in_the_account_database(&db.pool).await;
 
         let row = by_name(&db.pool, &StoreName::main())
             .await

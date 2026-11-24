@@ -1292,14 +1292,18 @@ pub async fn list(pool: &PgPool) -> Result<Vec<Catalog>, OkfError> {
     allow(uninstrumented_fn, reason = "a test helper")
 )]
 pub(crate) async fn test_generation(pool: &PgPool, name: &str) -> i64 {
-    sqlx::query_scalar(
-        "SELECT s.generation FROM catalog.catalog_state s JOIN catalogs c ON c.id = s.id \
-         WHERE c.name = $1",
-    )
-    .bind(name)
-    .fetch_one(pool)
-    .await
-    .expect("the catalog has a state row")
+    // Two databases in `separate` store mode: the id from the registry, the
+    // generation from the store.
+    let id: i64 = sqlx::query_scalar("SELECT id FROM catalogs WHERE name = $1")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .expect("the catalog is registered");
+    sqlx::query_scalar("SELECT generation FROM catalog.catalog_state WHERE id = $1")
+        .bind(id)
+        .fetch_one(CatalogDb::main_of(pool).executor())
+        .await
+        .expect("the catalog has a state row")
 }
 
 /// [`list`] with each catalog's generation, read from its store's
@@ -2574,7 +2578,7 @@ pub(crate) mod tests {
             "SELECT kind, title FROM catalog.documents WHERE catalog_id = $1 ORDER BY path",
         )
         .bind(pg.id)
-        .fetch_all(&db.pool)
+        .fetch_all(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         assert_eq!(kinds[0].0, "index");
@@ -2583,7 +2587,7 @@ pub(crate) mod tests {
             "SELECT path, op, message FROM catalog.revisions WHERE catalog_id = $1 ORDER BY path",
         )
         .bind(pg.id)
-        .fetch_all(&db.pool)
+        .fetch_all(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         let create_catalog = |path: &str| {
@@ -2941,7 +2945,7 @@ pub(crate) mod tests {
         )
         .bind(pg.id)
         .bind(now())
-        .fetch_one(&db.pool)
+        .fetch_one(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         sqlx::query(
@@ -2949,7 +2953,7 @@ pub(crate) mod tests {
         )
         .bind(changeset)
         .bind(b"x".to_vec())
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
 
@@ -2964,7 +2968,7 @@ pub(crate) mod tests {
         // The data goes with the cleanup the delete owes.
         crate::store::cleanups::settle_for_tests(&db.pool).await;
         let entries: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.changeset_entries")
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
         assert_eq!(entries, 0);
@@ -2993,7 +2997,7 @@ pub(crate) mod tests {
         )
         .bind(pg.id)
         .bind(now())
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
 
@@ -3054,7 +3058,7 @@ pub(crate) mod tests {
         ] {
             sqlx::query(statement)
                 .bind(catalog_id)
-                .execute(pool)
+                .execute(CatalogDb::main_of(pool).executor())
                 .await
                 .expect("drop the starter files");
         }
@@ -3062,9 +3066,13 @@ pub(crate) mod tests {
 
     /// Counts the lock requests blocked in this test's own database: the
     /// test server may be shared by other tests, whose waits are not ours.
-    pub(crate) const AWAITED_LOCKS: &str = "SELECT count(*) FROM pg_locks l \
-         JOIN pg_stat_activity a ON a.pid = l.pid \
-         WHERE NOT l.granted AND a.datname = current_database()";
+    /// In `separate` store mode the store is a database named after this
+    /// one, so the match is on the name's start.
+    pub(crate) const AWAITED_LOCKS: &str = concat!(
+        "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
+         WHERE NOT l.granted AND ",
+        crate::test_locks::own_databases!("a.datname")
+    );
 
     /// Waits until some backend is blocked on a lock, so a test knows the
     /// spawned delete (or import) has reached the point it should wait at.
@@ -3206,11 +3214,11 @@ pub(crate) mod tests {
         )
         .bind(pg.id)
         .bind(now())
-        .fetch_one(&db.pool)
+        .fetch_one(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         // A session's write, not yet committed when the delete starts.
-        let mut writer = db.pool.begin().await.unwrap();
+        let mut writer = crate::db::store_pool(&db.pool).begin().await.unwrap();
         sqlx::query(
             "INSERT INTO catalog.changeset_entries (changeset_id, path, content) VALUES ($1, 'a.md', $2)",
         )
@@ -3278,14 +3286,14 @@ pub(crate) mod tests {
         )
         .bind(catalog_id)
         .bind(now())
-        .fetch_one(pool)
+        .fetch_one(&crate::db::store_pool(pool))
         .await
         .unwrap();
         sqlx::query(
             "INSERT INTO catalog.changeset_entries (changeset_id, path, content) VALUES ($1, 'a.md', 'x')",
         )
         .bind(changeset)
-        .execute(pool)
+        .execute(&crate::db::store_pool(pool))
         .await
         .unwrap();
     }
@@ -3433,7 +3441,7 @@ pub(crate) mod tests {
         let starters: i64 =
             sqlx::query_scalar("SELECT count(*) FROM catalog.revisions WHERE message = $1")
                 .bind(STARTER_MESSAGE)
-                .fetch_one(&db.pool)
+                .fetch_one(&crate::db::store_pool(&db.pool))
                 .await
                 .unwrap();
         assert_eq!(starters, 2);

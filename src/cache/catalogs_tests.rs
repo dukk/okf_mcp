@@ -105,7 +105,7 @@ async fn break_catalog(pool: &PgPool, catalog_id: i64) {
          VALUES ($1, '../escape.md', '', false, 1, now(), 'test')",
     )
     .bind(catalog_id)
-    .execute(pool)
+    .execute(&crate::db::store_pool(pool))
     .await
     .unwrap();
     bump_generation(pool, catalog_id).await;
@@ -115,7 +115,7 @@ async fn break_catalog(pool: &PgPool, catalog_id: i64) {
 async fn bump_generation(pool: &PgPool, catalog_id: i64) {
     sqlx::query("UPDATE catalog.catalog_state SET generation = generation + 1 WHERE id = $1")
         .bind(catalog_id)
-        .execute(pool)
+        .execute(&crate::db::store_pool(pool))
         .await
         .unwrap();
 }
@@ -245,7 +245,7 @@ async fn a_broken_generation_is_not_rebuilt_on_every_request() {
     // Repaired, and the generation moves (as an import would move it).
     sqlx::query("DELETE FROM catalog.documents WHERE catalog_id = $1 AND path = '../escape.md'")
         .bind(id)
-        .execute(&pool)
+        .execute(&crate::db::store_pool(&pool))
         .await
         .unwrap();
     bump_generation(&pool, id).await;
@@ -481,7 +481,7 @@ async fn a_refused_publish_after_a_growing_refresh_still_reweighs() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_load_overtaken_by_a_catalog_message_is_served_but_not_kept() {
     let (test, _registry) = app(&[("pg", &[("a.md", "# A\n")])], ByteSize::gib(1).as_u64()).await;
-    let pool = test.app.accounts().executor().clone();
+    let pool = crate::db::store_pool(test.app.accounts().executor());
     let pg = row(&test.app, "pg").await;
     // Hold the documents table, so the load reads the generation and then
     // waits; release it on every path (dropping the transaction rolls back).

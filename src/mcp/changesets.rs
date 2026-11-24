@@ -1692,10 +1692,11 @@ mod publish_tests {
     /// Waits until `count` backends of this database wait on a lock.
     async fn lock_waiters(test: &TestApp, count: i64) {
         for _ in 0..500 {
-            let waiting: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM pg_stat_activity \
-                 WHERE datname = current_database() AND wait_event_type = 'Lock'",
-            )
+            let waiting: i64 = sqlx::query_scalar(concat!(
+                "SELECT count(*) FROM pg_stat_activity WHERE ",
+                crate::test_locks::own_databases!("datname"),
+                " AND wait_event_type = 'Lock'"
+            ))
             .fetch_one(test.app.accounts().executor())
             .await
             .unwrap();
@@ -1854,13 +1855,13 @@ mod publish_tests {
         let changeset_id: Option<i64> = sqlx::query_scalar(
             "SELECT changeset_id FROM catalog.revisions WHERE path = 'a.md' AND revision = 2",
         )
-        .fetch_one(test.app.accounts().executor())
+        .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
         assert_eq!(changeset_id, Some(changeset_row(&test, &handle).await.id));
         let updated_by: String =
             sqlx::query_scalar("SELECT updated_by FROM catalog.documents WHERE path = 'a.md'")
-                .fetch_one(test.app.accounts().executor())
+                .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
                 .await
                 .unwrap();
         assert_eq!(updated_by, "writer-a");
@@ -1953,7 +1954,7 @@ mod publish_tests {
         let store = sqlx::query_scalar(
             "SELECT count(*) FROM catalog.catalog_audit_entries WHERE action = 'catalog.published'",
         )
-        .fetch_one(pool)
+        .fetch_one(&crate::db::store_pool(pool))
         .await
         .unwrap();
         (account, store)
@@ -2837,7 +2838,7 @@ mod publish_tests {
             "SELECT revision, deleted_at IS NOT NULL, content FROM catalog.documents WHERE path = $1",
         )
         .bind(path)
-        .fetch_one(test.app.accounts().executor())
+        .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap()
     }
@@ -2912,7 +2913,7 @@ mod publish_tests {
         let deleted: (Option<Vec<u8>>, Option<i64>) = sqlx::query_as(
             "SELECT content, changeset_id FROM catalog.revisions WHERE path = 'infra/y.md' AND revision = 2",
         )
-        .fetch_one(test.app.accounts().executor())
+        .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
         assert_eq!(
@@ -2936,7 +2937,7 @@ mod publish_tests {
              VALUES ($1, 'a.md', 2, 'update', 'x'::bytea, false, 'intruder', 'x', now())",
         )
         .bind(state.id())
-        .execute(test.app.accounts().executor())
+        .execute(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
 
@@ -3023,7 +3024,7 @@ mod publish_tests {
         let entries: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM catalog.changeset_entries WHERE path = 'infra/y.md'",
         )
-        .fetch_one(test.app.accounts().executor())
+        .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
         assert_eq!(entries, 0);
@@ -3168,10 +3169,11 @@ mod changes_tests {
     /// Waits until `count` backends wait on a lock (as `publish_tests` does).
     async fn lock_waiters(test: &TestApp, count: i64) {
         for _ in 0..500 {
-            let waiting: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM pg_stat_activity \
-                 WHERE datname = current_database() AND wait_event_type = 'Lock'",
-            )
+            let waiting: i64 = sqlx::query_scalar(concat!(
+                "SELECT count(*) FROM pg_stat_activity WHERE ",
+                crate::test_locks::own_databases!("datname"),
+                " AND wait_event_type = 'Lock'"
+            ))
             .fetch_one(test.app.accounts().executor())
             .await
             .unwrap();
@@ -3508,7 +3510,7 @@ mod changes_tests {
             .unwrap_err();
         // A revision whose bytes are not UTF-8 (no write tool stores one).
         sqlx::query("UPDATE catalog.revisions SET content = '\\xff'::bytea WHERE path = 'a.md'")
-            .execute(test.app.accounts().executor())
+            .execute(&crate::db::store_pool(test.app.accounts().executor()))
             .await
             .unwrap();
         let binary = revert(&ctx, revert_to(&handle, "/a.md", 1))
@@ -3844,7 +3846,7 @@ mod restructure_publish_tests {
         // `$1` is a bind parameter; `documents` stores paths without the `/`.
         sqlx::query_scalar("SELECT deleted_at IS NOT NULL FROM catalog.documents WHERE path = $1")
             .bind(path)
-            .fetch_one(test.app.accounts().executor())
+            .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
             .await
             .unwrap()
     }
