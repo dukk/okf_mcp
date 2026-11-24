@@ -71,6 +71,25 @@ pub async fn backstop<T>(
         })
 }
 
+/// Whether `error` is a bound giving way: the process backstop
+/// ([`OkfError::Busy`]), or PostgreSQL's own `lock_timeout` (`55P03`) or
+/// `statement_timeout` (`57014`) from [`bound_waits`].
+///
+/// # Arguments
+/// * `error` - what a bounded step returned.
+#[tracing::instrument(level = "trace", skip_all)]
+#[must_use]
+pub fn is_timeout(error: &OkfError) -> bool {
+    match error {
+        OkfError::Busy { .. } => true,
+        OkfError::Database { source } => source
+            .as_database_error()
+            .and_then(|db_error| db_error.code())
+            .is_some_and(|code| matches!(code.as_ref(), "55P03" | "57014")),
+        _ => false,
+    }
+}
+
 /// Begins an account transaction whose waits are bounded by `wait`.
 ///
 /// # Arguments

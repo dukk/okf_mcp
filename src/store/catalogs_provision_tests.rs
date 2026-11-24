@@ -14,6 +14,10 @@ use crate::labels::DisplayName;
 use crate::store::audit::testing::entries;
 use crate::store::audit::AuditActor;
 
+/// The database-side bound the tests give recovery: long enough never to
+/// fire in a test that expects a wait.
+const WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
 fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 11, 23, 12, 0, 0).unwrap()
 }
@@ -154,7 +158,7 @@ async fn provisioning_job_finishes_a_catalog_whose_store_side_exists() {
         .await
         .unwrap();
 
-    let outcome = recover(&store, &pending, now()).await.unwrap();
+    let outcome = recover(&store, &pending, now(), WAIT).await.unwrap();
 
     assert_eq!(outcome, Recovery::Finished);
     assert_eq!(find(&db.pool, "stopped").await.unwrap().id, catalog.id);
@@ -163,7 +167,7 @@ async fn provisioning_job_finishes_a_catalog_whose_store_side_exists() {
     // Nothing is left to recover, and a second look changes nothing.
     assert!(pending_rows(&db.pool).await.is_empty());
     assert_eq!(
-        recover(&store, &pending, now()).await.unwrap(),
+        recover(&store, &pending, now(), WAIT).await.unwrap(),
         Recovery::Settled
     );
 }
@@ -180,7 +184,7 @@ async fn provisioning_job_removes_a_catalog_whose_store_side_never_happened() {
     let (catalog, pending) = half_made(&db.pool, "lost").await;
     let store = CatalogDb::main_of(&db.pool);
 
-    let outcome = recover(&store, &pending, now()).await.unwrap();
+    let outcome = recover(&store, &pending, now(), WAIT).await.unwrap();
 
     assert_eq!(outcome, Recovery::Removed);
     assert!(!row_exists(&db.pool, catalog.id).await);
@@ -294,7 +298,7 @@ async fn a_create_stalled_past_the_interval_is_not_removed_while_it_holds_the_lo
     // Recovery looks at it now, as the housekeeping task would after the interval.
     let recovery_task = {
         let (store, pending) = (store.clone(), pending.clone());
-        tokio::spawn(async move { recover(&store, &pending, now()).await })
+        tokio::spawn(async move { recover(&store, &pending, now(), WAIT).await })
     };
     let waited = wait_for_waiter_or_end(&db.pool, &recovery_task).await;
     release.notify_one();
@@ -319,7 +323,7 @@ async fn a_create_that_waited_behind_recovery_writes_nothing() {
         let (store, pending) = (store.clone(), pending.clone());
         let (entered, release) = (entered.clone(), release.clone());
         tokio::spawn(async move {
-            recover_holding(&store, &pending, now(), async move {
+            recover_holding(&store, &pending, now(), WAIT, async move {
                 entered.notify_one();
                 release.notified().await;
             })
@@ -371,7 +375,7 @@ async fn create_and_recovery_work_on_a_one_connection_pool() {
         (catalog, pending)
     };
     let store = CatalogDb::main_of(&one);
-    let removed = tokio::time::timeout(limit, recover(&store, &lost, now()))
+    let removed = tokio::time::timeout(limit, recover(&store, &lost, now(), WAIT))
         .await
         .expect("recovery finished")
         .unwrap();
@@ -379,7 +383,7 @@ async fn create_and_recovery_work_on_a_one_connection_pool() {
     let finished = tokio::time::timeout(limit, async {
         let catalog = find_half(&one, stopped_catalog.id).await;
         provision_store_side(&store, &catalog, "cli", now(), std::future::ready(())).await?;
-        recover(&store, &stopped_catalog, now()).await
+        recover(&store, &stopped_catalog, now(), WAIT).await
     })
     .await
     .expect("recovery finished")

@@ -85,7 +85,7 @@ use crate::store::oauth::{
 use crate::store::{
     audit, catalogs, changesets, cleanups, email_tokens, keys, sign_in_events, user_sessions,
 };
-use crate::stores::bounded::{account_tx, backstop, store_tx, Limits, LIMITS};
+use crate::stores::bounded::{account_tx, backstop, is_timeout, store_tx, Limits, LIMITS};
 use crate::stores::{AccountDb, CatalogDb, StoreName};
 use crate::telemetry::metrics::{MailStatus, Outcome};
 use crate::telemetry::subscriber::{split_event, LOCAL_ONLY};
@@ -776,11 +776,17 @@ async fn prune_store_changesets(app: &App, db: &CatalogDb, limits: Limits) -> Re
     steps.finish()
 }
 
+/// How many times `store_connect_timeout` one recovery attempt may take in
+/// all: the first open (registry read, connect, migration) and the
+/// recovery's own transactions each wait at most that long at the database.
+/// With the default 5 s it is 30 s, [`LIMITS`]'s backstop.
+const PROVISION_ATTEMPT_FACTOR: u32 = 6;
+
 /// Finishes or removes the catalogs whose create stopped half-way
 /// ([`catalogs::recover`], decision P9). It looks at rows older than
 /// [`UNPROVISIONED_GRACE_SECONDS`]; that age only keeps it off creates still
 /// running, since the catalog's lock decides the outcome. A failure on one
-/// catalog (its store unreachable, say) is logged and does not stop the
+/// catalog (its store unreachable or stalled, say) is logged and does not stop the
 /// others; the first is the task's result, so the job is retried. It pages
 /// through the rows ([`catalogs::pending`]) and, once a store is found
 /// unreachable, leaves that store's remaining rows for the next run, so a
@@ -790,6 +796,32 @@ async fn prune_store_changesets(app: &App, db: &CatalogDb, limits: Limits) -> Re
 /// The first failure; every catalog is tried regardless.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn provision_catalogs(app: &App) -> Result<(), OkfError> {
+    provision_catalogs_bounded(app, provision_limits(app)).await
+}
+
+/// The bounds on one recovery attempt: `store_connect_timeout` at the
+/// database (`lock_timeout` and `statement_timeout` on each transaction),
+/// and [`PROVISION_ATTEMPT_FACTOR`] times that for the whole attempt, which
+/// also covers the store's first open and migration. The database bound is
+/// the shorter, so it fires first and PostgreSQL rolls back.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "builds a value from the settings")
+)]
+fn provision_limits(app: &App) -> Limits {
+    let wait = app.stores().connect_timeout();
+    Limits {
+        attempt: wait.saturating_mul(PROVISION_ATTEMPT_FACTOR),
+        wait,
+    }
+}
+
+/// [`provision_catalogs`] under `limits`.
+///
+/// # Errors
+/// As [`provision_catalogs`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn provision_catalogs_bounded(app: &App, limits: Limits) -> Result<(), OkfError> {
     let now = app.clock().now();
     let older_than = now - TimeDelta::seconds(UNPROVISIONED_GRACE_SECONDS);
     let mut steps = Steps::default();
@@ -808,11 +840,11 @@ async fn provision_catalogs(app: &App) -> Result<(), OkfError> {
             }
             // The store is read from the row, so a catalog is recovered
             // where it was placed.
-            let outcome = async {
+            let outcome = backstop(limits, async {
                 let store = StoreName::parse(&catalog.store)?;
                 let db = app.store_db(&store).await?;
-                catalogs::recover(&db, catalog, now).await
-            }
+                catalogs::recover(&db, catalog, now, limits.wait).await
+            })
             .await;
             match outcome {
                 Ok(catalogs::Recovery::Finished) => finished += 1,
@@ -824,7 +856,7 @@ async fn provision_catalogs(app: &App) -> Result<(), OkfError> {
                 }
                 Ok(catalogs::Recovery::Settled) => {}
                 Err(error) => {
-                    if matches!(error, OkfError::StoreUnavailable { .. }) {
+                    if matches!(error, OkfError::StoreUnavailable { .. }) || is_timeout(&error) {
                         down.push(catalog.store.clone());
                     }
                     split_event!(

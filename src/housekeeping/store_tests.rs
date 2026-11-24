@@ -460,3 +460,158 @@ async fn store_jobs_finish_on_pools_of_one_connection() {
         [("main".to_string(), 0), ("shared-1".to_string(), 0)]
     );
 }
+
+/// What a recovery test needs: a replica whose bounds are short, an older
+/// half-made catalog on `shared-1` (the store the test stalls), and a newer
+/// one on `shared-2`, which is healthy. Both have their store side, so a
+/// recovery that gets to them finishes them.
+struct Pending {
+    db: TestDb,
+    replica: Replica,
+    /// The older catalog's id, on the store the test stalls.
+    stalled_id: i64,
+    /// A connection to the stalled store, to hold a lock on.
+    stalled_store: CatalogDb,
+}
+
+async fn two_half_made_catalogs() -> Pending {
+    let db = test_db().await;
+    let (stalled, healthy) = (store("shared-1"), store("shared-2"));
+    add_store(&db, stalled.as_str()).await;
+    add_store(&db, healthy.as_str()).await;
+    let config = Config {
+        store_connect_timeout: Duration::from_millis(500),
+        ..Config::default()
+    };
+    let replica = replica_sized(&db, 5, config).await;
+    let older = catalog_on(replica.app.stores(), &db.pool, "older", Some(&stalled)).await;
+    catalog_on(replica.app.stores(), &db.pool, "newer", Some(&healthy)).await;
+    let now = replica.app.clock().now();
+    for (name, minutes) in [("older", 90), ("newer", 60)] {
+        sqlx::query("UPDATE catalogs SET provisioned_at = NULL, created_at = $2 WHERE name = $1")
+            .bind(name)
+            .bind(now - TimeDelta::minutes(minutes))
+            .execute(&db.pool)
+            .await
+            .unwrap();
+    }
+    let stalled_store = replica.app.stores().get(&stalled).await.unwrap();
+    Pending {
+        db,
+        replica,
+        stalled_id: older.id,
+        stalled_store,
+    }
+}
+
+/// Whether catalog `name` is provisioned.
+async fn is_provisioned(db: &TestDb, name: &str) -> bool {
+    sqlx::query_scalar("SELECT provisioned_at IS NOT NULL FROM catalogs WHERE name = $1")
+        .bind(name)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap()
+}
+
+/// Runs the recovery with `limits` under [`PATIENCE`], so a recovery that
+/// waits on the held lock fails the test instead of hanging it.
+async fn recover_within_patience(
+    test: &Pending,
+    limits: Limits,
+) -> Result<Result<(), OkfError>, tokio::time::error::Elapsed> {
+    tokio::time::timeout(
+        PATIENCE,
+        provision_catalogs_bounded(&test.replica.app, limits),
+    )
+    .await
+}
+
+/// Asserts the failure is PostgreSQL's own `lock_timeout` (`55P03`) or
+/// `statement_timeout` (`57014`), not the process backstop's `Busy`: without
+/// the database-side bounds the attempt would end as `Busy` or not at all.
+fn assert_database_timeout(outcome: &Result<(), OkfError>) {
+    let code = match outcome {
+        Err(OkfError::Database { source }) => source
+            .as_database_error()
+            .and_then(|error| error.code())
+            .map(|code| code.into_owned()),
+        _ => None,
+    };
+    assert!(
+        matches!(code.as_deref(), Some("55P03" | "57014")),
+        "expected the database's own timeout, got {outcome:?}"
+    );
+}
+
+/// The catalog lock of the older catalog is held by another connection, so
+/// recovery of it waits. It gives up at the database, the store is skipped
+/// for the run, the first failure is the task's result, and the newer
+/// catalog on the healthy store settles while the lock is still held.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_held_catalog_lock_does_not_starve_a_healthy_store() {
+    let test = two_half_made_catalogs().await;
+    let mut holder = test.stalled_store.executor().begin().await.unwrap();
+    catalogs::lock(&mut holder, test.stalled_id).await.unwrap();
+    let limits = provision_limits(&test.replica.app);
+
+    let outcome = recover_within_patience(&test, limits).await;
+
+    let outcome = outcome.expect("the recovery waited on the held lock");
+    assert_database_timeout(&outcome);
+    assert!(
+        is_provisioned(&test.db, "newer").await,
+        "the healthy store settled"
+    );
+    assert!(
+        !is_provisioned(&test.db, "older").await,
+        "the row stays pending"
+    );
+    // The lock is released only now: the next run finishes the older one.
+    holder.rollback().await.unwrap();
+    provision_catalogs_bounded(&test.replica.app, limits)
+        .await
+        .unwrap();
+    assert!(is_provisioned(&test.db, "older").await);
+}
+
+/// A store query stalls (a table lock another connection holds): the same
+/// bounds apply, whatever the statement.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stalled_store_query_does_not_starve_a_healthy_store() {
+    let test = two_half_made_catalogs().await;
+    let mut holder = test.stalled_store.executor().begin().await.unwrap();
+    sqlx::query("LOCK TABLE catalog_state IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let limits = provision_limits(&test.replica.app);
+
+    let outcome = recover_within_patience(&test, limits).await;
+
+    let outcome = outcome.expect("the recovery waited on the held table");
+    assert_database_timeout(&outcome);
+    assert!(is_provisioned(&test.db, "newer").await);
+    assert!(!is_provisioned(&test.db, "older").await);
+    holder.rollback().await.unwrap();
+}
+
+/// The whole-attempt backstop, with a database bound too long to fire: the
+/// attempt is dropped as `Busy`, the store skipped, the healthy one settled.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_attempt_backstop_contains_a_wait_the_database_does_not_bound() {
+    let test = two_half_made_catalogs().await;
+    let mut holder = test.stalled_store.executor().begin().await.unwrap();
+    catalogs::lock(&mut holder, test.stalled_id).await.unwrap();
+    let limits = Limits {
+        attempt: Duration::from_millis(500),
+        wait: Duration::from_secs(120),
+    };
+
+    let outcome = recover_within_patience(&test, limits).await;
+
+    let outcome = outcome.expect("the backstop gave up");
+    assert!(matches!(outcome, Err(OkfError::Busy { .. })), "{outcome:?}");
+    assert!(is_provisioned(&test.db, "newer").await);
+    assert!(!is_provisioned(&test.db, "older").await);
+    holder.rollback().await.unwrap();
+}
