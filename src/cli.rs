@@ -3323,6 +3323,74 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn an_unavailable_store_does_not_stop_the_repair_of_the_stores_after_it() {
+        // Arrange: `a-down` (sorts before `main`) on a closed port, and
+        // `on-main` without a root index.
+        let db = crate::db::test_db().await;
+        sqlx::query(
+            "INSERT INTO stores (name, location_kind, host, port, database, \
+             credential_kind, credential_ref, created_at) \
+             VALUES ('a-down', 'host', 'localhost', 1, 'down', 'env', $1, now())",
+        )
+        .bind(crate::db::pg::STORE_PASSWORD_VAR)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let stores = Stores::new(
+            db.pool.clone(),
+            PoolSettings::from_config(&crate::config::Config::default()),
+        );
+        let new = catalogs::NewCatalog {
+            name: "on-main",
+            display_name: &DisplayName::default(),
+            description: "",
+            owner_team: crate::db::TEST_TEAM,
+        };
+        let created = catalogs::create_in(&stores, &new, &AuditActor::cli(), chrono::Utc::now())
+            .await
+            .unwrap();
+        for statement in [
+            "DELETE FROM catalog.revisions WHERE catalog_id = $1",
+            "DELETE FROM catalog.documents WHERE catalog_id = $1",
+        ] {
+            sqlx::query(statement)
+                .bind(created.id)
+                .execute(&crate::db::store_pool(&db.pool))
+                .await
+                .unwrap();
+        }
+
+        // Act: repair every catalog without a root index.
+        let outcome = run(
+            cli(
+                Some(db.url.clone()),
+                Command::Catalog(CatalogCommand::RepairIndexes {
+                    names: Vec::new(),
+                    missing_only: true,
+                    dry_run: false,
+                    actor: "okf-mcp/repair-indexes".to_string(),
+                }),
+            ),
+            fixed_now(),
+        )
+        .await;
+
+        // Assert: the command reports the down store, and `main` was still repaired.
+        let error = format!("{:#}", outcome.unwrap_err());
+        assert!(error.contains("store a-down"), "{error}");
+        assert!(!error.contains("store main"), "{error}");
+        let written: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM catalog.documents WHERE catalog_id = $1 AND path = 'index.md'",
+        )
+        .bind(created.id)
+        .fetch_one(&crate::db::store_pool(&db.pool))
+        .await
+        .unwrap();
+        assert_eq!(written, 1);
+        stores.forget_all().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn import_reads_a_directory() {
         let db = crate::db::test_db().await;
         let clock = fixed_now();
