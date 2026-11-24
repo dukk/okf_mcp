@@ -261,32 +261,149 @@ async fn a_key_deletion_crashing_after_commit_still_cleans_up_its_changesets() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_key_cleanup_clears_the_key_from_the_stores_history() {
-    // Arrange: the deleted key's changeset (kept, as it is published) and
-    // its maintenance run name the key.
+async fn a_key_cleanup_keeps_the_stores_history_and_clears_the_key_from_it() {
+    // Arrange: the deleted key's published changeset and its maintenance
+    // run both name it, and both rows are there before the cleanup.
     let db = test_db().await;
     seed_user(&db.pool, "alice", None).await;
     seed_catalog_owned_by(&db.pool, TEST_TEAM).await;
     let key = key_for(&db.pool, "alice", "alice-laptop", false).await;
     let catalog_id = shared_id(&db.pool).await;
-    let changeset = open_on(&db.pool, catalog_id, &key).await;
+    let published = open_on(&db.pool, catalog_id, &key).await;
+    sqlx::query("UPDATE catalog.changesets SET state = 'published' WHERE id = $1")
+        .bind(published)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO catalog.maintenance_runs (id, catalog_id, key_id, credential_id, actor, \
+         state, deadline, created_at, primary_count) \
+         VALUES ('run-1', $1, $2, $2, 'a', 'running', $3, $3, 1)",
+    )
+    .bind(catalog_id)
+    .bind(&key)
+    .bind(now())
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let naming_the_key = |sql: &'static str| {
+        let pool = db.pool.clone();
+        let key = key.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(sql)
+                .bind(key)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    const CHANGESETS: &str = "SELECT count(*) FROM catalog.changesets WHERE key_id = $1";
+    const RUNS: &str = "SELECT count(*) FROM catalog.maintenance_runs WHERE key_id = $1";
+    assert_eq!(naming_the_key(CHANGESETS).await, 1);
+    assert_eq!(naming_the_key(RUNS).await, 1);
     delete_alice(&db.pool).await;
 
     // Act
     settle_for_tests(&db.pool).await;
 
-    // Assert: the changeset is discarded and no row of the store names the
-    // key any more.
-    assert_eq!(state_of(&db.pool, changeset).await, "discarded");
-    let named: i64 = sqlx::query_scalar(
-        "SELECT (SELECT count(*) FROM catalog.changesets WHERE key_id = $1) \
-         + (SELECT count(*) FROM catalog.maintenance_runs WHERE key_id = $1)",
+    // Assert: both rows are kept, as history, and no longer name the key.
+    assert_eq!(naming_the_key(CHANGESETS).await, 0);
+    assert_eq!(naming_the_key(RUNS).await, 0);
+    assert_eq!(state_of(&db.pool, published).await, "published");
+    assert_eq!(
+        count(&db.pool, "SELECT count(*) FROM catalog.maintenance_runs").await,
+        1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_cleanup_discards_the_keys_open_changeset_and_clears_the_key() {
+    // Arrange
+    let db = test_db().await;
+    seed_user(&db.pool, "alice", None).await;
+    seed_catalog_owned_by(&db.pool, TEST_TEAM).await;
+    let key = key_for(&db.pool, "alice", "alice-laptop", false).await;
+    let open = open_on(&db.pool, shared_id(&db.pool).await, &key).await;
+    delete_alice(&db.pool).await;
+
+    // Act
+    settle_for_tests(&db.pool).await;
+
+    // Assert
+    assert_eq!(state_of(&db.pool, open).await, "discarded");
+    assert_eq!(
+        count(
+            &db.pool,
+            "SELECT count(*) FROM catalog.changesets WHERE key_id IS NOT NULL"
+        )
+        .await,
+        0
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cleanup_attempt_stuck_on_a_lock_fails_without_holding_up_another_store() {
+    // Arrange: alice's key has an open changeset on `main` and another on a
+    // second store; another connection holds the `main` one under
+    // `FOR UPDATE`, so its discard can only wait.
+    let accounts = test_db().await;
+    let second = test_db().await;
+    seed_user(&accounts.pool, "alice", None).await;
+    seed_catalog_owned_by(&accounts.pool, TEST_TEAM).await;
+    let key = key_for(&accounts.pool, "alice", "alice-laptop", false).await;
+    let on_main = open_on(&accounts.pool, shared_id(&accounts.pool).await, &key).await;
+    add_store_on(&accounts.pool, "second", &second.pool).await;
+    let remote_id: i64 = sqlx::query_scalar(
+        "INSERT INTO catalogs (name, created_at, store, provisioned_at) \
+         VALUES ('remote', now(), 'second', now()) RETURNING id",
     )
-    .bind(&key)
-    .fetch_one(&db.pool)
+    .fetch_one(&accounts.pool)
     .await
     .unwrap();
-    assert_eq!(named, 0);
+    sqlx::query("INSERT INTO catalog.catalog_state (id) VALUES ($1)")
+        .bind(remote_id)
+        .execute(&second.pool)
+        .await
+        .unwrap();
+    let on_second = open_on(&second.pool, remote_id, &key).await;
+    delete_alice(&accounts.pool).await;
+    let mut holder = accounts.pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM catalog.changesets WHERE id = $1 FOR UPDATE")
+        .bind(on_main)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let stores = registry(&accounts.pool, password_of(&second.url));
+
+    // Act: `main` sorts first, so it is attempted (and abandoned) before
+    // `second`. The outer timeout only fails the test if the run hangs.
+    let report = tokio::time::timeout(
+        Duration::from_secs(60),
+        run_bounded(&stores, now(), Duration::from_secs(2)),
+    )
+    .await
+    .expect("the run is bounded by the attempt timeout")
+    .unwrap();
+
+    // Assert: the stuck row counts a failed try and stays; the other
+    // store's row finished.
+    assert_eq!(report, Report { done: 1, failed: 1 });
+    assert_eq!(state_of(&second.pool, on_second).await, "discarded");
+    let left: Vec<(String, i32)> = sqlx::query_as("SELECT store, attempts FROM store_cleanups")
+        .fetch_all(&accounts.pool)
+        .await
+        .unwrap();
+    assert_eq!(left, [("main".to_string(), 1)]);
+
+    // Once the lock is released the next run settles it.
+    holder.rollback().await.unwrap();
+    let again = tokio::time::timeout(Duration::from_secs(60), run(&stores, now()))
+        .await
+        .expect("the run is bounded")
+        .unwrap();
+    stores.forget_all().await;
+    assert_eq!(again, Report { done: 1, failed: 0 });
+    assert_eq!(state_of(&accounts.pool, on_main).await, "discarded");
 }
 
 #[tokio::test(flavor = "multi_thread")]

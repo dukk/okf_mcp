@@ -19,6 +19,8 @@
 //! counts the tries); a row past [`GIVE_UP_ATTEMPTS`] is logged at error
 //! level on every run and kept. The deletion itself never waits for this.
 
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use sqlx::PgConnection;
 
@@ -39,6 +41,18 @@ pub const GIVE_UP_ATTEMPTS: i32 = 20;
 /// Rows one store's turn takes in one run, so a long list never keeps the
 /// other stores waiting.
 const BATCH_PER_STORE: i64 = 100;
+
+/// How long one cleanup attempt (one row on one store) may take before it is
+/// abandoned and counted as failed, so a row held under a lock, or a store
+/// that has stalled, cannot hold up the rows and stores behind it. Dropping
+/// the attempt rolls its transactions back.
+pub const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The database-side bound inside an attempt's transactions (`lock_timeout`
+/// and `statement_timeout`, set with `SET LOCAL`): shorter than
+/// [`ATTEMPT_TIMEOUT`], so the database gives up on a lock wait itself and
+/// the connection comes back clean.
+const WAIT_BOUND_MS: i64 = 20_000;
 
 /// Changesets or runs cleared of a deleted key per statement.
 const KEY_CLEAR_BATCH: i64 = 1000;
@@ -186,9 +200,10 @@ async fn owe_deleted_catalogs(conn: &mut PgConnection, now: DateTime<Utc>) -> Re
 }
 
 /// Drains `store_cleanups`: for each store with rows, opens it and settles
-/// up to 100 of them (`BATCH_PER_STORE`). A store that cannot be opened, or a
-/// row that fails, is logged, counted in `attempts` and left for the next
-/// run; it never stops another store or row.
+/// up to 100 of them (`BATCH_PER_STORE`). A store that cannot be opened, a
+/// row that fails, and a row that takes longer than [`ATTEMPT_TIMEOUT`] are
+/// logged, counted in `attempts` and left for the next run; none of them
+/// stops another store or row.
 ///
 /// # Arguments
 /// * `stores` - the registry of stores (the account database holds the
@@ -203,6 +218,26 @@ async fn owe_deleted_catalogs(conn: &mut PgConnection, now: DateTime<Utc>) -> Re
 /// not an error here.
 #[tracing::instrument(level = "debug", skip_all)]
 pub async fn run(stores: &Stores, now: DateTime<Utc>) -> Result<Report, OkfError> {
+    run_bounded(stores, now, ATTEMPT_TIMEOUT).await
+}
+
+/// [`run`] with each attempt limited to `attempt_timeout`: an attempt that
+/// overruns is dropped (its transactions roll back), counted as a failed
+/// try with [`note_failure`], and the run goes on to the next row and store.
+///
+/// # Arguments
+/// * `stores` - the registry of stores.
+/// * `now` - the server clock.
+/// * `attempt_timeout` - the longest one row may take.
+///
+/// # Errors
+/// As [`run`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn run_bounded(
+    stores: &Stores,
+    now: DateTime<Utc>,
+    attempt_timeout: Duration,
+) -> Result<Report, OkfError> {
     let accounts = stores.accounts();
     let mut conn = accounts.executor().acquire().await?;
     owe_deleted_catalogs(&mut conn, now).await?;
@@ -228,7 +263,14 @@ pub async fn run(stores: &Stores, now: DateTime<Utc>) -> Result<Report, OkfError
         match &db {
             Ok(db) => {
                 for row in &rows {
-                    match settle(db, row, now).await {
+                    let attempt = tokio::time::timeout(attempt_timeout, settle(db, row, now))
+                        .await
+                        .unwrap_or_else(|_| {
+                            Err(OkfError::StoreUnavailable {
+                                store: name.clone(),
+                            })
+                        });
+                    match attempt {
                         Ok(()) => report.done += 1,
                         Err(error) => {
                             report.failed += 1;
@@ -248,6 +290,22 @@ pub async fn run(stores: &Stores, now: DateTime<Utc>) -> Result<Report, OkfError
         }
     }
     Ok(report)
+}
+
+/// Bounds the waits of the transaction `tx` is on: a lock wait or a
+/// statement that runs past [`WAIT_BOUND_MS`] fails instead of waiting on.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn bound_waits(tx: &mut PgConnection) -> Result<(), OkfError> {
+    sqlx::query(
+        "SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $1, true)",
+    )
+    .bind(format!("{WAIT_BOUND_MS}ms"))
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
 }
 
 /// Counts a failed try, and logs it: a warning, or an error once the row is
@@ -414,12 +472,14 @@ async fn discard_one(
 ) -> Result<(), OkfError> {
     let (id, handle, catalog_id) = changeset;
     let mut account_tx = db.accounts().begin().await?;
+    bound_waits(&mut account_tx).await?;
     let name: Option<String> = sqlx::query_scalar("SELECT name FROM catalogs WHERE id = $1")
         .bind(catalog_id)
         .fetch_optional(&mut *account_tx)
         .await?;
     let resolved = audit::resolve_actor(&mut account_tx, actor, catalog_id).await?;
     let mut tx = db.begin().await?;
+    bound_waits(&mut tx).await?;
     // The row again under its lock: a publish or discard may have closed
     // it meanwhile.
     let files: Option<i64> = sqlx::query_scalar(
