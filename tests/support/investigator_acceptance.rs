@@ -366,7 +366,11 @@ async fn canonical(server: &TestServer, key: &str, peer: &Client) -> Value {
     ] {
         rows.push(
             sqlx::query_scalar::<_, Value>(query)
-                .fetch_all(&server.db.pool)
+                .fetch_all(&if query.contains(" catalog.") {
+                    server.db.store()
+                } else {
+                    server.db.pool.clone()
+                })
                 .await
                 .unwrap(),
         );
@@ -378,7 +382,7 @@ async fn work(server: &TestServer, run: &str) -> Vec<Value> {
         "SELECT to_jsonb(w) FROM catalog.maintenance_work w WHERE run_id=$1 ORDER BY id",
     )
     .bind(run)
-    .fetch_all(&server.db.pool)
+    .fetch_all(&server.db.store())
     .await
     .unwrap()
 }
@@ -443,14 +447,14 @@ async fn investigator_end_to_end_is_report_only() {
     assert_eq!(submits.len(), 2);
     assert!(submits[0].args == submits[1].args && submits[0].response == submits[1].response);
     let findings: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_findings")
-        .fetch_one(&server.db.pool)
+        .fetch_one(&server.db.store())
         .await
         .unwrap();
     assert_eq!(findings, 1);
     let reports: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM catalog.maintenance_requests WHERE operation='submit'",
     )
-    .fetch_one(&server.db.pool)
+    .fetch_one(&server.db.store())
     .await
     .unwrap();
     assert_eq!(reports, 1);
@@ -514,7 +518,7 @@ async fn investigator_aging_cancel_and_failed_validation_preserve_canonical() {
             assert_eq!(rows[0]["assessment"], "not_assessed");
             let findings: i64 =
                 sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_findings")
-                    .fetch_one(&server.db.pool)
+                    .fetch_one(&server.db.store())
                     .await
                     .unwrap();
             assert_eq!(findings, 0);
@@ -657,14 +661,14 @@ async fn investigator_lost_response_replay_and_historical_superseded() {
             .iter()
             .all(|c| c.args == pending.args && c.response == submits[0].response));
         let findings: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_findings")
-            .fetch_one(&server.db.pool)
+            .fetch_one(&server.db.store())
             .await
             .unwrap();
         assert_eq!(findings, 1);
         let reports: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM catalog.maintenance_requests WHERE operation='submit'",
         )
-        .fetch_one(&server.db.pool)
+        .fetch_one(&server.db.store())
         .await
         .unwrap();
         assert_eq!(reports, 1);
@@ -687,7 +691,7 @@ async fn investigator_authoritative_terminal_and_expired_runs_release_journal() 
             sqlx::query("UPDATE catalog.maintenance_work SET lease_expires_at=$2 WHERE run_id=$1")
                 .bind(&run_id)
                 .bind(expiry)
-                .execute(&server.db.pool)
+                .execute(&server.db.store())
                 .await
                 .unwrap();
             journal.leases[0].expires_at = expiry.to_rfc3339();
@@ -697,7 +701,7 @@ async fn investigator_authoritative_terminal_and_expired_runs_release_journal() 
             sqlx::query("UPDATE catalog.maintenance_runs SET deadline=$2 WHERE id=$1")
                 .bind(&run_id)
                 .bind(chrono::Utc::now() - chrono::Duration::seconds(1))
-                .execute(&server.db.pool)
+                .execute(&server.db.store())
                 .await
                 .unwrap();
         }
@@ -753,7 +757,7 @@ async fn investigator_authoritative_terminal_and_expired_runs_release_journal() 
                 "SELECT to_jsonb(r) FROM catalog.maintenance_runs r WHERE id=$1",
             )
             .bind(&run_id)
-            .fetch_one(&server.db.pool)
+            .fetch_one(&server.db.store())
             .await
             .unwrap();
             let work_history = work(&server, &run_id).await;
@@ -767,7 +771,7 @@ async fn investigator_authoritative_terminal_and_expired_runs_release_journal() 
                 "SELECT to_jsonb(r) FROM catalog.maintenance_runs r WHERE id=$1",
             )
             .bind(&run_id)
-            .fetch_one(&server.db.pool)
+            .fetch_one(&server.db.store())
             .await
             .unwrap();
             assert_eq!(recorded, history);
@@ -802,14 +806,14 @@ async fn investigator_expired_close_lost_ack_replays_after_restart() {
             sqlx::query("UPDATE catalog.maintenance_runs SET deadline=$2 WHERE id=$1")
                 .bind(&run_id)
                 .bind(expiry)
-                .execute(&server.db.pool)
+                .execute(&server.db.store())
                 .await
                 .unwrap();
         } else {
             sqlx::query("UPDATE catalog.maintenance_work SET lease_expires_at=$2 WHERE run_id=$1")
                 .bind(&run_id)
                 .bind(expiry)
-                .execute(&server.db.pool)
+                .execute(&server.db.store())
                 .await
                 .unwrap();
             j.leases[0].expires_at = expiry.to_rfc3339();
@@ -858,7 +862,7 @@ async fn investigator_expired_close_lost_ack_replays_after_restart() {
         let requests: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM catalog.maintenance_requests WHERE operation='close'",
         )
-        .fetch_one(&server.db.pool)
+        .fetch_one(&server.db.store())
         .await
         .unwrap();
         assert_eq!(requests, 1, "close replay must acknowledge once");
@@ -946,7 +950,7 @@ async fn investigator_terminalization_after_lookup_acknowledges_exact_failure_cl
                     "SELECT to_jsonb(r) FROM catalog.maintenance_runs r WHERE id=$1",
                 )
                 .bind(&run_id)
-                .fetch_one(&server.db.pool)
+                .fetch_one(&server.db.store())
                 .await
                 .unwrap();
                 assert_eq!(history["state"], state);
@@ -1014,7 +1018,7 @@ async fn investigator_terminalization_after_lookup_acknowledges_exact_failure_cl
                 "SELECT to_jsonb(r) FROM catalog.maintenance_runs r WHERE id=$1",
             )
             .bind(&run_id)
-            .fetch_one(&server.db.pool)
+            .fetch_one(&server.db.store())
             .await
             .unwrap();
             assert_eq!(
@@ -1022,7 +1026,7 @@ async fn investigator_terminalization_after_lookup_acknowledges_exact_failure_cl
                 "terminal metadata must remain immutable"
             );
             assert_eq!(work(&server, &run_id).await, history.1);
-            let acknowledgments: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_requests WHERE operation='close' AND idempotency_key=$1").bind(pending.args["idempotency_key"].as_str().unwrap()).fetch_one(&server.db.pool).await.unwrap();
+            let acknowledgments: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_requests WHERE operation='close' AND idempotency_key=$1").bind(pending.args["idempotency_key"].as_str().unwrap()).fetch_one(&server.db.store()).await.unwrap();
             assert_eq!(acknowledgments, 1);
             drop(store);
             let confirmed =

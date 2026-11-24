@@ -68,9 +68,16 @@ async fn try_seed(pool: &PgPool, name: &str) -> Result<Catalog, OkfError> {
 }
 
 async fn count(pool: &PgPool, sql: &'static str, id: i64) -> i64 {
+    // A table of schema `catalog` is on the store, a database of its own in
+    // `OKF_TEST_STORE=separate` mode.
+    let pool = if sql.contains(" catalog.") {
+        crate::db::store_pool(pool)
+    } else {
+        pool.clone()
+    };
     sqlx::query_scalar(sql)
         .bind(id)
-        .fetch_one(pool)
+        .fetch_one(&pool)
         .await
         .unwrap()
 }
@@ -118,7 +125,7 @@ async fn a_deleted_catalog_disappears_before_its_store_data_is_gone() {
         "SELECT deleted_at IS NOT NULL FROM catalog.catalog_state WHERE id = $1",
     )
     .bind(pg.id)
-    .fetch_one(&db.pool)
+    .fetch_one(&crate::db::store_pool(&db.pool))
     .await
     .unwrap();
     assert!(marked);
@@ -306,7 +313,7 @@ async fn an_edit_racing_a_delete_either_lands_first_and_blocks_it_or_fails_after
     );
     let state: String = sqlx::query_scalar("SELECT state FROM catalog.changesets WHERE id = $1")
         .bind(changeset)
-        .fetch_one(&db.pool)
+        .fetch_one(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     assert_eq!(state, "open");
@@ -340,7 +347,7 @@ async fn a_delete_without_force_never_discards_work_written_during_it() {
          FROM catalog.changesets c WHERE id = $1",
     )
     .bind(changeset)
-    .fetch_one(&db.pool)
+    .fetch_one(&crate::db::store_pool(&db.pool))
     .await
     .unwrap();
     assert_eq!((state.as_str(), entries), ("open", 1));
@@ -348,7 +355,7 @@ async fn a_delete_without_force_never_discards_work_written_during_it() {
         "SELECT deleted_at IS NOT NULL FROM catalog.catalog_state WHERE id = $1",
     )
     .bind(pg.id)
-    .fetch_one(&db.pool)
+    .fetch_one(&crate::db::store_pool(&db.pool))
     .await
     .unwrap();
     assert!(!marked);
@@ -364,7 +371,7 @@ async fn a_delete_without_force_never_discards_work_written_during_it() {
         .unwrap();
     let state: String = sqlx::query_scalar("SELECT state FROM catalog.changesets WHERE id = $1")
         .bind(changeset)
-        .fetch_one(&db.pool)
+        .fetch_one(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     assert_eq!(state, "discarded");

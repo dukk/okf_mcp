@@ -431,6 +431,7 @@ mod tests {
     #[tokio::test]
     async fn the_listing_shows_main_as_the_default() {
         let test = app().await;
+        crate::db::main_in_the_account_database(test.app.accounts().executor()).await;
         let root = every_catalog_admin(&test).await;
 
         let (status, body) = send(&test, "GET", "/api/v1/stores", Some(&root), None).await;

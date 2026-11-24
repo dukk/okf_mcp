@@ -2518,7 +2518,7 @@ async fn serve_a_sample_catalog_for_the_visual_check() {
     publish_as(&server, "alex", files(&kept)).await;
     let actors: Vec<String> =
         sqlx::query_scalar("SELECT DISTINCT actor FROM catalog.revisions ORDER BY actor")
-            .fetch_all(&server.db.pool)
+            .fetch_all(&server.db.store())
             .await
             .expect("read the actors");
     assert_eq!(
@@ -2550,7 +2550,7 @@ async fn pin_the_seed_actor(server: &TestServer) {
         "UPDATE catalog.revisions SET actor = 'owner' WHERE actor NOT IN ('tester', 'sam', 'alex')",
     ] {
         sqlx::query(statement)
-            .execute(&server.db.pool)
+            .execute(&server.db.store())
             .await
             .expect("pin the seed actor");
     }

@@ -650,7 +650,7 @@ mod tests {
                         .map(|_| ())
                 })
             })
-            .connect_with((*db.pool.connect_options()).clone())
+            .connect_with((*crate::db::store_pool(&db.pool).connect_options()).clone())
             .await
             .unwrap();
         let rebuilds = Arc::new(KeyedLocks::new());

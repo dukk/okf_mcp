@@ -2451,9 +2451,16 @@ pub(crate) mod tests {
 
     /// The single number `sql` answers.
     async fn count(pool: &PgPool, sql: &str) -> i64 {
+        // A table of schema `catalog` is on the store, a database of its own
+        // in `OKF_TEST_STORE=separate` mode.
+        let pool = if sql.contains(" catalog.") {
+            crate::db::store_pool(pool)
+        } else {
+            pool.clone()
+        };
         // `AssertSqlSafe`: the text is a test's own constant, not input.
         sqlx::query_scalar(sqlx::AssertSqlSafe(sql.to_string()))
-            .fetch_one(pool)
+            .fetch_one(&pool)
             .await
             .unwrap()
     }
@@ -2726,11 +2733,11 @@ pub(crate) mod tests {
         sqlx::query(
             "INSERT INTO catalog.revisions (catalog_id, path, revision, op, content, executable, actor, \
                                     message, created_at) \
-             SELECT id, 'a.md', 1, 'create', 'x', false, 'alice-laptop', 'm', $1 \
-             FROM catalogs WHERE name = 'shared'",
+             VALUES ($2, 'a.md', 1, 'create', 'x', false, 'alice-laptop', 'm', $1)",
         )
         .bind(now())
-        .execute(&db.pool)
+        .bind(crate::db::catalog_id(&db.pool, "shared").await)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
 
@@ -2830,7 +2837,7 @@ pub(crate) mod tests {
         let state_of = || async {
             sqlx::query_scalar::<_, String>("SELECT state FROM catalog.changesets WHERE id = $1")
                 .bind(changeset.id)
-                .fetch_one(&db.pool)
+                .fetch_one(&crate::db::store_pool(&db.pool))
                 .await
                 .unwrap()
         };
@@ -2851,7 +2858,7 @@ pub(crate) mod tests {
                 "SELECT target_name, teams, details FROM catalog.catalog_audit_entries \
                  WHERE action = 'catalog.changeset_discarded'",
             )
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
         assert_eq!(target.as_deref(), Some("shared"));
@@ -2957,7 +2964,7 @@ pub(crate) mod tests {
         crate::store::cleanups::settle_for_tests(&db.pool).await;
         let states: Vec<(i64, String)> =
             sqlx::query_as("SELECT id, state FROM catalog.changesets ORDER BY id")
-                .fetch_all(&db.pool)
+                .fetch_all(&crate::db::store_pool(&db.pool))
                 .await
                 .unwrap();
         assert_eq!(
@@ -2973,7 +2980,7 @@ pub(crate) mod tests {
             "SELECT target_name, details FROM catalog.catalog_audit_entries \
              WHERE action = 'catalog.changeset_discarded' ORDER BY id",
         )
-        .fetch_all(&db.pool)
+        .fetch_all(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         let shape: Vec<(Option<&str>, i64, &str)> = entries

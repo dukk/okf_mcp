@@ -189,7 +189,7 @@ async fn alpha_revisions(server: &TestServer) -> Vec<(String, String)> {
         "SELECT actor, COALESCE(message, '') FROM catalog.revisions \
          WHERE path = 'systems/alpha.md' ORDER BY revision",
     )
-    .fetch_all(&server.db.pool)
+    .fetch_all(&server.db.store())
     .await
     .expect("read Alpha's revisions")
 }

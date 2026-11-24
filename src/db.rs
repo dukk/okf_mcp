@@ -477,6 +477,56 @@ pub(crate) const TEST_USER: &str = "test-user";
 #[cfg(test)]
 pub(crate) const TEST_TEAM: &str = TEST_USER;
 
+/// A pool on the store `main` of the test whose account pool is `accounts`:
+/// the account database in the default store mode, the second database in
+/// `OKF_TEST_STORE=separate`. For test code that reads or writes catalog
+/// data (schema `catalog`) with a statement of its own.
+#[cfg(test)]
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "a test helper")
+)]
+pub(crate) fn store_pool(accounts: &PgPool) -> PgPool {
+    crate::stores::CatalogDb::main_of(accounts)
+        .executor()
+        .clone()
+}
+
+/// Puts the store `main` back on the account database: for the tests of the
+/// release-one layout, which `OKF_TEST_STORE=separate` mode moves to a
+/// second database.
+#[cfg(test)]
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "a test helper")
+)]
+pub(crate) async fn main_in_the_account_database(accounts: &PgPool) {
+    sqlx::query(
+        "UPDATE stores SET location_kind = 'account-database', host = NULL, port = NULL, \
+         database = NULL, credential_kind = NULL, credential_ref = NULL WHERE name = 'main'",
+    )
+    .execute(accounts)
+    .await
+    .expect("put the store main on the account database");
+}
+
+/// The id of the catalog called `name`, from the registry in the account
+/// database: for test statements that name a catalog's rows in its store,
+/// which a subquery on `catalogs` cannot reach once the two are separate
+/// databases.
+#[cfg(test)]
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "a test helper")
+)]
+pub(crate) async fn catalog_id(accounts: &PgPool, name: &str) -> i64 {
+    sqlx::query_scalar("SELECT id FROM catalogs WHERE name = $1")
+        .bind(name)
+        .fetch_one(accounts)
+        .await
+        .expect("the catalog is registered")
+}
+
 /// A migrated throwaway database for one test, with [`TEST_USER`].
 #[cfg(test)]
 pub(crate) async fn test_db() -> pg_support::TestDb {
@@ -2954,6 +3004,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_second_account_database_store_is_refused() {
         let db = pg_support::TestDb::start_migrated().await;
+        main_in_the_account_database(&db.pool).await;
 
         let second = insert_store(&db.pool, "also-main", ("account-database", None), None).await;
 

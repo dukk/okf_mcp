@@ -2966,6 +2966,7 @@ pub(crate) mod testing {
     pub(crate) async fn with_second_store(
         db: &crate::db::pg_support::TestDb,
     ) -> (Stores, crate::db::pg_support::TestDb) {
+        crate::db::main_in_the_account_database(&db.pool).await;
         let other = crate::db::test_db().await;
         let options = other.pool.connect_options();
         // The password in `scheme://user:password@host/db`.
@@ -3020,7 +3021,7 @@ pub(crate) mod testing {
              FROM catalog.catalog_audit_entries WHERE action = $1 ORDER BY id",
         )
         .bind(action)
-        .fetch_all(pool)
+        .fetch_all(&crate::db::store_pool(pool))
         .await
         .expect("read the catalog audit entries");
         let mut entries = Vec::with_capacity(rows.len());

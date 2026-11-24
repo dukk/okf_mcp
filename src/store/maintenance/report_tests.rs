@@ -66,12 +66,19 @@ async fn fixture(pool: &PgPool, catalog: i64, key: &str) -> (Lease, String) {
 
 async fn maintenance_snapshot(pool: &PgPool, catalog: i64) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_array((SELECT jsonb_agg(to_jsonb(d) ORDER BY id) FROM catalog.maintenance_dispositions d WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(q) ORDER BY credential_id,operation,idempotency_key) FROM catalog.maintenance_requests q WHERE catalog_id=$1),(SELECT to_jsonb(s) FROM catalog.maintenance_state s WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM catalog.maintenance_runs r WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(w) ORDER BY id) FROM catalog.maintenance_work w WHERE catalog_id=$1))")
-        .bind(catalog).fetch_one(pool).await.unwrap()
+        .bind(catalog).fetch_one(&crate::db::store_pool(pool)).await.unwrap()
 }
 
 async fn canonical(pool: &PgPool, catalog: i64) -> Value {
-    sqlx::query_scalar("SELECT jsonb_build_array((SELECT jsonb_agg(to_jsonb(d) ORDER BY path) FROM catalog.documents d WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(r) ORDER BY path,revision) FROM catalog.revisions r WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM catalog.changesets c WHERE catalog_id=$1),(SELECT to_jsonb(c) FROM catalogs c WHERE id=$1))")
-        .bind(catalog).fetch_one(pool).await.unwrap()
+    // The registry row is in the account database, the rest in the store.
+    let store: Value = sqlx::query_scalar("SELECT jsonb_build_array((SELECT jsonb_agg(to_jsonb(d) ORDER BY path) FROM catalog.documents d WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(r) ORDER BY path,revision) FROM catalog.revisions r WHERE catalog_id=$1),(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM catalog.changesets c WHERE catalog_id=$1))")
+        .bind(catalog).fetch_one(&crate::db::store_pool(pool)).await.unwrap();
+    let registry: Value = sqlx::query_scalar("SELECT to_jsonb(c) FROM catalogs c WHERE id=$1")
+        .bind(catalog)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    serde_json::json!([store, registry])
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -339,7 +346,7 @@ async fn maintenance_disposition_rejects_invalid_text_and_ids_atomically() {
         "SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id=$1 AND operation='dispose'",
     )
     .bind(catalog)
-    .fetch_one(&db.pool)
+    .fetch_one(&crate::db::store_pool(&db.pool))
     .await
     .unwrap();
     assert_eq!(requests, 0);
@@ -377,7 +384,7 @@ async fn maintenance_report_outdated_tracks_all_evidence() {
     // Restore only the neighbor's current pointer to isolate the assessment/primary pin.
     sqlx::query("UPDATE catalog.documents SET revision=1 WHERE catalog_id=$1 AND path='b.md'")
         .bind(catalog)
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     assert!(
@@ -389,7 +396,7 @@ async fn maintenance_report_outdated_tracks_all_evidence() {
     sqlx::query("UPDATE catalog.documents SET deleted_at=$2 WHERE catalog_id=$1 AND path='a.md'")
         .bind(catalog)
         .bind(t0())
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     assert!(
@@ -400,7 +407,7 @@ async fn maintenance_report_outdated_tracks_all_evidence() {
     );
     sqlx::query("DELETE FROM catalog.documents WHERE catalog_id=$1 AND path='a.md'")
         .bind(catalog)
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     assert!(
@@ -581,7 +588,7 @@ async fn maintenance_report_pages_are_catalog_scoped() {
         .bind(catalog)
         .bind(&all.items[1].id)
         .bind(t0() - Duration::seconds(1))
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     let by_time = runs::list_runs(
@@ -614,7 +621,7 @@ async fn maintenance_report_pages_are_catalog_scoped() {
     .bind(catalog)
     .bind(&findings.items[1].id)
     .bind(t0() - Duration::seconds(1))
-    .execute(&db.pool)
+    .execute(&crate::db::store_pool(&db.pool))
     .await
     .unwrap();
     let by_time = reports::list_findings(&CatalogDb::main_of(&db.pool), catalog, None, 1)
@@ -665,7 +672,7 @@ async fn maintenance_report_pages_are_catalog_scoped() {
     // account side's, and is deleted by `catalogs::delete`).
     sqlx::query("DELETE FROM catalog.catalog_state WHERE id=$1")
         .bind(catalog)
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     assert!(
@@ -685,7 +692,7 @@ async fn maintenance_report_pages_are_catalog_scoped() {
             .items
             .is_empty()
     );
-    let count: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM catalog.maintenance_runs WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_work WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_findings WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_evidence WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_dispositions WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id=$1)").bind(catalog).fetch_one(&db.pool).await.unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM catalog.maintenance_runs WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_work WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_findings WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_evidence WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_dispositions WHERE catalog_id=$1) + (SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id=$1)").bind(catalog).fetch_one(&crate::db::store_pool(&db.pool)).await.unwrap();
     assert_eq!(count, 0);
     assert_eq!(
         reports::get_finding(&CatalogDb::main_of(&db.pool), foreign, &foreign_finding)
@@ -750,7 +757,7 @@ async fn maintenance_disposition_concurrent_retry_is_one_append() {
     )
     .bind(catalog)
     .bind(&id)
-    .fetch_all(&db.pool)
+    .fetch_all(&crate::db::store_pool(&db.pool))
     .await
     .unwrap();
     assert_eq!(credentials, vec![human.key_id]);
@@ -852,7 +859,7 @@ async fn maintenance_report_assessment_and_sibling_pins_and_dto_contracts() {
     );
     sqlx::query("UPDATE catalog.documents SET revision=1 WHERE catalog_id=$1 AND path='c.md'")
         .bind(catalog)
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     // Likewise for evidence cited only by a sibling finding in the same work.
@@ -1166,7 +1173,7 @@ async fn runs_page_newest_first_with_a_descending_cursor() {
         .bind(catalog)
         .bind(&second.run_id)
         .bind(t0() - Duration::seconds(5))
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     let asc = runs::list_runs(

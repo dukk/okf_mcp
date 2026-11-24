@@ -61,6 +61,14 @@ const BOUND: Duration = Duration::from_secs(120);
 /// The body of every seeded document, 51 bytes.
 const NOTE: &str = "---\ntype: Note\ntitle: Note\n---\n# Note\nA tiny note.\n";
 
+/// The ids of the seeded catalogs.
+async fn catalog_ids(pool: &PgPool) -> Vec<i64> {
+    sqlx::query_scalar("SELECT id FROM catalogs WHERE name ~ '^c[0-9]{7}$'")
+        .fetch_all(pool)
+        .await
+        .expect("read the seeded ids")
+}
+
 /// Seeds [`SEEDED`] catalogs (one tiny document each, owned by the personal
 /// team of [`support::server::OWNER`], the administrator's user) and
 /// [`SEEDED`] users, each with a read key whose secret is `okf_scale_<n>`.
@@ -74,11 +82,6 @@ async fn seed(pool: &PgPool) {
          SELECT 'c' || lpad(n::text, 7, '0'), '', now(), \
                 (SELECT id FROM teams WHERE name = $2) \
          FROM generate_series(1, $1) AS n",
-        "INSERT INTO catalog.documents (catalog_id, path, content, executable, revision, updated_at, \
-                                updated_by, kind, concept_type, title) \
-         SELECT id, 'note.md', convert_to($2::text, 'UTF8'), false, 1, now(), 'scale', 'concept', \
-                'Note', 'Note' \
-         FROM catalogs WHERE name ~ '^c[0-9]{7}$' AND $1::bigint > 0",
         "INSERT INTO users (name, created_at) \
          SELECT 'u' || lpad(n::text, 7, '0'), now() FROM generate_series(1, $1) AS n",
         "INSERT INTO api_keys (name, sha256, access, all_catalogs, actor, created_at, user_id) \
@@ -97,6 +100,29 @@ async fn seed(pool: &PgPool) {
         }
         query.execute(pool).await.expect("seed");
     }
+    // The documents are on the store, a database of its own in
+    // `OKF_TEST_STORE=separate` mode, so they are written from the ids the
+    // registry holds rather than by a statement across the two.
+    let store = support::pg::store_pool(pool);
+    sqlx::query(
+        "INSERT INTO catalog.catalog_state (id) \
+         SELECT unnest($1::bigint[]) ON CONFLICT DO NOTHING",
+    )
+    .bind(catalog_ids(pool).await)
+    .execute(&store)
+    .await
+    .expect("seed the states");
+    sqlx::query(
+        "INSERT INTO catalog.documents (catalog_id, path, content, executable, revision, \
+                                updated_at, updated_by, kind, concept_type, title) \
+         SELECT unnest($1::bigint[]), 'note.md', convert_to($2::text, 'UTF8'), false, 1, now(), \
+                'scale', 'concept', 'Note', 'Note'",
+    )
+    .bind(catalog_ids(pool).await)
+    .bind(NOTE)
+    .execute(&store)
+    .await
+    .expect("seed the documents");
     sqlx::query("ANALYZE").execute(pool).await.expect("analyze");
     eprintln!("seeded in {:.1?}", started.elapsed());
 }

@@ -54,10 +54,14 @@ pub(super) async fn revision(
     at: DateTime<Utc>,
     text: &str,
 ) {
+    // Catalog data lives on the store, a database of its own in `separate`
+    // mode: `pool` is the account pool.
+    let store = CatalogDb::main_of(pool);
+    let store = store.executor();
     sqlx::query("INSERT INTO catalog.revisions (catalog_id, path, revision, op, content, executable, actor, message, created_at) VALUES ($1,$2,$3,'import',$4,false,'test','fixture',$5)")
-        .bind(catalog).bind(path).bind(rev).bind(text.as_bytes()).bind(at).execute(pool).await.unwrap();
+        .bind(catalog).bind(path).bind(rev).bind(text.as_bytes()).bind(at).execute(store).await.unwrap();
     sqlx::query("INSERT INTO catalog.documents (catalog_id, path, revision, content, executable, updated_at, updated_by, kind) VALUES ($1,$2,$3,$4,false,$5,'test','concept') ON CONFLICT (catalog_id, path) DO UPDATE SET revision=$3, content=$4, updated_at=$5, deleted_at=NULL")
-        .bind(catalog).bind(path).bind(rev).bind(text.as_bytes()).bind(at).execute(pool).await.unwrap();
+        .bind(catalog).bind(path).bind(rev).bind(text.as_bytes()).bind(at).execute(store).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -114,7 +118,7 @@ async fn maintenance_evidence_uses_exact_revision_bytes() {
     sqlx::query("UPDATE catalog.documents SET deleted_at=$2 WHERE catalog_id=$1 AND path='a.md'")
         .bind(catalog)
         .bind(t0())
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     assert!(
@@ -132,7 +136,7 @@ async fn maintenance_evidence_uses_exact_revision_bytes() {
     );
     sqlx::query("DELETE FROM catalog.documents WHERE catalog_id=$1 AND path='a.md'")
         .bind(catalog)
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     assert!(evidence::validate(&mut conn, catalog, &cited)
@@ -172,9 +176,9 @@ async fn maintenance_evidence_uses_exact_revision_bytes() {
             .is_err()
     );
     sqlx::query("INSERT INTO catalog.revisions (catalog_id,path,revision,op,content,executable,actor,message,created_at) VALUES ($1,'gone.md',2,'delete',NULL,false,'test','deleted',$2)")
-        .bind(catalog).bind(t0()).execute(&db.pool).await.unwrap();
+        .bind(catalog).bind(t0()).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     sqlx::query("INSERT INTO catalog.revisions (catalog_id,path,revision,op,content,executable,actor,message,created_at) VALUES ($1,'gone.md',3,'import',NULL,false,'test','no content',$2)")
-        .bind(catalog).bind(t0()).execute(&db.pool).await.unwrap();
+        .bind(catalog).bind(t0()).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let null_error = evidence::read(
         &CatalogDb::main_of(&db.pool),
         catalog,
@@ -198,7 +202,7 @@ async fn maintenance_evidence_uses_exact_revision_bytes() {
             .bind(catalog)
             .bind(path)
             .bind(bytes)
-            .execute(&db.pool)
+            .execute(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     }
@@ -317,14 +321,14 @@ async fn maintenance_close_rationale_limits_and_masking() {
         let state: String =
             sqlx::query_scalar("SELECT state FROM catalog.maintenance_runs WHERE id=$1")
                 .bind(&run.run_id)
-                .fetch_one(&db.pool)
+                .fetch_one(&crate::db::store_pool(&db.pool))
                 .await
                 .unwrap();
         assert_eq!(state, "running");
         let count: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM catalog.maintenance_requests WHERE operation='close'",
         )
-        .fetch_one(&db.pool)
+        .fetch_one(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         assert_eq!(count, 0);
@@ -507,7 +511,7 @@ async fn maintenance_claim_replay_does_not_extend_a_lease() {
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id=$1")
             .bind(catalog)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(count, 1);
@@ -552,7 +556,7 @@ async fn maintenance_source_change_supersedes_only_old_revision() {
     let outcome: String =
         sqlx::query_scalar("SELECT outcome FROM catalog.maintenance_work WHERE id=$1")
             .bind(&first.leases[0].work_id)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(outcome, "superseded");
@@ -711,7 +715,7 @@ async fn maintenance_candidates_ignore_machinery_and_bad_metadata() {
         .bind(catalog)
         .bind("bad.md")
         .bind(t0())
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     let remaining = candidates::load(&mut db.store().acquire().await.unwrap(), catalog, t0())
@@ -745,7 +749,7 @@ async fn maintenance_legacy_verification_is_pinned_to_its_source() {
     let at = t0() + Duration::seconds(30);
     // The older revision carries a verification timestamp after its own publication.
     let prior: (Vec<u8>, DateTime<Utc>) = sqlx::query_as("SELECT content,created_at FROM catalog.revisions WHERE catalog_id=$1 AND path='a.md' AND revision=2")
-        .bind(catalog).fetch_one(&db.pool).await.unwrap();
+        .bind(catalog).fetch_one(&crate::db::store_pool(&db.pool)).await.unwrap();
     assert_eq!(prior.1, t0() + Duration::seconds(10));
     let rows = candidates::load(&mut db.store().acquire().await.unwrap(), catalog, at)
         .await
@@ -774,7 +778,7 @@ async fn maintenance_legacy_verification_is_pinned_to_its_source() {
     assert_eq!(selected.items[0].reasons.len(), 2);
     // Revert the published row to the historical revision to establish the hint's provenance.
     sqlx::query("UPDATE catalog.documents SET revision=2, content=$3, updated_at=$4 WHERE catalog_id=$1 AND path=$2")
-        .bind(catalog).bind("a.md").bind(&prior.0).bind(prior.1).execute(&db.pool).await.unwrap();
+        .bind(catalog).bind("a.md").bind(&prior.0).bind(prior.1).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let earlier = candidates::load(&mut db.store().acquire().await.unwrap(), catalog, at)
         .await
         .unwrap();
@@ -976,7 +980,7 @@ async fn maintenance_claim_limits_primary_count_and_empty_run() {
     let count: i32 =
         sqlx::query_scalar("SELECT primary_count FROM catalog.maintenance_runs WHERE id=$1")
             .bind(&first.run_id)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(count, 50);
@@ -1007,7 +1011,7 @@ async fn maintenance_claim_limits_primary_count_and_empty_run() {
     let state: String =
         sqlx::query_scalar("SELECT state FROM catalog.maintenance_runs WHERE id=$1")
             .bind(empty.run_id)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(state, "completed");
@@ -1102,19 +1106,19 @@ async fn maintenance_claim_replay_ignores_review_interval_change() {
     let runs: i64 =
         sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_runs WHERE catalog_id=$1")
             .bind(catalog)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     let work: i64 =
         sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_work WHERE catalog_id=$1")
             .bind(catalog)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     let receipts: i64 =
         sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id=$1")
             .bind(catalog)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!((runs, work, receipts), (1, 1, 1));
@@ -1149,14 +1153,14 @@ async fn maintenance_claim_replay_conflict_preserves_original_lease() {
     let expiry: DateTime<Utc> =
         sqlx::query_scalar("SELECT lease_expires_at FROM catalog.maintenance_work WHERE id=$1")
             .bind(&initial.leases[0].work_id)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(expiry, t0() + Duration::seconds(900));
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id=$1")
             .bind(catalog)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(count, 1);
@@ -1217,7 +1221,7 @@ async fn maintenance_old_success_does_not_override_new_failed_cooldown() {
     .await
     .unwrap();
     sqlx::query("UPDATE catalog.maintenance_work SET outcome='completed', assessment='supported_current', ended_at=$2 WHERE id=$1")
-        .bind(&first.leases[0].work_id).bind(t0()+Duration::seconds(10)).execute(&db.pool).await.unwrap();
+        .bind(&first.leases[0].work_id).bind(t0()+Duration::seconds(10)).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let second = runs::claim(
         &CatalogDb::main_of(&db.pool),
         catalog,
@@ -1230,7 +1234,7 @@ async fn maintenance_old_success_does_not_override_new_failed_cooldown() {
     .await
     .unwrap();
     sqlx::query("UPDATE catalog.maintenance_work SET outcome='failed', reason='investigator', ended_at=$2 WHERE id=$1")
-        .bind(&second.leases[0].work_id).bind(t0()+Duration::days(31)).execute(&db.pool).await.unwrap();
+        .bind(&second.leases[0].work_id).bind(t0()+Duration::days(31)).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let rows = candidates::load(
         &mut db.store().acquire().await.unwrap(),
         catalog,
@@ -1257,7 +1261,7 @@ async fn maintenance_new_failure_after_success_still_cools_down() {
     .await
     .unwrap();
     sqlx::query("UPDATE catalog.maintenance_work SET outcome='completed', assessment='supported_current', ended_at=$2 WHERE id=$1")
-        .bind(&first.leases[0].work_id).bind(t0()).execute(&db.pool).await.unwrap();
+        .bind(&first.leases[0].work_id).bind(t0()).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let second = runs::claim(
         &CatalogDb::main_of(&db.pool),
         catalog,
@@ -1270,7 +1274,7 @@ async fn maintenance_new_failure_after_success_still_cools_down() {
     .await
     .unwrap();
     sqlx::query("UPDATE catalog.maintenance_work SET outcome='failed', reason='investigator', ended_at=$2 WHERE id=$1")
-        .bind(&second.leases[0].work_id).bind(t0()+Duration::days(31)).execute(&db.pool).await.unwrap();
+        .bind(&second.leases[0].work_id).bind(t0()+Duration::days(31)).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let rows = candidates::load(
         &mut db.store().acquire().await.unwrap(),
         catalog,
@@ -1310,7 +1314,7 @@ async fn maintenance_failed_attempt_cooldown_uses_latest_attempt_only() {
     .await
     .unwrap();
     sqlx::query("UPDATE catalog.maintenance_work SET outcome='failed', reason='investigator', ended_at=$2 WHERE id=$1")
-        .bind(&first.leases[0].work_id).bind(t0()).execute(&db.pool).await.unwrap();
+        .bind(&first.leases[0].work_id).bind(t0()).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let second = runs::claim(
         &CatalogDb::main_of(&db.pool),
         catalog,
@@ -1323,7 +1327,7 @@ async fn maintenance_failed_attempt_cooldown_uses_latest_attempt_only() {
     .await
     .unwrap();
     sqlx::query("UPDATE catalog.maintenance_work SET outcome='completed', assessment='supported_current', ended_at=$2 WHERE id=$1")
-        .bind(&second.leases[0].work_id).bind(t0()+Duration::days(1)).execute(&db.pool).await.unwrap();
+        .bind(&second.leases[0].work_id).bind(t0()+Duration::days(1)).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let rows = candidates::load(
         &mut db.store().acquire().await.unwrap(),
         catalog,
@@ -1350,9 +1354,9 @@ async fn maintenance_last_aging_completion_is_revision_scoped() {
     .await
     .unwrap();
     sqlx::query("UPDATE catalog.maintenance_work SET outcome='completed', assessment='supported_current', ended_at=$2 WHERE id=$1")
-        .bind(&first.leases[0].work_id).bind(t0()+Duration::seconds(10)).execute(&db.pool).await.unwrap();
+        .bind(&first.leases[0].work_id).bind(t0()+Duration::seconds(10)).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     sqlx::query("INSERT INTO catalog.maintenance_evidence (catalog_id,work_id,ordinal,path,revision,excerpt) VALUES ($1,$2,0,'a.md',1,'Body')")
-        .bind(catalog).bind(&first.leases[0].work_id).execute(&db.pool).await.unwrap();
+        .bind(catalog).bind(&first.leases[0].work_id).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let same = candidates::load(
         &mut db.store().acquire().await.unwrap(),
         catalog,
@@ -1406,7 +1410,7 @@ async fn maintenance_recovery_respects_retry_and_rollback() {
     .unwrap();
     // A persisted investigator failure cools down; an expired lease does not.
     sqlx::query("UPDATE catalog.maintenance_work SET outcome='failed', assessment='not_assessed', reason='investigator', ended_at=$2 WHERE id=$1")
-        .bind(&original.leases[0].work_id).bind(t0()).execute(&db.pool).await.unwrap();
+        .bind(&original.leases[0].work_id).bind(t0()).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let cooled = runs::claim(
         &CatalogDb::main_of(&db.pool),
         catalog,
@@ -1434,7 +1438,7 @@ async fn maintenance_recovery_respects_retry_and_rollback() {
     let old_request_count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id=$1")
             .bind(catalog)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert!(runs::close(
@@ -1453,7 +1457,7 @@ async fn maintenance_recovery_respects_retry_and_rollback() {
     let new_request_count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id=$1")
             .bind(catalog)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(new_request_count, old_request_count);
@@ -1498,7 +1502,7 @@ async fn maintenance_expiry_and_supersession_leave_no_live_old_claim() {
     let outcome: String =
         sqlx::query_scalar("SELECT outcome FROM catalog.maintenance_work WHERE id=$1")
             .bind(&first.leases[0].work_id)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(outcome, "superseded");
@@ -1558,7 +1562,7 @@ async fn maintenance_close_rejection_preserves_unrelated_recovery() {
     let expired: Option<String> =
         sqlx::query_scalar("SELECT outcome FROM catalog.maintenance_work WHERE id=$1")
             .bind(&first.leases[0].work_id)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(expired.as_deref(), Some("failed"));
@@ -1594,7 +1598,7 @@ async fn maintenance_failed_recovery_is_committed_before_rejected_renewal() {
     let outcome: Option<String> =
         sqlx::query_scalar("SELECT outcome FROM catalog.maintenance_work WHERE id=$1")
             .bind(&work.work_id)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(outcome.as_deref(), Some("failed"));
@@ -1639,7 +1643,7 @@ async fn maintenance_renewal_rejects_changed_source_without_replay_receipt() {
     let outcome: String =
         sqlx::query_scalar("SELECT outcome FROM catalog.maintenance_work WHERE id=$1")
             .bind(&work.work_id)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(outcome, "superseded");
@@ -1647,7 +1651,7 @@ async fn maintenance_renewal_rejects_changed_source_without_replay_receipt() {
         "SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id=$1 AND operation='renew'",
     )
     .bind(catalog)
-    .fetch_one(&db.pool)
+    .fetch_one(&crate::db::store_pool(&db.pool))
     .await
     .unwrap();
     assert_eq!(receipt_count, 0);
@@ -1743,7 +1747,7 @@ async fn maintenance_recovery_orders_run_before_work_on_expiry() {
     assert_eq!(next.leases.len(), 1);
     let old: String = sqlx::query_scalar("SELECT reason FROM catalog.maintenance_work WHERE id=$1")
         .bind(&first.leases[0].work_id)
-        .fetch_one(&db.pool)
+        .fetch_one(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     assert_eq!(old, "lease_expired");
@@ -1768,7 +1772,7 @@ async fn maintenance_idempotency_key_rejects_secret_pattern() {
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id=$1")
             .bind(catalog)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(count, 0);
@@ -1817,7 +1821,7 @@ async fn maintenance_requested_completion_never_closes_active_work() {
     let state: String =
         sqlx::query_scalar("SELECT state FROM catalog.maintenance_runs WHERE id=$1")
             .bind(&first.run_id)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(state, "running");
@@ -1911,7 +1915,7 @@ async fn maintenance_retry_follows_latest_terminal_attempt() {
     .await
     .unwrap();
     sqlx::query("UPDATE catalog.maintenance_work SET outcome='failed', assessment='not_assessed', reason='investigator', ended_at=$2 WHERE id=$1")
-        .bind(&first.leases[0].work_id).bind(t0()).execute(&db.pool).await.unwrap();
+        .bind(&first.leases[0].work_id).bind(t0()).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let second = runs::claim(
         &CatalogDb::main_of(&db.pool),
         catalog,
@@ -1924,7 +1928,7 @@ async fn maintenance_retry_follows_latest_terminal_attempt() {
     .await
     .unwrap();
     sqlx::query("UPDATE catalog.maintenance_work SET outcome='failed', assessment='not_assessed', reason='lease_expired', ended_at=$2 WHERE id=$1")
-        .bind(&second.leases[0].work_id).bind(t0()+Duration::days(1)+Duration::seconds(900)).execute(&db.pool).await.unwrap();
+        .bind(&second.leases[0].work_id).bind(t0()+Duration::days(1)+Duration::seconds(900)).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let rows = candidates::load(
         &mut db.store().acquire().await.unwrap(),
         catalog,
@@ -1951,7 +1955,7 @@ async fn maintenance_latest_supported_assessment_wins() {
     .await
     .unwrap();
     sqlx::query("UPDATE catalog.maintenance_work SET outcome='completed', assessment='supported_current', ended_at=$2 WHERE id=$1")
-        .bind(&first.leases[0].work_id).bind(t0()).execute(&db.pool).await.unwrap();
+        .bind(&first.leases[0].work_id).bind(t0()).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let second = runs::claim(
         &CatalogDb::main_of(&db.pool),
         catalog,
@@ -1964,7 +1968,7 @@ async fn maintenance_latest_supported_assessment_wins() {
     .await
     .unwrap();
     sqlx::query("UPDATE catalog.maintenance_work SET outcome='completed', assessment='outdated', ended_at=$2 WHERE id=$1")
-        .bind(&second.leases[0].work_id).bind(t0()+Duration::days(31)).execute(&db.pool).await.unwrap();
+        .bind(&second.leases[0].work_id).bind(t0()+Duration::days(31)).execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     let rows = candidates::load(
         &mut db.store().acquire().await.unwrap(),
         catalog,
@@ -2210,7 +2214,7 @@ async fn maintenance_renew_obsolete_source_terminalizes_work_and_run() {
     let result: (Option<String>, Option<String>, Option<DateTime<Utc>>) =
         sqlx::query_as("SELECT outcome,reason,ended_at FROM catalog.maintenance_work WHERE id=$1")
             .bind(&work.work_id)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(result.0.as_deref(), Some("superseded"));
@@ -2219,7 +2223,7 @@ async fn maintenance_renew_obsolete_source_terminalizes_work_and_run() {
     let run: (String, Option<DateTime<Utc>>) =
         sqlx::query_as("SELECT state,ended_at FROM catalog.maintenance_runs WHERE id=$1")
             .bind(&first.run_id)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(run, ("completed".into(), Some(t0() + Duration::seconds(2))));
@@ -2227,7 +2231,7 @@ async fn maintenance_renew_obsolete_source_terminalizes_work_and_run() {
         "SELECT count(*) FROM catalog.maintenance_requests WHERE catalog_id=$1 AND operation='renew'",
     )
     .bind(catalog)
-    .fetch_one(&db.pool)
+    .fetch_one(&crate::db::store_pool(&db.pool))
     .await
     .unwrap();
     assert_eq!(receipts, 0);
@@ -2365,14 +2369,30 @@ async fn maintenance_deleted_catalog_identity_cannot_replay() {
 /// `catalog.maintenance_run` entries, oldest first: their details and the
 /// credential id their actor names (`None` without one).
 async fn run_entries(pool: &PgPool) -> Vec<(serde_json::Value, Option<String>, String)> {
-    sqlx::query_as(
-        "SELECT e.details, a.credential_id, e.source FROM catalog.catalog_audit_entries e \
-         LEFT JOIN public.audit_credentials a ON a.id = e.actor_credential_ref \
-         WHERE e.action = 'catalog.maintenance_run' ORDER BY e.id",
+    // The entries are on the store, the credentials they name in the
+    // account database.
+    let rows: Vec<(serde_json::Value, Option<i64>, String)> = sqlx::query_as(
+        "SELECT details, actor_credential_ref, source FROM catalog.catalog_audit_entries \
+         WHERE action = 'catalog.maintenance_run' ORDER BY id",
     )
-    .fetch_all(pool)
+    .fetch_all(&crate::db::store_pool(pool))
     .await
-    .unwrap()
+    .unwrap();
+    let mut entries = Vec::with_capacity(rows.len());
+    for (details, credential_ref, source) in rows {
+        let credential_id = match credential_ref {
+            Some(id) => sqlx::query_scalar(
+                "SELECT credential_id FROM public.audit_credentials WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+            None => None,
+        };
+        entries.push((details, credential_id, source));
+    }
+    entries
 }
 
 /// Asserts the database holds none of the audit triggers migration 0017 made
@@ -2621,10 +2641,17 @@ async fn a_run_ends_without_waiting_for_its_users_or_credentials_rows() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_maintenance_run_entrys_findings_count_reads_one_run_by_index() {
     let db = test_db().await;
-    let mut conn = db.store().acquire().await.unwrap();
+    let mut conn = db.store().begin().await.unwrap();
     // The fixture tables are tiny, so the planner would scan them anyway:
-    // forbid the scan to see which index can serve the trigger's count.
-    sqlx::query("SET enable_seqscan = off")
+    // forbid the scan to see which index can serve the trigger's count. The
+    // table's other index on `catalog_id` costs the same on an empty table
+    // and which of the two wins depends on their creation order, so the
+    // transaction (rolled back) drops it.
+    sqlx::query("SET LOCAL enable_seqscan = off")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sqlx::query("DROP INDEX catalog.maintenance_findings_work")
         .execute(&mut *conn)
         .await
         .unwrap();
@@ -2684,7 +2711,7 @@ async fn maintenance_run_records_a_missing_key_as_null() {
     let recorded: Vec<(String, Option<String>, String)> = sqlx::query_as(
         "SELECT credential_id, key_id, actor FROM catalog.maintenance_runs ORDER BY credential_id",
     )
-    .fetch_all(&db.pool)
+    .fetch_all(&crate::db::store_pool(&db.pool))
     .await
     .unwrap();
     assert_eq!(

@@ -74,8 +74,16 @@ async fn submit(
 }
 
 async fn snapshot(pool: &PgPool, catalog: i64) -> serde_json::Value {
-    sqlx::query_scalar("SELECT jsonb_build_array((SELECT jsonb_agg(to_jsonb(w) ORDER BY id) FROM catalog.maintenance_work w WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM catalog.maintenance_runs r WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM catalog.maintenance_findings f WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(e) ORDER BY work_id,finding_id,ordinal) FROM catalog.maintenance_evidence e WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(s)) FROM catalog.maintenance_state s WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(q) ORDER BY operation,idempotency_key) FROM catalog.maintenance_requests q WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(d) ORDER BY path) FROM catalog.documents d WHERE catalog_id=$1), (SELECT to_jsonb(c) FROM catalogs c WHERE id=$1))")
-        .bind(catalog).fetch_one(pool).await.unwrap()
+    // The registry row is in the account database, the rest in the store.
+    let store: serde_json::Value = sqlx::query_scalar("SELECT jsonb_build_array((SELECT jsonb_agg(to_jsonb(w) ORDER BY id) FROM catalog.maintenance_work w WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM catalog.maintenance_runs r WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM catalog.maintenance_findings f WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(e) ORDER BY work_id,finding_id,ordinal) FROM catalog.maintenance_evidence e WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(s)) FROM catalog.maintenance_state s WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(q) ORDER BY operation,idempotency_key) FROM catalog.maintenance_requests q WHERE catalog_id=$1), (SELECT jsonb_agg(to_jsonb(d) ORDER BY path) FROM catalog.documents d WHERE catalog_id=$1))")
+        .bind(catalog).fetch_one(&crate::db::store_pool(pool)).await.unwrap();
+    let registry: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(c) FROM catalogs c WHERE id=$1")
+            .bind(catalog)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    serde_json::json!([store, registry])
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -140,7 +148,7 @@ async fn maintenance_submit_is_atomic_and_idempotent() {
     ));
     assert_eq!(snapshot(&db.pool, catalog).await, stored);
     let counts: (i64,i64,String) = sqlx::query_as("SELECT (SELECT count(*) FROM catalog.maintenance_findings WHERE catalog_id=$1),(SELECT count(*) FROM catalog.maintenance_evidence WHERE catalog_id=$1),(SELECT state FROM catalog.maintenance_runs WHERE id=$2)")
-        .bind(catalog).bind(&lease.run_id).fetch_one(&db.pool).await.unwrap();
+        .bind(catalog).bind(&lease.run_id).fetch_one(&crate::db::store_pool(&db.pool)).await.unwrap();
     assert_eq!(counts, (2, 3, "completed".into()));
     let cursors = candidates::cursors(&mut db.store().acquire().await.unwrap(), catalog)
         .await
@@ -223,11 +231,11 @@ async fn maintenance_historical_report_does_not_cover_new_revision() {
     let reason: String =
         sqlx::query_scalar("SELECT reason FROM catalog.maintenance_work WHERE id=$1")
             .bind(&lease.work_id)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(reason, "source_changed");
-    let payload: serde_json::Value = sqlx::query_scalar("SELECT request FROM catalog.maintenance_requests WHERE catalog_id=$1 AND operation='submit' AND idempotency_key='historical'").bind(catalog).fetch_one(&db.pool).await.unwrap();
+    let payload: serde_json::Value = sqlx::query_scalar("SELECT request FROM catalog.maintenance_requests WHERE catalog_id=$1 AND operation='submit' AND idempotency_key='historical'").bind(catalog).fetch_one(&crate::db::store_pool(&db.pool)).await.unwrap();
     assert_eq!(
         payload["submission"],
         serde_json::to_value(report(&lease)).unwrap()
@@ -338,7 +346,7 @@ async fn maintenance_submit_all_evidence_controls_effective_support() {
     // already outdated at submission is not a new current-support assessment.
     sqlx::query("UPDATE catalog.documents SET revision=1 WHERE catalog_id=$1 AND path='b.md'")
         .bind(catalog)
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     let rows = candidates::load(&mut db.store().acquire().await.unwrap(), catalog, later)
@@ -423,7 +431,7 @@ async fn maintenance_submit_context_and_state_guards() {
     let state: (String, Option<String>) =
         sqlx::query_as("SELECT state,end_reason FROM catalog.maintenance_runs WHERE id=$1")
             .bind(&newer.run_id)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(state, ("failed".into(), Some("budget_exhausted".into())));
@@ -468,7 +476,7 @@ async fn maintenance_submit_concurrent_replay_and_double_completion() {
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_findings WHERE catalog_id=$1")
             .bind(catalog)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(count, 1);
@@ -503,7 +511,7 @@ async fn maintenance_submit_rolls_back_late_database_errors() {
     let mut input = report(&lease);
     input.findings = vec![finding(lease.pin.clone()), finding(lease.pin.clone())];
     input.findings[1].assertion = "second".into();
-    sqlx::query("CREATE FUNCTION reject_report() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN RAISE EXCEPTION 'injected failure'; END $body$").execute(&db.pool).await.unwrap();
+    sqlx::query("CREATE FUNCTION reject_report() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN RAISE EXCEPTION 'injected failure'; END $body$").execute(&crate::db::store_pool(&db.pool)).await.unwrap();
     // Both failures occur after earlier writes; no receipt, counter, evidence,
     // finding, work or cursor change may escape the transaction.
     for (create, drop) in [
@@ -511,7 +519,7 @@ async fn maintenance_submit_rolls_back_late_database_errors() {
         ("CREATE TRIGGER reject_report BEFORE INSERT ON catalog.maintenance_requests FOR EACH ROW WHEN (NEW.operation = 'submit') EXECUTE FUNCTION reject_report()", "DROP TRIGGER reject_report ON catalog.maintenance_requests"),
     ] {
         sqlx::query(create)
-            .execute(&db.pool).await.unwrap();
+            .execute(&crate::db::store_pool(&db.pool)).await.unwrap();
         let before = snapshot(&db.pool, catalog).await;
         assert!(matches!(
             submit(&db.pool, catalog, &lease, "submit", &input, t0()).await,
@@ -519,7 +527,7 @@ async fn maintenance_submit_rolls_back_late_database_errors() {
         ));
         assert_eq!(snapshot(&db.pool, catalog).await, before);
         sqlx::query(drop)
-            .execute(&db.pool)
+            .execute(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     }
@@ -620,7 +628,7 @@ async fn maintenance_submit_cursors_preserve_other_completed_lanes() {
     let state: String =
         sqlx::query_scalar("SELECT state FROM catalog.maintenance_runs WHERE id=$1")
             .bind(&batch.run_id)
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
     assert_eq!(state, "running");
@@ -640,7 +648,7 @@ async fn maintenance_submit_cursors_preserve_other_completed_lanes() {
     assert_eq!(after.next_expiry, before.next_expiry);
     assert_eq!(after.changed, "c.md");
     let result: (String, i32, i64) = sqlx::query_as("SELECT state,primary_count,(SELECT count(*) FROM catalog.maintenance_work WHERE run_id=$1 AND outcome='completed') FROM catalog.maintenance_runs WHERE id=$1")
-        .bind(&batch.run_id).fetch_one(&db.pool).await.unwrap();
+        .bind(&batch.run_id).fetch_one(&crate::db::store_pool(&db.pool)).await.unwrap();
     assert_eq!(result, ("completed".into(), 3, 3));
 }
 
@@ -684,7 +692,7 @@ async fn maintenance_submit_assessment_pins_and_outdated_findings_never_certify_
     sqlx::query("UPDATE catalog.documents SET deleted_at=$2 WHERE catalog_id=$1 AND path='b.md'")
         .bind(catalog)
         .bind(t0())
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
     let rows = candidates::load(&mut db.store().acquire().await.unwrap(), catalog, t0())

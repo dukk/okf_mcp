@@ -559,7 +559,8 @@ pub(crate) async fn wait_for_lock_waiters(pool: &PgPool, want: i64) {
     for _ in 0..200 {
         let waiting: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM pg_stat_activity \
-              WHERE datname = current_database() AND wait_event_type = 'Lock'",
+              WHERE left(datname, length(current_database())) = current_database() \
+                   AND wait_event_type = 'Lock'",
         )
         .fetch_one(pool)
         .await
@@ -572,9 +573,22 @@ pub(crate) async fn wait_for_lock_waiters(pool: &PgPool, want: i64) {
     panic!("{want} backends never waited on a lock");
 }
 
+/// The database a trigger on `table` belongs in: the store for a table of
+/// schema `catalog` (a database of its own in `OKF_TEST_STORE=separate`
+/// mode), else the account database `pool`.
+fn database_of(pool: &PgPool, table: &str) -> PgPool {
+    if table.contains(" catalog.") || table.starts_with("catalog.") {
+        crate::db::store_pool(pool)
+    } else {
+        pool.clone()
+    }
+}
+
 /// Makes every statement matching `event` (`BEFORE DELETE ON
-/// user_sessions`, ...) fail, until [`allow`] drops it.
+/// user_sessions`, ...) fail, until [`allow`] drops it. An event on a table
+/// of schema `catalog` is installed on the store.
 pub(crate) async fn fail_on(pool: &PgPool, event: &str) {
+    let pool = &database_of(pool, event);
     sqlx::query(
         "CREATE FUNCTION okf_test_fail() RETURNS trigger LANGUAGE plpgsql AS \
          $$ BEGIN RAISE EXCEPTION 'injected failure'; END $$",
@@ -593,6 +607,7 @@ pub(crate) async fn fail_on(pool: &PgPool, event: &str) {
 
 /// Drops [`fail_on`]'s trigger.
 pub(crate) async fn allow(pool: &PgPool, table: &str) {
+    let pool = &database_of(pool, table);
     // `AssertSqlSafe`: `table` is a literal of the calling test.
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP TRIGGER okf_test_fail ON {table}"

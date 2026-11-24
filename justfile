@@ -15,9 +15,13 @@ lint:
 
 # One Postgres server for the whole run (scripts/test-pg.sh); set
 # TEST_PG_URL to reuse one already running. Runs the reader worker's tests
-# first.
+# first. The suite runs twice, once for each store mode of the test harness
+# (tests/support/pg.rs): `same`, the catalog data in the account database,
+# and `separate` (OKF_TEST_STORE), a second database copied from a store
+# template and registered as the store `main`. Both runs happen even when the
+# first fails, and the recipe fails if either did.
 test: test-worker
-    scripts/test-pg.sh run cargo test
+    scripts/test-pg.sh run bash -c 'status=0; cargo test || status=1; OKF_TEST_STORE=separate cargo test || status=1; exit $status'
 
 # The mobile reader's service worker (src/http/read/sw.js) in a Node vm, and
 # its page modules without a DOM (src/http/read/js/), with fake Cache Storage,

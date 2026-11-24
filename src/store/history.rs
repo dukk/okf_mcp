@@ -437,7 +437,7 @@ mod tests {
         .id;
         sqlx::query("DELETE FROM catalog.revisions WHERE catalog_id = $1")
             .bind(id)
-            .execute(pool)
+            .execute(&crate::db::store_pool(pool))
             .await
             .unwrap();
         id
@@ -464,7 +464,7 @@ mod tests {
         .bind(actor)
         .bind(format!("{op} {path}"))
         .bind(at)
-        .execute(pool)
+        .execute(&crate::db::store_pool(pool))
         .await
         .unwrap();
     }
@@ -695,11 +695,11 @@ mod tests {
         .bind(pg)
         .bind(other)
         .bind(at(0))
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         sqlx::query("ANALYZE catalog.revisions")
-            .execute(&db.pool)
+            .execute(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
 

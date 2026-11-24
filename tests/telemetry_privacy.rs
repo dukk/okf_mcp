@@ -673,11 +673,21 @@ async fn nothing_secret_is_exported_or_scraped() {
     .execute(pool)
     .await
     .expect("create the mail trigger");
+    // `catalog.changesets` is on the store, a database of its own in
+    // `OKF_TEST_STORE=separate` mode; the function goes there too.
+    let store = support::pg::store_pool(pool);
+    sqlx::query(
+        "CREATE OR REPLACE FUNCTION zq_refuse() RETURNS trigger LANGUAGE plpgsql AS \
+         $$ BEGIN RAISE EXCEPTION 'zq-sentinel-7f3a-dberr'; END $$",
+    )
+    .execute(&store)
+    .await
+    .expect("create the trigger function on the store");
     sqlx::query(
         "CREATE TRIGGER zq_refuse_changesets BEFORE INSERT ON catalog.changesets \
          FOR EACH ROW EXECUTE FUNCTION zq_refuse()",
     )
-    .execute(pool)
+    .execute(&store)
     .await
     .expect("create the changeset trigger");
     let failed = http

@@ -1488,7 +1488,7 @@ mod tests {
 
         assert!(matches!(written, Err(OkfError::Refused { reason }) if reason == CATALOG_GONE));
         let left: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.changesets")
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
         assert_eq!(left, 0);
@@ -1558,13 +1558,13 @@ mod tests {
         )
         .bind(catalog_id)
         .bind(now())
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         opened(&db.store(), catalog_id, "alice", now()).await;
         opened(&db.store(), catalog_id, "bob", now()).await;
         sqlx::query("ANALYZE catalog.changesets")
-            .execute(&db.pool)
+            .execute(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
 
@@ -1593,7 +1593,7 @@ mod tests {
         crate::store::drop_check_constraints(&db.pool, "catalog.changesets").await;
         sqlx::query("UPDATE catalog.changesets SET state = 'bogus-state' WHERE id = $1")
             .bind(row.id)
-            .execute(&db.pool)
+            .execute(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
 

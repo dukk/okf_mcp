@@ -21,8 +21,15 @@ const NOTE: &str = "---\ntype: Note\ntitle: Note\n---\nBody.\n";
 /// message, as the store's own writers do.
 async fn relabel(test: &TestApp, statements: &[&'static str]) {
     for statement in statements {
+        // A statement on schema `catalog` runs on the store, a database of
+        // its own in `OKF_TEST_STORE=separate` mode.
+        let pool = if statement.contains(" catalog.") {
+            crate::db::store_pool(test.app.accounts().executor())
+        } else {
+            test.app.accounts().executor().clone()
+        };
         sqlx::query(*statement)
-            .execute(test.app.accounts().executor())
+            .execute(&pool)
             .await
             .expect("relabel");
     }

@@ -1070,7 +1070,7 @@ async fn replacement_contents(test: &TestApp, id: i64) -> (i64, Vec<(String, Vec
     let generation =
         sqlx::query_scalar("SELECT generation FROM catalog.catalog_state WHERE id = $1")
             .bind(id)
-            .fetch_one(test.app.accounts().executor())
+            .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
             .await
             .unwrap();
     let documents = sqlx::query_as(
@@ -1078,7 +1078,7 @@ async fn replacement_contents(test: &TestApp, id: i64) -> (i64, Vec<(String, Vec
          WHERE catalog_id = $1 AND deleted_at IS NULL ORDER BY path",
     )
     .bind(id)
-    .fetch_all(test.app.accounts().executor())
+    .fetch_all(&crate::db::store_pool(test.app.accounts().executor()))
     .await
     .unwrap();
     (generation, documents)
@@ -1198,7 +1198,7 @@ async fn an_old_unlocked_principal_opens_no_changeset_in_the_replacement() {
         "SELECT count(*) FROM catalog.changesets WHERE catalog_id = $1 AND key_id <> 'acme-writer'",
     )
     .bind(replacement)
-    .fetch_one(test.app.accounts().executor())
+    .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
     .await
     .unwrap();
 

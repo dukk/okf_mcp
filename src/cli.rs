@@ -3164,7 +3164,7 @@ mod tests {
         let rows: Vec<(String, String)> = sqlx::query_as(
             "SELECT path, updated_by FROM catalog.documents WHERE deleted_at IS NULL",
         )
-        .fetch_all(&db.pool)
+        .fetch_all(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         assert_eq!(rows, [("index.md".to_string(), "test".to_string())]);
@@ -3222,7 +3222,7 @@ mod tests {
         let rows: Vec<(String, bool)> = sqlx::query_as(
             "SELECT path, executable FROM catalog.documents WHERE deleted_at IS NULL",
         )
-        .fetch_all(&db.pool)
+        .fetch_all(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         assert_eq!(rows, [("tools/run.sh".to_string(), true)]);

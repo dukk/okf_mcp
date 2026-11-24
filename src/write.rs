@@ -528,10 +528,12 @@ mod tests {
 
     /// A `SELECT count(*)` query's answer (sqlx 0.9 takes only literal SQL).
     async fn count(test: &TestApp, sql: &'static str) -> i64 {
-        sqlx::query_scalar(sql)
-            .fetch_one(test.app.accounts().executor())
-            .await
-            .unwrap()
+        let pool = if sql.contains(" catalog.") {
+            crate::db::store_pool(test.app.accounts().executor())
+        } else {
+            test.app.accounts().executor().clone()
+        };
+        sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap()
     }
 
     #[tokio::test(flavor = "multi_thread")]

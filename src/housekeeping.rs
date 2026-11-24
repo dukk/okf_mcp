@@ -1486,13 +1486,15 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(
-            "DELETE FROM catalog.catalog_state WHERE id IN \
-             (SELECT id FROM catalogs WHERE name IN ('lost', 'young'))",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        let gone = [
+            crate::db::catalog_id(&pool, "lost").await,
+            crate::db::catalog_id(&pool, "young").await,
+        ];
+        sqlx::query("DELETE FROM catalog.catalog_state WHERE id = ANY($1)")
+            .bind(&gone[..])
+            .execute(&crate::db::store_pool(&pool))
+            .await
+            .unwrap();
 
         run(Task::ProvisionCatalogs, &test.app).await.unwrap();
 

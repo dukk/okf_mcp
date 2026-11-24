@@ -2717,7 +2717,7 @@ mod tests {
         .bind(terminal.actor)
         .bind(old_changeset.id)
         .bind(now())
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         assert_ne!(first.id, "claude");

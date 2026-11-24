@@ -466,7 +466,7 @@ mod tests {
         sqlx::query_as(
             "SELECT path, revision, deleted_at IS NOT NULL, content FROM catalog.documents ORDER BY path",
         )
-        .fetch_all(pool)
+        .fetch_all(&crate::db::store_pool(pool))
         .await
         .unwrap()
     }
@@ -599,7 +599,7 @@ mod tests {
             "SELECT kind, concept_type, title, tags, updated_at, updated_by FROM catalog.documents \
              WHERE path = 'a.md'",
         )
-        .fetch_one(&db.pool)
+        .fetch_one(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         assert_eq!(
@@ -616,21 +616,21 @@ mod tests {
         let png: (Option<String>, Vec<u8>) = sqlx::query_as(
             "SELECT kind, content FROM catalog.documents WHERE path = 'img/logo.png'",
         )
-        .fetch_one(&db.pool)
+        .fetch_one(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         assert_eq!(png, (None, b"\x89PNG\0\xff".to_vec()));
         let executable: bool = sqlx::query_scalar(
             "SELECT executable FROM catalog.documents WHERE path = 'tools/run.sh'",
         )
-        .fetch_one(&db.pool)
+        .fetch_one(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         assert!(executable);
         let history: Vec<(String, i32, String, String, DateTime<Utc>)> = sqlx::query_as(
             "SELECT path, revision, op, actor, created_at FROM catalog.revisions ORDER BY path",
         )
-        .fetch_all(&db.pool)
+        .fetch_all(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         assert_eq!(history.len(), 4);
@@ -713,7 +713,7 @@ mod tests {
             "SELECT revision, op, content, message, created_at FROM catalog.revisions \
                  WHERE path = 'drop.md' ORDER BY revision",
         )
-        .fetch_all(&db.pool)
+        .fetch_all(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         assert_eq!(
@@ -723,7 +723,7 @@ mod tests {
         let tombstone: (Option<String>, Option<String>, DateTime<Utc>) = sqlx::query_as(
             "SELECT kind, title, deleted_at FROM catalog.documents WHERE path = 'drop.md'",
         )
-        .fetch_one(&db.pool)
+        .fetch_one(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         assert_eq!(tombstone, (None, None, at(3)));
@@ -924,7 +924,7 @@ mod tests {
         .await
         .unwrap();
         // Hold the catalog's lock, as a publish in progress would.
-        let mut holder = db.pool.begin().await.unwrap();
+        let mut holder = db.store().begin().await.unwrap();
         catalogs::lock(&mut holder, catalog.id).await.unwrap();
         let pool = db.pool.clone();
         // Expects generation 1, the one the catalog is at when it starts.
@@ -983,7 +983,7 @@ mod tests {
         );
         let history: Vec<(i32, String)> =
             sqlx::query_as("SELECT revision, actor FROM catalog.revisions ORDER BY revision")
-                .fetch_all(&db.pool)
+                .fetch_all(&crate::db::store_pool(&db.pool))
                 .await
                 .unwrap();
         assert_eq!(
@@ -1021,7 +1021,7 @@ mod tests {
         );
         let history: Vec<(i32, bool)> =
             sqlx::query_as("SELECT revision, executable FROM catalog.revisions ORDER BY revision")
-                .fetch_all(&db.pool)
+                .fetch_all(&crate::db::store_pool(&db.pool))
                 .await
                 .unwrap();
         assert_eq!(history, [(1, false), (2, true)]);
@@ -1084,7 +1084,7 @@ mod tests {
         .await
         .unwrap();
         // Hold the catalog's lock, as a delete in progress would.
-        let mut holder = db.pool.begin().await.unwrap();
+        let mut holder = db.store().begin().await.unwrap();
         catalogs::lock(&mut holder, catalog.id).await.unwrap();
         let pool = db.pool.clone();
         // `tokio::spawn` runs the import concurrently; it blocks on the lock.
@@ -1099,9 +1099,11 @@ mod tests {
         });
         catalogs::tests::until_a_lock_is_awaited(&db.pool).await;
 
+        // The registry row is in the account database, a database of its own
+        // from the store in `OKF_TEST_STORE=separate` mode.
         sqlx::query("DELETE FROM catalogs WHERE id = $1")
             .bind(catalog.id)
-            .execute(&mut *holder)
+            .execute(&db.pool)
             .await
             .unwrap();
         holder.commit().await.unwrap();

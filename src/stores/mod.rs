@@ -314,7 +314,7 @@ impl CatalogDb {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(accounts.options().get_max_connections())
             .after_connect(|connection, _meta| Box::pin(registry::set_search_path(connection)))
-            .connect_lazy_with((*accounts.connect_options()).clone());
+            .connect_lazy_with(crate::db::pg::store_options(accounts));
         Self::new(StoreName::main(), pool, AccountDb::new(accounts.clone()))
     }
 
@@ -421,6 +421,7 @@ mod tests {
     #[tokio::test]
     async fn main_store_and_accounts_reach_the_same_database_in_release_one() {
         let db = crate::db::test_db().await;
+        crate::db::main_in_the_account_database(&db.pool).await;
         let app = crate::app::App::load(
             db.pool.clone(),
             crate::config::Config::default(),
@@ -565,7 +566,7 @@ mod tests {
             .await
             .unwrap_err();
         let qualified: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.documents")
-            .fetch_one(&db.pool)
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
 

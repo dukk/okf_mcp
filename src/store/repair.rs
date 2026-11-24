@@ -383,7 +383,7 @@ mod tests {
             "SELECT content FROM catalog.documents WHERE path = $1 AND deleted_at IS NULL",
         )
         .bind(path)
-        .fetch_optional(pool)
+        .fetch_optional(&crate::db::store_pool(pool))
         .await
         .unwrap()
         .map(|bytes| String::from_utf8(bytes).unwrap())
@@ -444,7 +444,7 @@ mod tests {
              WHERE message = $1 ORDER BY path",
         )
         .bind(REPAIR_MESSAGE)
-        .fetch_all(&db.pool)
+        .fetch_all(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         let row = |path: &str, revision| {
@@ -466,7 +466,7 @@ mod tests {
         );
         let kind: Option<String> =
             sqlx::query_scalar("SELECT kind FROM catalog.documents WHERE path = 'infra/index.md'")
-                .fetch_one(&db.pool)
+                .fetch_one(&crate::db::store_pool(&db.pool))
                 .await
                 .unwrap();
         assert_eq!(kind.as_deref(), Some("index"));
@@ -538,7 +538,7 @@ mod tests {
         assert!(root.contains("* [A](a.md) - A note."), "{root}");
         let revision: i32 =
             sqlx::query_scalar("SELECT revision FROM catalog.documents WHERE path = 'index.md'")
-                .fetch_one(&db.pool)
+                .fetch_one(&crate::db::store_pool(&db.pool))
                 .await
                 .unwrap();
         assert_eq!(revision, 4);
@@ -636,10 +636,11 @@ mod tests {
         let before = missing_root_index(&accounts, &store).await.unwrap();
         // `mid`'s root index is deleted (a tombstone row stays).
         let deleted = sqlx::query(
-            "UPDATE catalog.documents SET deleted_at = now() WHERE path = 'index.md' AND catalog_id = \
-             (SELECT id FROM catalogs WHERE name = 'mid')",
+            "UPDATE catalog.documents SET deleted_at = now() \
+             WHERE path = 'index.md' AND catalog_id = $1",
         )
-        .execute(&db.pool)
+        .bind(crate::db::catalog_id(&db.pool, "mid").await)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap()
         .rows_affected();

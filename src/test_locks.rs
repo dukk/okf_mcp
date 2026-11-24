@@ -100,6 +100,13 @@ pub(crate) async fn wait_row_lock_waiter(
     table: &str,
     limit: Duration,
 ) -> Option<i32> {
+    // A table of schema `catalog` lives in the store's database, which is a
+    // database of its own in `OKF_TEST_STORE=separate` mode.
+    let pool = &if table.starts_with("catalog.") {
+        crate::db::store_pool(pool)
+    } else {
+        pool.clone()
+    };
     tokio::time::timeout(limit, async {
         loop {
             let pid: Option<i32> = sqlx::query_scalar(
