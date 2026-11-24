@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1125,
+  "next_claim_seq": 1131,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "19d1ed8fec3b34e48c486fcc4a3a21dd3a789cdc5702addaf380153d4a25140e"
+    "mac": "3805fb776d92d3b74c915307f0e279d40505fd5337fc02fd5b956dccaf944478"
   },
-  "next_evidence_seq": 1662,
+  "next_evidence_seq": 1668,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "4f851d3e94b1247dc438f307ad672ba5ba5bce130277000633d7c1fb2a751dc7"
+    "mac": "4b994f97c299c0add8cc4675105ceb27a2a1b9aed8b62753ceb9ec5b2d0d059e"
   },
   "claims": [
     {
@@ -91866,6 +91866,384 @@
       "seal": {
         "by": "server",
         "mac": "3f969544c916850048d17618a1e47310aaad6de73c7df5b5b9a4031ced31be74"
+      }
+    },
+    {
+      "id": "CLM-1125",
+      "statement": "justfile `test` recipe runs OKF_TEST_STORE=same cargo test first, then OKF_TEST_STORE=separate cargo test, accumulating exit status.",
+      "kind": "functional",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "source_anchor": {
+        "path": "justfile",
+        "lines": {
+          "start": 23,
+          "end": 24
+        },
+        "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1662",
+          "kind": "inspection",
+          "locator": "justfile:24",
+          "summary": "Recipe runs same then separate, each `|| status=1`, then `exit $status`.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "justfile",
+              "lines": {
+                "start": 23,
+                "end": 24
+              },
+              "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+            }
+          },
+          "recorded_at": "2026-11-24T07:32:15.897898431Z",
+          "seal": {
+            "by": "server",
+            "mac": "06d85e2b0b4cbc7b0c9f68c76bc0653573db79104eaaa09c0b6661a11ef469a7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Recipe text matches.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1662"
+          ],
+          "recorded_at": "2026-11-24T07:32:24.674521336Z",
+          "seal": {
+            "by": "server",
+            "mac": "1655ecb39dbabc8208d6f7160121a754321b7ae17f8701e6b3682ef7d8483717"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T07:32:04.724442008Z",
+      "updated_at": "2026-11-24T07:32:24.674521336Z",
+      "seal": {
+        "by": "server",
+        "mac": "d0f739b763e9cdb524bf12862ee9bcccf9bd9f10a0897c5ed8deaa7c2d10944c"
+      }
+    },
+    {
+      "id": "CLM-1126",
+      "statement": "tests/support/pg.rs keys the SEPARATE_STORES registry by host:port/database via registry_key in register_store, store_options and unregister_store (called from Database::drop); no other harness state is keyed by bare database name.",
+      "kind": "functional",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "source_anchor": {
+        "path": "tests/support/pg.rs",
+        "lines": {
+          "start": 362,
+          "end": 425
+        },
+        "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1663",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:366-420,556",
+          "summary": "register_store inserts, store_options looks up, unregister_store(key) removes, all via registry_key (host:port/db); Database::drop calls unregister_store. Only other statics (SHARED_TEMPLATE, NEXT_START, Once) are not name-keyed maps.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 362,
+                "end": 425
+              },
+              "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+            }
+          },
+          "recorded_at": "2026-11-24T07:32:15.962730313Z",
+          "seal": {
+            "by": "server",
+            "mac": "fb0f57cb7a4ef55815237410e0568f67a66be84d27fb0a197010f6e4786e3ba7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All three operations key via registry_key; drop unregisters; no other name-keyed state found.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1663"
+          ],
+          "recorded_at": "2026-11-24T07:32:24.737478700Z",
+          "seal": {
+            "by": "server",
+            "mac": "5642e4cc058907abd358216ee0f79df62e7875124c5c7fe23623230fb6c30ebd"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T07:32:04.724442008Z",
+      "updated_at": "2026-11-24T07:32:24.737478700Z",
+      "seal": {
+        "by": "server",
+        "mac": "35cac0a15e14cc806962225fb3a2a16474deca6b5069e84e775f012dd2bdcdd1"
+      }
+    },
+    {
+      "id": "CLM-1127",
+      "statement": "Test stores_of_same_named_databases_on_distinct_servers_stay_apart registers two same-named databases on distinct ports and asserts they stay apart after one unregisters, and passes.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "source_anchor": {
+        "path": "tests/test_database.rs",
+        "lines": {
+          "start": 248,
+          "end": 285
+        },
+        "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1664",
+          "kind": "test",
+          "locator": "cargo test --jobs 4 --test test_database stores_of_same",
+          "summary": "Ran it: 1 passed, 0 failed. Test code registers ports 15432/15433 both named postgres, asserts separation and that unregistering first leaves second intact.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/test_database.rs",
+              "lines": {
+                "start": 248,
+                "end": 285
+              },
+              "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+            }
+          },
+          "recorded_at": "2026-11-24T07:32:16.029781866Z",
+          "seal": {
+            "by": "server",
+            "mac": "11543a4506929c7f44c8fff92e7959fddce93ac4a0104b8e8ae0c850d90b9de7"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test exists as described and passed when run.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1664"
+          ],
+          "recorded_at": "2026-11-24T07:32:24.800156833Z",
+          "seal": {
+            "by": "server",
+            "mac": "999e532ea02b89a0c453223882245f96b6f16399ff278796aec1abc992484594"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T07:32:04.724442008Z",
+      "updated_at": "2026-11-24T07:32:24.800156833Z",
+      "seal": {
+        "by": "server",
+        "mac": "79da926a08ea514728ea6ca069eabb50a745787d1a98569043b75ae8a0789ee6"
+      }
+    },
+    {
+      "id": "CLM-1128",
+      "statement": "In separate mode the account database's catalog schema is dropped (drop_account_catalog) for both the template build and the own-container path, and template_name includes the mode.",
+      "kind": "functional",
+      "level": "component",
+      "verification_method": "inspection",
+      "source_anchor": {
+        "path": "tests/support/pg.rs",
+        "lines": {
+          "start": 155,
+          "end": 165
+        },
+        "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1665",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:155,295-297,754,657-665",
+          "summary": "drop_account_catalog is a no-op unless Separate; called after migrate_in_place in the own-container branch (295-297) and in template build (754); template_name hashes a mode byte.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 155,
+                "end": 165
+              },
+              "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+            }
+          },
+          "recorded_at": "2026-11-24T07:32:16.100044453Z",
+          "seal": {
+            "by": "server",
+            "mac": "ebe7ac8c4690e8126cf698112badcb6a597094082a48106044e7f8933ffdd325"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both paths call drop_account_catalog; mode is in template hash.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1665"
+          ],
+          "recorded_at": "2026-11-24T07:32:24.864173832Z",
+          "seal": {
+            "by": "server",
+            "mac": "b118b9c1cd64ece9598d56fcfeb7881aa15a22a992c7d8cdc65ebb64b36c6809"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T07:32:04.724442008Z",
+      "updated_at": "2026-11-24T07:32:24.864173832Z",
+      "seal": {
+        "by": "server",
+        "mac": "3ec3a62b64f425dea34537a837b810228b2b97308218fdaa2cf5aca23dff8823"
+      }
+    },
+    {
+      "id": "CLM-1129",
+      "statement": "TestDb::start_account_layout keeps the catalog schema, and six tests (five in src/db.rs, one in src/cli/stores.rs) use it.",
+      "kind": "functional",
+      "level": "component",
+      "verification_method": "inspection",
+      "source_anchor": {
+        "path": "tests/support/pg.rs",
+        "lines": {
+          "start": 254,
+          "end": 258
+        },
+        "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1666",
+          "kind": "inspection",
+          "locator": "tests/support/pg.rs:254; src/db.rs:541,1754,2031,2438,2490,2720; src/cli/stores.rs:275",
+          "summary": "start_account_layout = create(false) + migrate_in_place, no drop. Five db.rs tests use it (four via test_db_account_layout, no_foreign_key_crosses directly) and the stores.rs test uses test_db_account_layout.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 254,
+                "end": 258
+              },
+              "commit": "bda8b9fef67ba0ae49b112c5e31e632f3f77b57d"
+            }
+          },
+          "recorded_at": "2026-11-24T07:32:16.165673358Z",
+          "seal": {
+            "by": "server",
+            "mac": "8172d3e71ad9062dc3bd51160e1d86539db4460ac4ae914f58b6f1736f0b1201"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "No drop in start_account_layout; six named tests use it directly or via helper.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1666"
+          ],
+          "recorded_at": "2026-11-24T07:32:24.926868104Z",
+          "seal": {
+            "by": "server",
+            "mac": "027e046a016ea15cc783f58ea022893ce9e8590c3fb175186125d2cee67d88c4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T07:32:04.724442008Z",
+      "updated_at": "2026-11-24T07:32:24.926868104Z",
+      "seal": {
+        "by": "server",
+        "mac": "b6f6d59bdbb724370f726e87ccd7863bfeecffd7e6cfd8ed756a2d2d9d17d6a6"
+      }
+    },
+    {
+      "id": "CLM-1130",
+      "statement": "The final gate.sh test run (gate3-test.log) passed in both store modes with 0 failures.",
+      "kind": "functional",
+      "level": "system",
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1667",
+          "kind": "log",
+          "locator": "target/i974-logs/gate3-test.log, gate3-test.rc",
+          "summary": "rc file is 0; all 56 'test result' lines are ok with 0 failed, summing 7068 passed and 42 ignored; two sets of lib/bin/doc-test runs (lines 126 and 3850) show both modes ran; no FAILED lines.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T07:32:16.228060860Z",
+          "seal": {
+            "by": "server",
+            "mac": "27be8344d63db3d94beacda226f47598d761cd7e5cf02b8025bc4ec330cf1d51"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Log and rc show a green run with two mode passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1667"
+          ],
+          "recorded_at": "2026-11-24T07:32:24.989241476Z",
+          "seal": {
+            "by": "server",
+            "mac": "3478b8da625411eb3b154cffa1e5fec0e65c132d34c84a710f32812ae69532fc"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T07:32:04.724442008Z",
+      "updated_at": "2026-11-24T07:32:24.989241476Z",
+      "seal": {
+        "by": "server",
+        "mac": "7fb33d5d269de961ad187a821a7ee8fb8f962c47411f019b68c51ccd8fb533b9"
       }
     }
   ]
