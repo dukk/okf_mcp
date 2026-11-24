@@ -1900,6 +1900,13 @@ If the store's commit fails after the account's, the catalog is gone from
 every lookup and its data stays unmarked until the cleanup removes it all the
 same.
 
+Each attempt is bounded: one row on one store may take at most 30 seconds
+(`ATTEMPT_TIMEOUT`, a constant, not a setting), and its transactions set
+`lock_timeout` and `statement_timeout` to 20 seconds. A row held under a lock
+(a changeset another session has `FOR UPDATE`) or a store that has stalled
+is abandoned, rolled back and counted as a failed try like any other, and
+the run goes on to the next row and store.
+
 ### Deletion rules
 
 Deleting a user takes everything that is only theirs, in one transaction:

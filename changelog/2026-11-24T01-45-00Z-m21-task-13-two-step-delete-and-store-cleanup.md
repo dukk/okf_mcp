@@ -78,10 +78,20 @@ made at least one named test fail:
 | `open_changeset` drops `FOR KEY SHARE` | `a_changeset_opened_while_its_key_is_deleted_is_refused_and_leaves_nothing` |
 | A failed try does not count an attempt | `cleanup_retries_an_unreachable_store_without_blocking_others` |
 | `rows_by_names` loses `deleted_at IS NULL` | `a_deleted_catalog_resolves_to_nothing_before_its_cleanup` |
-| Key cleanup does not clear the key id | `a_key_cleanup_clears_the_key_from_the_stores_history` (it loops until the run is killed) |
+| Key cleanup does not clear the key id | `a_key_cleanup_keeps_the_stores_history_and_clears_the_key_from_it` (the maintenance run still names the key) |
+| No attempt timeout and no `lock_timeout` | `a_cleanup_attempt_stuck_on_a_lock_fails_without_holding_up_another_store` (the bounded run does not return; the test's own 60 s limit fails it) |
 
 Not mutation-checked: `catalog_audit_survives_catalog_deletion` (the
 table's append-only guard also refuses a delete, so the test checks the
 outcome, not which of the two held), the admin-race test (a guard on the lock
 order), the starvation test (added after the run), and the directory test's
 other paths.
+
+## Review round 1
+
+- Each cleanup attempt is bounded (`ATTEMPT_TIMEOUT` of 30 s, plus
+  `lock_timeout` and `statement_timeout` of 20 s inside its transactions); a
+  timeout counts as a failed try and the run continues. Documented in
+  `docs/operations.md`.
+- The key cleanup history test now seeds a published changeset and a
+  maintenance run; the open-changeset discard is its own test.
