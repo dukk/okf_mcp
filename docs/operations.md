@@ -454,7 +454,9 @@ catalog. Create the database and its login role first; the server creates the
 3. refuses a database that holds the account tables (the account database
    under another host name) or whose `catalog.store_identity` names another
    registered store (an identity naming a store with no row is left by an
-   add that failed after step 4 and is replaced, so a retry works): each physical database answers to one store name, whatever host
+   add that failed after step 4 and is replaced, so a retry works; adds of
+   one physical database take turns, whatever host name or store name they
+   use): each physical database answers to one store name, whatever host
    name reached it, so adding the same database twice under two names is
    refused;
 4. migrates it (`migrations/catalog/`: the baseline, then the identity row)

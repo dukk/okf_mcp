@@ -85,6 +85,12 @@ const CONCURRENT_INDEXES: [&str; 6] = [
 /// migrations (an arbitrary constant, distinct from sqlx's own lock key).
 const CONCURRENT_INDEX_LOCK: i64 = 0x6f6b_665f_6964_7831;
 
+/// The advisory lock, taken inside a new store's own database, that orders the
+/// adds that reach one physical database (under any host spelling or name):
+/// it is held from the ownership decision through the account registration.
+/// Advisory locks are per database, so every add of that database meets it.
+pub const STORE_ADD_LOCK_KEY: &str = "okf.store-add.database";
+
 /// Drops each of [`CONCURRENT_INDEXES`] that exists but is INVALID (a
 /// failed concurrent build), so its migration builds it again.
 ///
