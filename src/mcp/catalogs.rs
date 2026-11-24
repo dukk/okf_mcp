@@ -135,7 +135,7 @@ pub(crate) async fn list(ctx: &ToolContext, after: Option<&str>) -> Result<Catal
         }
         // A listing's snapshot fields; a catalog whose data does not build
         // is left out of its page.
-        let state = match ctx.app().listed_state(row).await {
+        let state = match ctx.listed_state(row).await {
             Ok(Some(state)) => state,
             Ok(None) => continue,
             // The store went away since the page was read.

@@ -399,3 +399,45 @@ async fn a_store_whose_query_stalls_is_unavailable_within_the_bound() {
     assert_eq!(result.hits.len(), 1);
     lock.rollback().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn list_catalogs_spends_one_bound_on_a_store_that_fails_at_the_state_load() {
+    let connect = Duration::from_millis(300);
+    let test = app_with(
+        &[("home", &[("note.md", HOME_NOTE)])],
+        Config {
+            store_connect_timeout: connect,
+            ..Config::default()
+        },
+    )
+    .await;
+    let store = test
+        .catalog_on_new_store("store-b", "remote-1", &[("note.md", REMOTE_NOTE)])
+        .await;
+    test.catalog_on_store(&store, "remote-2", &[("note.md", REMOTE_NOTE)])
+        .await;
+    // The store answers the directory's probe but its documents are locked:
+    // each catalog's state load would stall for the whole load bound.
+    let db = test.app.stores().get(&store).await.unwrap();
+    let mut lock = db.executor().begin().await.unwrap();
+    sqlx::query("LOCK TABLE documents IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let ctx = context(&test, principal(&[], None), None);
+    let load_bound = test.app.stores().state_load_timeout();
+    let started = std::time::Instant::now();
+
+    let listed = bounded(crate::mcp::catalogs::list(&ctx, None))
+        .await
+        .unwrap();
+
+    assert_eq!(listed.unavailable, ["remote-1", "remote-2"]);
+    // One stalled load, not one per catalog on the store.
+    assert!(
+        started.elapsed() < load_bound * 3 / 2,
+        "took {:?} for a load bound of {load_bound:?}",
+        started.elapsed()
+    );
+    lock.rollback().await.unwrap();
+}

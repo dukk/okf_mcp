@@ -98,6 +98,36 @@ impl TestApp {
         )
         .await
         .expect("place the team on the store");
+        self.catalog_on_store(&store, name, entries).await;
+        store
+    }
+
+    /// Creates catalog `name` on `store` (registered by
+    /// [`TestApp::catalog_on_new_store`]) and imports `entries` into it.
+    ///
+    /// # Arguments
+    /// * `store` - the store.
+    /// * `name` - the catalog's name.
+    /// * `entries` - `(path, content)` pairs.
+    ///
+    /// # Panics
+    /// If the database or the import fails: a broken test setup.
+    pub(crate) async fn catalog_on_store(
+        &self,
+        store: &crate::stores::StoreName,
+        name: &str,
+        entries: &[(&str, &str)],
+    ) {
+        let pool = self.app.accounts().executor();
+        crate::store::teams::set_store(
+            pool,
+            crate::db::TEST_TEAM,
+            Some(store),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("place the team on the store");
         let new = catalogs::NewCatalog {
             name,
             display_name: &crate::labels::DisplayName::default(),
@@ -126,14 +156,13 @@ impl TestApp {
             now: Utc::now(),
         };
         import(
-            &self.app.stores().get(&store).await.expect("open the store"),
+            &self.app.stores().get(store).await.expect("open the store"),
             name,
             files(entries),
             &options,
         )
         .await
         .expect("import the files");
-        store
     }
 
     /// Makes `store` really unreachable: its row now points at a port nothing
