@@ -437,7 +437,7 @@ async fn summary(
 /// key still exists, else NULL (the credential id and actor are recorded
 /// either way). The key's row is on the account database, so no statement
 /// names both sides (plan decision P1, issue #963). It is read `FOR KEY SHARE`
-/// in the account transaction that [`AuditTarget::read`] opens BEFORE the
+/// in the account transaction that `AuditTarget::read` opens BEFORE the
 /// store's connection (`CatalogDb::begin`'s order), and that transaction
 /// lasts until after the store commits: the deletion of the key (a user's),
 /// which locks the row `FOR UPDATE`, waits for the claim, and the cleanup it
