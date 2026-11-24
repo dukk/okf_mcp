@@ -38,3 +38,19 @@ Issue #974, Task 15 of `docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores
   a cross-database join or subselect, a lock-wait on the account database's name, or a registry whose
   environment lacked the store credential). None was a production bug.
 - `tests/scale.rs` (ignored) was changed to seed documents through the store; it was not run.
+
+## Review round 1 (PR #1008)
+
+- `just test` sets `OKF_TEST_STORE=same` on its first run, so a caller's exported `separate` cannot make it run
+  one mode twice.
+- The registry of second databases is keyed by host, port and database (`registry_key`), for insertion
+  (`register_store`), lookup (`store_options`) and removal (`unregister_store`): every per-test container names
+  its account database `postgres`. `stores_of_same_named_databases_on_distinct_servers_stay_apart` holds two live
+  same-named databases on distinct servers. No other harness state is keyed by database name.
+- In `separate` mode the account database's schema `catalog` is dropped after the account template is built
+  (`drop_account_catalog`; the template name carries the mode), so a statement sent to the account pool instead
+  of the store's fails with a missing relation instead of reading an empty table. Production keeps the schema in
+  the account database until release 3's migration removes it, but no production path reads it once `main` is
+  separated, so no production code path was exposed. Six tests that check what the account migrations build, or
+  the store `main` being the account database, use `TestDb::start_account_layout` (`test_db_account_layout` in
+  the lib), which keeps the schema in both modes.
