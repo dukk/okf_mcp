@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1217,
+  "next_claim_seq": 1221,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "daff91ac86f324f038afc77936591accd21d2862792cddb00e791961dc0c5fe6"
+    "mac": "3357bc734b401c3445e2a00acc669d18f3610483dc310a1b1e60e6bf52252e59"
   },
-  "next_evidence_seq": 1809,
+  "next_evidence_seq": 1815,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "a7bda9d18458d0661dfef7eb0bac5283c35cb50485776cfd0b416c8ac5bffce1"
+    "mac": "74717ddc72924201bb8786eef8f619f6d2c0a768bee56eebc36e89c33e90bd4b"
   },
   "claims": [
     {
@@ -98454,6 +98454,29 @@
             "by": "server",
             "mac": "2054c20cc66da29d594159532f58913e7f6b42f380b4e0280cbd20a0e9f9fd6a"
           }
+        },
+        {
+          "id": "EVD-1813",
+          "kind": "inspection",
+          "locator": "src/http/api/catalogs.rs:257-290 (git diff HEAD)",
+          "summary": "Re-check: the uncommitted change extends the per-call down set to the HTTP listing (ctx.mark_down on page-down rows, ctx.listed_state for loads); MCP paths (context.rs, mcp/catalogs.rs) are unchanged by the diff, so earlier supporting evidence still holds. Listing route test and list_catalogs_spends_one_bound test pass in r2-narrow.log.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/catalogs.rs",
+              "lines": {
+                "start": 257,
+                "end": 292
+              },
+              "commit": "74a89d6cac50be706054e82b812b130c61aed550",
+              "dirty": true
+            }
+          },
+          "recorded_at": "2026-11-24T15:54:30.811567346Z",
+          "seal": {
+            "by": "server",
+            "mac": "15fce6b65807ddf36e2f498211bf532980fd352c1d9c84eb591b47017cae6d0b"
+          }
         }
       ],
       "verdicts": [
@@ -98497,13 +98520,26 @@
             "by": "server",
             "mac": "f2ee4f2404165e65d382dd40c3acd4b9f80ca6e2c5052dd5abb7b24791b18d4e"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-check: changes extend the down set to the HTTP route; MCP paths unchanged; relevant tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1813"
+          ],
+          "recorded_at": "2026-11-24T15:54:39.230374208Z",
+          "seal": {
+            "by": "server",
+            "mac": "9d813055cae8e1549acae3c268523973ac818d5b2fc15b722d62d7d6ec216652"
+          }
         }
       ],
       "created_at": "2026-11-24T14:28:46.499664433Z",
-      "updated_at": "2026-11-24T15:13:31.703003287Z",
+      "updated_at": "2026-11-24T15:54:39.230374208Z",
       "seal": {
         "by": "server",
-        "mac": "29bc2613681cf94bef66b45fe148e318f20e3f479829fe3770092d4670ce5fd9"
+        "mac": "da98347603fc1cdb5cd1010cadc68b6d39959c3140074564d65e0beb91b94958"
       }
     },
     {
@@ -99193,6 +99229,29 @@
             "by": "server",
             "mac": "2e3d5133e8b3457894e88a09b150bb554969a44a6678f645b7f3d7943e19a39d"
           }
+        },
+        {
+          "id": "EVD-1814",
+          "kind": "test",
+          "locator": "src/cache/catalogs.rs:456-471; a_store_whose_query_stalls_is_unavailable_within_the_bound in r2-narrow.log",
+          "summary": "Re-check: within_store_bound is unchanged in behaviour (diff only rewraps the map_err line); timeout maps to store_unavailable. The refresh StoreUnavailable arm now also propagates it. Stall test still passes in r2-narrow.log (16 passed), as does the refresh stall test.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/catalogs.rs",
+              "lines": {
+                "start": 456,
+                "end": 471
+              },
+              "commit": "74a89d6cac50be706054e82b812b130c61aed550",
+              "dirty": true
+            }
+          },
+          "recorded_at": "2026-11-24T15:54:30.913925710Z",
+          "seal": {
+            "by": "server",
+            "mac": "a1448409e8d425462ebc70a2d4e7218737234e81d4b009cbe3c11436c702fdb4"
+          }
         }
       ],
       "verdicts": [
@@ -99209,13 +99268,26 @@
             "by": "server",
             "mac": "1b7c29c06e42fa0beb02f4c65f547c7af72937d65c0c7fba1fa8e06e989f3277"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-check: bound logic unchanged (formatting only); stall tests still pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1814"
+          ],
+          "recorded_at": "2026-11-24T15:54:39.304664111Z",
+          "seal": {
+            "by": "server",
+            "mac": "3c889f4c95ce8d1549fecf8416039f80a12ee3279fa2fe81069fff306ff95bf1"
+          }
         }
       ],
       "created_at": "2026-11-24T15:05:43.151903466Z",
-      "updated_at": "2026-11-24T15:07:48.948610809Z",
+      "updated_at": "2026-11-24T15:54:39.304664111Z",
       "seal": {
         "by": "server",
-        "mac": "1a8edc69a6586fbdce7b458f10bb31940b58b3189f85a96ba35f0e44c3ac4f10"
+        "mac": "86cd994fb442514d1383681058d25f29cf339674152e04f24bd81ce2d3647083"
       }
     },
     {
@@ -99514,6 +99586,242 @@
       "seal": {
         "by": "server",
         "mac": "2465bcbe2bf1bd309eb9c10c2dacdea2be762f6d90e96b039d2702e7639235d0"
+      }
+    },
+    {
+      "id": "CLM-1217",
+      "statement": "A resident catalog whose refresh ends as `StoreUnavailable` (store outage or stalled rebuild) is not served from its stale snapshot: `CatalogCache::get` (src/cache/catalogs.rs) returns the StoreUnavailable error, so a search names the catalog in `unavailable` and a first-match read fails; other refresh failures still fall back to the stale state (test `a_refresh_that_stalls_is_unavailable_not_a_stale_snapshot`).",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1809",
+          "kind": "test",
+          "locator": "src/cache/catalogs.rs:291-298; src/mcp/unavailable_tests.rs a_refresh_that_stalls_is_unavailable_not_a_stale_snapshot; target/i977-logs/r2-narrow.log; r2-revert_src_cache_catalogs.rs.log",
+          "summary": "CatalogCache::get has an arm `Err(error @ StoreUnavailable) => return Err(error)` before the generic refresh_failed fallback. Test loads a state, bumps generation, locks documents, then asserts search unavailable==[\"remote\"], 1 hit, and get_concept is StoreUnavailable. Passes in r2-narrow.log (16 passed); with catalogs.rs reverted it fails at the assertion (r2-revert log).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/catalogs.rs",
+              "lines": {
+                "start": 285,
+                "end": 300
+              },
+              "commit": "74a89d6cac50be706054e82b812b130c61aed550",
+              "dirty": true
+            }
+          },
+          "recorded_at": "2026-11-24T15:54:30.434222737Z",
+          "seal": {
+            "by": "server",
+            "mac": "7f32362a5900e7ab0743d6a661acd294d1af14391165c39462b028396cf21f64"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code arm returns StoreUnavailable on refresh; test passes on head and fails when reverted.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1809"
+          ],
+          "recorded_at": "2026-11-24T15:54:38.926151797Z",
+          "seal": {
+            "by": "server",
+            "mac": "d9b1f19a680978dc613bb6ed6f9cc3fb2a5899318e3660dcd39a84f93cf430b5"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T15:47:36.168875358Z",
+      "updated_at": "2026-11-24T15:54:38.926151797Z",
+      "seal": {
+        "by": "server",
+        "mac": "11a192359af47df528ab8cebfab6af11a2c8875bbedc9e4e2ec7ac69a0b2e8d0"
+      }
+    },
+    {
+      "id": "CLM-1218",
+      "statement": "`Bounded::get_or_load` (src/cache/bounded.rs) gives callers that shared a failed load `OkfError::StoreUnavailable` when the leader's failure was StoreUnavailable, and `OkfError::Busy` for any other failure, so concurrent searches on an uncached directory row of a lost store, and on a cached row with a stalled state load, all return partial results (tests `concurrent_searches_on_an_uncached_row_of_a_stalled_store_both_get_partial_results` and `concurrent_searches_on_a_cached_row_with_a_stalled_state_both_get_partial_results`).",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1810",
+          "kind": "test",
+          "locator": "src/cache/bounded.rs:156-165,893-931; unavailable_tests.rs two concurrent_searches_* tests; r2-narrow.log; r2-revert_src_cache_bounded.rs.log",
+          "summary": "Load::Failed carries outage: Some(store) when leader error is StoreUnavailable; sharing callers get StoreUnavailable, else Busy. Both concurrent-search tests assert both searches Ok with unavailable==[\"remote\"] and 1 hit; pass on head; with bounded.rs reverted both fail with Busy \"a load this request shared failed\".",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/bounded.rs",
+              "lines": {
+                "start": 890,
+                "end": 932
+              },
+              "commit": "74a89d6cac50be706054e82b812b130c61aed550",
+              "dirty": true
+            }
+          },
+          "recorded_at": "2026-11-24T15:54:30.541693503Z",
+          "seal": {
+            "by": "server",
+            "mac": "2af9c37ea79dde10c474cc76431d20dd61e0c1a93ce75332af24fc1123acfc18"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code maps outage to StoreUnavailable, else Busy; both tests pass on head and fail with Busy when reverted.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1810"
+          ],
+          "recorded_at": "2026-11-24T15:54:39.002395088Z",
+          "seal": {
+            "by": "server",
+            "mac": "92c2ec36a9216eb13a4fb3849f751635dbfbf44951005ebd53749f77b6660b2a"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T15:47:36.168875358Z",
+      "updated_at": "2026-11-24T15:54:39.002395088Z",
+      "seal": {
+        "by": "server",
+        "mac": "f9f01fd4ba0fd4ef25785eb56f3f879d87c44a1c06fb90945fe0fd84e77095f5"
+      }
+    },
+    {
+      "id": "CLM-1219",
+      "statement": "`GET /api/v1/catalogs` (`list_catalogs` in src/http/api/catalogs.rs) loads states through a per-request `ToolContext` and marks a failed store down, so catalogs sharing a store whose state load stalls cost one `state_load_timeout`, and all are named in `unavailable` (test `the_catalog_listing_route_spends_one_load_bound_on_a_store_that_stalls`).",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1811",
+          "kind": "test",
+          "locator": "src/http/api/catalogs.rs:257-290; unavailable_tests.rs the_catalog_listing_route_spends_one_load_bound_on_a_store_that_stalls; r2-narrow.log; r2-revert_src_http_api_catalogs.rs.log",
+          "summary": "list_catalogs builds a per-request ctx via context(), loads rows with ctx.listed_state and calls ctx.mark_down on failure. Test: two catalogs on one store with documents locked, GET /api/v1/catalogs returns 200, unavailable==[remote-1, remote-2], elapsed < 1.5x state_load_timeout. Passes on head; fails at the assertion with the route reverted.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/catalogs.rs",
+              "lines": {
+                "start": 257,
+                "end": 292
+              },
+              "commit": "74a89d6cac50be706054e82b812b130c61aed550",
+              "dirty": true
+            }
+          },
+          "recorded_at": "2026-11-24T15:54:30.633232991Z",
+          "seal": {
+            "by": "server",
+            "mac": "79d5b390d7f1b8f8b265d768c1a7fb7ebae15b5b76bf6e1d0bd848669f3e7c24"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Route uses per-request ctx and marks failures down; timing/unavailable test passes on head, fails reverted.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1811"
+          ],
+          "recorded_at": "2026-11-24T15:54:39.072811744Z",
+          "seal": {
+            "by": "server",
+            "mac": "d826df529bbc7b376a1718ac7f9438ca41d4edd014b1a0d6a1072d1a941070b8"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T15:47:36.168875358Z",
+      "updated_at": "2026-11-24T15:54:39.072811744Z",
+      "seal": {
+        "by": "server",
+        "mac": "28fef560ec98794803657330023fadd17df12a3bef55b48341a83a0187f0c4b9"
+      }
+    },
+    {
+      "id": "CLM-1220",
+      "statement": "The changelog entry and the plan's Task 18 correction note carry a 'Review round 2' item that describes the three round-2 behaviours (refresh outage propagates, followers keep StoreUnavailable, HTTP listing per-request down set) accurately.",
+      "kind": "documentation",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1812",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T13-38-53Z-m21-task-18-reads-across-stores.md:20; docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:657",
+          "summary": "Both files add a 'Review round 2' item stating: refresh ending StoreUnavailable propagates instead of stale snapshot (other failures still stale); shared-load callers get StoreUnavailable when leader's was one, Busy otherwise; GET /api/v1/catalogs uses a per-request down set so a failing store costs one bound. Each matches the diffs read in catalogs.rs, bounded.rs and http/api/catalogs.rs. Changelog also says 'Four regression tests'; I count four new tests (refresh, two concurrent, listing route).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-24T13-38-53Z-m21-task-18-reads-across-stores.md",
+              "lines": {
+                "start": 18,
+                "end": 21
+              },
+              "commit": "74a89d6cac50be706054e82b812b130c61aed550",
+              "dirty": true
+            }
+          },
+          "recorded_at": "2026-11-24T15:54:30.721862936Z",
+          "seal": {
+            "by": "server",
+            "mac": "e7214a0d5b933150e1156616479017128227f6a79147cb1f36b4411a6f1b1daf"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both docs' Review round 2 items describe the three behaviours as the diffs implement them.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1812"
+          ],
+          "recorded_at": "2026-11-24T15:54:39.153678945Z",
+          "seal": {
+            "by": "server",
+            "mac": "660534c09a40895fbe4ab7b9397c6ab47d2b0346412b0412405361c81397d2ba"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T15:47:36.168875358Z",
+      "updated_at": "2026-11-24T15:54:39.153678945Z",
+      "seal": {
+        "by": "server",
+        "mac": "8f5af1ca0f0073d285129f27d5b288dc88995c329abf7385f1f66cfa148a2fff"
       }
     }
   ]
