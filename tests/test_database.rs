@@ -1,7 +1,8 @@
 //! Tests of the test-database helper itself (`tests/support/pg.rs`): the
 //! migrated template is built once however many processes race for it, a
-//! half-built one is rebuilt, a killed run's databases are dropped by a later
-//! one, and a dropped `TestDb` drops its database.
+//! half-built one is rebuilt (also one killed between its two marks), a
+//! killed run's databases are dropped by a later one, and a dropped `TestDb`
+//! drops its database.
 //!
 //! Each test works on the shared server when `TEST_PG_URL` names one (as
 //! `just test` does), else on a container of its own.
@@ -33,13 +34,22 @@ async fn database_exists(server_url: &str, name: &str) -> bool {
     found.is_some()
 }
 
-/// Drops the template `name` (a template must be unmarked first).
+/// Drops the template `name` and its store template.
 async fn drop_template(server_url: &str, name: &str) {
+    pg::drop_template(server_url, name).await.unwrap();
+}
+
+/// Whether `name` exists on `server_url` marked a template.
+async fn is_template(server_url: &str, name: &str) -> bool {
     let mut admin = pg::connect_admin(server_url).await.unwrap();
-    let statement = format!("ALTER DATABASE {} IS_TEMPLATE false", pg::quoted(name));
-    pg::execute_ddl(&mut admin, statement).await.unwrap();
+    let marked: Option<bool> =
+        sqlx::query_scalar("SELECT datistemplate FROM pg_database WHERE datname = $1")
+            .bind(name)
+            .fetch_optional(&mut admin)
+            .await
+            .unwrap();
     admin.close().await.unwrap();
-    pg::drop_database(server_url, name).await.unwrap();
+    marked == Some(true)
 }
 
 /// A template name of this test's own, so the race really builds one.
@@ -154,6 +164,35 @@ async fn a_half_built_template_is_dropped_and_rebuilt() {
     let applied = migrations_in_a_copy_of(&server_url, &template).await;
     assert_eq!(applied, pg::migration_count() as i64);
     drop_template(&server_url, &template).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_build_killed_between_the_two_marks_is_rebuilt() {
+    // Arrange: the store template complete and marked, the account template
+    // created but unmarked, as a builder killed between the two marks
+    // leaves them. PostgreSQL refuses to drop the marked one as it is.
+    let (server_url, _container) = pg::server().await;
+    let template = own_template_name("marks");
+    let store = format!("{template}_store");
+    for name in [&template, &store] {
+        pg::create_database(&server_url, name, None).await.unwrap();
+    }
+    let mut admin = pg::connect_admin(&server_url).await.unwrap();
+    let statement = format!("ALTER DATABASE {} IS_TEMPLATE true", pg::quoted(&store));
+    pg::execute_ddl(&mut admin, statement).await.unwrap();
+    admin.close().await.unwrap();
+
+    // Act
+    let built = pg::ensure_template(&server_url, &template).await.unwrap();
+
+    // Assert: rebuilt, both marked, and a copy fully migrated.
+    assert!(built);
+    assert!(is_template(&server_url, &template).await);
+    assert!(is_template(&server_url, &store).await);
+    let applied = migrations_in_a_copy_of(&server_url, &template).await;
+    assert_eq!(applied, pg::migration_count() as i64);
+    drop_template(&server_url, &template).await;
+    assert!(!database_exists(&server_url, &store).await);
 }
 
 #[tokio::test(flavor = "multi_thread")]

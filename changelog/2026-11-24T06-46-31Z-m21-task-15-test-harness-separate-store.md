@@ -68,3 +68,16 @@ Issue #974, Task 15 of `docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores
 - The password of `OKF_TEST_STORE_PASSWORD` comes from `server_password`, which parses the server URL and
   percent-decodes the userinfo (`p%40ss` is `p@ss`), as the connection does. `the_server_password_is_percent_decoded`
   covers it. `percent-encoding` is a dev-dependency.
+
+## Review round 3 (PR #1008)
+
+- A template build killed between its two `IS_TEMPLATE` marks (the store template `{name}_store` marked, the
+  account template not) is now rebuilt. Every drop in the build and its recovery goes through one helper,
+  `drop_template_on`, which unmarks a marked database before dropping it: PostgreSQL refuses to drop a database
+  whose `IS_TEMPLATE` is true. The order stays store first, account last; the account mark is the commit point
+  `ensure_template` checks, and the doc comments say so.
+- `pg::drop_template` drops a template and its store template (account first, so a drop stopped halfway is one
+  the next build recovers from). `tests/test_database.rs` cleans up through it, so its tests no longer leave a
+  marked `{name}_store` database behind.
+- `a_build_killed_between_the_two_marks_is_rebuilt` creates an unmarked account template and a marked store
+  template, then checks that `ensure_template` rebuilds, marks both and serves fully migrated copies.

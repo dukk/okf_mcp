@@ -703,7 +703,10 @@ pub fn migration_count() -> usize {
 /// The check and the build run under a session advisory lock, so of several
 /// processes racing, one builds and the rest wait, then find it complete. A
 /// template is marked complete (`IS_TEMPLATE`) only once migrated, so one
-/// whose builder was killed is dropped and built again.
+/// whose builder was killed is dropped and built again. Its store template
+/// (`{name}_store`) is marked first and the account template last: the
+/// account mark is the commit point, and a builder killed between the two
+/// leaves a marked store template, which the rebuild unmarks and drops.
 ///
 /// # Arguments
 /// * `server_url` - the server, with no database name.
@@ -729,7 +732,7 @@ pub async fn ensure_template(server_url: &str, name: &str) -> Result<bool, sqlx:
     let built = match complete {
         Some(true) => false,
         Some(false) => {
-            drop_database_on(&mut admin, name).await?;
+            drop_template_on(&mut admin, name).await?;
             build_template(&mut admin, server_url, name).await?;
             true
         }
@@ -754,7 +757,7 @@ async fn build_template(
     // second database of `OKF_TEST_STORE=separate`) is complete before the
     // account template is, so a complete account template has its store one.
     let store_name = format!("{name}_store");
-    drop_database_on(admin, &store_name).await?;
+    drop_template_on(admin, &store_name).await?;
     execute_ddl(admin, format!("CREATE DATABASE {}", quoted(&store_name))).await?;
     let mut store = PgConnection::connect(&format!("{server_url}/{store_name}")).await?;
     build_store_schema(&mut store).await?;
@@ -767,8 +770,10 @@ async fn build_template(
     apalis_migrator().run(&mut template).await?;
     // A copy needs the template to have no connections.
     template.close().await?;
-    // Marked only now, and the store's first, so a builder killed halfway
-    // leaves nothing the next one cannot drop.
+    // Marked only now: the store first, the account last. The account mark
+    // is the commit point ([`ensure_template`] trusts nothing else), so a
+    // builder killed between the two leaves an unmarked account template and
+    // a marked store one, and the next build unmarks the store's to drop it.
     for database in [&store_name, name] {
         execute_ddl(
             admin,
@@ -870,6 +875,41 @@ pub async fn drop_database(server_url: &str, name: &str) -> Result<(), sqlx::Err
     let mut admin = connect_admin(server_url).await?;
     drop_database_on(&mut admin, name).await?;
     admin.close().await
+}
+
+/// Drops the template `name` and its store template (`{name}_store`) on
+/// `server_url`, unmarking each first; either already gone is fine.
+///
+/// The account template goes first, as its mark is the commit point
+/// [`ensure_template`] checks: stopped halfway, this leaves a state the next
+/// build recovers from.
+///
+/// # Errors
+/// If the server is unreachable or a statement fails.
+pub async fn drop_template(server_url: &str, name: &str) -> Result<(), sqlx::Error> {
+    let mut admin = connect_admin(server_url).await?;
+    drop_template_on(&mut admin, name).await?;
+    drop_template_on(&mut admin, &format!("{name}_store")).await?;
+    admin.close().await
+}
+
+/// As [`drop_database_on`], but first unmarks `name` if it is a template:
+/// PostgreSQL refuses to drop a database whose `IS_TEMPLATE` is true. Every
+/// drop in the template build and its recovery goes through here.
+///
+/// # Errors
+/// If a statement fails.
+async fn drop_template_on(admin: &mut PgConnection, name: &str) -> Result<(), sqlx::Error> {
+    let marked: Option<bool> =
+        sqlx::query_scalar("SELECT datistemplate FROM pg_database WHERE datname = $1")
+            .bind(name)
+            .fetch_optional(&mut *admin)
+            .await?;
+    if marked == Some(true) {
+        let statement = format!("ALTER DATABASE {} IS_TEMPLATE false", quoted(name));
+        execute_ddl(admin, statement).await?;
+    }
+    drop_database_on(admin, name).await
 }
 
 /// As [`drop_database`], over an open connection to the server.
