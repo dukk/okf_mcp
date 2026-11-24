@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1169,
+  "next_claim_seq": 1189,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "c6247c825b288d0c037b42b80a0f73c57ba72f580a5286d9cbfc444545a21ed5"
+    "mac": "0fb091077b692a84787aec194a2123c903e2529a1e7d44c69b3d991adc5706cc"
   },
-  "next_evidence_seq": 1728,
+  "next_evidence_seq": 1754,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "e4be371ea550ded3231940f970fa40fd523d2b01da101eb64c6b55496755e99e"
+    "mac": "06958f97323aa30ebf8d98f5e781266b4a49df474b03b2d320b37daf843f5a28"
   },
   "claims": [
     {
@@ -54712,6 +54712,28 @@
             "by": "server",
             "mac": "02315082fb56286098427c0b420749659f3d1a1d0ab0a556f37955c1091b5150"
           }
+        },
+        {
+          "id": "EVD-1751",
+          "kind": "inspection",
+          "locator": "src/cache/directory.rs:44,236",
+          "summary": "On head ABSENT_TTL is still 5 s (line 44) and still feeds the absent cache (line 236); the PR's edits to resolve_many only changed its return type and moved the lines the old anchor pointed at.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/directory.rs",
+              "lines": {
+                "start": 42,
+                "end": 44
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:32:56.425831055Z",
+          "seal": {
+            "by": "server",
+            "mac": "cb1df680435e401f869fcc80db2a805cef8e0c5af306a4f8e03dced9726d48eb"
+          }
         }
       ],
       "verdicts": [
@@ -54728,13 +54750,26 @@
             "by": "server",
             "mac": "248cab3580513767bc7a96c0fdef59c747b8254f0a06d26c4aa34612b5793032"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head: ABSENT_TTL is still 5 s and still used; only line positions moved.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1751"
+          ],
+          "recorded_at": "2026-11-24T14:33:04.312680601Z",
+          "seal": {
+            "by": "server",
+            "mac": "13153d0f8f42a7b1dff201f8b7120464e79ed880f887399ac2a2cf690418997d"
+          }
         }
       ],
       "created_at": "2026-11-23T08:12:15.185449087Z",
-      "updated_at": "2026-11-23T08:13:21.986431464Z",
+      "updated_at": "2026-11-24T14:33:04.312680601Z",
       "seal": {
         "by": "server",
-        "mac": "37ea67c6bf1bfc608021f146b9f80fc4280cd064e1453051d0e4311b67dd2080"
+        "mac": "90debe9d015a6960e9cb41b05e701e00e0063b7f59e2416e8b1a411a8dc70614"
       }
     },
     {
@@ -68891,6 +68926,28 @@
             "by": "server",
             "mac": "674b780a875e97027b16541944c6ef2e524b8180663520e55858e85fa6bd515e"
           }
+        },
+        {
+          "id": "EVD-1749",
+          "kind": "test",
+          "locator": "SQLX_OFFLINE=true cargo test --lib mcp::search::tests --jobs 4 (11 passed)",
+          "summary": "check_fanout unchanged in behavior on head; the lines shifted only because this PR added code around it. Search tests pass.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/search.rs",
+              "lines": {
+                "start": 138,
+                "end": 146
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:32:56.142385392Z",
+          "seal": {
+            "by": "server",
+            "mac": "a6a3d7ced7368a1a84c7e9f9d3e7f838042ec7884cd5c98a5280557c30a70dcc"
+          }
         }
       ],
       "verdicts": [
@@ -68907,13 +68964,26 @@
             "by": "server",
             "mac": "0be6bb6211c776218019c1f91275d91be7998414aed1a88652d38887226d3bf0"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head: behavior unchanged, tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1749"
+          ],
+          "recorded_at": "2026-11-24T14:33:04.094640074Z",
+          "seal": {
+            "by": "server",
+            "mac": "e95b0e548c26280ee5dca779e39f2946e25f8eaf01d7f21b06762bf2d62db589"
+          }
         }
       ],
       "created_at": "2026-11-23T12:35:04.533848494Z",
-      "updated_at": "2026-11-23T12:36:35.648490235Z",
+      "updated_at": "2026-11-24T14:33:04.094640074Z",
       "seal": {
         "by": "server",
-        "mac": "686a38eb9ef84fb61fd16e4417b03ad01c3f415be747ce4f2669be2d65da677e"
+        "mac": "08373bd8291aa5341ba8b0e6ee527743154d59b7a4cc582134d9749eb23f22fe"
       }
     },
     {
@@ -69091,6 +69161,28 @@
             "by": "server",
             "mac": "ecf8050875d192b9f5963f05e20986519109a09fd203510fd16842589b8bc22d"
           }
+        },
+        {
+          "id": "EVD-1748",
+          "kind": "test",
+          "locator": "SQLX_OFFLINE=true cargo test --lib mcp::search::tests --jobs 4 (11 passed, incl. the_tool_refuses_more_named_catalogs_than_the_cap)",
+          "summary": "On head c3b358f, run_with still calls check_fanout(params.catalogs, search_fanout_max) before loading states (search.rs:140-143); the refusal test passes.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/search.rs",
+              "lines": {
+                "start": 138,
+                "end": 146
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:32:56.011836548Z",
+          "seal": {
+            "by": "server",
+            "mac": "e73323b7d1ee03a12dfdbd8d3707fa8f0edfdd6bdc24c561e1698affc88c4ba5"
+          }
         }
       ],
       "verdicts": [
@@ -69106,13 +69198,26 @@
             "by": "server",
             "mac": "8608e96d1466618001447db79854c04541a35e9683fe71277d477f4074903a4c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head after this PR touched run_with: the check is intact and the test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1748"
+          ],
+          "recorded_at": "2026-11-24T14:33:03.984479331Z",
+          "seal": {
+            "by": "server",
+            "mac": "1744b7b0cb463621cae9f5088418fabc663148d9f0fe0131280934a2eb88d6cb"
+          }
         }
       ],
       "created_at": "2026-11-23T12:35:04.533848494Z",
-      "updated_at": "2026-11-23T12:36:35.827071075Z",
+      "updated_at": "2026-11-24T14:33:03.984479331Z",
       "seal": {
         "by": "server",
-        "mac": "aec2c53e592f0f41122ebfde9ef50401a7c65d6aa9dd4fe3b3f21930d2be49ab"
+        "mac": "c0d280ff5bb414dcec21c8bfa031348cf0663fa22528e54fc947b34ba50e3a93"
       }
     },
     {
@@ -69855,6 +69960,28 @@
             "by": "server",
             "mac": "bb6e7719efe2424ff4d96d2442a41208dd015491df38fecf8e43247612395da9"
           }
+        },
+        {
+          "id": "EVD-1750",
+          "kind": "inspection",
+          "locator": "docs/reference/tools.md:563",
+          "summary": "On head the search `catalogs` row still says \"At most the server's `search_fanout_max` (default 25) distinct catalogs may be named; more is refused.\" The PR's edit to the search description (line 558) left it intact.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/reference/tools.md",
+              "lines": {
+                "start": 563,
+                "end": 563
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:32:56.284132129Z",
+          "seal": {
+            "by": "server",
+            "mac": "d8f698a25f8ba808ae6f6f9b1d644ea3f7643ad1718be62a8a4303dfc410ac67"
+          }
         }
       ],
       "verdicts": [
@@ -69897,13 +70024,26 @@
             "by": "server",
             "mac": "7b7543ad24b8bc7f482c969b2ba0c45d16a8fb810f712168b9f9ba9bc6708724"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on head after this PR edited the search section: line 563 still carries the cap statement.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1750"
+          ],
+          "recorded_at": "2026-11-24T14:33:04.198389061Z",
+          "seal": {
+            "by": "server",
+            "mac": "f6dbd353461b333ecdf8146ad7a54921df449efe28f81313f71b5a0b2020e1f4"
+          }
         }
       ],
       "created_at": "2026-11-23T12:35:59.513183217Z",
-      "updated_at": "2026-11-23T12:48:54.312506165Z",
+      "updated_at": "2026-11-24T14:33:04.198389061Z",
       "seal": {
         "by": "server",
-        "mac": "91ed515a65ba37110248f1b44f4ebf8435cd0486cbf960311c4843e104464e8e"
+        "mac": "7d3c2d4abe54902d646f0315c876dc437b446c2edefd3cd4a1270a1b7eadaed1"
       }
     },
     {
@@ -95320,6 +95460,1392 @@
       "seal": {
         "by": "server",
         "mac": "71904893fac01d7fdb11e1d5dcb930145f4cb87816ed75c5215778ba20503742"
+      }
+    },
+    {
+      "id": "CLM-1169",
+      "statement": "Issue #977 (M21.18, Task 18): reads across stores tolerate an unreachable store, name its catalogs in `unavailable`, and first-match reads, changeset lookup and writes fail with StoreUnavailable as specified.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/977",
+      "derived_from": [],
+      "artifacts": [
+        "src/mcp/context.rs",
+        "src/mcp/search.rs",
+        "src/mcp/catalogs.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1747",
+          "kind": "analysis",
+          "locator": "children of CLM-1169",
+          "summary": "All functional and documentation children are supported (merging reads, visibility, first-match reads, changesets, writes, tests, docs, changelog, plan note, PR statements). One child, CLM-1188 (doc comment of MAIN_STORE displaced onto READ_CONCURRENCY in src/stores/mod.rs), is refuted: a cosmetic documentation defect that does not affect behaviour.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-24T14:30:27.358387828Z",
+          "seal": {
+            "by": "server",
+            "mac": "fe7a50c5f4c57113ebf3e1eb051cc6928bbf90a5dbc9360a97963624d5153f26"
+          }
+        },
+        {
+          "id": "EVD-1753",
+          "kind": "analysis",
+          "locator": "children of CLM-1169",
+          "summary": "All children are now supported, including CLM-1188 after bed114a.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T14:33:49.819353483Z",
+          "seal": {
+            "by": "server",
+            "mac": "5599c16561f57d57f2b81368b6a7f00373075410e8843257518c0920806c36ac"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Roll-up only: every behavioural child is supported; the sole refuted child is CLM-1188, a displaced doc comment. Fix: move the \"/// The name of the store every existing catalog is on after migration 0036.\" line in src/stores/mod.rs to directly above `const MAIN_STORE`, commit, and re-audit CLM-1188 and this claim.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1747"
+          ],
+          "recorded_at": "2026-11-24T14:30:32.233962420Z",
+          "seal": {
+            "by": "server",
+            "mac": "ccd6ba725cf7a3c053bb0ec786006c0f2683b1242cab99c222068d61a109e8d8"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Every child is supported; the one earlier refuted child was fixed in bed114a.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1753"
+          ],
+          "recorded_at": "2026-11-24T14:33:53.838806306Z",
+          "seal": {
+            "by": "server",
+            "mac": "125e27a6467420a569ac0ef65f03941e177a2c33f9707748cb995eeb1353815c"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:33:53.838806306Z",
+      "seal": {
+        "by": "server",
+        "mac": "c7c1a0988713f0a9570e84e695c7a22afa703034fac8e7f814f870f7787b2195"
+      }
+    },
+    {
+      "id": "CLM-1170",
+      "statement": "`search` over catalogs on several stores, one of which is unreachable, returns the hits of the reachable catalogs and lists the unreachable catalog's id in `unavailable` instead of failing.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #977: merging reads (search, list_catalogs counts, console search) tolerate an unreachable store and name its catalogs in `unavailable`",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/mcp/search.rs",
+        "src/mcp/context.rs"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1728",
+          "kind": "test",
+          "locator": "SQLX_OFFLINE=true cargo test --lib unavailable_tests --jobs 4 (7 passed): search_returns_other_stores_results_and_names_the_unavailable_catalog",
+          "summary": "Ran the module on head: all 7 pass. The test searches home+remote with remote's store made unreachable; asserts hits come only from home and unavailable == [\"remote\"]. Code: states_or_unavailable converts StoreUnavailable into names (context.rs:647) and search::run_with uses it (search.rs:144).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 72,
+                "end": 91
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:19.045940727Z",
+          "seal": {
+            "by": "server",
+            "mac": "aca967af0a505d68b0f653a1a6994a50e6ad385bf9ebc47dc5422a68ebfce0c9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test passes on head and asserts exactly the claim (hits from home only, unavailable [\"remote\"]) with a store made unreachable for real.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1728"
+          ],
+          "recorded_at": "2026-11-24T14:30:22.504239381Z",
+          "seal": {
+            "by": "server",
+            "mac": "47d2830d8ac4e026aaa266b07c04aa6ef5c9f38a64039f24d53987d37f14438a"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:22.504239381Z",
+      "seal": {
+        "by": "server",
+        "mac": "a700d2e4c9babf7df7b8d3048435e8c0513c50e00031ac3e759a167f7242e351"
+      }
+    },
+    {
+      "id": "CLM-1171",
+      "statement": "`list_catalogs` (MCP) leaves out a catalog whose store is unreachable, still lists the others, and names the left-out catalog in `unavailable`.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #977: merging reads (search, list_catalogs counts, console search) tolerate an unreachable store",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/mcp/catalogs.rs",
+        "src/cache/directory.rs"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1729",
+          "kind": "test",
+          "locator": "cargo test --lib unavailable_tests::list_catalogs_leaves_out_and_names_the_unavailable_catalog (ok)",
+          "summary": "Asserts catalogs == [\"home\"] and unavailable == [\"remote\"] for an unrestricted key, and no unavailable for a key reaching only home. Code at catalogs.rs:126-166 pushes page.unavailable and store-went-away rows.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 126,
+                "end": 147
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:19.134790011Z",
+          "seal": {
+            "by": "server",
+            "mac": "8df4f70bcbcccba881d6575d2c2f138fd03d3656ce3edb5a3be318c183e5ea29"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test asserts the lost catalog is left out of catalogs and named in unavailable, and a narrow key sees none.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1729"
+          ],
+          "recorded_at": "2026-11-24T14:30:22.608807116Z",
+          "seal": {
+            "by": "server",
+            "mac": "872650f5a6ce5deacf74480f578cbe941bd87855376ec8f41a2857e5e7c1fbf2"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:22.608807116Z",
+      "seal": {
+        "by": "server",
+        "mac": "040afea4cc500c70f17c658c5d213ec5b450653552e937fa3115e05d6fedda0d"
+      }
+    },
+    {
+      "id": "CLM-1172",
+      "statement": "The console search (`GET /search`) and `GET /catalogs` tolerate an unreachable store and carry `unavailable`, instead of failing.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Issue #977: merging reads (search, list_catalogs counts, console search); PR body: `unavailable` on ... `GET /catalogs` ... and `GET /search` (the console search)",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/http/api/search.rs",
+        "src/http/api/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1730",
+          "kind": "inspection",
+          "locator": "src/http/api/search.rs:130-175; src/http/api/catalogs.rs:266-287",
+          "summary": "every_reachable keeps a catalog on a down store (page.unavailable) so the search names it; GET /catalogs skips and names it. WebSearch carries unavailable (search.rs:66-93), CatalogListing too (catalogs.rs:155). No test in the diff exercises either HTTP route with a lost store (grep of tests/ and src/http finds none).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/search.rs",
+              "lines": {
+                "start": 130,
+                "end": 175
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:19.216930201Z",
+          "seal": {
+            "by": "server",
+            "mac": "006fd5791f9af89b2da6479a4b8a00e666bd417553d4e5bafca21a5723416b92"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code reading shows both HTTP routes keep the other catalogs and name the lost ones. Supported by inspection only (integrity 2): no test drives GET /search or GET /catalogs with a lost store. Consider adding one, but it does not block.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1730"
+          ],
+          "recorded_at": "2026-11-24T14:30:22.733575232Z",
+          "seal": {
+            "by": "server",
+            "mac": "5811f774971e00b99f084187bf9fd779fa3971be4b686d4d97b77a21dacaf411"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:22.733575232Z",
+      "seal": {
+        "by": "server",
+        "mac": "f79650adff85ee54f91c99e2b9330175ed1360adfb953a761fd6cc45c94229c5"
+      }
+    },
+    {
+      "id": "CLM-1173",
+      "statement": "`unavailable` lists catalog ids sorted, each once, and the key is omitted from the JSON when empty (search, list_catalogs, list_changesets).",
+      "kind": "interface",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #977: `unavailable` (sorted, deduplicated, omitted when empty)",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/mcp/search.rs",
+        "src/mcp/catalogs.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1731",
+          "kind": "test",
+          "locator": "cargo test --lib unavailable_tests::the_unavailable_field_is_left_out_when_every_store_answers (ok)",
+          "summary": "Search: json has no \"unavailable\" key when every store answered; lost case serialises [\"remote\"]. Sorting/dedup is by code: search.rs:213-214 sort+dedup, catalogs.rs:166 sort (rows unique), changesets unreachable_catalogs sort+dedup. All three fields use skip_serializing_if Vec::is_empty. list_catalogs/list_changesets omission is not asserted by a test; no test has two lost catalogs (the comment on line 88 mentions it but only one is present).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 93,
+                "end": 105
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:19.298016867Z",
+          "seal": {
+            "by": "server",
+            "mac": "1c547521a192f3572dc9f81467f8a5a3a95a7facb5bb761d07111521d69281d0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Omission is tested for search; sort and dedup are explicit in the code of all three tools and skip_serializing_if is on every field. Caveat: no test has two lost catalogs, so ordering is by reading, and the omission for list_catalogs/list_changesets is not asserted.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1731"
+          ],
+          "recorded_at": "2026-11-24T14:30:22.853222648Z",
+          "seal": {
+            "by": "server",
+            "mac": "03ead7c0daee02d4461e49c638bed72e5f278a404f715e3c7e7651b622f054b0"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:22.853222648Z",
+      "seal": {
+        "by": "server",
+        "mac": "def4f763abd6792fb0f74fd92757378e651a75417ef6477eafefe0351d269ad1"
+      }
+    },
+    {
+      "id": "CLM-1174",
+      "statement": "The wait on an unreachable or stalled store is bounded by `store_connect_timeout` per store in every merging read (generation probe, state loads, changeset fan-out).",
+      "kind": "performance",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #977: bounded wait; PR body: each within `store_connect_timeout`",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/cache/directory.rs",
+        "src/mcp/changesets.rs",
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1732",
+          "kind": "inspection",
+          "locator": "src/cache/directory.rs:319; src/mcp/changesets.rs:282; src/stores/registry.rs:727-756",
+          "summary": "Generation probe and changeset fan-out wrap each store's read in tokio::time::timeout(Stores::connect_timeout()) mapping elapsed to StoreUnavailable; state loads go through Stores::get whose pool connect is bounded by acquire_timeout/timeout(settings.connect_timeout). A stall mid-query on a state load is bounded only by the pool/sqlx settings, not an explicit timeout, which is acceptable for the issue's wording.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/directory.rs",
+              "lines": {
+                "start": 291,
+                "end": 327
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:19.372291588Z",
+          "seal": {
+            "by": "server",
+            "mac": "e41b81922169b63141d0bb42e651818c981f22f7cff0d597e5a250739c78e36f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Each merging path wraps the store read in a timeout of store_connect_timeout or uses the registry's bounded connect.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1732"
+          ],
+          "recorded_at": "2026-11-24T14:30:22.928014274Z",
+          "seal": {
+            "by": "server",
+            "mac": "025dc03a736e779a0dd7a02ae1e4a75066ee8e8f500db65ec67960636d710e70"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:22.928014274Z",
+      "seal": {
+        "by": "server",
+        "mac": "da7f53392226b246ea33ec8169f949e128502e954c47340861606a509e8821eb"
+      }
+    },
+    {
+      "id": "CLM-1175",
+      "statement": "`unavailable` never names a catalog the caller cannot see: a key that does not reach a catalog on a lost store gets no mention of it.",
+      "kind": "security",
+      "level": "software",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #977: the field never names a catalog the caller cannot see; PR body: Only catalogs the caller reaches (and the connection offers) can be named",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/mcp/context.rs",
+        "src/mcp/changesets.rs",
+        "src/cache/directory.rs"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1733",
+          "kind": "test",
+          "locator": "cargo test --lib unavailable_tests::a_catalog_the_key_does_not_reach_is_never_named_unavailable (ok)",
+          "summary": "A key reaching only home asking for home+remote gets CatalogNotSelected (same as a nonexistent catalog), and a default search names nothing. Code: select() decides reach from the account row before mark_down (context.rs:441-465); list_changesets filters with ctx.offers (changesets.rs:343); Page.unavailable only covers listed rows (directory.rs). list_catalogs test asserts narrow key sees none.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 107,
+                "end": 124
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:19.452748621Z",
+          "seal": {
+            "by": "server",
+            "mac": "38aa122db26d891dd95ce916a0b740d78b4756439ab9a4077db6c43545b5b661"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test shows a non-reaching key gets the same refusal as for a nonexistent catalog and names nothing; code decides reach from the account row before marking down.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1733"
+          ],
+          "recorded_at": "2026-11-24T14:30:22.998180294Z",
+          "seal": {
+            "by": "server",
+            "mac": "841dfada50d741cd6b9033ca4296670a072e9c29b4234ca857c5616136424bbe"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:22.998180294Z",
+      "seal": {
+        "by": "server",
+        "mac": "bced7f00df205c21f2f197c116324a15406da96d7458ba591d08a034bd364141"
+      }
+    },
+    {
+      "id": "CLM-1176",
+      "statement": "`get_concept`, `history` and `read_document` without `catalog` fail with StoreUnavailable when a catalog earlier in the selection is on an unreachable store and no earlier catalog answers; later catalogs do not answer in its place.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #977: first-match reads (get_concept, history, read_document without `catalog`) fail with StoreUnavailable when an earlier catalog's store is down",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/mcp/documents.rs",
+        "src/mcp/history.rs",
+        "src/mcp/context.rs"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1734",
+          "kind": "test",
+          "locator": "cargo test --lib unavailable_tests::get_concept_fails_when_an_earlier_catalogs_store_is_unavailable (ok)",
+          "summary": "With remote selected before home: get_concept, history and read_document all return StoreUnavailable although home holds note.md; with home first, get_concept answers from home; a missing path with home first is StoreUnavailable, not NotFound. Code: ReadSet.blocked returned at documents.rs:395,534 and history.rs:173.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 149,
+                "end": 199
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:19.532783473Z",
+          "seal": {
+            "by": "server",
+            "mac": "a3147ffc7862128581274ee8437cb071b8d748db9cbda3e2e4e8be141ece5bf6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test covers all three tools plus the not-found-behind-a-lost-store case.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1734"
+          ],
+          "recorded_at": "2026-11-24T14:30:23.083412462Z",
+          "seal": {
+            "by": "server",
+            "mac": "664292026e000e3456a70a647c78b3b3d47e2b951b2e441dffc41da1fdb68971"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:23.083412462Z",
+      "seal": {
+        "by": "server",
+        "mac": "276a4283a4a61dda278cc5813ad3d01528b8830614eaf4552f71da0f3dba885a"
+      }
+    },
+    {
+      "id": "CLM-1177",
+      "statement": "`ToolContext::resolve_changeset` looks up a handle in every store from `Stores::all()`, `main` first, and a store it cannot reach ends the lookup with StoreUnavailable.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #977 comment (from #966): Task 18 must look through every store from `Stores::all()`, `main` first",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/mcp/context.rs"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1735",
+          "kind": "test",
+          "locator": "cargo test --lib unavailable_tests::a_changeset_handle_on_a_lost_store_is_unavailable_and_others_still_resolve (ok)",
+          "summary": "Handle on main resolves with a store down; handle on the lost store and an unknown handle both give StoreUnavailable. Code: changeset_by_handle iterates stores_main_first (stable sort puts main first) over Stores::all (context.rs:1193-1239) and resolve_changeset uses it (1124-1150).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 1188,
+                "end": 1240
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:19.612855126Z",
+          "seal": {
+            "by": "server",
+            "mac": "f840f500dba819a92f78e9b8a18df13e3586171d9719d05ca3baa831d71a8d69"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code iterates all stores main first; test shows main's handle resolves and a handle on, or unknown while there is, a lost store gives StoreUnavailable. Caveat: no test has the handle on a healthy non-main store.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1735"
+          ],
+          "recorded_at": "2026-11-24T14:30:23.153919252Z",
+          "seal": {
+            "by": "server",
+            "mac": "ba1cc7811a71df20e09d660ed574a2f00c68e190886b4834e499ab2b10946fee"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:23.153919252Z",
+      "seal": {
+        "by": "server",
+        "mac": "3679f57ad4c2f2702f53cac9348eab7e54de948e50fd5c84afd5734c5324c251"
+      }
+    },
+    {
+      "id": "CLM-1178",
+      "statement": "`list_changesets` without `catalog` reads every store (fan-out) and names the catalogs of an unreachable store in `unavailable`.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #977: list_changesets without `catalog` fans out over stores",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1736",
+          "kind": "test",
+          "locator": "same test as above, final assertions: listed.unavailable == [\"remote\"], listed.changesets.len() == 1",
+          "summary": "list_changesets with catalog None, with one catalog on main (with a changeset) and one on a lost store, lists main's changeset and names remote. Code: open_in_every_store reads each store in chunks of READ_CONCURRENCY with a timeout (changesets.rs:254-312). The fan-out over several healthy stores merging is not tested.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets.rs",
+              "lines": {
+                "start": 254,
+                "end": 312
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:19.695522557Z",
+          "seal": {
+            "by": "server",
+            "mac": "3ec3b7cd98a28056f1f47447eb596851447884171c1147ca9584eca209676acb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Fan-out code reads each store; test shows the healthy store's changeset listed and the lost catalog named.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1736"
+          ],
+          "recorded_at": "2026-11-24T14:30:23.224229291Z",
+          "seal": {
+            "by": "server",
+            "mac": "83db3da87d6a323a873aeeb9aef177d3b67bf1c041d84907360971168124232d"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:23.224229291Z",
+      "seal": {
+        "by": "server",
+        "mac": "b33395f375c7d039d1d197a91fba98bc846534e18af22049403e6b4e3762cbbe"
+      }
+    },
+    {
+      "id": "CLM-1179",
+      "statement": "A write (`open_changeset` on a catalog) to an unreachable store fails with StoreUnavailable, and the message does not name the store.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #977: writes to an unavailable store fail with StoreUnavailable",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/mcp/changesets.rs",
+        "src/mcp/unavailable_tests.rs"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1737",
+          "kind": "test",
+          "locator": "cargo test --lib unavailable_tests::a_write_to_an_unavailable_store_fails_with_store_unavailable (ok)",
+          "summary": "open_changeset on remote (store lost) returns StoreUnavailable and the error string does not contain the store name.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 201,
+                "end": 220
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:19.774106374Z",
+          "seal": {
+            "by": "server",
+            "mac": "522bb36dd421d5fe50d5be5b9405519a19a15d80858ee4ec29e38ea6d25f3196"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test asserts StoreUnavailable and that the message omits the store name.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1737"
+          ],
+          "recorded_at": "2026-11-24T14:30:23.298773258Z",
+          "seal": {
+            "by": "server",
+            "mac": "494a5f2e1ea52cd18f6802f9fdd198eca5bdab8e59f0106a615ce2d2c6cb3f71"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:23.298773258Z",
+      "seal": {
+        "by": "server",
+        "mac": "79a1cae6d649d19dc22990e1f7a894466eccd1e9607f6edac200cc4f4da5906d"
+      }
+    },
+    {
+      "id": "CLM-1180",
+      "statement": "The three tests named by the plan exist in src/mcp/unavailable_tests.rs, make a store really unavailable (its row repointed at a closed port and its pool dropped, no mocked flag), and use bounded timeouts, not sleeps.",
+      "kind": "constraint",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #977: the three named tests exist and make a store really unavailable (no mocked flag) and use bounded waits not sleeps",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/mcp/unavailable_tests.rs",
+        "src/mcp/testing.rs"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1738",
+          "kind": "test",
+          "locator": "src/mcp/unavailable_tests.rs:72,149,201; src/mcp/testing.rs make_unreachable; cargo test --lib unavailable_tests (7 passed)",
+          "summary": "All three plan-named tests exist (lines 73, 150, 202) and pass. make_unreachable UPDATEs the stores row to a just-closed local port and calls Stores::forget to drop the pool, so connects are really refused; no flag or mock. Every call goes through bounded() (tokio timeout, 30 s); grep for sleep finds only a comment saying nothing sleeps.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/testing.rs",
+              "lines": {
+                "start": 144,
+                "end": 164
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:48.754088863Z",
+          "seal": {
+            "by": "server",
+            "mac": "ede652d3959894c0e91cf56db49aea57114613fb7f213813b9beb77ff8012f35"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Names present, tests pass, unreachability is a repointed row plus dropped pool, waits are tokio timeouts, no sleeps.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1738"
+          ],
+          "recorded_at": "2026-11-24T14:30:23.371880258Z",
+          "seal": {
+            "by": "server",
+            "mac": "bd4f66f8a9ddf9708810b0d033aeeca925a871458249df6d7abd841ecca8617f"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:23.371880258Z",
+      "seal": {
+        "by": "server",
+        "mac": "494a0942ba067841957dbc6486a88772876182605e8447cd801f7f1ee991533c"
+      }
+    },
+    {
+      "id": "CLM-1181",
+      "statement": "docs/reference/tools.md changes only by adding the `unavailable` field to the descriptions of list_catalogs, list_changesets and search.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #977: docs/reference/tools.md gets the `unavailable` field only",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "docs/reference/tools.md"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1739",
+          "kind": "inspection",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD -- docs/reference/tools.md",
+          "summary": "Three hunks only (6 lines changed): one sentence appended to each of the List Catalogs, List Changesets and Search Concepts descriptions, each naming `unavailable`. Nothing else in the file changed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/reference/tools.md",
+              "lines": {
+                "start": 233,
+                "end": 246
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:48.849519733Z",
+          "seal": {
+            "by": "server",
+            "mac": "19ee1b04bfb2816652674e767ecd3bb88e36f0bdf690a682ec8b7d7967e9b434"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Diff of tools.md is three one-sentence appends naming `unavailable`.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1739"
+          ],
+          "recorded_at": "2026-11-24T14:30:23.446301694Z",
+          "seal": {
+            "by": "server",
+            "mac": "28a21d59ac6b001ae7f70b21a92ce82cdd55e6d022bcc010150cd1ff58c907ba"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:23.446301694Z",
+      "seal": {
+        "by": "server",
+        "mac": "8e08529e8108bb719b36ba3b505747958466593c2f1de1bd7468c034879bdb8f"
+      }
+    },
+    {
+      "id": "CLM-1182",
+      "statement": "Exactly one changelog entry changelog/<ts>-m21-task-18-<slug>.md was added, with Added, Changed and Notes sections.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #977: one changelog entry changelog/<ts>-m21-task-18-<slug>.md with Added/Changed/Notes sections",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "changelog/2026-11-24T13-38-53Z-m21-task-18-reads-across-stores.md"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1740",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T13-38-53Z-m21-task-18-reads-across-stores.md; git diff --stat shows one changelog file",
+          "summary": "One new file in the range under changelog/, named with timestamp, m21-task-18 and a slug; it has ## Added, ## Changed and ## Notes headings.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-24T13-38-53Z-m21-task-18-reads-across-stores.md",
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:48.924711097Z",
+          "seal": {
+            "by": "server",
+            "mac": "b4db53deb8cfff2fdac6b1256a9910959889052b56d5320ab2b464c2ace957fe"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "One correctly named entry with the three sections.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1740"
+          ],
+          "recorded_at": "2026-11-24T14:30:23.518777292Z",
+          "seal": {
+            "by": "server",
+            "mac": "ddd3b8c3f260db5d33aed8204e0058cffc9bdf340e47f6614f67a697520656cc"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:23.518777292Z",
+      "seal": {
+        "by": "server",
+        "mac": "1f6601f300d2d0fc0d0d78100c4b8be35a3017d31148d5912a923bb7c49df1aa"
+      }
+    },
+    {
+      "id": "CLM-1183",
+      "statement": "The plan's Task 18 carries a dated \"> **Corrected (issue #977\" note describing where the code differs.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #977: the plan is corrected with a dated \"> **Corrected (issue #977\" note if code differs",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1741",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:642-647",
+          "summary": "Task 18 gains a block starting \"> **Corrected (issue #977, 2026-11-24).** Shipped:\" with five bullets describing directory, merging reads, P3 reads, changesets and tests; its content matches the diff.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 642,
+                "end": 647
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:48.999683501Z",
+          "seal": {
+            "by": "server",
+            "mac": "cdb5b3b81a36a32f367605881129235244b82177d1219b083cec4af945f5bf07"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The dated Corrected note is present in Task 18 and matches the code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1741"
+          ],
+          "recorded_at": "2026-11-24T14:30:23.600813088Z",
+          "seal": {
+            "by": "server",
+            "mac": "0bd2c46d3b7ae50c28eee409e7eb32d0544d805b87aea61ba144b7445dc4256d"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:23.600813088Z",
+      "seal": {
+        "by": "server",
+        "mac": "c33d05436aa238f68d387b01668eb94c22e8b3542ddc4694ca889f776e08626f"
+      }
+    },
+    {
+      "id": "CLM-1184",
+      "statement": "The directory's generation probe asks stores together, at most 8 at a time, each within `store_connect_timeout`, and reports the stores it could not reach instead of failing.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: The directory's generation probe asks stores together (at most 8 at a time), each within `store_connect_timeout`, and reports the stores it could not reach instead of failing.",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/cache/directory.rs",
+        "src/stores/mod.rs"
+      ],
+      "tags": [
+        "from-issue:977",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1742",
+          "kind": "inspection",
+          "locator": "src/cache/directory.rs:291-345",
+          "summary": "fill_generations groups ids by store, runs them through stream::iter(..).buffer_unordered(READ_CONCURRENCY) (= 8, stores/mod.rs:30), wraps each read in tokio::time::timeout(connect_timeout), and returns the set of stores answering StoreUnavailable instead of an error. Not covered by a test that counts concurrency; behavior is by reading.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/directory.rs",
+              "lines": {
+                "start": 291,
+                "end": 345
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:49.081106212Z",
+          "seal": {
+            "by": "server",
+            "mac": "c94634e7b88d0e2e608df55a5917d98f3fc4ea3fc090f146abd656996960ddb8"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code matches each part of the statement (buffer_unordered(8), per-store timeout, down set returned).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1742"
+          ],
+          "recorded_at": "2026-11-24T14:30:23.673597307Z",
+          "seal": {
+            "by": "server",
+            "mac": "f281d7dd46d3acd0a806d836c4712fcdea260868a9a4f694b74dd703c5b3212e"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:23.673597307Z",
+      "seal": {
+        "by": "server",
+        "mac": "45b20d037b4a4468d7742f4b59040d69ee94df926e658d006d9b1dba54c03027"
+      }
+    },
+    {
+      "id": "CLM-1185",
+      "statement": "A call probes a lost store once, not once per catalog.",
+      "kind": "performance",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: A call probes a lost store once, not once per catalog.",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/mcp/context.rs",
+        "src/cache/directory.rs"
+      ],
+      "tags": [
+        "from-issue:977",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1743",
+          "kind": "inspection",
+          "locator": "src/mcp/context.rs:436-500,1260-1335; src/cache/directory.rs:384-410",
+          "summary": "ToolContext keeps a per-call `down` set. select() passes it as known_down so resolve_or_unavailable short-circuits for later catalogs on that store; state() and held_state return StoreUnavailable from the set without connecting; resolve_many probes once per store. No test counts probes or connect attempts.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 436,
+                "end": 500
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:49.161437209Z",
+          "seal": {
+            "by": "server",
+            "mac": "dac6c2de799b4113adbd6cd59a7720a2f14d2135a9f7d19471dc8a9593d81925"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Per-call down set short-circuits later catalogs on a known-down store; supported by reading, no probe-count test (integrity 2).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1743"
+          ],
+          "recorded_at": "2026-11-24T14:30:23.749071177Z",
+          "seal": {
+            "by": "server",
+            "mac": "d71ca473f74cd38ae903957dfff6ba2b5981a994b4b2b066571c710ac3cdeb1f"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:23.749071177Z",
+      "seal": {
+        "by": "server",
+        "mac": "2b23e744173cf5cd4c5172349be5b9ff4fb6523de4fd9c3e175a956c25ebd038"
+      }
+    },
+    {
+      "id": "CLM-1186",
+      "statement": "A credential's ceiling no longer fails while a store is down (ceiling_over_grants uses resolve_many's tolerant result).",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: A credential's ceiling no longer fails while a store is down.",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/cache/credentials.rs"
+      ],
+      "tags": [
+        "from-issue:977",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1744",
+          "kind": "inspection",
+          "locator": "src/cache/credentials.rs:451-455",
+          "summary": "ceiling_over_grants destructures `(rows, _unreachable)` from the now-tolerant resolve_many and builds the ceiling from the account-database rows, so a down store no longer produces an error there. No test exercises it with a lost store.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/credentials.rs",
+              "lines": {
+                "start": 448,
+                "end": 456
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:49.232041004Z",
+          "seal": {
+            "by": "server",
+            "mac": "e2a4c64d2c6d083a94b5f55f4069bbd6117856d94d6a67f6b7dd55047f9eda88"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The code path now ignores unreachable stores; supported by reading only.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1744"
+          ],
+          "recorded_at": "2026-11-24T14:30:23.825237720Z",
+          "seal": {
+            "by": "server",
+            "mac": "1d243e0d7039bcda2cbc964585ce0d31ab340792266cda23760a2a120c9f6918"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:23.825237720Z",
+      "seal": {
+        "by": "server",
+        "mac": "b9c02ca853447c64871be3af807387acad2218b385f599977e301cf0b7ad0a33"
+      }
+    },
+    {
+      "id": "CLM-1187",
+      "statement": "`cited_by` is unchanged by this PR and still fails with StoreUnavailable when a store is down.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "PR body: `cited_by` is unchanged and still fails with `StoreUnavailable` when a store is down",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/mcp/cited_by.rs"
+      ],
+      "tags": [
+        "from-issue:977",
+        "pr-description"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1745",
+          "kind": "inspection",
+          "locator": "src/mcp/cited_by.rs:111; git diff --stat (cited_by.rs absent)",
+          "summary": "cited_by.rs is not in the diff and still calls the strict ctx.states(); that function was not modified (only states_or_unavailable added), and a down catalog's state() returns StoreUnavailable, so it still fails.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/cited_by.rs",
+              "lines": {
+                "start": 109,
+                "end": 113
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:49.316981690Z",
+          "seal": {
+            "by": "server",
+            "mac": "b7bdbf41813c56c05f006bfbf98441fe4f5c7de1e61c7d866029f604a1a742b5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "cited_by untouched and uses the strict states().",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1745"
+          ],
+          "recorded_at": "2026-11-24T14:30:23.895713940Z",
+          "seal": {
+            "by": "server",
+            "mac": "5211252d2c4b8630d72acbad091659816c5042e7db313fd35b8cee14752cef6a"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:30:23.895713940Z",
+      "seal": {
+        "by": "server",
+        "mac": "46878661601a45b7b395977f4b3c7f4cc6fab0b63e041a196fbc79ab22dc3c86"
+      }
+    },
+    {
+      "id": "CLM-1188",
+      "statement": "The PR's non-test change keeps the doc comments of the items it touches attached to the right item (the `MAIN_STORE` doc is not left on `READ_CONCURRENCY`).",
+      "kind": "non_functional",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "CLAUDE.md: doc comments for all public items, keep comments up to date; src/stores/mod.rs diff",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/stores/mod.rs"
+      ],
+      "tags": [
+        "from-issue:977"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1746",
+          "kind": "inspection",
+          "locator": "src/stores/mod.rs:26-32",
+          "summary": "The line \"/// The name of the store every existing catalog is on after migration 0036.\" now sits directly above the READ_CONCURRENCY doc, joined to it as one doc comment, while `const MAIN_STORE` has no doc. READ_CONCURRENCY's rustdoc therefore begins with a sentence about the main store.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 26,
+                "end": 32
+              },
+              "commit": "c3b358fa00473330bb48a744156358994cf3853b"
+            }
+          },
+          "recorded_at": "2026-11-24T14:29:49.387640256Z",
+          "seal": {
+            "by": "server",
+            "mac": "6fddfdc4eee9b169c9f7ce849c09d1ad0d6caa91e0f9307b805daafbeb93473a"
+          }
+        },
+        {
+          "id": "EVD-1752",
+          "kind": "inspection",
+          "locator": "src/stores/mod.rs:26-32 at bed114a",
+          "summary": "READ_CONCURRENCY now has its own doc; the \"name of the store every existing catalog is on\" line sits directly above const MAIN_STORE.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 26,
+                "end": 33
+              },
+              "commit": "bed114a332a8e0eac88c7d5b2e2f6a0aff4903e9"
+            }
+          },
+          "recorded_at": "2026-11-24T14:33:45.074420458Z",
+          "seal": {
+            "by": "server",
+            "mac": "72b7959f3759b53a95ab90a40ef49021489508f08cd64edd95a7af566918d11e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The PR inserted READ_CONCURRENCY between MAIN_STORE's doc line and MAIN_STORE, so MAIN_STORE lost its doc and READ_CONCURRENCY's doc starts with an unrelated sentence. Fix: in src/stores/mod.rs move the line \"/// The name of the store every existing catalog is on after migration 0036.\" from above READ_CONCURRENCY's doc to directly above `const MAIN_STORE`.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1746"
+          ],
+          "recorded_at": "2026-11-24T14:30:23.980342736Z",
+          "seal": {
+            "by": "server",
+            "mac": "16e4522865f601b08952ea8978875191b1d9b7cf4f920314bf476792f3a91885"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Fixed in bed114a: each doc comment is on its own item.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1752"
+          ],
+          "recorded_at": "2026-11-24T14:33:49.672432165Z",
+          "seal": {
+            "by": "server",
+            "mac": "fa91fcc9357c7cc7d1a029fef68606cb69a4ab166fcc454607897a8652acb3e9"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:28:46.499664433Z",
+      "updated_at": "2026-11-24T14:33:49.672432165Z",
+      "seal": {
+        "by": "server",
+        "mac": "dc764bd9592166a4b246b32512e028b917fe680ab66e9cb274c64772a61adec4"
       }
     }
   ]
