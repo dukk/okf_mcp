@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1079,
+  "next_claim_seq": 1082,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "40d2c5ba3285500bee94c8206c69e1b6299b37482b0279b96388d5253df73e9f"
+    "mac": "545b06a292bad82fd63e5808f9af0473f8b248cf65593eecbbff3a0e08c4d8e8"
   },
-  "next_evidence_seq": 1587,
+  "next_evidence_seq": 1590,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "c54d9a7300b5dead08b3e319a9767e6087a95dbf6f8947f91ff60e1a78ca6622"
+    "mac": "6e11cba0bcc8af82a763b5070c878b863223021e8a5e9ead8148c4df1432791d"
   },
   "claims": [
     {
@@ -88102,6 +88102,182 @@
       "seal": {
         "by": "server",
         "mac": "df0230988ddd9cda0488352757ecbc18d53857077a9b10e54775f8b8da1ce643"
+      }
+    },
+    {
+      "id": "CLM-1079",
+      "statement": "Every statement of the store cleanup job, on the account database and on each store, runs inside a transaction that sets lock_timeout and statement_timeout to LIMITS.wait (20 s), including note_failure; a 30 s tokio timeout per row is only a backstop.",
+      "kind": "non_functional",
+      "level": "component",
+      "verification_method": "test",
+      "source": "PR #1005 review round 2, threads T3 and T5",
+      "source_anchor": {
+        "path": "src/store/cleanups.rs",
+        "commit": "54ea0cf025c292253f01283d45e9f6a9a2c6a670"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:972",
+        "round-2"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1587",
+          "kind": "test",
+          "locator": "src/store/cleanups_tests.rs: a_store_row_lock_fails_that_cleanup_at_the_database_and_another_store_settles; a_held_default_key_lock_fails_a_catalog_cleanup_and_leaves_a_one_connection_pool_usable",
+          "summary": "Both tests pass at 54ea0cf; with the store half or the account half of clean_catalog run in an unbounded begin(), each fails at its 15 s limit (mutation runs, changelog round 2). bound_waits sets both timeouts via set_config in every account_tx and store_tx; LIMITS.wait is 20 s and LIMITS.attempt 30 s.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "commit": "54ea0cf025c292253f01283d45e9f6a9a2c6a670"
+            }
+          },
+          "recorded_at": "2026-11-24T03:38:55.695094998Z",
+          "seal": {
+            "by": "server",
+            "mac": "ccef2baf03e7d48776d507b392a75d7eb56049294949133c2a2ef0e06e50a8e3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Tests and mutation runs show both halves bounded at the database; code inspection shows account_tx/store_tx call bound_waits and note_failure uses account_tx.",
+          "auditor": "claude-sonnet-5-5 (implementer self-check; no fresh auditor in round 2)",
+          "evidence_ids": [
+            "EVD-1587"
+          ],
+          "recorded_at": "2026-11-24T03:39:04.068152421Z",
+          "seal": {
+            "by": "server",
+            "mac": "8881b505a56d2e7002d060646b1bc97eeb7a0f132c53bf65df4b18200ec95629"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:38:48.209900929Z",
+      "updated_at": "2026-11-24T03:39:04.068152421Z",
+      "seal": {
+        "by": "server",
+        "mac": "8e56fe942c53b9c83cb9747a22fa86b9842e92d359898fc0dac1596be641866a"
+      }
+    },
+    {
+      "id": "CLM-1080",
+      "statement": "runs::claim reads the claiming key's row FOR KEY SHARE in the account transaction opened before the store connection and held until after the store commit, so a user deletion waits for a claim and the cleanup it owes then clears the key from the run.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "source": "PR #1005 review round 2, thread T4",
+      "source_anchor": {
+        "path": "src/store/maintenance/runs.rs",
+        "commit": "54ea0cf025c292253f01283d45e9f6a9a2c6a670"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:972",
+        "round-2"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1588",
+          "kind": "test",
+          "locator": "src/store/cleanups_tests.rs: a_maintenance_claim_paused_after_its_key_read_never_leaves_a_deleted_key_behind",
+          "summary": "The regression passes at 54ea0cf and fails when lock_key's FOR KEY SHARE is removed (mutation run). claim calls AuditTarget::lock_key after AuditTarget::read and before db.begin(), and the account transaction ends in watch.commit.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/mod.rs",
+              "commit": "54ea0cf025c292253f01283d45e9f6a9a2c6a670"
+            }
+          },
+          "recorded_at": "2026-11-24T03:38:55.768568707Z",
+          "seal": {
+            "by": "server",
+            "mac": "dbe419483f9bfd1e3cc49fdc874e5b60575b55d8874903a0b971f11b4267097a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The regression passes and fails without the lock.",
+          "auditor": "claude-sonnet-5-5 (implementer self-check; no fresh auditor in round 2)",
+          "evidence_ids": [
+            "EVD-1588"
+          ],
+          "recorded_at": "2026-11-24T03:39:04.192963522Z",
+          "seal": {
+            "by": "server",
+            "mac": "d7969a5f28c8231fd695b1fdc0c8d2ec6deac4699a1639f7e1bb3bd0db763f97"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:38:48.209900929Z",
+      "updated_at": "2026-11-24T03:39:04.192963522Z",
+      "seal": {
+        "by": "server",
+        "mac": "c90642103b6918aecff7472fd132e653f3abddce6ac8c0e3efa2f24ff42e13d9"
+      }
+    },
+    {
+      "id": "CLM-1081",
+      "statement": "At head 54ea0cf the full test gate passes with 3522 passed, 0 failed, 21 ignored, and fmt, lint and dylint pass.",
+      "kind": "constraint",
+      "level": "artifact",
+      "verification_method": "test",
+      "source": "tools/agentic/gate.sh test log target/i972-logs/g2-test.log",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:972",
+        "round-2"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1589",
+          "kind": "log",
+          "locator": "target/i972-logs/g2-test.log; g2-lint.log; g2-dylint.log; g2-fmt.log",
+          "summary": "gate.sh test finished rc=0 with the summed test results at 3522 passed, 0 failed, 21 ignored; fmt, lint and dylint exited 0 at this code head.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T03:38:55.829416173Z",
+          "seal": {
+            "by": "server",
+            "mac": "f3f2aed68e63f07b9c86788a4aa78f2ac125cc5174cd9a2ae5c6e501fade8d71"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Gate logs show rc=0 and the stated totals.",
+          "auditor": "claude-sonnet-5-5 (implementer self-check; no fresh auditor in round 2)",
+          "evidence_ids": [
+            "EVD-1589"
+          ],
+          "recorded_at": "2026-11-24T03:39:04.252291316Z",
+          "seal": {
+            "by": "server",
+            "mac": "982fe1f65ce72a48921de59fc9a2013055c3c42b73e0cacd3293235e713d6d20"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:38:48.209900929Z",
+      "updated_at": "2026-11-24T03:39:04.252291316Z",
+      "seal": {
+        "by": "server",
+        "mac": "e89f0c4f7ab0ce280800191489e48a45d901badacbace8cd700e64460a994b6b"
       }
     }
   ]
