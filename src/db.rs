@@ -1,8 +1,14 @@
-//! The Postgres connection pool and the account schema migrations (`migrations/accounts/`).
+//! The Postgres connection pool, the account schema migrations
+//! (`migrations/accounts/`) and the catalog store migrations
+//! (`migrations/catalog/`).
 
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use std::sync::LazyLock;
+
+use sqlx::migrate::Migrator;
+use sqlx::postgres::{PgConnection, PgPool, PgPoolOptions};
 
 use crate::error::OkfError;
+use crate::stores::StoreName;
 
 // The library's unit tests share the integration tests' container helper:
 // `#[path]` compiles that file here as a module (relative to `src/`).
@@ -19,7 +25,27 @@ pub(crate) mod redis_support;
 /// The account schema migrations in `migrations/accounts/`, embedded at compile time.
 // `migrate!` reads the directory while compiling (`build.rs` makes cargo
 // notice new files), so the binary needs no SQL files at runtime.
-pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/accounts");
+pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations/accounts");
+
+/// Where a store's migration history is kept: in its own schema, apart from
+/// the account database's `public._sqlx_migrations`, so the two migrators
+/// never see each other's rows even when the store is the account database.
+pub const CATALOG_HISTORY: &str = "catalog._sqlx_migrations";
+
+/// The catalog store migrations in `migrations/catalog/`, embedded at
+/// compile time, with their history in [`CATALOG_HISTORY`].
+// `LazyLock` builds the value on first use (like a module-level value
+// computed once in Python): `dangerous_set_table_name` is a method, so the
+// migrator cannot be a plain `static` as `MIGRATOR` is.
+pub static CATALOG_MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| {
+    let mut migrator = sqlx::migrate!("./migrations/catalog");
+    migrator.dangerous_set_table_name(CATALOG_HISTORY);
+    migrator
+});
+
+/// The version of `migrations/catalog/0001_baseline.sql`, the one adoption
+/// records without running.
+const BASELINE_VERSION: i64 = 1;
 
 /// Connects a pool to the database.
 ///
@@ -95,8 +121,9 @@ async fn drop_invalid_indexes(conn: &mut sqlx::PgConnection) -> Result<usize, sq
     Ok(invalid.len())
 }
 
-/// Applies every okf migration not yet applied, then apalis' own (both are
-/// no-ops when up to date).
+/// Applies every okf migration not yet applied, then the account database's
+/// own catalog store (`main`: adoption the first time, see
+/// [`migrate_store`]), then apalis' own (each a no-op when up to date).
 ///
 /// apalis-postgres keeps its tables in schema `apalis` and its history in
 /// `apalis._sqlx_migrations`, apart from okf's `public._sqlx_migrations`, so
@@ -125,7 +152,15 @@ pub async fn migrate(pool: &PgPool) -> Result<(), OkfError> {
         // `&mut *conn`: the pooled connection itself (sqlx's migrator takes
         // its own advisory lock on it, and runs `no-transaction` files on
         // it outside any transaction, as on a pool).
-        Ok(_) => MIGRATOR.run(&mut *conn).await.map_err(OkfError::from),
+        Ok(_) => match MIGRATOR.run(&mut *conn).await {
+            // Then the catalog schema the account migrations built (0041,
+            // 0042): the account database is store `main`, adopted the
+            // first time and brought up to date after, inside the same hold.
+            Ok(()) => migrate_store_locked(&mut conn, &StoreName::main())
+                .await
+                .map(|_| ()),
+            Err(error) => Err(OkfError::from(error)),
+        },
         Err(error) => Err(OkfError::from(error)),
     };
     // Released on every path; a lost connection releases it too.
@@ -142,6 +177,259 @@ pub async fn migrate(pool: &PgPool) -> Result<(), OkfError> {
         .await
         .map_err(apalis_error)?;
     Ok(())
+}
+
+/// What [`migrate_store`] did to a store's database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StoreMigration {
+    /// The baseline was recorded as applied without running it: the
+    /// database already held the catalog schema (the account database
+    /// after migrations 0041 and 0042).
+    pub adopted: bool,
+    /// How many catalog migrations ran (an adopted baseline not counted).
+    pub applied: usize,
+}
+
+impl std::fmt::Display for StoreMigration {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "a Display impl")
+    )]
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.adopted, self.applied) {
+            (false, 0) => formatter.write_str("up to date"),
+            (true, applied) => write!(formatter, "adopted, {applied} applied"),
+            (false, applied) => write!(formatter, "{applied} applied"),
+        }
+    }
+}
+
+/// Brings a store's `catalog` schema up to date: the catalog migrations,
+/// adoption of a schema the account migrations built, and the store's
+/// identity row.
+///
+/// A store that is already current (every embedded migration recorded with
+/// its checksum, and its identity row naming `store`) is found so with
+/// reads alone, without the lock and without any privilege beyond reading
+/// the two tables. Otherwise the work runs under the advisory lock
+/// [`migrate`] uses, so two replicas opening one store together migrate it
+/// once (the lock is per database: it never waits on another store).
+///
+/// # Arguments
+/// * `conn` - a connection to the store's database, outside any
+///   transaction (sqlx runs each migration in a transaction of its own). It
+///   may have any `search_path`: every name here is schema-qualified.
+/// * `store` - the store the database is opened as.
+///
+/// # Returns
+/// What was done.
+///
+/// # Errors
+/// [`OkfError::Refused`] if the database's identity row names another store
+/// (it was reached under a second name); [`OkfError::Migrate`] if a
+/// migration fails or the database has one this binary does not know;
+/// [`OkfError::Database`] (or `Busy`) for a driver error.
+#[tracing::instrument(level = "debug", skip_all, fields(store = %store))]
+pub async fn migrate_store(
+    conn: &mut PgConnection,
+    store: &StoreName,
+) -> Result<StoreMigration, OkfError> {
+    if store_is_current(conn, store).await? {
+        return Ok(StoreMigration::default());
+    }
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(CONCURRENT_INDEX_LOCK)
+        .execute(&mut *conn)
+        .await?;
+    // The lock is released below whatever this returns, so no `?` here.
+    let migrated = migrate_store_locked(conn, store).await;
+    sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(CONCURRENT_INDEX_LOCK)
+        .execute(&mut *conn)
+        .await?;
+    migrated
+}
+
+/// Whether a store needs nothing from [`migrate_store`]: its history holds
+/// exactly the embedded migrations, each succeeded with the same checksum,
+/// and its identity row names `store`. Reads only.
+///
+/// # Errors
+/// [`OkfError::Database`] (or `Busy`) for a driver error.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "db.store_is_current"))]
+async fn store_is_current(conn: &mut PgConnection, store: &StoreName) -> Result<bool, OkfError> {
+    // `to_regclass` reads no table: NULL when the table (or the schema) is
+    // missing, where a SELECT from it would fail.
+    let (history, identity): (bool, bool) = sqlx::query_as(
+        "SELECT to_regclass('catalog._sqlx_migrations') IS NOT NULL, \
+                to_regclass('catalog.store_identity') IS NOT NULL",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if !(history && identity) {
+        return Ok(false);
+    }
+    let applied: Vec<(i64, Vec<u8>, bool)> = sqlx::query_as(
+        "SELECT version, checksum, success FROM catalog._sqlx_migrations ORDER BY version",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    // `migrate!` lists the files in version order, as the query sorts.
+    let embedded = CATALOG_MIGRATOR
+        .iter()
+        .filter(|migration| !migration.migration_type.is_down_migration());
+    let same_history = applied.len() == embedded.clone().count()
+        && applied
+            .iter()
+            .zip(embedded)
+            .all(|((version, checksum, success), migration)| {
+                *success && *version == migration.version && **checksum == *migration.checksum
+            });
+    if !same_history {
+        return Ok(false);
+    }
+    let owner = store_owner(conn).await?;
+    Ok(owner.as_deref() == Some(store.as_str()))
+}
+
+/// [`migrate_store`]'s work, on a connection that already holds
+/// `CONCURRENT_INDEX_LOCK` ([`migrate`] calls it for `main` inside its own
+/// hold, so a pool of one connection is enough).
+///
+/// 1. Creates schema `catalog` if absent (a new store), so the history table
+///    has somewhere to go.
+/// 2. Adoption: when `catalog.catalog_state` exists and the history has no
+///    rows, the account migrations built the schema, so the baseline is
+///    recorded as applied (version, description and the checksum embedded
+///    in this binary) instead of run.
+/// 3. Runs every catalog migration not yet applied.
+/// 4. Writes the identity row if there is none, then refuses one naming
+///    another store.
+///
+/// # Errors
+/// As for [`migrate_store`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "db.migrate_store"))]
+async fn migrate_store_locked(
+    conn: &mut PgConnection,
+    store: &StoreName,
+) -> Result<StoreMigration, OkfError> {
+    let has_schema: bool = sqlx::query_scalar("SELECT to_regnamespace('catalog') IS NOT NULL")
+        .fetch_one(&mut *conn)
+        .await?;
+    if !has_schema {
+        sqlx::query("CREATE SCHEMA catalog")
+            .execute(&mut *conn)
+            .await?;
+    }
+    let has_state: bool =
+        sqlx::query_scalar("SELECT to_regclass('catalog.catalog_state') IS NOT NULL")
+            .fetch_one(&mut *conn)
+            .await?;
+    let before = history_len(conn).await?;
+    let adopted = has_state && before == 0;
+    if adopted {
+        // `skip = true` writes the history row of every migration up to the
+        // target without running its SQL: here, the baseline alone.
+        // `run_direct` is what `skip` and `run` call; it takes the connection
+        // itself, where their `Acquire` bound is "not general enough" for a
+        // future that must be `Send` (sqlx documents it as the way around).
+        CATALOG_MIGRATOR
+            .run_direct(Some(BASELINE_VERSION), &mut *conn, true)
+            .await?;
+        tracing::info!(store = %store, "adopted the catalog schema: baseline recorded as applied");
+    }
+    let skipped = usize::from(adopted);
+    CATALOG_MIGRATOR.run_direct(None, &mut *conn, false).await?;
+    let after = history_len(conn).await?;
+    // A store with no identity row takes this store's name; one that has a
+    // row keeps it.
+    sqlx::query(
+        "INSERT INTO catalog.store_identity (name) SELECT $1 \
+         WHERE NOT EXISTS (SELECT 1 FROM catalog.store_identity)",
+    )
+    .bind(store.as_str())
+    .execute(&mut *conn)
+    .await?;
+    let owner = store_owner(conn).await?;
+    if owner.as_deref() != Some(store.as_str()) {
+        return Err(OkfError::Refused {
+            reason: format!(
+                "this database belongs to store {}, not {store}",
+                owner.unwrap_or_default()
+            ),
+        });
+    }
+    // `try_from`: the counts are row counts, never negative.
+    let applied = usize::try_from(after - before)
+        .unwrap_or_default()
+        .saturating_sub(skipped);
+    Ok(StoreMigration { adopted, applied })
+}
+
+/// How many rows the store's migration history has (0 when the table does
+/// not exist yet).
+///
+/// # Errors
+/// [`OkfError::Database`] (or `Busy`) for a driver error.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "db.history_len"))]
+async fn history_len(conn: &mut PgConnection) -> Result<i64, OkfError> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT to_regclass('catalog._sqlx_migrations') IS NOT NULL")
+            .fetch_one(&mut *conn)
+            .await?;
+    if !exists {
+        return Ok(0);
+    }
+    Ok(
+        sqlx::query_scalar("SELECT count(*) FROM catalog._sqlx_migrations")
+            .fetch_one(&mut *conn)
+            .await?,
+    )
+}
+
+/// The store a database says it belongs to: its `catalog.store_identity`
+/// row.
+///
+/// # Arguments
+/// * `conn` - a connection to the database (any `search_path`).
+///
+/// # Returns
+/// The name, or `None` when the table or its row does not exist yet (a
+/// database no store has migrated).
+///
+/// # Errors
+/// [`OkfError::Database`] (or `Busy`) for a driver error.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "db.store_owner"))]
+pub async fn store_owner(conn: &mut PgConnection) -> Result<Option<String>, OkfError> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT to_regclass('catalog.store_identity') IS NOT NULL")
+            .fetch_one(&mut *conn)
+            .await?;
+    if !exists {
+        return Ok(None);
+    }
+    Ok(
+        sqlx::query_scalar("SELECT name FROM catalog.store_identity")
+            .fetch_optional(&mut *conn)
+            .await?,
+    )
+}
+
+/// Whether a database holds the account tables (`public.stores`): it is the
+/// account database, whatever name reached it.
+///
+/// # Arguments
+/// * `conn` - a connection to the database (any `search_path`).
+///
+/// # Errors
+/// [`OkfError::Database`] (or `Busy`) for a driver error.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "db.holds_account_tables"))]
+pub async fn holds_account_tables(conn: &mut PgConnection) -> Result<bool, OkfError> {
+    Ok(
+        sqlx::query_scalar("SELECT to_regclass('public.stores') IS NOT NULL")
+            .fetch_one(&mut *conn)
+            .await?,
+    )
 }
 
 /// An apalis setup failure as an [`OkfError`].
@@ -278,7 +566,9 @@ mod tests {
                 "users",
             ]
         );
-        // The catalog's own tables live in schema `catalog` (0041; 0042 adds its audit).
+        // The catalog's own tables live in schema `catalog` (0041; 0042 adds
+        // its audit), beside the catalog migrator's history and the store's
+        // identity (catalog migration 0002).
         let catalog_tables: Vec<String> = sqlx::query_scalar(
             "SELECT table_name::text FROM information_schema.tables \
              WHERE table_schema = 'catalog' ORDER BY table_name COLLATE \"C\"",
@@ -289,6 +579,7 @@ mod tests {
         assert_eq!(
             catalog_tables,
             [
+                "_sqlx_migrations",
                 "catalog_audit_entries",
                 "catalog_state",
                 "changeset_entries",
@@ -302,6 +593,7 @@ mod tests {
                 "maintenance_state",
                 "maintenance_work",
                 "revisions",
+                "store_identity",
             ]
         );
         // apalis keeps everything in its own schema, with its own history.
@@ -2020,6 +2312,179 @@ mod tests {
         assert_eq!(
             applied,
             i64::try_from(super::MIGRATOR.iter().count()).unwrap()
+        );
+    }
+
+    /// Every object of schema `catalog` that a schema-only dump would show,
+    /// one line each, sorted: tables and columns (in column order, with
+    /// type, nullability, default and identity), constraints, indexes,
+    /// sequences, triggers and functions, each as Postgres prints its
+    /// definition. Two databases with equal lists have the same `catalog`
+    /// schema whatever path built it.
+    async fn catalog_schema(pool: &PgPool) -> Vec<String> {
+        let queries = [
+            // Columns by position among the live ones: a column dropped in
+            // some history leaves a gap in `attnum` that a dump never shows.
+            "SELECT format('column %s %s %s %s %s %s', c.relname, \
+                    row_number() OVER (PARTITION BY c.oid ORDER BY a.attnum), a.attname, \
+                    format_type(a.atttypid, a.atttypmod), a.attnotnull, \
+                    coalesce(pg_get_expr(d.adbin, d.adrelid), '-') || ' ' || a.attidentity::text) \
+             FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid \
+             LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum \
+             WHERE c.relnamespace = 'catalog'::regnamespace AND c.relkind = 'r' \
+               AND a.attnum > 0 AND NOT a.attisdropped",
+            "SELECT format('constraint %s %s %s', c.relname, k.conname, pg_get_constraintdef(k.oid)) \
+             FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid \
+             WHERE k.connamespace = 'catalog'::regnamespace",
+            "SELECT format('index %s', indexdef) FROM pg_indexes WHERE schemaname = 'catalog'",
+            "SELECT format('sequence %s %s %s %s %s', sequencename, data_type, start_value, \
+                    increment_by, cache_size) \
+             FROM pg_sequences WHERE schemaname = 'catalog'",
+            "SELECT format('trigger %s', pg_get_triggerdef(t.oid)) \
+             FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid \
+             WHERE c.relnamespace = 'catalog'::regnamespace AND NOT t.tgisinternal",
+            "SELECT format('function %s', pg_get_functiondef(p.oid)) \
+             FROM pg_proc p WHERE p.pronamespace = 'catalog'::regnamespace",
+            "SELECT format('relation %s %s %s', relname, relkind, relpersistence) \
+             FROM pg_class WHERE relnamespace = 'catalog'::regnamespace",
+        ];
+        let mut lines = Vec::new();
+        for query in queries {
+            let rows: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(query))
+                .fetch_all(pool)
+                .await
+                .unwrap();
+            lines.extend(rows);
+        }
+        lines.sort();
+        lines
+    }
+
+    /// Puts an adopted test database back to the state migrations 0041 and
+    /// 0042 leave: the catalog schema without its migrator's history or
+    /// the identity table (catalog migration 0002).
+    async fn undo_adoption(pool: &PgPool) {
+        sqlx::query("DROP TABLE catalog._sqlx_migrations, catalog.store_identity")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn adopted_schema_equals_a_fresh_store_schema() {
+        // The account database as 0041 and 0042 leave it, then adopted by
+        // `migrate` (what `okf-mcp migrate` runs).
+        let adopted = test_db().await;
+        undo_adoption(&adopted.pool).await;
+        migrate(&adopted.pool).await.unwrap();
+        // An empty database migrated as a new store.
+        let fresh = pg_support::TestDb::start().await;
+        let mut connection = fresh.pool.acquire().await.unwrap();
+        let shared = StoreName::parse("shared-1").unwrap();
+        let migration = migrate_store(&mut connection, &shared).await.unwrap();
+        drop(connection);
+
+        let adopted_schema = catalog_schema(&adopted.pool).await;
+        let fresh_schema = catalog_schema(&fresh.pool).await;
+
+        assert_eq!(
+            migration,
+            StoreMigration {
+                adopted: false,
+                applied: CATALOG_MIGRATOR.iter().count()
+            }
+        );
+        // Not trivially equal: both hold every catalog table.
+        assert!(adopted_schema
+            .iter()
+            .any(|line| line.starts_with("relation catalog_audit_entries ")));
+        assert_eq!(adopted_schema, fresh_schema);
+        // Each database answers to its own store.
+        let mut connection = adopted.pool.acquire().await.unwrap();
+        assert_eq!(
+            store_owner(&mut connection).await.unwrap().as_deref(),
+            Some("main")
+        );
+        // The adopted baseline was recorded with the embedded checksum, not
+        // run (sqlx writes -1 for a migration it only records).
+        let (checksum, took): (Vec<u8>, i64) = sqlx::query_as(
+            "SELECT checksum, execution_time FROM catalog._sqlx_migrations WHERE version = $1",
+        )
+        .bind(BASELINE_VERSION)
+        .fetch_one(&mut *connection)
+        .await
+        .unwrap();
+        let baseline = CATALOG_MIGRATOR
+            .iter()
+            .find(|migration| migration.version == BASELINE_VERSION)
+            .unwrap();
+        assert_eq!(checksum, *baseline.checksum);
+        assert_eq!(took, -1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn adoption_runs_once_under_concurrent_starts() {
+        let db = test_db().await;
+        undo_adoption(&db.pool).await;
+        const STARTS: usize = 4;
+
+        // Each start on a connection of its own, all at once: the advisory
+        // lock serialises them, and only the first finds nothing recorded.
+        let starts = (0..STARTS).map(|_| {
+            let pool = db.pool.clone();
+            tokio::spawn(async move {
+                let mut connection = pool.acquire().await.unwrap();
+                migrate_store(&mut connection, &StoreName::main()).await
+            })
+        });
+        let mut outcomes = Vec::with_capacity(STARTS);
+        for start in starts.collect::<Vec<_>>() {
+            outcomes.push(start.await.unwrap().unwrap());
+        }
+        // A server start after them is a no-op too.
+        migrate(&db.pool).await.unwrap();
+
+        assert_eq!(outcomes.iter().filter(|outcome| outcome.adopted).count(), 1);
+        let versions: Vec<i64> =
+            sqlx::query_scalar("SELECT version FROM catalog._sqlx_migrations ORDER BY version")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        let embedded: Vec<i64> = CATALOG_MIGRATOR
+            .iter()
+            .map(|migration| migration.version)
+            .collect();
+        assert_eq!(versions, embedded);
+        let owners: Vec<String> = sqlx::query_scalar("SELECT name FROM catalog.store_identity")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(owners, ["main"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_opened_under_another_name_is_refused_and_keeps_its_identity() {
+        let db = pg_support::TestDb::start().await;
+        let mut connection = db.pool.acquire().await.unwrap();
+        let first = StoreName::parse("shared-1").unwrap();
+        let second = StoreName::parse("shared-2").unwrap();
+        migrate_store(&mut connection, &first).await.unwrap();
+
+        let refused = migrate_store(&mut connection, &second).await.unwrap_err();
+
+        assert!(
+            matches!(&refused, OkfError::Refused { reason }
+                if reason.contains("belongs to store shared-1")),
+            "{refused:?}"
+        );
+        assert_eq!(
+            store_owner(&mut connection).await.unwrap().as_deref(),
+            Some("shared-1")
+        );
+        // Its own name still opens it (a no-op).
+        assert_eq!(
+            migrate_store(&mut connection, &first).await.unwrap(),
+            StoreMigration::default()
         );
     }
 

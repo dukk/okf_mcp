@@ -93,6 +93,34 @@ const POOL_SIZE: u32 = 8;
 /// `okf_mcp::db` in the integration tests).
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations/accounts");
 
+/// The catalog store migrations, with their history in
+/// `catalog._sqlx_migrations`, as in `okf_mcp::db::CATALOG_MIGRATOR`.
+fn catalog_migrator() -> Migrator {
+    let mut migrator = sqlx::migrate!("./migrations/catalog");
+    migrator.dangerous_set_table_name("catalog._sqlx_migrations");
+    migrator
+}
+
+/// What `okf_mcp::db::migrate` does to the catalog schema after the account
+/// migrations: adopts the baseline (records it without running it: 0041
+/// and 0042 built the schema) and runs the later catalog migrations. It
+/// writes no `catalog.store_identity` row, unlike `migrate`, which writes
+/// `main`: a copy of the template is then free to be opened as any store
+/// (tests use a second migrated database as a `host` store), and the first
+/// store to open it writes its own name.
+///
+/// # Errors
+/// [`sqlx::Error`] if a migration fails.
+async fn adopt_catalog(connection: &mut PgConnection) -> Result<(), sqlx::Error> {
+    let migrator = catalog_migrator();
+    // `run_direct` with `skip = true` up to version 1: the baseline's
+    // history row alone. A database with no account migrations has no
+    // catalog schema to adopt.
+    migrator.run_direct(Some(1), &mut *connection, true).await?;
+    migrator.run_direct(None, &mut *connection, false).await?;
+    Ok(())
+}
+
 /// apalis-postgres' migrations (schema `apalis`, history in
 /// `apalis._sqlx_migrations`), which `okf_mcp::db::migrate` runs after
 /// [`MIGRATOR`].
@@ -182,6 +210,11 @@ impl TestDb {
             .expect("connect to the test database");
         if migrated && container.is_some() {
             MIGRATOR.run(&pool).await.expect("migrations apply");
+            let mut connection = pool.acquire().await.expect("a connection");
+            adopt_catalog(&mut connection)
+                .await
+                .expect("catalog migrations apply");
+            drop(connection);
             apalis_migrator()
                 .run(&pool)
                 .await
@@ -294,7 +327,12 @@ async fn shared_template(server_url: &str) -> String {
 /// version and checksum, so a schema change gets a template of its own.
 pub fn template_name() -> String {
     let mut hasher = Sha256::new();
-    for migration in MIGRATOR.iter().chain(apalis_migrator().iter()) {
+    let catalog = catalog_migrator();
+    for migration in MIGRATOR
+        .iter()
+        .chain(catalog.iter())
+        .chain(apalis_migrator().iter())
+    {
         hasher.update(migration.version.to_le_bytes());
         hasher.update(&migration.checksum);
     }
@@ -369,6 +407,7 @@ async fn build_template(
     execute_ddl(admin, format!("CREATE DATABASE {}", quoted(name))).await?;
     let mut template = PgConnection::connect(&format!("{server_url}/{name}")).await?;
     MIGRATOR.run(&mut template).await?;
+    adopt_catalog(&mut template).await?;
     apalis_migrator().run(&mut template).await?;
     // A copy needs the template to have no connections.
     template.close().await?;
