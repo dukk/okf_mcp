@@ -291,6 +291,10 @@ impl CatalogCache {
                 self.states.invalidate(&row.id).await;
                 return Err(error);
             }
+            // An outage is not a stale answer: the catalog has changed and
+            // the store cannot say how, so the read is unavailable (the old
+            // snapshot is still served for any other failure, below).
+            Err(error @ OkfError::StoreUnavailable { .. }) => return Err(error),
             Err(error) => {
                 self.refresh_failed(row.id, row.generation, &row.name, &error)
                     .await
@@ -461,7 +465,9 @@ impl CatalogCache {
         read: impl std::future::Future<Output = Result<T, OkfError>>,
     ) -> Result<T, OkfError> {
         match tokio::time::timeout(self.stores.state_load_timeout(), read).await {
-            Ok(outcome) => outcome.map_err(|error| crate::stores::classify_store_failure(store, error)),
+            Ok(outcome) => {
+                outcome.map_err(|error| crate::stores::classify_store_failure(store, error))
+            }
             Err(_) => Err(OkfError::store_unavailable(store)),
         }
     }

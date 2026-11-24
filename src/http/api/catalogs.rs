@@ -18,6 +18,8 @@ use crate::auth::{CredentialKind, Principal};
 use crate::catalog::CatalogState;
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
+use crate::http::api::context;
+use crate::http::requester::Requester;
 use crate::http::{archives, AppError};
 use crate::labels::directory::{Labels, Wanted};
 use crate::labels::{catalog_label, DisplayName};
@@ -255,8 +257,12 @@ pub(crate) struct CatalogDeleted {
 async fn list_catalogs(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
+    requester: Requester,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<CatalogListing>, AppError> {
+    // The call's context remembers which stores are down, so a store that
+    // fails once costs this request one bound, not one per catalog on it.
+    let ctx = context(&app, Arc::clone(&principal), requester);
     let page = reachable_page(&app, &principal, &query).await?;
     let mut wanted = Wanted::default();
     for row in &page.items {
@@ -269,13 +275,17 @@ async fn list_catalogs(
     let mut unavailable = page.unavailable;
     for row in &page.items {
         if unavailable.contains(&row.name) {
+            ctx.mark_down(row);
             continue;
         }
-        match app.listed_state(row).await {
+        match ctx.listed_state(row).await {
             Ok(Some(state)) => catalogs.push(CatalogSummary::of(row, &state, &principal, &labels)),
             Ok(None) => {}
             // The store went away since the page was read.
-            Err(OkfError::StoreUnavailable { .. }) => unavailable.push(row.name.clone()),
+            Err(OkfError::StoreUnavailable { .. }) => {
+                ctx.mark_down(row);
+                unavailable.push(row.name.clone());
+            }
             Err(error) => return Err(error.into()),
         }
     }

@@ -263,8 +263,18 @@ impl TestApp {
         });
         self.repoint(store, proxy_port).await;
         // One idle connection through the proxy, so the pool exists.
-        let db = self.app.stores().get(store).await.expect("open through the proxy");
-        drop(db.executor().acquire().await.expect("a connection through the proxy"));
+        let db = self
+            .app
+            .stores()
+            .get(store)
+            .await
+            .expect("open through the proxy");
+        drop(
+            db.executor()
+                .acquire()
+                .await
+                .expect("a connection through the proxy"),
+        );
         StoreProxy { task }
     }
 

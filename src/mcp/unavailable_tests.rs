@@ -309,7 +309,14 @@ async fn an_unnamed_console_search_probes_a_lost_store_once() {
     let key = every_catalog_admin(&test).await;
     let before = stalled.accepted();
 
-    let (status, body) = bounded(send(&test, "GET", "/api/v1/search?q=alpha", Some(&key), None)).await;
+    let (status, body) = bounded(send(
+        &test,
+        "GET",
+        "/api/v1/search?q=alpha",
+        Some(&key),
+        None,
+    ))
+    .await;
 
     assert_eq!(status, axum::http::StatusCode::OK, "{body}");
     assert_eq!(body["unavailable"], serde_json::json!(["remote"]), "{body}");
@@ -327,7 +334,9 @@ async fn list_catalogs_probes_a_lost_selected_store_once() {
     let ctx = context(&test, principal(&[], None), None);
     let before = stalled.accepted();
 
-    let listed = bounded(crate::mcp::catalogs::list(&ctx, None)).await.unwrap();
+    let listed = bounded(crate::mcp::catalogs::list(&ctx, None))
+        .await
+        .unwrap();
 
     assert_eq!(listed.unavailable, ["remote"]);
     assert_eq!(
@@ -339,18 +348,18 @@ async fn list_catalogs_probes_a_lost_selected_store_once() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_store_that_goes_away_after_its_pool_opened_is_unavailable_not_a_database_error() {
-    let test = app_with(
-        &[("home", &[("note.md", HOME_NOTE)])],
-        quick_config(None),
-    )
-    .await;
+    let test = app_with(&[("home", &[("note.md", HOME_NOTE)])], quick_config(None)).await;
     let store = test
         .catalog_on_new_store("store-b", "remote", &[("note.md", REMOTE_NOTE)])
         .await;
     let proxy = test.front_with_a_proxy(&store).await;
     // The directory row is cached and the pool is open; only the state is
     // not loaded. Then the store goes away.
-    test.app.catalog_row("remote").await.unwrap().expect("the row");
+    test.app
+        .catalog_row("remote")
+        .await
+        .unwrap()
+        .expect("the row");
     proxy.stop().await;
     let ctx = context(&test, principal(&[], None), None);
 
@@ -380,7 +389,11 @@ async fn a_store_whose_query_stalls_is_unavailable_within_the_bound() {
     let store = test
         .catalog_on_new_store("store-b", "remote", &[("note.md", REMOTE_NOTE)])
         .await;
-    test.app.catalog_row("remote").await.unwrap().expect("the row");
+    test.app
+        .catalog_row("remote")
+        .await
+        .unwrap()
+        .expect("the row");
     // A lock on the catalog's documents that nobody releases: the load's
     // query waits for it, on a connection that is up.
     let db = test.app.stores().get(&store).await.unwrap();
@@ -434,6 +447,166 @@ async fn list_catalogs_spends_one_bound_on_a_store_that_fails_at_the_state_load(
 
     assert_eq!(listed.unavailable, ["remote-1", "remote-2"]);
     // One stalled load, not one per catalog on the store.
+    assert!(
+        started.elapsed() < load_bound * 3 / 2,
+        "took {:?} for a load bound of {load_bound:?}",
+        started.elapsed()
+    );
+    lock.rollback().await.unwrap();
+}
+
+/// Takes an exclusive lock on the store's documents, so a query on them
+/// waits on a connection that is up. Roll the returned transaction back to
+/// release it.
+async fn lock_documents(
+    test: &TestApp,
+    store: &crate::stores::StoreName,
+) -> sqlx::Transaction<'static, sqlx::Postgres> {
+    let db = test.app.stores().get(store).await.unwrap();
+    let mut lock = db.executor().begin().await.unwrap();
+    sqlx::query("LOCK TABLE documents IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    lock
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refresh_that_stalls_is_unavailable_not_a_stale_snapshot() {
+    let test = app_with(
+        &[("home", &[("note.md", HOME_NOTE)])],
+        Config {
+            store_connect_timeout: Duration::from_millis(300),
+            ..Config::default()
+        },
+    )
+    .await;
+    let store = test
+        .catalog_on_new_store("store-b", "remote", &[("note.md", REMOTE_NOTE)])
+        .await;
+    let ctx = context(&test, principal(&[], None), Some(&["remote", "home"]));
+    // Load the state while the store answers.
+    let before = bounded(run(&ctx, search_for("alpha", &["remote"])))
+        .await
+        .unwrap();
+    assert!(before.unavailable.is_empty() && !before.hits.is_empty());
+    // The catalog moves on, then the store stops answering its queries.
+    let id = test.app.catalog_row("remote").await.unwrap().unwrap().id;
+    let db = test.app.stores().get(&store).await.unwrap();
+    sqlx::query("UPDATE catalog_state SET generation = generation + 1 WHERE id = $1")
+        .bind(id)
+        .execute(db.executor())
+        .await
+        .unwrap();
+    test.app.directory().mark_all_stale().await;
+    let lock = lock_documents(&test, &store).await;
+    let fresh = context(&test, principal(&[], None), Some(&["remote", "home"]));
+
+    let searched = bounded(run(&fresh, search_for("alpha", &["home", "remote"])))
+        .await
+        .unwrap();
+    let blocked = bounded(get_concept(&fresh, concept("nowhere"))).await;
+
+    assert_eq!(searched.unavailable, ["remote"]);
+    assert_eq!(searched.hits.len(), 1, "only home answers");
+    assert!(
+        matches!(blocked, Err(OkfError::StoreUnavailable { .. })),
+        "{blocked:?}"
+    );
+    lock.rollback().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_searches_on_an_uncached_row_of_a_stalled_store_both_get_partial_results() {
+    let (test, _stalled, _) = app_with_a_stalled_store(quick_config(None)).await;
+    // The probe above did not cache the row: both searches must resolve it.
+    let first = context(&test, principal(&[], None), None);
+    let second = context(&test, principal(&[], None), None);
+
+    let (one, two) = bounded(async {
+        tokio::join!(
+            run(&first, search_for("alpha", &["main", "remote"])),
+            run(&second, search_for("alpha", &["main", "remote"]))
+        )
+    })
+    .await;
+
+    for result in [one, two] {
+        let result = result.expect("a lost store is named, not a failure");
+        assert_eq!(result.unavailable, ["remote"]);
+        assert_eq!(result.hits.len(), 1);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_searches_on_a_cached_row_with_a_stalled_state_both_get_partial_results() {
+    let test = app_with(
+        &[("home", &[("note.md", HOME_NOTE)])],
+        Config {
+            store_connect_timeout: Duration::from_millis(300),
+            ..Config::default()
+        },
+    )
+    .await;
+    let store = test
+        .catalog_on_new_store("store-b", "remote", &[("note.md", REMOTE_NOTE)])
+        .await;
+    // The row is cached; its state is not loaded, and its load will stall.
+    test.app
+        .catalog_row("remote")
+        .await
+        .unwrap()
+        .expect("the row");
+    let lock = lock_documents(&test, &store).await;
+    let first = context(&test, principal(&[], None), None);
+    let second = context(&test, principal(&[], None), None);
+
+    let (one, two) = bounded(async {
+        tokio::join!(
+            run(&first, search_for("alpha", &["home", "remote"])),
+            run(&second, search_for("alpha", &["home", "remote"]))
+        )
+    })
+    .await;
+
+    for result in [one, two] {
+        let result = result.expect("a stalled load is named, not a failure");
+        assert_eq!(result.unavailable, ["remote"]);
+        assert_eq!(result.hits.len(), 1);
+    }
+    lock.rollback().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_catalog_listing_route_spends_one_load_bound_on_a_store_that_stalls() {
+    use crate::http::api::testing::{every_catalog_admin, send};
+    let connect = Duration::from_millis(300);
+    let test = app_with(
+        &[("main", &[("note.md", HOME_NOTE)])],
+        Config {
+            store_connect_timeout: connect,
+            ..Config::default()
+        },
+    )
+    .await;
+    let store = test
+        .catalog_on_new_store("store-b", "remote-1", &[("note.md", REMOTE_NOTE)])
+        .await;
+    test.catalog_on_store(&store, "remote-2", &[("note.md", REMOTE_NOTE)])
+        .await;
+    let key = every_catalog_admin(&test).await;
+    let lock = lock_documents(&test, &store).await;
+    let load_bound = test.app.stores().state_load_timeout();
+    let started = std::time::Instant::now();
+
+    let (status, body) = bounded(send(&test, "GET", "/api/v1/catalogs", Some(&key), None)).await;
+
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert_eq!(
+        body["unavailable"],
+        serde_json::json!(["remote-1", "remote-2"]),
+        "{body}"
+    );
     assert!(
         started.elapsed() < load_bound * 3 / 2,
         "took {:?} for a load bound of {load_bound:?}",
