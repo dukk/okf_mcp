@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1075,
+  "next_claim_seq": 1076,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "bd99c4884032fe2a00e166ac8bbf2cf0e97958a7741e565c9c2c993035d1035c"
+    "mac": "3466a069a2ab516e2999f3c9cc440cf8383dc72f3ad9e70ffea6a26dbb8b3e30"
   },
-  "next_evidence_seq": 1574,
+  "next_evidence_seq": 1583,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "8c8686ef2e3f21a1e34b1d5c09b8db544402fe1138b956a074aa4e86cd1388f5"
+    "mac": "12a6e7b4d6fa7c866a7fa43fabacce305529cbdd3b36a30223a8006562baa526"
   },
   "claims": [
     {
@@ -86172,6 +86172,28 @@
             "by": "server",
             "mac": "d66a00587ccbec0c5637f2cd10a18559d81074904c16c127c3016ea06a37aaa2"
           }
+        },
+        {
+          "id": "EVD-1578",
+          "kind": "test",
+          "locator": "store::catalogs::delete_tests::a_deleted_catalog_disappears_before_its_store_data_is_gone",
+          "summary": "The test deletes a catalog, asserts the lookups no longer see it and the store data is still present until cleanup. Passes in the 10x repeat run and the full gate at the final head (re-anchored on a clean tree).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs_delete_tests.rs",
+              "lines": {
+                "start": 103,
+                "end": 141
+              },
+              "commit": "9f1e9021aff019da510ed0c069bfb6ffb8e1ed10"
+            }
+          },
+          "recorded_at": "2026-11-24T02:48:25.435470760Z",
+          "seal": {
+            "by": "server",
+            "mac": "5687f3a2d22c6a50f56b8876126deb387b05609c37e85f9c4dc237602403d568"
+          }
         }
       ],
       "verdicts": [
@@ -86191,10 +86213,10 @@
         }
       ],
       "created_at": "2026-11-24T02:11:41.769345711Z",
-      "updated_at": "2026-11-24T02:23:49.555457297Z",
+      "updated_at": "2026-11-24T02:48:25.435470760Z",
       "seal": {
         "by": "server",
-        "mac": "26bb966ac5bc9021fef174712921cd18ce0baf6bd4d0578d1507b4f89d4b7182"
+        "mac": "27c7d3ba766d0a4de1198ca662a190cd6a17dcc6f31153c36d52eaab65df3776"
       }
     },
     {
@@ -86263,6 +86285,28 @@
             "by": "server",
             "mac": "ae5cfadec506813ab5173bc34e654588577beb49e02476e562cc86f8a2665292"
           }
+        },
+        {
+          "id": "EVD-1579",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs delete_on",
+          "summary": "delete_on's doc comment states the global lock order and the body takes account row locks, commits the account transaction, then opens the store connection. Re-anchored on a clean tree at the final head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 1976,
+                "end": 2114
+              },
+              "commit": "9f1e9021aff019da510ed0c069bfb6ffb8e1ed10"
+            }
+          },
+          "recorded_at": "2026-11-24T02:48:25.501366079Z",
+          "seal": {
+            "by": "server",
+            "mac": "2260b8d77e00e35e3f2340bb11200f64550dbb6e3de4baee0426b0ac835ec2fc"
+          }
         }
       ],
       "verdicts": [
@@ -86282,10 +86326,10 @@
         }
       ],
       "created_at": "2026-11-24T02:11:41.769345711Z",
-      "updated_at": "2026-11-24T02:23:49.760069906Z",
+      "updated_at": "2026-11-24T02:48:25.501366079Z",
       "seal": {
         "by": "server",
-        "mac": "0ea4bf9059c820e14b7ae3cf7c1626eb43921665940e0000f7a49b3fff1be545"
+        "mac": "6fbff374d3abf18577d0437bc57ea8b6f348f4dc6b69aa423f14ee6ff6cf7b55"
       }
     },
     {
@@ -86514,6 +86558,28 @@
             "by": "server",
             "mac": "9b484280971888e2fa84e470409216e59a2dceff271bf3718f625836bde8e052"
           }
+        },
+        {
+          "id": "EVD-1580",
+          "kind": "test",
+          "locator": "store::catalogs::delete_tests::a_deleted_catalogs_name_is_reserved_until_cleanup",
+          "summary": "The test deletes a catalog, shows creating the same name is refused, then after cleanup it succeeds. Re-anchored on a clean tree.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs_delete_tests.rs",
+              "lines": {
+                "start": 173,
+                "end": 191
+              },
+              "commit": "9f1e9021aff019da510ed0c069bfb6ffb8e1ed10"
+            }
+          },
+          "recorded_at": "2026-11-24T02:48:25.566727015Z",
+          "seal": {
+            "by": "server",
+            "mac": "7876adaa4ce6b85627143b5f97054c352fab81a3d1e359148481a7624d7430ef"
+          }
         }
       ],
       "verdicts": [
@@ -86532,10 +86598,10 @@
         }
       ],
       "created_at": "2026-11-24T02:11:41.769345711Z",
-      "updated_at": "2026-11-24T02:23:50.161405438Z",
+      "updated_at": "2026-11-24T02:48:25.566727015Z",
       "seal": {
         "by": "server",
-        "mac": "6b87f289981be264ce8bf32b59dbf79a5a9d5e9eb58c8a6fa60e4dca50611c1d"
+        "mac": "1e2dd4dfbc453fe6d374cfbe92ecb30170f8c0ff1d163c9d0a3097183116de7c"
       }
     },
     {
@@ -86582,6 +86648,28 @@
             "by": "server",
             "mac": "6768073ac35173ae4e71d208374d4c966f4d719fcf627e470df22d68c9b6d4d8"
           }
+        },
+        {
+          "id": "EVD-1581",
+          "kind": "test",
+          "locator": "store::catalogs::delete_tests::catalog_audit_survives_catalog_deletion",
+          "summary": "The test checks the catalog's audit entries are still on the store after delete and after cleanup (outcome check; the append-only guard and cleanup not touching the table enforce it). Re-anchored on a clean tree.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs_delete_tests.rs",
+              "lines": {
+                "start": 199,
+                "end": 251
+              },
+              "commit": "9f1e9021aff019da510ed0c069bfb6ffb8e1ed10"
+            }
+          },
+          "recorded_at": "2026-11-24T02:48:25.631755500Z",
+          "seal": {
+            "by": "server",
+            "mac": "e51d73ab566e03e3fd1d1689ac997b277170341251fbe14944c51bd4b651327f"
+          }
         }
       ],
       "verdicts": [
@@ -86600,10 +86688,10 @@
         }
       ],
       "created_at": "2026-11-24T02:11:41.769345711Z",
-      "updated_at": "2026-11-24T02:23:50.298572784Z",
+      "updated_at": "2026-11-24T02:48:25.631755500Z",
       "seal": {
         "by": "server",
-        "mac": "86e2c1f465c55eca3c2573bc167d85fe1e88929dac6a35969152d45fa1763c91"
+        "mac": "d41814ebc5fede1772d9e88985fb93e66a60ee2a4a51466461c5c152ac7a9806"
       }
     },
     {
@@ -86895,6 +86983,28 @@
             "by": "server",
             "mac": "2799ae19608491a9f7cd88a6d717239c2a64a46ff0d8b476bf7b8ab15f789071"
           }
+        },
+        {
+          "id": "EVD-1574",
+          "kind": "analysis",
+          "locator": "src/store/cleanups.rs:214-222; src/store/cleanups_tests.rs:190-238",
+          "summary": "At head 68d7d15 the per-store select is ORDER BY attempts, id LIMIT $2, so rows that failed less go first; a failing row cannot starve the rest. Test rows_that_keep_failing_do_not_starve_the_rest_of_their_store (100 failing + 1 good) passes; failing note_failure also loops on to the next row and store.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 214,
+                "end": 222
+              },
+              "commit": "68d7d1559bbda8e1372885f8816893f10bf500da"
+            }
+          },
+          "recorded_at": "2026-11-24T02:38:39.827411209Z",
+          "seal": {
+            "by": "server",
+            "mac": "5e821c31504f01bde5327a3e75fe46ad5233389d583ec14d34a12ef8150e71f5"
+          }
         }
       ],
       "verdicts": [
@@ -86910,13 +87020,26 @@
             "by": "server",
             "mac": "a3ed193f020466f22daadc44743eaaf57f6f7547887e033d7bcfd64c74855ad6"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Query now orders by attempts, id; starvation test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1574"
+          ],
+          "recorded_at": "2026-11-24T02:38:45.769525656Z",
+          "seal": {
+            "by": "server",
+            "mac": "f0866014f0255363ec3f79dc0db51ca39f68e911a0565972a2bc9c61a0839970"
+          }
         }
       ],
       "created_at": "2026-11-24T02:22:13.867680269Z",
-      "updated_at": "2026-11-24T02:24:16.015795090Z",
+      "updated_at": "2026-11-24T02:38:45.769525656Z",
       "seal": {
         "by": "server",
-        "mac": "d983f48cb8b60ff58456b670460738316dacd6772567d93aa6d780a816196d5a"
+        "mac": "3bf20a825ff7b2b285147782257522d2a124b3101573faf583f446a007c0e07b"
       }
     },
     {
@@ -86967,6 +87090,28 @@
             "by": "server",
             "mac": "6e53b508e400260ca518bcb0ff275087c69ea8063bff00bb2b847abaae22b123"
           }
+        },
+        {
+          "id": "EVD-1575",
+          "kind": "inspection",
+          "locator": "docs/operations.md:2171",
+          "summary": "At head the team.deleted row reads: a shared team is deleted, recorded before the row goes; a refused deletion records nothing; extra none. No catalog or cleanup wording remains (that sits only in catalog.deleted, line 2182).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2171,
+                "end": 2171
+              },
+              "commit": "68d7d1559bbda8e1372885f8816893f10bf500da"
+            }
+          },
+          "recorded_at": "2026-11-24T02:38:39.936895061Z",
+          "seal": {
+            "by": "server",
+            "mac": "4fe4a4709eada0349b22ce92d72af4529ba3ce82d3a49cc512991dbb0b237455"
+          }
         }
       ],
       "verdicts": [
@@ -86982,13 +87127,26 @@
             "by": "server",
             "mac": "56258ea2f616b4d75c165c694017937515346d321b0eaa7cfc1a0bb5627cfb75"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Row restored to team-only wording.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1575"
+          ],
+          "recorded_at": "2026-11-24T02:38:45.837988637Z",
+          "seal": {
+            "by": "server",
+            "mac": "1726726333a1f56d02b379e624dca0bf98dd036e5d8cf4804ec15e0197092550"
+          }
         }
       ],
       "created_at": "2026-11-24T02:22:13.867680269Z",
-      "updated_at": "2026-11-24T02:24:16.128411480Z",
+      "updated_at": "2026-11-24T02:38:45.837988637Z",
       "seal": {
         "by": "server",
-        "mac": "a071c4c0b6c44c4c547b5d709bf9d0658369e91347428450624b93325d6ee14c"
+        "mac": "f0e8b2f07e5e23f60d8a94c09e80560d2a4883c4f75c12fe43e5c1a9e4d1c716"
       }
     },
     {
@@ -87041,6 +87199,28 @@
             "by": "server",
             "mac": "f3d0357d01687a4a18fd784737308db653bbac3af884f2decfdefc3bffddec51"
           }
+        },
+        {
+          "id": "EVD-1576",
+          "kind": "inspection",
+          "locator": "docs/operations.md:1877-1900",
+          "summary": "The false 'marked on the store when it is back' sentence is gone; the section now says that if the store commit fails after the account commit, the data stays unmarked until cleanup removes it. The 100-per-store, attempts ordering, and 20-attempt wording match cleanups.rs (BATCH_PER_STORE, ORDER BY attempts, id).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 1877,
+                "end": 1900
+              },
+              "commit": "68d7d1559bbda8e1372885f8816893f10bf500da"
+            }
+          },
+          "recorded_at": "2026-11-24T02:38:40.091223610Z",
+          "seal": {
+            "by": "server",
+            "mac": "d1cf09c6607ec7da9fc8b1428226edf30fa9bfd402764c30907203ae714b4f85"
+          }
         }
       ],
       "verdicts": [
@@ -87056,13 +87236,26 @@
             "by": "server",
             "mac": "66b8513eb3a13491640584a1d9bbc74a7918750a7237a6bb6b8200914a1d6f17"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "False store-marking sentence removed; remaining statements match the code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1576"
+          ],
+          "recorded_at": "2026-11-24T02:38:45.923604754Z",
+          "seal": {
+            "by": "server",
+            "mac": "50a9113214ac099de7475c09f4822de562ad3440c5de9716001786139ca5320c"
+          }
         }
       ],
       "created_at": "2026-11-24T02:22:13.867680269Z",
-      "updated_at": "2026-11-24T02:24:16.245305194Z",
+      "updated_at": "2026-11-24T02:38:45.923604754Z",
       "seal": {
         "by": "server",
-        "mac": "f42d43e74df80bb737ce0ccf61b3f2f1325965cb45db8841fa2fdd44ac5ee65e"
+        "mac": "99969a73715b2963a7a50b0e6b52de8e1a15102b296aa51350cc41340238da76"
       }
     },
     {
@@ -87299,6 +87492,28 @@
             "by": "server",
             "mac": "07a5f31c82cfbe39993aceb1b75cef43e9bd3fdbea7179df5a8c7f07be7e67d4"
           }
+        },
+        {
+          "id": "EVD-1577",
+          "kind": "test",
+          "locator": "cargo test --lib store::catalogs::delete_tests (x3), store::cleanups::tests (x1)",
+          "summary": "At 68d7d15 the delete_tests module passed 6/6 in three consecutive runs (3.5-4.7 s) and cleanups::tests passed 7/7. The pause registry is now keyed by SERVER_IDENTITY (database plus postmaster start time) rather than the bare database name, which fixes the cross-server collision that likely caused the earlier flake. Three runs is a small sample.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 1782,
+                "end": 1820
+              },
+              "commit": "68d7d1559bbda8e1372885f8816893f10bf500da"
+            }
+          },
+          "recorded_at": "2026-11-24T02:38:40.196591483Z",
+          "seal": {
+            "by": "server",
+            "mac": "510a3ac706125b9af152a03466f9781fdac6a7ff5c01b10a7e90d47cc134c7ad"
+          }
         }
       ],
       "verdicts": [
@@ -87314,13 +87529,26 @@
             "by": "server",
             "mac": "de4f0739a5c38073210aefd95ff9a09828e623f401783b50ffde0ce11d2b62f1"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Tests exist; module passed 3 of 3 runs after the pause-key fix (small sample).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1577"
+          ],
+          "recorded_at": "2026-11-24T02:38:45.998692944Z",
+          "seal": {
+            "by": "server",
+            "mac": "552602bcbb3bd28b8a1fc21da54f718b75c672301852e93b45bb5c5b5d102f78"
+          }
         }
       ],
       "created_at": "2026-11-24T02:22:13.867680269Z",
-      "updated_at": "2026-11-24T02:24:16.650666029Z",
+      "updated_at": "2026-11-24T02:38:45.998692944Z",
       "seal": {
         "by": "server",
-        "mac": "af3012155421b660640a5742c9b1dccc11ddef163a76d288ee8d1c2b19975632"
+        "mac": "9f501a14c6c818da55cefcc940975d83cc1189a7ebebc7b4372b56938d948ae1"
       }
     },
     {
@@ -87627,6 +87855,57 @@
       "seal": {
         "by": "server",
         "mac": "d65111638971b8eb1a7188afe03a8e079129793ee4fd9263d730a9495a7040d5"
+      }
+    },
+    {
+      "id": "CLM-1075",
+      "statement": "At commit 9f1e902, gate.sh fmt, lint (clippy and rustdoc) and dylint exit 0 and gate.sh test passes with 3517 tests passed, 0 failed and 21 ignored across all test binaries.",
+      "kind": "non_functional",
+      "level": "software",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1582",
+          "kind": "log",
+          "locator": "target/i972-logs/full-test2.log (gate.sh test, rc=0); gate.sh fmt and lint rc=0 (final-fmt.log, final-lint.log); dylint ran clean after the last source edit",
+          "summary": "Summing every \"test result\" line of the full gate.sh test log gives 3517 passed, 0 failed, 21 ignored; the log ends \"finished rc=0\". fmt and lint were re-run on the final tree and exited 0. dylint passed after the final edit (the tracing allow on still_deleting_reason).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T02:53:26.728561585Z",
+          "seal": {
+            "by": "server",
+            "mac": "2197098721df849ace470e51d2f99a93650d966ccd3457652c45d180ba085f5c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The full test log sums to 3517 passed, 0 failed and ends rc=0; fmt and lint were re-run on the final tree; dylint passed after the last source edit.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1582"
+          ],
+          "recorded_at": "2026-11-24T02:53:34.925082953Z",
+          "seal": {
+            "by": "server",
+            "mac": "c3fc3040ed84bf4624b76cf45c8a7f797c7e5675925bb5fafbf5192033c94610"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:52:52.753609780Z",
+      "updated_at": "2026-11-24T02:53:34.925082953Z",
+      "seal": {
+        "by": "server",
+        "mac": "75c241a7800ad018c028ef3e3b63d7c9851baf6ec4e14fcd62d1882c25f4b031"
       }
     }
   ]
