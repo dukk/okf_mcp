@@ -100,6 +100,18 @@ impl ChangesetState {
     }
 }
 
+/// What names a changeset across stores: its catalog's id (unique server
+/// wide) and its own `changesets.id`, which each store numbers from its own
+/// sequence, so two stores hand out the same one (issue #1022). Every
+/// in-memory map or lock keyed by a changeset uses this, never the bare id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ChangesetKey {
+    /// The catalog's id.
+    pub catalog_id: i64,
+    /// The changeset's id within its store.
+    pub id: i64,
+}
+
 /// A changeset row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangesetRow {
@@ -123,6 +135,26 @@ pub struct ChangesetRow {
     pub created_at: DateTime<Utc>,
     /// Its last change (server clock).
     pub updated_at: DateTime<Utc>,
+}
+
+impl ChangesetRow {
+    /// The key that names this changeset in caches and lock maps.
+    ///
+    /// # Returns
+    /// Its catalog id and its id.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn key(&self) -> ChangesetKey {
+        ChangesetKey {
+            catalog_id: self.catalog_id,
+            id: self.id,
+        }
+    }
 }
 
 /// One changed path of a changeset.

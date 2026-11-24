@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1274,
+  "next_claim_seq": 1283,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "d3fe63ee368478ed1b88e8971b869c313202bd27d537fc846af72d5d08646a3f"
+    "mac": "145ad90c4f1fc0822875ab4995106e2c9b305a44ec14b361ba975433e5d2a58e"
   },
-  "next_evidence_seq": 1877,
+  "next_evidence_seq": 1886,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "b9c3bf535bada7b36f5219c660e64d7dceabbcbcb51fbfcdc0c08d3c20545775"
+    "mac": "c230e6e9c64b03a0c3d2f48733ec4102ef35bfe726704f58edecdd519ee99b83"
   },
   "claims": [
     {
@@ -103807,6 +103807,517 @@
       "seal": {
         "by": "server",
         "mac": "bda56611455ce1535590bc9b9446dc5ea666d5824412fd47b97fdb1cdaff9df8"
+      }
+    },
+    {
+      "id": "CLM-1274",
+      "statement": "Issue #1022 is resolved: the overlay cache no longer collides across stores whose changeset ids are equal.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/1022 (M21.21: overlay cache keyed by store-local changeset id collides across stores)",
+      "derived_from": [],
+      "artifacts": [
+        "src/overlay.rs",
+        "src/mcp/overlay_stores_tests.rs"
+      ],
+      "tags": [
+        "from-issue:1022"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1885",
+          "kind": "analysis",
+          "locator": "children of CLM-1274",
+          "summary": "Key used in cache, build lock, replace, forget and the write queue; no invalidation message names a changeset; the colliding two-store test exists and failed before; other identities audited; changelog present; no plan text affected.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T19:38:56.476212544Z",
+          "seal": {
+            "by": "server",
+            "mac": "3336da4863afe2031b635a123b6fb0b2dc4e0ce2ccc9e35e630c501b16c7d043"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All eight children supported; together they cover the key change, the test, the audit of other keys, and docs.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1885"
+          ],
+          "recorded_at": "2026-11-24T19:39:12.027088095Z",
+          "seal": {
+            "by": "server",
+            "mac": "d2ca6064711527ee68f570cbd060b75aa65d3fc52c136a3efff0eda2bf527e25"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T19:38:20.349004655Z",
+      "updated_at": "2026-11-24T19:39:12.027088095Z",
+      "seal": {
+        "by": "server",
+        "mac": "1cf06e1ebab6549d42713553b0ecd81ab3bad854e013f3cc3671a62ce6711895"
+      }
+    },
+    {
+      "id": "CLM-1275",
+      "statement": "Overlays looks up, builds, locks builds (builds), replaces and invalidates (forget) a cached overlay by ChangesetKey { catalog_id, id }, never by the bare changesets.id.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "Issue #1022 requirement 1; PR body: \"`Overlays` looks up, builds, locks builds, replaces and forgets by that key\"",
+      "derived_from": [
+        "CLM-1274"
+      ],
+      "artifacts": [
+        "src/overlay.rs",
+        "src/store/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:1022"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1877",
+          "kind": "inspection",
+          "locator": "src/overlay.rs (working tree) get ~L362/L374/L389, get_in ~L451/L460, forget ~L475, lookup ~L488; struct Overlays L300-307",
+          "summary": "Read the diff and file: cached is Bounded<ChangesetKey, _>, builds is KeyedLocks<ChangesetKey>; get_if, builds.lock, cached.build (both get and get_in), forget/invalidate and lookup peek/invalidate all use changeset.key(). The only remaining changeset.id uses are database queries (changesets::entries) within the changeset's own store.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T19:38:40.411687757Z",
+          "seal": {
+            "by": "server",
+            "mac": "e95081eb09f3ee2622c4733c3065d7d1b50657f64727baeafa276ba245b4c91e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Every cache and lock operation in Overlays uses ChangesetKey.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1877"
+          ],
+          "recorded_at": "2026-11-24T19:38:55.816330554Z",
+          "seal": {
+            "by": "server",
+            "mac": "e022effa6d2ca32d757b7b9950d7dd8e795a749ab3b7b9aca66047025920841e"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T19:38:20.349004655Z",
+      "updated_at": "2026-11-24T19:38:55.816330554Z",
+      "seal": {
+        "by": "server",
+        "mac": "492e61a1513ed6d2f1e9208267321626e601a7035e1268a085095fca8c8b7df6"
+      }
+    },
+    {
+      "id": "CLM-1276",
+      "statement": "Every caller of Overlays::forget (write, publish, discard) passes the changeset's ChangesetKey.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "analysis",
+      "source": "Issue #1022 requirement 1 (invalidation); PR body \"`forget` takes a key\"",
+      "derived_from": [
+        "CLM-1275"
+      ],
+      "artifacts": [
+        "src/write.rs",
+        "src/store/publish.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:1022"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1878",
+          "kind": "inspection",
+          "locator": "grep -rn \"\\.forget(\" src (non-key callers); src/write.rs:300, src/store/publish.rs:351, src/mcp/changesets.rs:852",
+          "summary": "The three production callers of Overlays::forget pass changeset_row.key()/locked.key()/changeset.key(); the signature takes ChangesetKey so a bare id no longer compiles. The remaining .forget( hits in src are unrelated (stores, oauth, catalog_cache, semaphore permit).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T19:38:40.493915121Z",
+          "seal": {
+            "by": "server",
+            "mac": "f4ef9e5f6704f88b696649c3a1fac682621a1deb6c8b9ae28e8f4125d13b09d5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All three callers pass a key; the type enforces it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1878"
+          ],
+          "recorded_at": "2026-11-24T19:38:55.891644340Z",
+          "seal": {
+            "by": "server",
+            "mac": "d12ad25e72402bc7355f02719bc840c2ae448b698b6b5b754687da205f1157a8"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T19:38:20.349004655Z",
+      "updated_at": "2026-11-24T19:38:55.891644340Z",
+      "seal": {
+        "by": "server",
+        "mac": "a4fe3bb22b6a9563429ddbafac73f1c503790ff3921fa9513d3910fe256f9422"
+      }
+    },
+    {
+      "id": "CLM-1277",
+      "statement": "No cross-replica invalidation message (the Invalidation enum) names a changeset, so none needed changing.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"No cross-replica invalidation message names a changeset (they name a store, catalog, team or user), so none changed.\"",
+      "derived_from": [
+        "CLM-1274"
+      ],
+      "artifacts": [
+        "src/invalidate.rs"
+      ],
+      "tags": [
+        "from-issue:1022"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1879",
+          "kind": "inspection",
+          "locator": "src/invalidate.rs:82-127 (enum Invalidation)",
+          "summary": "Variants are Catalog{id,generation}, CatalogMeta{id,name}, Credential{key_id}, User{id}, Team{id}, Settings, Store{name}. None names a changeset; Catalog.id is the global catalogs.id.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T19:38:40.582285390Z",
+          "seal": {
+            "by": "server",
+            "mac": "66fe977db3586158169c3ddb74368bdb2be27777a9ddd125fd01d212461e5031"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The Invalidation enum has no changeset-naming variant.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1879"
+          ],
+          "recorded_at": "2026-11-24T19:38:55.966881736Z",
+          "seal": {
+            "by": "server",
+            "mac": "af783bc2e47459fe38493270a1ebb766989e8cc137b0bddbb20b6744c2150412"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T19:38:20.349004655Z",
+      "updated_at": "2026-11-24T19:38:55.966881736Z",
+      "seal": {
+        "by": "server",
+        "mac": "cda64729f6f256654bd34bf9496f42606c56b8eceeefe80c93d5a565e0a971c8"
+      }
+    },
+    {
+      "id": "CLM-1278",
+      "statement": "KeyedLocks is generic over its key (default i64) and the write queue and the overlay build lock use ChangesetKey, so two stores' changesets with one id no longer share a queue slot.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"`KeyedLocks` is generic over its key (default `i64`); the write queue and the overlay build lock use `ChangesetKey`.\"",
+      "derived_from": [
+        "CLM-1274"
+      ],
+      "artifacts": [
+        "src/keyed_lock.rs",
+        "src/app.rs",
+        "src/write.rs"
+      ],
+      "tags": [
+        "from-issue:1022"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1880",
+          "kind": "inspection",
+          "locator": "src/keyed_lock.rs:21-27 (struct KeyedLocks<K = i64>), src/app.rs:97,1060, src/write.rs:166, src/overlay.rs:307",
+          "summary": "KeyedLocks<K = i64> with K: Hash+Eq+Copy; write_queue is KeyedLocks<ChangesetKey> and write::apply locks row.key(); Overlays.builds is KeyedLocks<ChangesetKey>. publish_locks, rebuild_locks, catching_up stay i64 catalog ids. The ChangesetKey derives Hash, Eq, Copy. Not compiled by me (no builds allowed); green.log shows 39 related tests passing incl. write::tests::writers_queued_on_one_changeset_hold_no_connection.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T19:38:40.675593419Z",
+          "seal": {
+            "by": "server",
+            "mac": "1c42bc499096d985f0cc8f3eb85e02f6cc7f418e9b2297b338a27a9a4b021954"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code reading shows the generic key and both users on ChangesetKey; author's green.log shows the queue tests passing. Not rerun by me.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1880"
+          ],
+          "recorded_at": "2026-11-24T19:38:56.045435624Z",
+          "seal": {
+            "by": "server",
+            "mac": "8628259afe5272ec4561451b617a0ee54bd72fde53dee99df40a90f63f050879"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T19:38:20.349004655Z",
+      "updated_at": "2026-11-24T19:38:56.045435624Z",
+      "seal": {
+        "by": "server",
+        "mac": "c2908684f1ecb99ce2dc96dd232b090166fa7df29da9cfc07668314d8a39a8c9"
+      }
+    },
+    {
+      "id": "CLM-1279",
+      "statement": "A two-store test with colliding changeset ids, equal generation and version, two principals each allowed only their own catalog, alternating cached reads and an edit through get_in exists, and it fails on the old code.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "Issue #1022 requirement 2; PR body: \"the first fails on the base branch (the remote read shows the home draft)\"",
+      "derived_from": [
+        "CLM-1274"
+      ],
+      "artifacts": [
+        "src/mcp/overlay_stores_tests.rs"
+      ],
+      "tags": [
+        "from-issue:1022"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1881",
+          "kind": "test",
+          "locator": "src/mcp/overlay_stores_tests.rs (untracked); target/i1022-logs/red.log:502-515; target/i1022-logs/green.log",
+          "summary": "Test builds home (main) and remote (store-b) catalogs, two keys each limited to one catalog, asserts identity() (changeset id, version, generation) equal across stores, alternates cached reads, then edits via edit_document (write::apply -> get_in, src/write.rs:227). red.log: test FAILED at overlay_stores_tests.rs:110 (remote read shows 'Home draft'); green.log: same test ok, 39 passed 0 failed. I did not rerun (builds forbidden); logs are the author's, and red.log's provenance (old code) cannot be independently confirmed beyond the failure content matching the defect.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T19:38:40.767512102Z",
+          "seal": {
+            "by": "server",
+            "mac": "816899ffb5d6b2ff68534a88ccf5edd18718c048328e1793c55b0ce5db43337b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test meets each listed requirement (read the code); red.log shows it failing with the cross-store leak and green.log passing. Logs not independently regenerated.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1881"
+          ],
+          "recorded_at": "2026-11-24T19:38:56.122967119Z",
+          "seal": {
+            "by": "server",
+            "mac": "5d888701f36e25ddd5432ebb7bd7b2f71583d9bfcd207f85828fb893794fb808"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T19:38:20.349004655Z",
+      "updated_at": "2026-11-24T19:38:56.122967119Z",
+      "seal": {
+        "by": "server",
+        "mac": "1774cfa5018407076a0886882dea95934c355f2256d7832d950d1f186a429e24"
+      }
+    },
+    {
+      "id": "CLM-1280",
+      "statement": "No other in-memory cache or map in src is keyed by a bare changeset id or another store-local identity; the PR's list of other identities checked (catalog cache, broken, rebuild, publish and catching_up locks keyed by global catalog id; credential, directory, label caches in the accounts database; no in-memory maps of documents, revisions, entries by bare id) is accurate.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Issue #1022 requirement 3; PR body: \"Other per-store identities checked, none needing a change: ...\"",
+      "derived_from": [
+        "CLM-1274"
+      ],
+      "artifacts": [
+        "src/cache/catalogs.rs",
+        "src/app.rs",
+        "src/catalog.rs",
+        "src/mcp/context.rs"
+      ],
+      "tags": [
+        "from-issue:1022"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1882",
+          "kind": "analysis",
+          "locator": "grep -rnE \"Bounded<|Cache<|HashMap<|KeyedLocks\" src (non-test)",
+          "summary": "Keyed maps/caches: catalogs.rs states Bounded<i64> and catching_up (catalog id), broken Bounded<(i64,i64)> (id, generation); app.rs publish/rebuild locks (catalog id); credentials caches by hash/String key id/user id (accounts db); mcp/context.rs rows/held keyed by catalog name String (per-call); labels/directory by String names; catalog.rs revisions HashMap<String,i32> by path. No other map is keyed by a store-local bare id. The PR's list is accurate, though context.rs per-call maps by catalog name and Bounded<(i64,i64)> are not named in it (harmless).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T19:38:40.855626380Z",
+          "seal": {
+            "by": "server",
+            "mac": "87d515d9bffc67add82a64aa1e2926bd55d529678109958478ef16b8c38da44e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Repository-wide grep of keyed maps/caches finds no other bare store-local key.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1882"
+          ],
+          "recorded_at": "2026-11-24T19:38:56.206376718Z",
+          "seal": {
+            "by": "server",
+            "mac": "d8bafceda83c0992e48c132956dce1ee2ecded2375134043ef39b91ae464d549"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T19:38:20.349004655Z",
+      "updated_at": "2026-11-24T19:38:56.206376718Z",
+      "seal": {
+        "by": "server",
+        "mac": "4d889515b080692f1a8220d1a7053994b613a5d294b47caaca2db43dfc6e5664"
+      }
+    },
+    {
+      "id": "CLM-1281",
+      "statement": "A changelog entry for issue 1022 exists under changelog/ with a timestamped name and describes the key change.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #1022 requirement 4; CLAUDE.md changelog rule",
+      "derived_from": [
+        "CLM-1274"
+      ],
+      "artifacts": [
+        "changelog/2026-11-24T19-37-16Z-m21-issue-1022-overlay-store-key.md"
+      ],
+      "tags": [
+        "from-issue:1022"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1883",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T19-37-16Z-m21-issue-1022-overlay-store-key.md",
+          "summary": "Untracked timestamped file describing the defect, ChangesetKey, Overlays/KeyedLocks changes, other identities checked and the tests. It must be added to git before commit.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T19:38:40.931935510Z",
+          "seal": {
+            "by": "server",
+            "mac": "6b417fca3d15854e1b87bf260eb0dee83fa21dc09329510d6787b4aeacd2ec73"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Entry exists and is accurate.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1883"
+          ],
+          "recorded_at": "2026-11-24T19:38:56.309682808Z",
+          "seal": {
+            "by": "server",
+            "mac": "fdeae515c1d53a7fe1def722ffcb9b116977e6fa4435696a4a97e885c6b221fa"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T19:38:20.349004655Z",
+      "updated_at": "2026-11-24T19:38:56.309682808Z",
+      "seal": {
+        "by": "server",
+        "mac": "d9f9e3b084c37ddb33be64ee45afdf7447714dd66d7797eb94395c5740608f27"
+      }
+    },
+    {
+      "id": "CLM-1282",
+      "statement": "No text of the catalog-stores plan is affected by the change, so no plan correction note is needed (PR: \"No plan text is affected\").",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "Issue #1022 requirement 4; PR body: \"No plan text is affected, so no plan correction.\"",
+      "derived_from": [
+        "CLM-1274"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:1022"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1884",
+          "kind": "analysis",
+          "locator": "grep -n \"overlay|changeset id|changeset_id|write_queue\" docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+          "summary": "The plan mentions overlay.rs only as a file in tables (L121, L235) and never says the overlay cache, build lock or write queue is keyed by changeset id; nothing in it is contradicted. Limitation: grep was keyword-based, not a full read of the plan.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T19:38:41.006921154Z",
+          "seal": {
+            "by": "server",
+            "mac": "7a599d658959412ed73ca932b989fa4431a15770c13383ee3cc097477f0eec70"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The plan makes no statement about the overlay key.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1884"
+          ],
+          "recorded_at": "2026-11-24T19:38:56.399374442Z",
+          "seal": {
+            "by": "server",
+            "mac": "95ec772005c57ac74336e40222f6da4ec89a7c6738c559a003ebbdac3a4b4e37"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T19:38:20.349004655Z",
+      "updated_at": "2026-11-24T19:38:56.399374442Z",
+      "seal": {
+        "by": "server",
+        "mac": "c494635c014362b864ea7370c60d4433e7eeea6a8972cc5bd96534ae0072a8f5"
       }
     }
   ]

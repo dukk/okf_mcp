@@ -163,7 +163,7 @@ where
     // connection while they wait; only the one whose turn it is takes a
     // connection and then the row lock (which still orders writers in other
     // processes, and publish and discard). `_queued` is held until return.
-    let _queued = app.write_queue().lock(row.id).await;
+    let _queued = app.write_queue().lock(row.key()).await;
     // A snapshot behind the database (this replica was not told of a publish
     // elsewhere) would give the entry an older base revision than the text
     // it edits, and publish would replay or conflict for nothing (issue
@@ -297,7 +297,7 @@ where
     }
     // The version moved, so the cached overlay is stale; dropping it now
     // also frees its memory before the next read rebuilds it.
-    app.overlays().forget(changeset_row.id).await;
+    app.overlays().forget(changeset_row.key()).await;
     Ok(WriteReport {
         catalog: state.name().to_string(),
         changeset: changeset_row.handle,

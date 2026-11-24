@@ -1,6 +1,7 @@
-//! An async mutex per key (a changeset or catalog id), created on first
-//! use and dropped when the last holder or waiter lets go, so the map holds
-//! only keys in use.
+//! An async mutex per key (a catalog id, or a
+//! [`ChangesetKey`](crate::store::changesets::ChangesetKey)), created on
+//! first use and dropped when the last holder or waiter lets go, so the map
+//! holds only keys in use.
 //!
 //! [`crate::write::apply`] queues each changeset's writers here before they
 //! take a pooled connection, and [`crate::overlay::Overlays`] builds each
@@ -12,16 +13,18 @@
 //! already holds a connection waits for it (issue #671).
 
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
-/// One async mutex per `i64` key.
-#[derive(Debug, Default)]
-pub struct KeyedLocks {
+/// One async mutex per key: an `i64` (a catalog id) unless the key type says
+/// otherwise.
+#[derive(Debug)]
+pub struct KeyedLocks<K = i64> {
     // A `std` mutex: held only to look up, insert or remove an entry, never
     // across `.await`.
-    locks: Mutex<HashMap<i64, Entry>>,
+    locks: Mutex<HashMap<K, Entry>>,
 }
 
 /// One key's mutex and how many callers hold or wait for it.
@@ -38,11 +41,11 @@ struct Entry {
 /// holds or waits for it, removes the key's entry.
 #[derive(Debug)]
 #[must_use = "the lock is released as soon as the guard is dropped"]
-pub struct KeyedGuard<'a> {
+pub struct KeyedGuard<'a, K: Hash + Eq + Copy = i64> {
     // Fields drop in declaration order: the lock is released before the
     // registration tidies the map.
     _held: OwnedMutexGuard<()>,
-    _registration: Registration<'a>,
+    _registration: Registration<'a, K>,
 }
 
 /// One caller's count on a key's entry, from before it waits until its
@@ -50,12 +53,27 @@ pub struct KeyedGuard<'a> {
 /// mid-wait (its future dropped, as on a timeout or a client disconnect)
 /// still gives its count back.
 #[derive(Debug)]
-struct Registration<'a> {
-    owner: &'a KeyedLocks,
-    key: i64,
+struct Registration<'a, K: Hash + Eq + Copy> {
+    owner: &'a KeyedLocks<K>,
+    key: K,
 }
 
-impl KeyedLocks {
+impl<K: Hash + Eq + Copy> Default for KeyedLocks<K> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    fn default() -> Self {
+        Self {
+            locks: Mutex::default(),
+        }
+    }
+}
+
+impl<K: Hash + Eq + Copy> KeyedLocks<K> {
     /// An empty set of locks.
     ///
     /// # Returns
@@ -81,7 +99,7 @@ impl KeyedLocks {
     /// # Returns
     /// The guard; the lock is held until it is dropped.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn lock(&self, key: i64) -> KeyedGuard<'_> {
+    pub async fn lock(&self, key: K) -> KeyedGuard<'_, K> {
         let (registration, mutex) = self.register(key);
         let held = mutex.lock_owned().await;
         KeyedGuard {
@@ -93,7 +111,7 @@ impl KeyedLocks {
     /// Counts one more user of `key`'s entry (creating it) and clones its
     /// mutex, both under the map lock.
     #[tracing::instrument(level = "trace", skip_all)]
-    fn register(&self, key: i64) -> (Registration<'_>, Arc<AsyncMutex<()>>) {
+    fn register(&self, key: K) -> (Registration<'_, K>, Arc<AsyncMutex<()>>) {
         let mut map = self.map();
         let entry = map.entry(key).or_default();
         entry.users += 1;
@@ -114,12 +132,12 @@ impl KeyedLocks {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    fn map(&self) -> MutexGuard<'_, HashMap<i64, Entry>> {
+    fn map(&self) -> MutexGuard<'_, HashMap<K, Entry>> {
         self.locks.lock().expect("keyed lock map poisoned")
     }
 }
 
-impl Drop for Registration<'_> {
+impl<K: Hash + Eq + Copy> Drop for Registration<'_, K> {
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
