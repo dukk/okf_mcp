@@ -17,7 +17,7 @@ use crate::maintenance::types::{new_id, Disposition};
 use crate::maintenance::types::{
     Actor, Assessment, ClaimResult, Evidence, Lane, Lease, RevisionPin, RunState, WorkOutcome,
 };
-use crate::stores::{AccountDb, CatalogDb};
+use crate::stores::CatalogDb;
 
 /// A deterministic page (ascending unless a run listing asks for newest
 /// first); the cursor is the last returned row ID.
@@ -445,15 +445,10 @@ async fn summary(
 /// after the deletion finds no key and records NULL (issue #972;
 /// `maintenance_runs.key_id` has no foreign key now).
 ///
-/// # Arguments
-/// * `_accounts` - the account database; unused, the transaction comes from
-///   `db.accounts()` (the same database).
 /// # Errors
 /// Refuses invalid limits or conflicting idempotency; propagates database failures.
-#[allow(clippy::too_many_arguments)]
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "runs.claim", catalog_id = catalog_id))]
 pub async fn claim(
-    _accounts: &AccountDb,
     db: &CatalogDb,
     catalog_id: i64,
     actor: &Actor,
