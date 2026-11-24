@@ -1191,7 +1191,11 @@ impl ToolContext {
     /// order a lookup that must try each store follows.
     ///
     /// # Errors
-    /// [`OkfError::Database`] if the registry cannot be read.
+    /// [`OkfError::Database`] if the registry cannot be read;
+    /// [`OkfError::Busy`] when the `stores` table (in the account database,
+    /// not a store) is locked past `store_connect_timeout`. No store is
+    /// unavailable then, so the call is told to retry, not given an
+    /// `unavailable` entry.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn stores_main_first(&self) -> Result<Vec<StoreName>, OkfError> {
         let mut stores = self.app.stores().all().await?;

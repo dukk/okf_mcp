@@ -13,6 +13,9 @@ use crate::db::{test_db, TEST_TEAM, TEST_USER};
 use crate::store::users::{self, NewUser};
 use crate::stores::{CatalogDb, StoreName, Stores};
 
+/// The database-side bound the prune runs under in these tests.
+const WAIT: std::time::Duration = crate::stores::bounded::LIMITS.wait;
+
 fn at(minutes: i64) -> DateTime<Utc> {
     let base: DateTime<Utc> = "2026-11-13T12:00:00Z".parse().unwrap();
     base + TimeDelta::minutes(minutes)
@@ -185,12 +188,12 @@ async fn store_audit_prune_honours_the_passed_retention_and_its_floor() {
     }
 
     // A cut-off that reaches into a 60-day retention deletes nothing.
-    let reaching = prune_catalog(&store, Utc::now() - TimeDelta::days(58), 60).await;
+    let reaching = prune_catalog(&store, Utc::now() - TimeDelta::days(58), 60, WAIT).await;
     assert!(reaching.is_err(), "{reaching:?}");
     assert_eq!(count().await, 4, "the refused prune deleted nothing");
 
     // With 60 days passed, the entries older than that go, and no more.
-    let removed = prune_catalog(&store, Utc::now() - TimeDelta::days(60), 60)
+    let removed = prune_catalog(&store, Utc::now() - TimeDelta::days(60), 60, WAIT)
         .await
         .unwrap();
     assert_eq!(removed, 2, "61 and 100 days are past 60");
@@ -198,10 +201,10 @@ async fn store_audit_prune_honours_the_passed_retention_and_its_floor() {
 
     // The same cut-off with a retention of 5 days is held to the 30-day
     // floor: the 59-day entry is past it, the 10-day one is not.
-    let floor = prune_catalog(&store, Utc::now() - TimeDelta::days(5), 5).await;
+    let floor = prune_catalog(&store, Utc::now() - TimeDelta::days(5), 5, WAIT).await;
     assert!(floor.is_err(), "{floor:?}");
     assert_eq!(count().await, 2, "the floor refused the whole statement");
-    let removed = prune_catalog(&store, Utc::now() - TimeDelta::days(35), 5)
+    let removed = prune_catalog(&store, Utc::now() - TimeDelta::days(35), 5, WAIT)
         .await
         .unwrap();
     assert_eq!(removed, 1, "only the 59-day entry is past the 30-day floor");

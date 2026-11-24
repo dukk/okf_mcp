@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 
 use super::*;
 use crate::db::{test_db, TEST_TEAM};
@@ -864,4 +864,75 @@ async fn shared_id(pool: &PgPool) -> i64 {
         .fetch_one(pool)
         .await
         .unwrap()
+}
+
+/// Issue #1006: opening a store that is not cached reads its `stores` row,
+/// and that read is bounded at the database. With the table locked, the
+/// uncached store's open fails within `store_connect_timeout`, the run goes
+/// on to a store already open and settles it, and no account connection is
+/// left waiting on the lock.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_locked_registry_fails_an_uncached_store_and_the_run_settles_an_open_one() {
+    // Arrange: a deleted key owes `down` (never opened; its row sorts
+    // first, so it is tried first) and `main` (opened beforehand).
+    let db = test_db().await;
+    seed_user(&db.pool, "alice", None).await;
+    seed_catalog_owned_by(&db.pool, TEST_TEAM).await;
+    let key = key_for(&db.pool, "alice", "alice-laptop", false).await;
+    let changeset = open_on(&db.pool, shared_id(&db.pool).await, &key).await;
+    sqlx::query(
+        "INSERT INTO stores (name, location_kind, host, port, database, credential_kind, \
+         credential_ref, created_at) \
+         VALUES ('down', 'host', 'db.example.internal', 5432, 'okf', 'env', 'UNSET_PASSWORD', now())",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    delete_alice(&db.pool).await;
+    let stores = Stores::with_environment(
+        db.pool.clone(),
+        settings(),
+        Arc::new(crate::db::pg_support::harness_password),
+    );
+    stores.get(&StoreName::main()).await.unwrap();
+    let mut holder = db.pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE stores IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let holder_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *holder)
+        .await
+        .unwrap();
+
+    // Act: the run, bounded by the test so a regression fails instead of
+    // hanging.
+    let report = tokio::time::timeout(
+        Duration::from_secs(60),
+        run_bounded(&stores, now(), quick()),
+    )
+    .await
+    .expect("the run finishes while the registry is locked");
+    // While the lock is still held: the account pool answers, and nothing
+    // is still waiting on the lock (the database ended the row read).
+    let usable: i32 = sqlx::query_scalar("SELECT 1")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let waiting: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_stat_activity WHERE pg_blocking_pids(pid) @> ARRAY[$1]::int[]",
+    )
+    .bind(holder_pid)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    holder.rollback().await.unwrap();
+    stores.forget_all().await;
+
+    // Assert
+    assert_eq!(report.unwrap(), Report { done: 1, failed: 1 });
+    assert_eq!(usable, 1);
+    assert_eq!(waiting, 0, "no statement is left waiting on the lock");
+    assert_eq!(state_of(&db.pool, changeset).await, "discarded");
+    assert_eq!(cleanup_rows(&db.pool).await, [("down".to_string(), 1)]);
 }

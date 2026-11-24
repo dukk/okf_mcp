@@ -19,15 +19,15 @@
 //! counts the tries); a row past [`GIVE_UP_ATTEMPTS`] is logged at error
 //! level on every run and kept. The deletion itself never waits for this.
 
-use std::future::Future;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use sqlx::{PgConnection, Postgres, Transaction};
+use sqlx::PgConnection;
 
 use crate::error::OkfError;
 use crate::store::audit::{self, Action, AuditActor, CatalogEntry};
 use crate::store::changesets::{self, ChangesetState};
+use crate::stores::bounded::{account_tx, backstop, store_tx};
 use crate::stores::{AccountDb, CatalogDb, StoreName, Stores};
 use crate::telemetry::subscriber::split_event;
 
@@ -43,30 +43,9 @@ pub const GIVE_UP_ATTEMPTS: i32 = 20;
 /// other stores waiting.
 const BATCH_PER_STORE: i64 = 100;
 
-/// The two limits on one cleanup attempt (one row on one store).
-///
-/// `wait` is the bound at the database: every statement of an attempt runs
-/// in a transaction that sets `lock_timeout` and `statement_timeout` to it
-/// (`SET LOCAL`), so PostgreSQL itself gives up on a lock wait or a long
-/// statement, rolls the transaction back and hands the connection back,
-/// whether or not the caller is still waiting. `attempt` is the backstop: a
-/// `tokio` timeout around the whole attempt for what the database cannot
-/// bound (a connect, a store that stops answering). It is longer than `wait`
-/// so the database bound fires first; dropping a future does not cancel its
-/// statement, so the backstop alone could leave a connection busy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Limits {
-    /// The longest one attempt may take.
-    pub attempt: Duration,
-    /// `lock_timeout` and `statement_timeout` inside each transaction.
-    pub wait: Duration,
-}
-
-/// The limits [`run`] uses: 20 s at the database, 30 s per attempt.
-pub const LIMITS: Limits = Limits {
-    attempt: Duration::from_secs(30),
-    wait: Duration::from_secs(20),
-};
+/// The bounds on one cleanup attempt (one row on one store), shared with
+/// the other background work: see [`crate::stores::bounded`].
+pub use crate::stores::bounded::{Limits, LIMITS};
 
 /// Changesets or runs cleared of a deleted key per statement.
 const KEY_CLEAR_BATCH: i64 = 1000;
@@ -289,25 +268,6 @@ async fn run_bounded(
     Ok(report)
 }
 
-/// `step` under the `attempt` backstop of `limits`: past it, the step is
-/// dropped and fails with `Busy`.
-///
-/// # Errors
-/// The step's own error, or `Busy` past the backstop.
-#[tracing::instrument(level = "trace", skip_all)]
-async fn backstop<T>(
-    limits: Limits,
-    step: impl Future<Output = Result<T, OkfError>>,
-) -> Result<T, OkfError> {
-    tokio::time::timeout(limits.attempt, step)
-        .await
-        .unwrap_or_else(|_| {
-            Err(OkfError::Busy {
-                reason: "a store cleanup step ran past its limit".to_string(),
-            })
-        })
-}
-
 /// The names of the stores with cleanup rows, in name order.
 ///
 /// # Errors
@@ -371,8 +331,11 @@ async fn run_store(
             return;
         }
     };
+    // Opening an uncached store reads its registry row (bounded at the
+    // database by `store_connect_timeout`) and connects; the backstop covers
+    // the whole open, so it never holds up the next store (issue #1006).
     let db = match StoreName::parse(name) {
-        Ok(store) => stores.get(&store).await,
+        Ok(store) => backstop(limits, stores.get(&store)).await,
         Err(error) => Err(error),
     };
     let db = match db {
@@ -408,52 +371,6 @@ async fn run_store(
             }
         }
     }
-}
-
-/// Begins an account transaction whose waits are bounded by `wait`.
-///
-/// # Errors
-/// [`OkfError::Database`] or `Busy`, with no connection to be had.
-#[tracing::instrument(level = "trace", skip_all)]
-async fn account_tx(
-    accounts: &AccountDb,
-    wait: Duration,
-) -> Result<Transaction<'static, Postgres>, OkfError> {
-    let mut tx = accounts.begin().await?;
-    bound_waits(&mut tx, wait).await?;
-    Ok(tx)
-}
-
-/// Begins a store transaction whose waits are bounded by `wait`.
-///
-/// # Errors
-/// [`OkfError::StoreUnavailable`] with no connection to be had;
-/// [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all)]
-async fn store_tx(
-    db: &CatalogDb,
-    wait: Duration,
-) -> Result<Transaction<'static, Postgres>, OkfError> {
-    let mut tx = db.begin().await?;
-    bound_waits(&mut tx, wait).await?;
-    Ok(tx)
-}
-
-/// Bounds the waits of the transaction `tx` is on: a lock wait or a
-/// statement that runs past `wait` fails (and rolls the transaction back)
-/// instead of waiting on.
-///
-/// # Errors
-/// [`OkfError::Database`].
-#[tracing::instrument(level = "trace", skip_all)]
-async fn bound_waits(tx: &mut PgConnection, wait: Duration) -> Result<(), OkfError> {
-    sqlx::query(
-        "SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $1, true)",
-    )
-    .bind(format!("{}ms", wait.as_millis()))
-    .execute(&mut *tx)
-    .await?;
-    Ok(())
 }
 
 /// Counts a failed try of `row` and logs it: a warning, or an error once

@@ -36,6 +36,7 @@ use std::time::Duration;
 
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 
+use super::bounded::{account_tx, backstop, Limits};
 #[cfg(test)]
 use super::credentials::Environment;
 use super::credentials::{
@@ -76,6 +77,10 @@ pub(super) async fn set_search_path(
         .await?;
     Ok(())
 }
+
+/// How much longer than its database-side bound a registry read may take in
+/// all (getting a connection included) before it is dropped.
+const REGISTRY_BACKSTOP_MARGIN: Duration = Duration::from_secs(1);
 
 /// The most stores the registry keeps open at once: a bound on memory for a
 /// registry that is meant to hold a handful.
@@ -482,10 +487,52 @@ impl Stores {
     /// The names, in name order.
     ///
     /// # Errors
-    /// [`OkfError::Database`].
+    /// [`OkfError::Database`], or `Busy` when the table cannot be read
+    /// within `store_connect_timeout` (a lock held on it).
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn all(&self) -> Result<Vec<StoreName>, OkfError> {
-        stores::names(&self.inner.accounts).await
+        let limits = self.registry_limits();
+        backstop(limits, async {
+            let mut tx = account_tx(&self.accounts(), limits.wait).await?;
+            let names = stores::names(&mut *tx).await?;
+            tx.commit().await?;
+            Ok(names)
+        })
+        .await
+    }
+
+    /// The bounds on a read of the `stores` table: `store_connect_timeout`
+    /// at the database (`lock_timeout` and `statement_timeout`), and a
+    /// second more for the whole read. A lock someone holds on the table
+    /// (a migration's `ACCESS EXCLUSIVE`, say) then fails the read instead
+    /// of keeping an account connection, and the caller, waiting (issue
+    /// #1006).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "builds a value from the settings")
+    )]
+    fn registry_limits(&self) -> Limits {
+        let wait = self.inner.settings.connect_timeout;
+        Limits {
+            attempt: wait + REGISTRY_BACKSTOP_MARGIN,
+            wait,
+        }
+    }
+
+    /// Reads the store's row under [`Stores::registry_limits`].
+    ///
+    /// # Errors
+    /// [`OkfError::Database`], or `Busy` past the bounds.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn read_row(&self, store: &StoreName) -> Result<Option<StoreRow>, OkfError> {
+        let limits = self.registry_limits();
+        backstop(limits, async {
+            let mut tx = account_tx(&self.accounts(), limits.wait).await?;
+            let row = stores::by_name(&mut *tx, store).await?;
+            tx.commit().await?;
+            Ok(row)
+        })
+        .await
     }
 
     /// How long one connect to a store may take (`store_connect_timeout`):
@@ -566,14 +613,15 @@ impl Stores {
         }
     }
 
-    /// Reads the store's row, opens its pool and migrates its schema.
+    /// Reads the store's row (bounded by [`Stores::registry_limits`]), opens
+    /// its pool and migrates its schema.
     ///
     /// # Errors
     /// An [`OpenFailure`]; the detail is logged here, on the local side
     /// only (a host name is operator detail).
     #[tracing::instrument(level = "debug", skip_all)]
     async fn open(&self, store: &StoreName) -> Result<Arc<OpenStore>, OpenFailure> {
-        let row = match stores::by_name(&self.inner.accounts, store).await {
+        let row = match self.read_row(store).await {
             Ok(Some(row)) => row,
             Ok(None) => return Err(OpenFailure::NoSuchStore),
             Err(error) => {
@@ -1029,6 +1077,66 @@ mod tests {
         assert!(!failed.to_json().to_string().contains("main"));
         // The pool is still the cached one: nothing reopened.
         assert_eq!(stores.pools_opened(), 1);
+    }
+
+    /// Issue #1006: the registry's reads of the `stores` table are bounded
+    /// at the database. With the table locked, opening an uncached store and
+    /// listing the stores fail within the bound, a store already open is
+    /// still served, and no statement is left waiting on the lock.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_locked_stores_table_fails_an_uncached_open_in_time_and_spares_an_open_store() {
+        let db = crate::db::test_db().await;
+        let quick = PoolSettings {
+            connect_timeout: Duration::from_millis(500),
+            ..settings()
+        };
+        let stores = Stores::new(db.pool.clone(), quick);
+        stores.get(&StoreName::main()).await.unwrap();
+        add_host_store(&db.pool, "shared-1", "127.0.0.1", 1, "okf").await;
+        let mut holder = db.pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE stores IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        let holder_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *holder)
+            .await
+            .unwrap();
+        let wait = Duration::from_secs(30);
+
+        let started = Instant::now();
+        let uncached =
+            tokio::time::timeout(wait, stores.get(&StoreName::parse("shared-1").unwrap()))
+                .await
+                .expect("the uncached open returns while the table is locked");
+        let elapsed = started.elapsed();
+        let listed = tokio::time::timeout(wait, stores.all())
+            .await
+            .expect("the listing returns while the table is locked");
+        let cached = tokio::time::timeout(wait, stores.get(&StoreName::main()))
+            .await
+            .expect("an open store is served while the table is locked");
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity WHERE pg_blocking_pids(pid) @> ARRAY[$1]::int[]",
+        )
+        .bind(holder_pid)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        holder.rollback().await.unwrap();
+        stores.forget_all().await;
+
+        assert!(
+            matches!(uncached, Err(OkfError::Busy { .. })),
+            "{uncached:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "given up near store_connect_timeout, not later: {elapsed:?}"
+        );
+        assert!(listed.is_err(), "{listed:?}");
+        assert!(cached.is_ok(), "{cached:?}");
+        assert_eq!(waiting, 0, "the database ended the waiting reads");
     }
 
     #[tokio::test(flavor = "multi_thread")]

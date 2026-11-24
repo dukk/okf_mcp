@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1189,
+  "next_claim_seq": 1208,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "0fb091077b692a84787aec194a2123c903e2529a1e7d44c69b3d991adc5706cc"
+    "mac": "98ed3e5ed57ffbce9d5f3d99097e5b3e1f5a49d463b7a822b324ddbc53e439b3"
   },
-  "next_evidence_seq": 1754,
+  "next_evidence_seq": 1781,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "06958f97323aa30ebf8d98f5e781266b4a49df474b03b2d320b37daf843f5a28"
+    "mac": "7da9b548de7cb245cb675d2c5fa7019799c6908dafffeb2836e96430ae09179e"
   },
   "claims": [
     {
@@ -23148,6 +23148,28 @@
             "by": "server",
             "mac": "202bcaba86702f183498bab72d17682d5437b5615b8ae759da7e34182cec085a"
           }
+        },
+        {
+          "id": "EVD-1748",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs:90-94,241-253 at 32ba57b",
+          "summary": "Re-checked at head: QUEUE \"housekeeping\", MAX_ATTEMPTS 3, cadence() PruneChangesets 5 min, PruneOauth/PruneWorkers 1 h, PruneAudit 24 h, ClusterStats 60 s are unchanged by the per-store change (jobs are now per store but the cadence is per task).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 241,
+                "end": 253
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:15:56.510379922Z",
+          "seal": {
+            "by": "server",
+            "mac": "a63470cad16701f45e368af06b9c0de9f5c5b24aa409e1b7692cce15e6c3c6ea"
+          }
         }
       ],
       "verdicts": [
@@ -23163,13 +23185,26 @@
             "by": "server",
             "mac": "8ac1b1872ee5c80bec99d9fc238b6b183b01f575ab9d92b14a90f623114145c1"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head after the diff touched src/housekeeping.rs: cadences and attempts unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1748"
+          ],
+          "recorded_at": "2026-11-24T14:16:33.314878548Z",
+          "seal": {
+            "by": "server",
+            "mac": "77418f95e6aa009b976e95d26ea8307de0ef97807991c25ce3c6b1cf728ad599"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:50.360239770Z",
-      "updated_at": "2026-11-21T19:12:15.470619281Z",
+      "updated_at": "2026-11-24T14:16:33.314878548Z",
       "seal": {
         "by": "server",
-        "mac": "6928dafb78a250bea1897a0a743b9483505fe0bfe6a3b99d41ab0cd444ff4d78"
+        "mac": "e3d6984e83b81cac332306fa540721655e610ab0c337d9c086d5ab31a0ff849d"
       }
     },
     {
@@ -25606,6 +25641,28 @@
             "by": "server",
             "mac": "6b9dd12ea83e18a5cb5c664fd552b535c67bf95f8dbe87017e8179891bcaef80"
           }
+        },
+        {
+          "id": "EVD-1749",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_locked_ prune_discards_only_empty (6 passed, incl. store::changesets::tests::prune_discards_only_empty_changesets_idle_past_the_cutoff) at 32ba57b",
+          "summary": "The pre-existing prune_empty test still passes after prune_empty's signature became generic over an executor; the UPDATE keeps state='open', updated_at < cutoff and NOT EXISTS changeset_entries (src/store/changesets.rs:801-815). Housekeeping now calls it per store with cutoff now-24h (src/housekeeping.rs:759-775).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 801,
+                "end": 815
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:15:56.616711488Z",
+          "seal": {
+            "by": "server",
+            "mac": "7d13878bbf1d3ce0da3bce8c62bde965f883759f35f276c2a8e2d7ea65a3c398"
+          }
         }
       ],
       "verdicts": [
@@ -25622,13 +25679,26 @@
             "by": "server",
             "mac": "e13b7654b719a24ad41b2789887422418daefc1ae8b5f284bda2a32034a9f32c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited at head: prune_empty's SQL semantics are unchanged and its test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1749"
+          ],
+          "recorded_at": "2026-11-24T14:16:33.444193634Z",
+          "seal": {
+            "by": "server",
+            "mac": "7465d396672ab199781681179be1d1af7ee0133561bd8ccd3ad6b6b61caf85dd"
+          }
         }
       ],
       "created_at": "2026-11-21T20:00:50.368228186Z",
-      "updated_at": "2026-11-21T20:01:15.562501152Z",
+      "updated_at": "2026-11-24T14:16:33.444193634Z",
       "seal": {
         "by": "server",
-        "mac": "e7900b2953b846b198c2824f040223500ee58589ecdcd20f0ef8c24875b9524b"
+        "mac": "de1b5ca107bb0c19d2938a51507fde88d462eeb0c840e607996eedeefbb1ddb8"
       }
     },
     {
@@ -54714,7 +54784,7 @@
           }
         },
         {
-          "id": "EVD-1751",
+          "id": "EVD-1778",
           "kind": "inspection",
           "locator": "src/cache/directory.rs:44,236",
           "summary": "On head ABSENT_TTL is still 5 s (line 44) and still feeds the absent cache (line 236); the PR's edits to resolve_many only changed its return type and moved the lines the old anchor pointed at.",
@@ -54732,7 +54802,7 @@
           "recorded_at": "2026-11-24T14:32:56.425831055Z",
           "seal": {
             "by": "server",
-            "mac": "cb1df680435e401f869fcc80db2a805cef8e0c5af306a4f8e03dced9726d48eb"
+            "mac": "1ed492ac5671bbb70d58d1466947f748b768274c316c983c798bb1fb4fb2eef0"
           }
         }
       ],
@@ -54756,12 +54826,12 @@
           "rationale": "Re-audited on head: ABSENT_TTL is still 5 s and still used; only line positions moved.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1751"
+            "EVD-1778"
           ],
           "recorded_at": "2026-11-24T14:33:04.312680601Z",
           "seal": {
             "by": "server",
-            "mac": "13153d0f8f42a7b1dff201f8b7120464e79ed880f887399ac2a2cf690418997d"
+            "mac": "6227daaba68b0331c6a482a7388942d4436e6d9479bb1111314a62c17a37886a"
           }
         }
       ],
@@ -54769,7 +54839,7 @@
       "updated_at": "2026-11-24T14:33:04.312680601Z",
       "seal": {
         "by": "server",
-        "mac": "90debe9d015a6960e9cb41b05e701e00e0063b7f59e2416e8b1a411a8dc70614"
+        "mac": "8bfb35455d9dcf84c0dbdb45eaeb12ae34f8535be90625d937bab5ee141e5ab4"
       }
     },
     {
@@ -68928,7 +68998,7 @@
           }
         },
         {
-          "id": "EVD-1749",
+          "id": "EVD-1776",
           "kind": "test",
           "locator": "SQLX_OFFLINE=true cargo test --lib mcp::search::tests --jobs 4 (11 passed)",
           "summary": "check_fanout unchanged in behavior on head; the lines shifted only because this PR added code around it. Search tests pass.",
@@ -68946,7 +69016,7 @@
           "recorded_at": "2026-11-24T14:32:56.142385392Z",
           "seal": {
             "by": "server",
-            "mac": "a6a3d7ced7368a1a84c7e9f9d3e7f838042ec7884cd5c98a5280557c30a70dcc"
+            "mac": "146d9a5c4ddabc84c04d5be92b426419ef82a9f44be42823b7e551ad8576866a"
           }
         }
       ],
@@ -68970,12 +69040,12 @@
           "rationale": "Re-audited on head: behavior unchanged, tests pass.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1749"
+            "EVD-1776"
           ],
           "recorded_at": "2026-11-24T14:33:04.094640074Z",
           "seal": {
             "by": "server",
-            "mac": "e95b0e548c26280ee5dca779e39f2946e25f8eaf01d7f21b06762bf2d62db589"
+            "mac": "a5ee7020a89513356f9ebb6eee707d872b29dd6095416b2fb30b23fc091f9e3a"
           }
         }
       ],
@@ -68983,7 +69053,7 @@
       "updated_at": "2026-11-24T14:33:04.094640074Z",
       "seal": {
         "by": "server",
-        "mac": "08373bd8291aa5341ba8b0e6ee527743154d59b7a4cc582134d9749eb23f22fe"
+        "mac": "a2e99d3c0de21034286aaca9cdd5965748b3e3b0be4372841c43f62ca0b5df46"
       }
     },
     {
@@ -69163,7 +69233,7 @@
           }
         },
         {
-          "id": "EVD-1748",
+          "id": "EVD-1775",
           "kind": "test",
           "locator": "SQLX_OFFLINE=true cargo test --lib mcp::search::tests --jobs 4 (11 passed, incl. the_tool_refuses_more_named_catalogs_than_the_cap)",
           "summary": "On head c3b358f, run_with still calls check_fanout(params.catalogs, search_fanout_max) before loading states (search.rs:140-143); the refusal test passes.",
@@ -69181,7 +69251,7 @@
           "recorded_at": "2026-11-24T14:32:56.011836548Z",
           "seal": {
             "by": "server",
-            "mac": "e73323b7d1ee03a12dfdbd8d3707fa8f0edfdd6bdc24c561e1698affc88c4ba5"
+            "mac": "72e94724b7cba14668ebc672b8663e23129994683f8b39f9a6b12421ea556900"
           }
         }
       ],
@@ -69204,12 +69274,12 @@
           "rationale": "Re-audited on head after this PR touched run_with: the check is intact and the test passes.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1748"
+            "EVD-1775"
           ],
           "recorded_at": "2026-11-24T14:33:03.984479331Z",
           "seal": {
             "by": "server",
-            "mac": "1744b7b0cb463621cae9f5088418fabc663148d9f0fe0131280934a2eb88d6cb"
+            "mac": "cd2a0d768bf073e3092095a7132838dccd9979cecbd8b4c5ddd0dcabc3463581"
           }
         }
       ],
@@ -69217,7 +69287,7 @@
       "updated_at": "2026-11-24T14:33:03.984479331Z",
       "seal": {
         "by": "server",
-        "mac": "c0d280ff5bb414dcec21c8bfa031348cf0663fa22528e54fc947b34ba50e3a93"
+        "mac": "088dd1d29541341ee8148474c31808b92940721e998e07de474fa268f4516c10"
       }
     },
     {
@@ -69962,7 +70032,7 @@
           }
         },
         {
-          "id": "EVD-1750",
+          "id": "EVD-1777",
           "kind": "inspection",
           "locator": "docs/reference/tools.md:563",
           "summary": "On head the search `catalogs` row still says \"At most the server's `search_fanout_max` (default 25) distinct catalogs may be named; more is refused.\" The PR's edit to the search description (line 558) left it intact.",
@@ -69980,7 +70050,7 @@
           "recorded_at": "2026-11-24T14:32:56.284132129Z",
           "seal": {
             "by": "server",
-            "mac": "d8f698a25f8ba808ae6f6f9b1d644ea3f7643ad1718be62a8a4303dfc410ac67"
+            "mac": "3eb151e89e53837e59fe1833210e013bea299d18d1fa05a81ab5d54266daff62"
           }
         }
       ],
@@ -70030,12 +70100,12 @@
           "rationale": "Re-audited on head after this PR edited the search section: line 563 still carries the cap statement.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1750"
+            "EVD-1777"
           ],
           "recorded_at": "2026-11-24T14:33:04.198389061Z",
           "seal": {
             "by": "server",
-            "mac": "f6dbd353461b333ecdf8146ad7a54921df449efe28f81313f71b5a0b2020e1f4"
+            "mac": "ba66e1ae747d71e3be74c8cf803f3536b171d979fb2159a4c07f4d8db21e6127"
           }
         }
       ],
@@ -70043,7 +70113,7 @@
       "updated_at": "2026-11-24T14:33:04.198389061Z",
       "seal": {
         "by": "server",
-        "mac": "7d3c2d4abe54902d646f0315c876dc437b446c2edefd3cd4a1270a1b7eadaed1"
+        "mac": "dae01de49cc734ab279dacfc5e34f883276d5554ae8932ef9c61f9956aab0fef"
       }
     },
     {
@@ -95464,6 +95534,1399 @@
     },
     {
       "id": "CLM-1169",
+      "statement": "Issue #976 (M21.16) and #1006: per-store housekeeping is implemented as the issue and plan Task 16 require, and the registry lookup in store opening is bounded.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/976 and /issues/1006",
+      "derived_from": [],
+      "artifacts": [
+        "src/housekeeping.rs",
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:976",
+        "from-issue:1006"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1747",
+          "kind": "analysis",
+          "locator": "children of CLM-1169",
+          "summary": "Not all children are supported: CLM-1174 (all statements incl. open-time migration and settings read bounded at the database) is refuted and CLM-1178 (pool of one test) is not_enough_info.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-24T14:15:46.315989930Z",
+          "seal": {
+            "by": "server",
+            "mac": "254aa9e1e6aa9c05316d122e821dee07a012a31d7279d0e39dc58a5d53f9262f"
+          }
+        },
+        {
+          "id": "EVD-1754",
+          "kind": "analysis",
+          "locator": "children of CLM-1169",
+          "summary": "Every active child is now supported: scheduling, late stores, forget decision, bounded statements with documented exceptions, error containment, cluster sum, lock order and pool of one, #1006 registry bound, and the helper move, changelog, plan note and backstop boxing. The earlier refuted child was retired and replaced by a claim for the documented behaviour.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T14:33:30.252414814Z",
+          "seal": {
+            "by": "server",
+            "mac": "e88bb721eb477a1f34854d08066d30a46562af5efe49d15e182d1e35efa1361b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "One child (CLM-1174, every statement bounded at the database) is refuted and CLM-1178 (pool of one) is undecided; the rest of the issue's requirements hold. Fix: resolve CLM-1174 (bound or document the open-time migration and settings read) and add the pool-of-one test, then re-audit.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1747"
+          ],
+          "recorded_at": "2026-11-24T14:16:33.169286694Z",
+          "seal": {
+            "by": "server",
+            "mac": "bd5ae870e57bc28b79570c514da8a8b5dd8c0af2cc9336075fe906cf9db9f598"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All active children are supported at 61440c7.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1754"
+          ],
+          "recorded_at": "2026-11-24T14:33:34.118679525Z",
+          "seal": {
+            "by": "server",
+            "mac": "8bb9e9493e754860daa9177fd148cc6dbe73220ef80cb1bf58e48dbda5af24be"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:33:34.118679525Z",
+      "seal": {
+        "by": "server",
+        "mac": "ea50b408c1f3754b84c7eddaebf088c2ef87fd665e4f08c25396491b209a30a7"
+      }
+    },
+    {
+      "id": "CLM-1170",
+      "statement": "prune_changesets, the store half of prune_audit (via audit::prune_catalog) and the open-changeset count of cluster_stats each run as one job per store and slot, keyed \"<task>:<store>:<slot>\", scheduled for every store returned by Stores::all(), and each job is run exactly once across two replicas sharing the account database.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #976 Scope; plan Task 16; test per_store_housekeeping_runs_once_per_store_and_slot_across_replicas",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs",
+        "src/housekeeping/store_tests.rs"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1736",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- housekeeping::store_tests (5 passed, 0 failed) at 32ba57b; src/housekeeping/store_tests.rs:124-198",
+          "summary": "per_store_housekeeping_runs_once_per_store_and_slot_across_replicas passed. Two Replica apps on separate pools over one account DB, stores main plus two host stores on separate databases (add_store), both replicas push the slots twice concurrently. Asserts scheduled keys == keys_for(all 3 stores) (so one per task, store, slot), every job Done with attempts==1, per-task ok run counters summed over both replicas == pushed jobs, stale changesets Discarded on both shared stores, and store counts for main, shared-1, shared-2.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping/store_tests.rs",
+              "lines": {
+                "start": 124,
+                "end": 198
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:15:45.147457457Z",
+          "seal": {
+            "by": "server",
+            "mac": "fd15f20b522f1c3932604271388501094b523672b2cd8c4132d65317e1334fb0"
+          }
+        },
+        {
+          "id": "EVD-1737",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs:348-353,482-515",
+          "summary": "key() yields \"<task>:<store>:<slot>\" for a store job; schedule_slots reads app.stores().all() on each pass and pushes one job per store for tasks with runs_per_store (PruneChangesets, PruneAudit, ClusterStats). Run path prune_store_audit calls audit::prune_catalog.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 482,
+                "end": 515
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:15:45.246086686Z",
+          "seal": {
+            "by": "server",
+            "mac": "f113c3de526265143c42cc4c91690e662056b07f44cd853a7da97f68a27ccffa"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Passing test with two apps over one account DB and 3 stores asserts exact key set, one attempt each and run counters; code shows key format and per-store push.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1736",
+            "EVD-1737"
+          ],
+          "recorded_at": "2026-11-24T14:16:30.327098197Z",
+          "seal": {
+            "by": "server",
+            "mac": "fe0f2819f726bf9ec55cf8ca4ac779aec537b3dd4a66022b5af4b5def5499e36"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:16:30.327098197Z",
+      "seal": {
+        "by": "server",
+        "mac": "a32b2b372a4a7a9695667d1d8ec08170b34ae3e38eda710c47de0928c0aa680a"
+      }
+    },
+    {
+      "id": "CLM-1171",
+      "statement": "A store added after start-up gets its housekeeping jobs on the next scheduling pass, without a restart or the store being opened.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Coordinator brief: a store opened after start-up gets its jobs on the next scheduling pass; PR body test a_store_added_after_start_gets_its_jobs_at_the_next_pass",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1738",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- housekeeping::store_tests (5 passed); src/housekeeping/store_tests.rs:200-220",
+          "summary": "a_store_added_after_start_gets_its_jobs_at_the_next_pass passed: after one pass (keys for main only), add_store inserts shared-1, a second schedule_slots on the same replica gives keys_for([main, shared-1]); the store was never opened.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping/store_tests.rs",
+              "lines": {
+                "start": 200,
+                "end": 220
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:15:45.344298573Z",
+          "seal": {
+            "by": "server",
+            "mac": "f9e465eb883ffec19951559d8438101418a89da52894a45ec30db9f44ba84073"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test adds a store after a pass and the next pass yields exactly its keys; the store is never opened.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1738"
+          ],
+          "recorded_at": "2026-11-24T14:16:30.552882680Z",
+          "seal": {
+            "by": "server",
+            "mac": "dc59ef4883a1448b79634b8c932b8e1dd16a3c975501736a12f00638920b3189"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:16:30.552882680Z",
+      "seal": {
+        "by": "server",
+        "mac": "8ae1eec70e02f23d2e706f9121505a3dd06e7bc874054d50cfe74c54d3441e6d"
+      }
+    },
+    {
+      "id": "CLM-1172",
+      "statement": "What happens to the housekeeping jobs of a store that has no stores row or was forgotten by the registry is decided in code and documented: a job whose store has no row succeeds without retry, and a forgotten store is reopened by its next job from the current row, as stated in the housekeeping module docs and the plan's Task 16 correction note.",
+      "kind": "documentation",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Coordinator brief: what happens to a forgotten store's jobs is decided and documented",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1728",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs:34-44,686-705; plan Task 16 correction note (line 616+)",
+          "summary": "open_store maps NotFound from Stores::get to Ok(None) so run_on_store returns Ok (job not retried); module docs (lines 40-44) and the plan correction note state both rules (no-row job succeeds, row cascades via ON DELETE CASCADE; a forgotten store is reopened by its next job from the current row). No housekeeping test exercises a no-row job or a forget, so the behaviour rests on Stores::get's existing semantics.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 686,
+                "end": 705
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:14:23.104475993Z",
+          "seal": {
+            "by": "server",
+            "mac": "c7837f284315277ab0054dcc15fb89350efa47cca1b960adf85dc1977dbfd3a5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "open_store turns NotFound into a successful no-op; module docs and plan note state the no-row and forget-then-reopen decisions. The rule is documented and implemented, though no housekeeping test pins it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1728"
+          ],
+          "recorded_at": "2026-11-24T14:16:30.780729431Z",
+          "seal": {
+            "by": "server",
+            "mac": "2999a8746a8c7752e201321340f1289e70c78af4605e1e09afc082df797e65bd"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:16:30.780729431Z",
+      "seal": {
+        "by": "server",
+        "mac": "c10dc5c35804558e703f369a87b55564060070e3fa54100deb1e6966375062de"
+      }
+    },
+    {
+      "id": "CLM-1173",
+      "statement": "Each statement of a per-store housekeeping job (prune, count, audit prune, and the account-side count write and schedule insert) runs in a transaction that sets lock_timeout and statement_timeout with SET LOCAL (set_config(..., true)), and the tokio timeout is only a longer backstop; a lock held on the table the job needs makes it fail with the database's lock timeout.",
+      "kind": "non_functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Coordinator brief: every statement bounded with SET LOCAL lock_timeout and statement_timeout; PR body test a_store_job_blocked_on_a_lock_gives_up_at_the_database",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs",
+        "src/stores/bounded.rs"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1739",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- housekeeping::store_tests (5 passed); src/housekeeping/store_tests.rs:361-420",
+          "summary": "a_store_job_blocked_on_a_lock_gives_up_at_the_database passed: for PruneChangesets, ClusterStats (lock on changesets) and PruneAudit (lock on catalog_audit_entries), with wait=500ms and attempt=30s, each job returns Err(OkfError::Database) (not Busy from the backstop) in under 10 s, no pg_stat_activity backend still waits on the holder, and the job succeeds after release. Covers store-side statements; the account-side count write and push insert go through account_tx (src/stores/bounded.rs:83-90) but are not lock-tested.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping/store_tests.rs",
+              "lines": {
+                "start": 361,
+                "end": 420
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:15:45.469640204Z",
+          "seal": {
+            "by": "server",
+            "mac": "20f6906d02a6ea20fa215b6fa6e32ad45eb139e5de9d79df3696b053aa2c722d"
+          }
+        },
+        {
+          "id": "EVD-1740",
+          "kind": "inspection",
+          "locator": "src/stores/bounded.rs:121-133; src/housekeeping.rs:759-775,1088-1125,447-480",
+          "summary": "bound_waits issues set_config('lock_timeout',..,true) and set_config('statement_timeout',..,true) (SET LOCAL). prune_store_changesets, count_store_changesets (store and account parts), prune_catalog (via store_tx) and push_once (account_tx) all go through account_tx/store_tx; backstop (30 s) wraps each and is longer than wait (20 s).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/bounded.rs",
+              "lines": {
+                "start": 121,
+                "end": 133
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:15:45.596860721Z",
+          "seal": {
+            "by": "server",
+            "mac": "2dd775284184310e405bf03f0664a64d8733b59e05d66f42988469c1ceabca26"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "bound_waits uses set_config(..., true) in every job transaction and the lock test shows the DB's own timeout (Database error, not backstop Busy) for all three store tasks with nothing left waiting. The account-side writes use the same helper (inspection) but are not lock-tested.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1739",
+            "EVD-1740"
+          ],
+          "recorded_at": "2026-11-24T14:16:30.972950013Z",
+          "seal": {
+            "by": "server",
+            "mac": "9de45ce18b82d0d33041fbc18507575d575a9c3e0a2f800cc1e361654ef78b06"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:16:30.972950013Z",
+      "seal": {
+        "by": "server",
+        "mac": "27101a8b86910fe5599bfb096a6af051681d8873aa82955242d53b63016094fd"
+      }
+    },
+    {
+      "id": "CLM-1174",
+      "statement": "Every database statement a per-store housekeeping job can issue, including those run while opening an uncached store (the schema migration) and the audit job's settings freshness read, is bounded at the database by SET LOCAL lock_timeout and statement_timeout.",
+      "kind": "non_functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Coordinator brief: every statement bounded with SET LOCAL lock_timeout and statement_timeout (tokio timeout only a backstop)",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs",
+        "src/housekeeping.rs",
+        "src/app.rs"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Superseded: the design now states that open-time schema migrations and prune_audit's settings read are bounded by the tokio backstop alone, so the claim as worded (every statement under SET LOCAL) no longer matches the documented design. The earlier refuted verdict stays as the audit trail; the replacement claims state the documented behaviour.",
+        "retired_at": "2026-11-24T14:33:03.867031628Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1729",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:910 (migrate_on), src/housekeeping.rs:995-1000 (audit_cut_off -> app.fresh_settings), src/app.rs:934-958",
+          "summary": "bound_waits (src/stores/bounded.rs:125) is the only place lock_timeout/statement_timeout are set (grep over src/stores, src/db). migrate_on, which runs on the first open of an uncached or forgotten store inside a store job, does not use it, so its DDL waits are limited only by the 30 s tokio backstop (which does not cancel the statement). prune_store_audit's fresh_settings read uses the account pool directly under a 5 s tokio timeout, not SET LOCAL. Both are outside the job's own transactions.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 606,
+                "end": 625
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:14:23.250979962Z",
+          "seal": {
+            "by": "server",
+            "mac": "77ee5feecff4567da4c4e4afe65b48c98c0c2e16e2fa5bbe3ac62ab3a00eb751"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Two statements in a store job's path are not under SET LOCAL timeouts: the schema migration migrate_on run on first open of an uncached or forgotten store (registry.rs open), and the settings freshness read in prune_store_audit (app.rs revalidate_settings, 5 s tokio timeout only). Both are bounded only by tokio timeouts, which do not cancel the statement. Elsewhere: the open path and settings read pre-date this PR; the PR only routes the registry row read through bounded transactions. Fix: run migrate_on's statements in a transaction (or on a connection) with bound_waits(LIMITS.wait) and bound the settings revalidation reads the same way, or document in housekeeping.rs and the plan note that opening a store and the settings read are bounded by the backstop only.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1729"
+          ],
+          "recorded_at": "2026-11-24T14:16:31.151006994Z",
+          "seal": {
+            "by": "server",
+            "mac": "7bf333601aecf7ebcebd1e5990e8f89d2e8d7ac811ed734a6c7674d6a63e6132"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:33:03.867031628Z",
+      "seal": {
+        "by": "server",
+        "mac": "3c8ed424d6fec66aa39051edb48bd1b71193055b1eeae43c0883244eddce2035"
+      }
+    },
+    {
+      "id": "CLM-1175",
+      "statement": "Each store's errors are contained: one store being down fails only that store's jobs (marked Failed for retry) while the other stores' jobs complete and do their work; shown with a store whose database is dropped.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #976 test one_store_failing_does_not_hold_up_the_others",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs",
+        "src/housekeeping/store_tests.rs"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1741",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- housekeeping::store_tests (5 passed); src/housekeeping/store_tests.rs:222-286",
+          "summary": "one_store_failing_does_not_hold_up_the_others passed. The cached shared-2 database is really dropped with DROP DATABASE ... WITH (FORCE); main and shared-1 jobs reach Done (bounded waits), their stale changesets are Discarded, store counts exist only for main and shared-1, and every shared-2 job is Failed with attempts >= 1.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping/store_tests.rs",
+              "lines": {
+                "start": 222,
+                "end": 286
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:15:45.721845620Z",
+          "seal": {
+            "by": "server",
+            "mac": "e6ab516e898e8acee2a716754912e58ca9e8d971bd520d26b9b9ecf46ef220d9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "A real DROP DATABASE WITH (FORCE) on a cached store fails only that store's jobs (Failed, attempts>=1) while the other stores' jobs are Done with their work done.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1741"
+          ],
+          "recorded_at": "2026-11-24T14:16:31.329927119Z",
+          "seal": {
+            "by": "server",
+            "mac": "81b1f531661d90fd289ab51b52a8c1b52e26379076ef4bb552abdc9bab986d93"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:16:31.329927119Z",
+      "seal": {
+        "by": "server",
+        "mac": "343b29571ff2975e540ae14626061fb012acae6a161af60d8d812e5d772cfd52"
+      }
+    },
+    {
+      "id": "CLM-1176",
+      "statement": "cluster_stats.open_changesets is the sum of the open changesets across all stores (1+2+3 = 6 in the test), and a store that can no longer be counted contributes its last known count.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #976 test cluster_stats_sums_open_changesets_across_stores",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs",
+        "migrations/accounts/0043_cluster_store_stats.sql"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1742",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- housekeeping::store_tests (5 passed); src/housekeeping/store_tests.rs:288-359",
+          "summary": "cluster_stats_sums_open_changesets_across_stores passed: 1, 2, 3 open changesets on main, shared-1, shared-2 -> read_stats().open_changesets == 6 and cluster_store_stats rows (1,2,3); after adding a changeset on shared-1 and dropping shared-2's database, sum == 7 (1+3 counted now plus shared-2's last 3). Note the test calls run_on_store/run directly rather than through the queue.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping/store_tests.rs",
+              "lines": {
+                "start": 288,
+                "end": 359
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:15:45.817054427Z",
+          "seal": {
+            "by": "server",
+            "mac": "1009290a7525ff4105c18e98bc478f48138faf4661e018b20079b88212dab579"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test asserts the sum 6 across 1/2/3 and, after a store is dropped, 7 with its last count retained.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1742"
+          ],
+          "recorded_at": "2026-11-24T14:16:31.498738617Z",
+          "seal": {
+            "by": "server",
+            "mac": "87dc7149ae6431dd4f4fe55f0a495cfcfe79d20a5c12b7665c8eddd2a346279a"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:16:31.498738617Z",
+      "seal": {
+        "by": "server",
+        "mac": "6b73c720e5e3e7b4d26461f7e17f05fece3d169d92668f259b4aa9ca7678c262"
+      }
+    },
+    {
+      "id": "CLM-1177",
+      "statement": "No per-store housekeeping job holds an account-database transaction and a store transaction at the same time: the store transaction commits (and its connection is released) before the account transaction begins, and opening a store commits its registry read before connecting, so a pool of one connection on either side works.",
+      "kind": "non_functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Coordinator brief: lock order account connection, account row locks, then store connection, never holding one transaction while acquiring the other's connection; pool of one must work",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs",
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1730",
+          "kind": "analysis",
+          "locator": "src/housekeeping.rs:1088-1125 (count_store_changesets), 759-775, 995-1000; src/stores/registry.rs:527-540,597-615",
+          "summary": "count_store_changesets runs the store tx inside backstop(async{...}) that commits and ends (releasing the connection) before the account tx begins in a second backstop block. prune_store_changesets and prune_store_audit use only a store tx; the audit cut-off settings read runs before it. Stores::read_row commits its account tx before open_row connects and migrate_on runs. No path holds both connections.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 1088,
+                "end": 1125
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:14:23.404467868Z",
+          "seal": {
+            "by": "server",
+            "mac": "62f2231cfd1c217abb108e80750c05e62e945dc95c08b04ed1ba43b7ad60e735"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code reading: the store tx is committed and dropped inside the first backstop block before the account tx begins; the registry read commits before connecting; prune paths use one side only. No overlap on any path.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1730"
+          ],
+          "recorded_at": "2026-11-24T14:16:31.672790234Z",
+          "seal": {
+            "by": "server",
+            "mac": "9421b63bea5d92d3f9d42dad6eaaa42e327505397bef6706014619cbfc51d97b"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:16:31.672790234Z",
+      "seal": {
+        "by": "server",
+        "mac": "5bb38783beb378dc3f4f5bf69fa5bb7806270b83456e6f86499a8e7cc9d8dc3e"
+      }
+    },
+    {
+      "id": "CLM-1178",
+      "statement": "A test runs the per-store housekeeping jobs with a pool of one connection on the account side or the store side and shows they complete.",
+      "kind": "non_functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Coordinator brief: a pool of one connection must work",
+      "derived_from": [
+        "CLM-1177"
+      ],
+      "artifacts": [
+        "src/housekeeping/store_tests.rs"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1731",
+          "kind": "analysis",
+          "locator": "search: max_connections(1)|connect\\(.*, 1\\) in src/housekeeping*",
+          "summary": "The Replica harness in src/housekeeping/store_tests.rs uses connect(&db.url, 5); no new test uses a one-connection pool for the account or store side. The only one-connection pool uses are older tests (src/stores/mod.rs:476, src/store/cleanups_tests.rs:689) not covering housekeeping jobs.",
+          "stance": "refutes",
+          "anchor": {
+            "search": {
+              "pattern": "max_connections\\(1\\)|connect\\(&[a-z_.]+, 1\\)",
+              "scope": [
+                "src/housekeeping",
+                "src/housekeeping.rs"
+              ],
+              "hits": 0,
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:14:23.548984929Z",
+          "seal": {
+            "by": "server",
+            "mac": "5c6413a434770c2914d95ab9754b19e7c3ef3268f770b2318b0d76f9eeedc107"
+          }
+        },
+        {
+          "id": "EVD-1752",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- store_jobs_finish_on_pools_of_one_connection (passed) at 61440c7; src/housekeeping/store_tests.rs:431-462",
+          "summary": "The test builds the replica on an account pool of 1 (replica_sized(&db,1,..)) and store_max_connections: 1 (the registry builds store pools from that setting, registry.rs:115), then runs run_on_store for all three per-store tasks on main and shared-1 plus the cluster_stats job under a PATIENCE timeout; asserts the stale changeset is Discarded and counts 0/0. It passes. In the same-DB mode main shares the account pool; shared-1 is a separate one-connection pool.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping/store_tests.rs",
+              "lines": {
+                "start": 431,
+                "end": 462
+              },
+              "commit": "61440c785ba41a0ca7a92c1fad06cbb644f7a132"
+            }
+          },
+          "recorded_at": "2026-11-24T14:33:15.280050159Z",
+          "seal": {
+            "by": "server",
+            "mac": "cc9458ff176c3912ee7d12296b9b71196fc7e286c6086be3b37eabc9bafedf04"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "No test in the PR runs a store job with a one-connection account or store pool (harness pools have 5 connections; zero hits for max_connections(1)/connect(..,1) in the housekeeping tests). The code reading supports it but is not a test. Fix: add a test that builds the replica's App on an account pool of 1 (crate::db::connect(&db.url, 1)) and a single-connection store pool, runs run_on_store for ClusterStats, PruneChangesets and PruneAudit, and asserts Ok.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1731"
+          ],
+          "recorded_at": "2026-11-24T14:16:31.811381753Z",
+          "seal": {
+            "by": "server",
+            "mac": "de719adfa28ae6c2ed5418fab42fd555254239a42c66e6ba69af0328b06f1ffd"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The new test uses a one-connection account pool and one-connection store pool, runs every per-store task plus the cluster job to completion, and passes at head (my run).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1752"
+          ],
+          "recorded_at": "2026-11-24T14:33:26.477418173Z",
+          "seal": {
+            "by": "server",
+            "mac": "9ddcd547291075a895eefb1bc05e47751d6aff2204ac11c5fc95efe8023cb89d"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:33:26.477418173Z",
+      "seal": {
+        "by": "server",
+        "mac": "9ea6910c47b8f7a8f7e875dd1a8c05afcff82dc53e32e361d50ce6641e1702d3"
+      }
+    },
+    {
+      "id": "CLM-1179",
+      "statement": "The new housekeeping tests synchronize on evidence (job status read from the queue) with bounded waits and contain no sleeps.",
+      "kind": "non_functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "Coordinator brief: tests synchronize on evidence with bounded waits, never sleeps; PR body: The tests wait on job status with bounded waits, never sleeps.",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/housekeeping/store_tests.rs"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1732",
+          "kind": "analysis",
+          "locator": "search: sleep in src/housekeeping/store_tests.rs",
+          "summary": "Zero sleep calls in the new test file (only the doc comment mentions the word). Waits use wait_for(&pool, key, status) from the shared housekeeping test helpers and tokio::time::timeout(PATIENCE, ...) bounds on every blocking step.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "sleep\\(",
+              "case_insensitive": true,
+              "scope": [
+                "src/housekeeping/store_tests.rs"
+              ],
+              "hits": 0,
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:14:23.711560039Z",
+          "seal": {
+            "by": "server",
+            "mac": "137f32bfbe5ccaa2eda7520ac57b90e8dfaf9d36edc1939ae8c3a3cbd00f8989"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Zero sleep( calls in the new test file; waits are wait_for on job status and tokio::time::timeout bounds.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1732"
+          ],
+          "recorded_at": "2026-11-24T14:16:31.983740404Z",
+          "seal": {
+            "by": "server",
+            "mac": "5fcabd9b97a99751aba50ecc8976e8834ab89ec64315b066746305d96c30c7a4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:16:31.983740404Z",
+      "seal": {
+        "by": "server",
+        "mac": "01d5f6a4cf2904230af812a7ccd05fc0abdc403ecac33059536e503dd3919804"
+      }
+    },
+    {
+      "id": "CLM-1180",
+      "statement": "Issue #1006: the registry's reads of the stores table (Stores::all and the row read when a store is first opened) run in a bounded account transaction (store_connect_timeout) under a backstop one second longer, so a locked stores table fails an uncached open with Busy within the bound, an already-open store is still served, and no statement is left waiting on the lock.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/1006",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs",
+        "src/store/cleanups.rs"
+      ],
+      "tags": [
+        "from-issue:1006"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1743",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_locked_ prune_discards_only_empty (6 passed, incl. stores::registry::tests::a_locked_stores_table_fails_an_uncached_open_in_time_and_spares_an_open_store); src/stores/registry.rs:1058-1111",
+          "summary": "With the stores table under ACCESS EXCLUSIVE (store_connect_timeout 500 ms) the uncached open returns Err(Busy) in under 10 s, Stores::all fails, the cached main store is served, and zero backends still block on the holder.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 1058,
+                "end": 1111
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:15:45.918763456Z",
+          "seal": {
+            "by": "server",
+            "mac": "825dee3c60f23e6d0eec7a90bb189ddee55196ae67d9c08dcd5f868eb2d310bc"
+          }
+        },
+        {
+          "id": "EVD-1744",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:487-540",
+          "summary": "Stores::all and read_row both run inside backstop(registry_limits) with account_tx(wait = connect_timeout) and commit; attempt = wait + 1 s (REGISTRY_BACKSTOP_MARGIN); open() uses read_row.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 487,
+                "end": 540
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:15:46.013880683Z",
+          "seal": {
+            "by": "server",
+            "mac": "d5dce2ec274c04ed777057eee6e7a94a102a87fc9976b18991fa9cdd7bfe69d6"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code runs both reads in bounded account transactions under wait+1s backstop; the passing test locks the table and asserts Busy for uncached open, error for listing, cached store served, nothing left waiting.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1743",
+            "EVD-1744"
+          ],
+          "recorded_at": "2026-11-24T14:16:32.170337776Z",
+          "seal": {
+            "by": "server",
+            "mac": "a3a5a81a6692d835238edcda2d5b6aeaebec85ba83eebed659ca33cd1c74d6fa"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:16:32.170337776Z",
+      "seal": {
+        "by": "server",
+        "mac": "0af9a01604a65dec1dca8cc548e875ca2e624cd3056b6120775b6bbda0a2f5c6"
+      }
+    },
+    {
+      "id": "CLM-1181",
+      "statement": "The store cleanup worker puts each store's open under its attempt backstop, and with the stores table locked and the first store uncached, the run settles a second already-open store and the account pool stays usable.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #1006 possible fix and regression test; PR body test a_locked_registry_fails_an_uncached_store_and_the_run_settles_an_open_one",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/store/cleanups.rs",
+        "src/store/cleanups_tests.rs"
+      ],
+      "tags": [
+        "from-issue:1006"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1745",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_locked_ prune_discards_only_empty (6 passed, incl. store::cleanups::tests::a_locked_registry_fails_an_uncached_store_and_the_run_settles_an_open_one); src/store/cleanups_tests.rs:870-937",
+          "summary": "Uncached store 'down' (sorts first, never opened) with main already open, stores table locked: run_bounded returns Report{done:1, failed:1}, main's key-deleted changeset is discarded, the account pool answers SELECT 1 while the lock is held, no backend waits on the holder, and the failed store's cleanup row has attempts 1. Code: src/store/cleanups.rs run_store wraps stores.get in backstop(limits, ...).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 870,
+                "end": 937
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:15:46.133794164Z",
+          "seal": {
+            "by": "server",
+            "mac": "45ee38ea4439f9a4627460c51b5415ce76bc858c77213cd76cc8e10de30a8c25"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The passing test matches the issue's regression test (first store uncached, second open, table locked): Report{done 1, failed 1}, account pool usable, no waiting backends.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1745"
+          ],
+          "recorded_at": "2026-11-24T14:16:32.378266715Z",
+          "seal": {
+            "by": "server",
+            "mac": "06b35edc58ba25af14ad06749e13cb00873b84133a1e5a07a643df5202d29005"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:16:32.378266715Z",
+      "seal": {
+        "by": "server",
+        "mac": "db1adef932e08ae05edf83b556ce2ef6cd413913f00b5400d012468d68195dc1"
+      }
+    },
+    {
+      "id": "CLM-1182",
+      "statement": "PR body: \"Old pre-store prune_changesets:<slot> jobs left in the queue at upgrade do nothing and succeed; the store jobs do the work.\"",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body, Changes section",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1733",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs:200-218,598-610",
+          "summary": "Housekeeping.store is serde(default), so a pre-store payload parses as a cluster job; run() maps Task::PruneChangesets to Ok(()), so the old job succeeds and does nothing. No test feeds such a job through the worker.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 598,
+                "end": 610
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:14:23.872959255Z",
+          "seal": {
+            "by": "server",
+            "mac": "bcb9fb7b5d6cef1e217611c061fd586190a2544a78cc2071d73ac787b4e541aa"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "serde(default) reads a pre-store payload as a cluster job and run() returns Ok for PruneChangesets. Not exercised by a test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1733"
+          ],
+          "recorded_at": "2026-11-24T14:16:32.536214714Z",
+          "seal": {
+            "by": "server",
+            "mac": "d19201313755642feeff3bd2645e7616d9bde554958fe1b60902d00419fc37e8"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:16:32.536214714Z",
+      "seal": {
+        "by": "server",
+        "mac": "3610da841e2a36192bed50c5d7c11c56a2c0fa6c30613419cb73134d62fad95e"
+      }
+    },
+    {
+      "id": "CLM-1183",
+      "statement": "PR body: \"Revert check: with the per-store scheduling limited to main, the sum changed to max, and bound_waits made a no-op, all seven new tests fail.\"",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "demonstration",
+      "source": "PR body, Tests section",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/housekeeping/store_tests.rs"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "The PR body no longer makes the revert-check statement, so it is not a claim of the change. The author's log target/i976-logs/revert1.log (7 of 7 failed under three mutations) is kept as evidence EVD-1753 but was not reproduced by the auditor.",
+        "retired_at": "2026-11-24T14:33:26.561190352Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1746",
+          "kind": "analysis",
+          "locator": "not rerun: would need the three source mutations",
+          "summary": "The mutation run described in the PR body was not repeated: it needs temporary edits to source files, which this audit may not make. The 7 tests do exist (5 in store_tests plus 2 for #1006) and pass at head.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T14:15:46.222922631Z",
+          "seal": {
+            "by": "server",
+            "mac": "45b6f3dec8d0b9e0836794cff09c8a68cfa5ed4fa733e170aecf62e7f37d03cc"
+          }
+        },
+        {
+          "id": "EVD-1753",
+          "kind": "log",
+          "locator": "target/i976-logs/revert1.log (7 failed, 0 passed)",
+          "summary": "The log shows 7 tests run and all FAILED, each for a reason matching a mutation (main-only keys in a_store_added..., sum 3 instead of 6, waiting backends left with bound_waits a no-op, Busy instead of Database error, jobs timing out for shared-1). I did not reproduce the mutations; the log is the author's. It covers the 7 tests named (5 here is 4 in store_tests plus the lock test, plus 2 for #1006), not the new pool-of-one test.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T14:33:15.404728390Z",
+          "seal": {
+            "by": "server",
+            "mac": "cdd93fee41d61af55618e5972130e86522e583384e3a23fb0380f1db3982c231"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The mutation run needs temporary source edits, which this audit was not allowed to make, so the claim that all seven tests fail under them could not be reproduced. Fix: author reruns the three mutations (main-only scheduling, sum to max, bound_waits no-op) and records which tests failed in the PR body or a log.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [],
+          "recorded_at": "2026-11-24T14:16:32.684890259Z",
+          "seal": {
+            "by": "server",
+            "mac": "ddeaa2cf05fe51b544a293e79da0419b0843e66c28cbbb00d503d80377f1205b"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:33:26.561190352Z",
+      "seal": {
+        "by": "server",
+        "mac": "f0de9e3b5ddc5fdfaab66fc76bdbf83648a1401d7c98a4d840eb7463cd63cbf6"
+      }
+    },
+    {
+      "id": "CLM-1184",
+      "statement": "PR body: the helpers Limits, LIMITS, backstop, account_tx, store_tx and bound_waits moved from src/store/cleanups.rs into src/stores/bounded.rs, and cleanups.rs re-exports Limits and LIMITS.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body, Changes section",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/stores/bounded.rs",
+        "src/store/cleanups.rs"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1734",
+          "kind": "inspection",
+          "locator": "src/stores/bounded.rs:28-133; src/store/cleanups.rs:48",
+          "summary": "bounded.rs defines Limits, LIMITS, backstop, account_tx, store_tx and bound_waits; cleanups.rs has the removed definitions in its diff and line 48 is pub use crate::stores::bounded::{Limits, LIMITS}. (backstop's Busy message changed wording.)",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 46,
+                "end": 48
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:14:24.011730574Z",
+          "seal": {
+            "by": "server",
+            "mac": "570e990066d0636268613e2f352656c9576e060f9201c565061cab803651a69b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All six items are defined in bounded.rs, their definitions are gone from cleanups.rs, and it re-exports Limits and LIMITS.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1734"
+          ],
+          "recorded_at": "2026-11-24T14:16:32.833473524Z",
+          "seal": {
+            "by": "server",
+            "mac": "8e5ebe4e63719fb01a0c059b03e3940abc0a66e2dd017625bcd43a0da922e24c"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:16:32.833473524Z",
+      "seal": {
+        "by": "server",
+        "mac": "54a99c08890491e05a7923fc1983676952e1d87c647a5cd7efa93b7c4fa2cb9d"
+      }
+    },
+    {
+      "id": "CLM-1185",
+      "statement": "The changes add a changelog entry and a dated plan correction note under Task 16 in the same PR.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #976 Validation: A changelog entry, and plan corrections (with a dated note) in the same PR",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "changelog",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1735",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T13-35-08Z-m21-task-16-per-store-housekeeping.md; docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:616",
+          "summary": "The diff adds the 44-line changelog file and a \"Corrected (issue #976, 2026-11-24)\" note under Task 16 in the plan.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 616,
+                "end": 623
+              },
+              "commit": "32ba57be5eb5f35242bb8ff93515d8bccd77e2a8"
+            }
+          },
+          "recorded_at": "2026-11-24T14:14:24.231581992Z",
+          "seal": {
+            "by": "server",
+            "mac": "186c61f658e324579a4e233ace99607dadbd0bd1f39d890ec8141846a4bac64e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The diff adds the changelog file and the dated plan correction note under Task 16.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1735"
+          ],
+          "recorded_at": "2026-11-24T14:16:33.005435104Z",
+          "seal": {
+            "by": "server",
+            "mac": "77c1d15e0ab3ae9ceaac608ef08cf99d73d14db1d9d314a337e8e6943b8a2176"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:13:57.319288600Z",
+      "updated_at": "2026-11-24T14:16:33.005435104Z",
+      "seal": {
+        "by": "server",
+        "mac": "1f31357d0b89ada5128131ea2fdd5e6dc3fdf306d4b59803ab828b7d3908b462"
+      }
+    },
+    {
+      "id": "CLM-1186",
+      "statement": "The housekeeping module docs (item 3) and the plan's Task 16 note state that the store-open schema migrations and prune_audit's App::fresh_settings read are bounded by the tokio backstop (and the settings read's own timeout) alone, with every other statement of a store job under SET LOCAL lock_timeout and statement_timeout; and the code matches (migrate_on and the settings revalidation set no SET LOCAL bound).",
+      "kind": "documentation",
+      "level": "component",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "Coordinator re-audit request; brief: every statement bounded with SET LOCAL (exceptions now documented)",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/housekeeping.rs",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1750",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs:34-48; plan line 621; src/stores/registry.rs:606-625",
+          "summary": "Module docs item 3 and the plan Task 16 note both state the two backstop-only exceptions (store-open migrations, prune_audit's fresh_settings read). Code agrees: migrate_on (registry.rs open) and revalidate_settings set no SET LOCAL bound, while the job's own statements go through account_tx/store_tx. The documented trade-off (migrations may rightly run long) is a design decision, accepted as such.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 34,
+                "end": 48
+              },
+              "commit": "61440c785ba41a0ca7a92c1fad06cbb644f7a132"
+            }
+          },
+          "recorded_at": "2026-11-24T14:33:15.062957466Z",
+          "seal": {
+            "by": "server",
+            "mac": "484280c860097e2aca4aedb97cad6e43f3f71f301068c88e0521f44d92fab1db"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Docs and code agree on the two backstop-only exceptions; all other store-job statements are SET LOCAL bounded (CLM-1173).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1750"
+          ],
+          "recorded_at": "2026-11-24T14:33:26.295938199Z",
+          "seal": {
+            "by": "server",
+            "mac": "7ad95cd0d9451d590455377c3114e4fe965598d199773104cffe82243acb09c1"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:33:03.973910520Z",
+      "updated_at": "2026-11-24T14:33:26.295938199Z",
+      "seal": {
+        "by": "server",
+        "mac": "7f433049e452cb05cdd1d8a2833e5926e33d934a4bd67abdc9c08012aa229c24"
+      }
+    },
+    {
+      "id": "CLM-1187",
+      "statement": "backstop (src/stores/bounded.rs) wraps its step in Box::pin before the tokio timeout, and with that change http::api::health::tests::health_counts_match_the_reports passes where it overflowed the stack in a debug build before.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "Coordinator re-audit request (new statement)",
+      "derived_from": [
+        "CLM-1169"
+      ],
+      "artifacts": [
+        "src/stores/bounded.rs"
+      ],
+      "tags": [
+        "from-issue:976"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1751",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- store_jobs_finish_on_pools_of_one_connection health_counts_match_the_reports (2 passed) at 61440c7; target/i976-logs/narrow3.log:9 (overflow), narrow4.log (23 passed)",
+          "summary": "bounded.rs:65 is tokio::time::timeout(limits.attempt, Box::pin(step)). I reran health_counts_match_the_reports at head: ok. narrow3.log shows the pre-change stack overflow of that test; narrow4.log shows it passing.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/bounded.rs",
+              "lines": {
+                "start": 58,
+                "end": 72
+              },
+              "commit": "61440c785ba41a0ca7a92c1fad06cbb644f7a132"
+            }
+          },
+          "recorded_at": "2026-11-24T14:33:15.165878341Z",
+          "seal": {
+            "by": "server",
+            "mac": "9ee03b64329bfa14ac9e26df4160d12274c4b79b2371f2cd39b048199f620827"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Box::pin is in backstop at head and the previously overflowing test passes on my rerun.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1751"
+          ],
+          "recorded_at": "2026-11-24T14:33:26.377259109Z",
+          "seal": {
+            "by": "server",
+            "mac": "541ed3c8a29e8af7845689d46bff14065c44795f5beb43a4977d128a2886cca6"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T14:33:03.973910520Z",
+      "updated_at": "2026-11-24T14:33:26.377259109Z",
+      "seal": {
+        "by": "server",
+        "mac": "db239844608efa1c2a4af2a91bee3eefb7e521a06baf1acfe4403d5b1b9c5354"
+      }
+    },
+    {
+      "id": "CLM-1188",
       "statement": "Issue #977 (M21.18, Task 18): reads across stores tolerate an unreachable store, name its catalogs in `unavailable`, and first-match reads, changeset lookup and writes fail with StoreUnavailable as specified.",
       "kind": "functional",
       "level": "system",
@@ -95485,7 +96948,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1747",
+          "id": "EVD-1774",
           "kind": "analysis",
           "locator": "children of CLM-1169",
           "summary": "All functional and documentation children are supported (merging reads, visibility, first-match reads, changesets, writes, tests, docs, changelog, plan note, PR statements). One child, CLM-1188 (doc comment of MAIN_STORE displaced onto READ_CONCURRENCY in src/stores/mod.rs), is refuted: a cosmetic documentation defect that does not affect behaviour.",
@@ -95493,11 +96956,11 @@
           "recorded_at": "2026-11-24T14:30:27.358387828Z",
           "seal": {
             "by": "server",
-            "mac": "fe7a50c5f4c57113ebf3e1eb051cc6928bbf90a5dbc9360a97963624d5153f26"
+            "mac": "73b9e4caac9312393128c08d7ae5c6a9d747683ed50420871aab07953fc4e49b"
           }
         },
         {
-          "id": "EVD-1753",
+          "id": "EVD-1780",
           "kind": "analysis",
           "locator": "children of CLM-1169",
           "summary": "All children are now supported, including CLM-1188 after bed114a.",
@@ -95505,7 +96968,7 @@
           "recorded_at": "2026-11-24T14:33:49.819353483Z",
           "seal": {
             "by": "server",
-            "mac": "5599c16561f57d57f2b81368b6a7f00373075410e8843257518c0920806c36ac"
+            "mac": "e4e21bb85d115380a8fe8746a0900169334f490151ab2e16ec9512bcce1aac17"
           }
         }
       ],
@@ -95515,12 +96978,12 @@
           "rationale": "Roll-up only: every behavioural child is supported; the sole refuted child is CLM-1188, a displaced doc comment. Fix: move the \"/// The name of the store every existing catalog is on after migration 0036.\" line in src/stores/mod.rs to directly above `const MAIN_STORE`, commit, and re-audit CLM-1188 and this claim.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1747"
+            "EVD-1774"
           ],
           "recorded_at": "2026-11-24T14:30:32.233962420Z",
           "seal": {
             "by": "server",
-            "mac": "ccd6ba725cf7a3c053bb0ec786006c0f2683b1242cab99c222068d61a109e8d8"
+            "mac": "898d8a2be1acbe258c0dfac23032a9f26afe7c7ca1ff47f2e4b42447140dabb0"
           }
         },
         {
@@ -95528,12 +96991,12 @@
           "rationale": "Every child is supported; the one earlier refuted child was fixed in bed114a.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1753"
+            "EVD-1780"
           ],
           "recorded_at": "2026-11-24T14:33:53.838806306Z",
           "seal": {
             "by": "server",
-            "mac": "125e27a6467420a569ac0ef65f03941e177a2c33f9707748cb995eeb1353815c"
+            "mac": "34413630f641f1bdf4444f045388c63dc4c5092eca157c2acf3f91beb7e5f3ad"
           }
         }
       ],
@@ -95541,11 +97004,11 @@
       "updated_at": "2026-11-24T14:33:53.838806306Z",
       "seal": {
         "by": "server",
-        "mac": "c7c1a0988713f0a9570e84e695c7a22afa703034fac8e7f814f870f7787b2195"
+        "mac": "0eab752af0ed8eb1e0d2ecd4461e9c420eabf2fc13772079cadc872c83050c23"
       }
     },
     {
-      "id": "CLM-1170",
+      "id": "CLM-1189",
       "statement": "`search` over catalogs on several stores, one of which is unreachable, returns the hits of the reachable catalogs and lists the unreachable catalog's id in `unavailable` instead of failing.",
       "kind": "functional",
       "level": "software",
@@ -95553,7 +97016,7 @@
       "verification_method": "test",
       "source": "Issue #977: merging reads (search, list_catalogs counts, console search) tolerate an unreachable store and name its catalogs in `unavailable`",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/mcp/search.rs",
@@ -95567,7 +97030,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1728",
+          "id": "EVD-1755",
           "kind": "test",
           "locator": "SQLX_OFFLINE=true cargo test --lib unavailable_tests --jobs 4 (7 passed): search_returns_other_stores_results_and_names_the_unavailable_catalog",
           "summary": "Ran the module on head: all 7 pass. The test searches home+remote with remote's store made unreachable; asserts hits come only from home and unavailable == [\"remote\"]. Code: states_or_unavailable converts StoreUnavailable into names (context.rs:647) and search::run_with uses it (search.rs:144).",
@@ -95585,7 +97048,7 @@
           "recorded_at": "2026-11-24T14:29:19.045940727Z",
           "seal": {
             "by": "server",
-            "mac": "aca967af0a505d68b0f653a1a6994a50e6ad385bf9ebc47dc5422a68ebfce0c9"
+            "mac": "f25002162f626f59f22ee1bed70248ee38cd7fb8afc184ffc4552ba3750748bc"
           }
         }
       ],
@@ -95595,12 +97058,12 @@
           "rationale": "Test passes on head and asserts exactly the claim (hits from home only, unavailable [\"remote\"]) with a store made unreachable for real.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1728"
+            "EVD-1755"
           ],
           "recorded_at": "2026-11-24T14:30:22.504239381Z",
           "seal": {
             "by": "server",
-            "mac": "47d2830d8ac4e026aaa266b07c04aa6ef5c9f38a64039f24d53987d37f14438a"
+            "mac": "864df54630e3f4322b53650154767c15c20a994bbdd741abf17d8930ef9b944e"
           }
         }
       ],
@@ -95608,11 +97071,11 @@
       "updated_at": "2026-11-24T14:30:22.504239381Z",
       "seal": {
         "by": "server",
-        "mac": "a700d2e4c9babf7df7b8d3048435e8c0513c50e00031ac3e759a167f7242e351"
+        "mac": "ff0d98e8de28a9275522c226d5e99c00ccf80470f129e1a5974208e0b5270e4b"
       }
     },
     {
-      "id": "CLM-1171",
+      "id": "CLM-1190",
       "statement": "`list_catalogs` (MCP) leaves out a catalog whose store is unreachable, still lists the others, and names the left-out catalog in `unavailable`.",
       "kind": "functional",
       "level": "software",
@@ -95620,7 +97083,7 @@
       "verification_method": "test",
       "source": "Issue #977: merging reads (search, list_catalogs counts, console search) tolerate an unreachable store",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/mcp/catalogs.rs",
@@ -95634,7 +97097,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1729",
+          "id": "EVD-1756",
           "kind": "test",
           "locator": "cargo test --lib unavailable_tests::list_catalogs_leaves_out_and_names_the_unavailable_catalog (ok)",
           "summary": "Asserts catalogs == [\"home\"] and unavailable == [\"remote\"] for an unrestricted key, and no unavailable for a key reaching only home. Code at catalogs.rs:126-166 pushes page.unavailable and store-went-away rows.",
@@ -95652,7 +97115,7 @@
           "recorded_at": "2026-11-24T14:29:19.134790011Z",
           "seal": {
             "by": "server",
-            "mac": "8df4f70bcbcccba881d6575d2c2f138fd03d3656ce3edb5a3be318c183e5ea29"
+            "mac": "dc43a9e649909f131177f0acd4a0cb4542e1fe5ac9815209be96c6a0040d3826"
           }
         }
       ],
@@ -95662,12 +97125,12 @@
           "rationale": "Test asserts the lost catalog is left out of catalogs and named in unavailable, and a narrow key sees none.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1729"
+            "EVD-1756"
           ],
           "recorded_at": "2026-11-24T14:30:22.608807116Z",
           "seal": {
             "by": "server",
-            "mac": "872650f5a6ce5deacf74480f578cbe941bd87855376ec8f41a2857e5e7c1fbf2"
+            "mac": "8a2d9aafe76fc23174d699324cefa5a7a9d98ae021bdc539e08cefa6eabaa09c"
           }
         }
       ],
@@ -95675,11 +97138,11 @@
       "updated_at": "2026-11-24T14:30:22.608807116Z",
       "seal": {
         "by": "server",
-        "mac": "040afea4cc500c70f17c658c5d213ec5b450653552e937fa3115e05d6fedda0d"
+        "mac": "233b23c73bbb548fb25db48a891f59cdfe30fb8ed5bdf92266f4cdbc7c4c7c91"
       }
     },
     {
-      "id": "CLM-1172",
+      "id": "CLM-1191",
       "statement": "The console search (`GET /search`) and `GET /catalogs` tolerate an unreachable store and carry `unavailable`, instead of failing.",
       "kind": "functional",
       "level": "software",
@@ -95687,7 +97150,7 @@
       "verification_method": "analysis",
       "source": "Issue #977: merging reads (search, list_catalogs counts, console search); PR body: `unavailable` on ... `GET /catalogs` ... and `GET /search` (the console search)",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/http/api/search.rs",
@@ -95701,7 +97164,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1730",
+          "id": "EVD-1757",
           "kind": "inspection",
           "locator": "src/http/api/search.rs:130-175; src/http/api/catalogs.rs:266-287",
           "summary": "every_reachable keeps a catalog on a down store (page.unavailable) so the search names it; GET /catalogs skips and names it. WebSearch carries unavailable (search.rs:66-93), CatalogListing too (catalogs.rs:155). No test in the diff exercises either HTTP route with a lost store (grep of tests/ and src/http finds none).",
@@ -95719,7 +97182,7 @@
           "recorded_at": "2026-11-24T14:29:19.216930201Z",
           "seal": {
             "by": "server",
-            "mac": "006fd5791f9af89b2da6479a4b8a00e666bd417553d4e5bafca21a5723416b92"
+            "mac": "7e12d8b9a8e1e8c37280be86db57cf0f3bd5fe701e55d326a10249c4da3d6df1"
           }
         }
       ],
@@ -95729,12 +97192,12 @@
           "rationale": "Code reading shows both HTTP routes keep the other catalogs and name the lost ones. Supported by inspection only (integrity 2): no test drives GET /search or GET /catalogs with a lost store. Consider adding one, but it does not block.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1730"
+            "EVD-1757"
           ],
           "recorded_at": "2026-11-24T14:30:22.733575232Z",
           "seal": {
             "by": "server",
-            "mac": "5811f774971e00b99f084187bf9fd779fa3971be4b686d4d97b77a21dacaf411"
+            "mac": "6f6f1f1f961b9c5d54e0420664c9c58b0b3542ced470c2256f1139492c8f38fd"
           }
         }
       ],
@@ -95742,11 +97205,11 @@
       "updated_at": "2026-11-24T14:30:22.733575232Z",
       "seal": {
         "by": "server",
-        "mac": "f79650adff85ee54f91c99e2b9330175ed1360adfb953a761fd6cc45c94229c5"
+        "mac": "9906da689df7654b082a1c84398b0c137079e0394e7fc99d484296215b7a85bb"
       }
     },
     {
-      "id": "CLM-1173",
+      "id": "CLM-1192",
       "statement": "`unavailable` lists catalog ids sorted, each once, and the key is omitted from the JSON when empty (search, list_catalogs, list_changesets).",
       "kind": "interface",
       "level": "software",
@@ -95754,7 +97217,7 @@
       "verification_method": "test",
       "source": "Issue #977: `unavailable` (sorted, deduplicated, omitted when empty)",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/mcp/search.rs",
@@ -95769,7 +97232,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1731",
+          "id": "EVD-1758",
           "kind": "test",
           "locator": "cargo test --lib unavailable_tests::the_unavailable_field_is_left_out_when_every_store_answers (ok)",
           "summary": "Search: json has no \"unavailable\" key when every store answered; lost case serialises [\"remote\"]. Sorting/dedup is by code: search.rs:213-214 sort+dedup, catalogs.rs:166 sort (rows unique), changesets unreachable_catalogs sort+dedup. All three fields use skip_serializing_if Vec::is_empty. list_catalogs/list_changesets omission is not asserted by a test; no test has two lost catalogs (the comment on line 88 mentions it but only one is present).",
@@ -95787,7 +97250,7 @@
           "recorded_at": "2026-11-24T14:29:19.298016867Z",
           "seal": {
             "by": "server",
-            "mac": "1c547521a192f3572dc9f81467f8a5a3a95a7facb5bb761d07111521d69281d0"
+            "mac": "2807d7589017bac26ad681c68894ceffa0b882e767c87fc9df2b133ad4c81d04"
           }
         }
       ],
@@ -95797,12 +97260,12 @@
           "rationale": "Omission is tested for search; sort and dedup are explicit in the code of all three tools and skip_serializing_if is on every field. Caveat: no test has two lost catalogs, so ordering is by reading, and the omission for list_catalogs/list_changesets is not asserted.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1731"
+            "EVD-1758"
           ],
           "recorded_at": "2026-11-24T14:30:22.853222648Z",
           "seal": {
             "by": "server",
-            "mac": "03ead7c0daee02d4461e49c638bed72e5f278a404f715e3c7e7651b622f054b0"
+            "mac": "97f58e79c5159312363d04294a49506dff7fd81a36673e3dfa4ddd2c55e716ed"
           }
         }
       ],
@@ -95810,11 +97273,11 @@
       "updated_at": "2026-11-24T14:30:22.853222648Z",
       "seal": {
         "by": "server",
-        "mac": "def4f763abd6792fb0f74fd92757378e651a75417ef6477eafefe0351d269ad1"
+        "mac": "d3b651c5fcc1a50905d7623db7795c373b7a295c850dc2b489a64e7b9a5b50ed"
       }
     },
     {
-      "id": "CLM-1174",
+      "id": "CLM-1193",
       "statement": "The wait on an unreachable or stalled store is bounded by `store_connect_timeout` per store in every merging read (generation probe, state loads, changeset fan-out).",
       "kind": "performance",
       "level": "software",
@@ -95822,7 +97285,7 @@
       "verification_method": "analysis",
       "source": "Issue #977: bounded wait; PR body: each within `store_connect_timeout`",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/cache/directory.rs",
@@ -95837,7 +97300,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1732",
+          "id": "EVD-1759",
           "kind": "inspection",
           "locator": "src/cache/directory.rs:319; src/mcp/changesets.rs:282; src/stores/registry.rs:727-756",
           "summary": "Generation probe and changeset fan-out wrap each store's read in tokio::time::timeout(Stores::connect_timeout()) mapping elapsed to StoreUnavailable; state loads go through Stores::get whose pool connect is bounded by acquire_timeout/timeout(settings.connect_timeout). A stall mid-query on a state load is bounded only by the pool/sqlx settings, not an explicit timeout, which is acceptable for the issue's wording.",
@@ -95855,7 +97318,7 @@
           "recorded_at": "2026-11-24T14:29:19.372291588Z",
           "seal": {
             "by": "server",
-            "mac": "e41b81922169b63141d0bb42e651818c981f22f7cff0d597e5a250739c78e36f"
+            "mac": "f2ec00ad924c329b360435a56572db46150656eba23107751106c83714e2d00f"
           }
         }
       ],
@@ -95865,12 +97328,12 @@
           "rationale": "Each merging path wraps the store read in a timeout of store_connect_timeout or uses the registry's bounded connect.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1732"
+            "EVD-1759"
           ],
           "recorded_at": "2026-11-24T14:30:22.928014274Z",
           "seal": {
             "by": "server",
-            "mac": "025dc03a736e779a0dd7a02ae1e4a75066ee8e8f500db65ec67960636d710e70"
+            "mac": "b717fa1f0c263ee69c82f4d6863fe5d99ba1a270b72640f8c03abff5bdabd8c9"
           }
         }
       ],
@@ -95878,11 +97341,11 @@
       "updated_at": "2026-11-24T14:30:22.928014274Z",
       "seal": {
         "by": "server",
-        "mac": "da7f53392226b246ea33ec8169f949e128502e954c47340861606a509e8821eb"
+        "mac": "7f4a15423f14c65add939d377b4b0d9bed105bf948ada085b4ce7c97ac79f379"
       }
     },
     {
-      "id": "CLM-1175",
+      "id": "CLM-1194",
       "statement": "`unavailable` never names a catalog the caller cannot see: a key that does not reach a catalog on a lost store gets no mention of it.",
       "kind": "security",
       "level": "software",
@@ -95890,7 +97353,7 @@
       "verification_method": "test",
       "source": "Issue #977: the field never names a catalog the caller cannot see; PR body: Only catalogs the caller reaches (and the connection offers) can be named",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/mcp/context.rs",
@@ -95905,7 +97368,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1733",
+          "id": "EVD-1760",
           "kind": "test",
           "locator": "cargo test --lib unavailable_tests::a_catalog_the_key_does_not_reach_is_never_named_unavailable (ok)",
           "summary": "A key reaching only home asking for home+remote gets CatalogNotSelected (same as a nonexistent catalog), and a default search names nothing. Code: select() decides reach from the account row before mark_down (context.rs:441-465); list_changesets filters with ctx.offers (changesets.rs:343); Page.unavailable only covers listed rows (directory.rs). list_catalogs test asserts narrow key sees none.",
@@ -95923,7 +97386,7 @@
           "recorded_at": "2026-11-24T14:29:19.452748621Z",
           "seal": {
             "by": "server",
-            "mac": "38aa122db26d891dd95ce916a0b740d78b4756439ab9a4077db6c43545b5b661"
+            "mac": "95e02768d85f099db4e0c56ecdbcf70ddb3a6df10152b4987998bf0400009428"
           }
         }
       ],
@@ -95933,12 +97396,12 @@
           "rationale": "Test shows a non-reaching key gets the same refusal as for a nonexistent catalog and names nothing; code decides reach from the account row before marking down.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1733"
+            "EVD-1760"
           ],
           "recorded_at": "2026-11-24T14:30:22.998180294Z",
           "seal": {
             "by": "server",
-            "mac": "841dfada50d741cd6b9033ca4296670a072e9c29b4234ca857c5616136424bbe"
+            "mac": "bbc79217206fca41bdead8bbe4a83ce4d88c7418ca53a021f0bb7315be34fba6"
           }
         }
       ],
@@ -95946,11 +97409,11 @@
       "updated_at": "2026-11-24T14:30:22.998180294Z",
       "seal": {
         "by": "server",
-        "mac": "bced7f00df205c21f2f197c116324a15406da96d7458ba591d08a034bd364141"
+        "mac": "469e81c6bf7396224f0a19b68995dcf84606a6ebac94a21e7111a61dbbda2cba"
       }
     },
     {
-      "id": "CLM-1176",
+      "id": "CLM-1195",
       "statement": "`get_concept`, `history` and `read_document` without `catalog` fail with StoreUnavailable when a catalog earlier in the selection is on an unreachable store and no earlier catalog answers; later catalogs do not answer in its place.",
       "kind": "functional",
       "level": "software",
@@ -95958,7 +97421,7 @@
       "verification_method": "test",
       "source": "Issue #977: first-match reads (get_concept, history, read_document without `catalog`) fail with StoreUnavailable when an earlier catalog's store is down",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/mcp/documents.rs",
@@ -95973,7 +97436,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1734",
+          "id": "EVD-1761",
           "kind": "test",
           "locator": "cargo test --lib unavailable_tests::get_concept_fails_when_an_earlier_catalogs_store_is_unavailable (ok)",
           "summary": "With remote selected before home: get_concept, history and read_document all return StoreUnavailable although home holds note.md; with home first, get_concept answers from home; a missing path with home first is StoreUnavailable, not NotFound. Code: ReadSet.blocked returned at documents.rs:395,534 and history.rs:173.",
@@ -95991,7 +97454,7 @@
           "recorded_at": "2026-11-24T14:29:19.532783473Z",
           "seal": {
             "by": "server",
-            "mac": "a3147ffc7862128581274ee8437cb071b8d748db9cbda3e2e4e8be141ece5bf6"
+            "mac": "b584e9c9624f64080b48393a6c4db5cb628bf975055eaba76873a3bab1c5a061"
           }
         }
       ],
@@ -96001,12 +97464,12 @@
           "rationale": "Test covers all three tools plus the not-found-behind-a-lost-store case.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1734"
+            "EVD-1761"
           ],
           "recorded_at": "2026-11-24T14:30:23.083412462Z",
           "seal": {
             "by": "server",
-            "mac": "664292026e000e3456a70a647c78b3b3d47e2b951b2e441dffc41da1fdb68971"
+            "mac": "1c4422440e9cf1e0b714a39078cfc9868f6d4c608836f319020eec78c4099861"
           }
         }
       ],
@@ -96014,11 +97477,11 @@
       "updated_at": "2026-11-24T14:30:23.083412462Z",
       "seal": {
         "by": "server",
-        "mac": "276a4283a4a61dda278cc5813ad3d01528b8830614eaf4552f71da0f3dba885a"
+        "mac": "6330fabbc665645e522cc3a4b7dfbdfb5da62c7b2e1c259c5637a6739b461ff9"
       }
     },
     {
-      "id": "CLM-1177",
+      "id": "CLM-1196",
       "statement": "`ToolContext::resolve_changeset` looks up a handle in every store from `Stores::all()`, `main` first, and a store it cannot reach ends the lookup with StoreUnavailable.",
       "kind": "functional",
       "level": "software",
@@ -96026,7 +97489,7 @@
       "verification_method": "test",
       "source": "Issue #977 comment (from #966): Task 18 must look through every store from `Stores::all()`, `main` first",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/mcp/context.rs"
@@ -96039,7 +97502,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1735",
+          "id": "EVD-1762",
           "kind": "test",
           "locator": "cargo test --lib unavailable_tests::a_changeset_handle_on_a_lost_store_is_unavailable_and_others_still_resolve (ok)",
           "summary": "Handle on main resolves with a store down; handle on the lost store and an unknown handle both give StoreUnavailable. Code: changeset_by_handle iterates stores_main_first (stable sort puts main first) over Stores::all (context.rs:1193-1239) and resolve_changeset uses it (1124-1150).",
@@ -96057,7 +97520,7 @@
           "recorded_at": "2026-11-24T14:29:19.612855126Z",
           "seal": {
             "by": "server",
-            "mac": "f840f500dba819a92f78e9b8a18df13e3586171d9719d05ca3baa831d71a8d69"
+            "mac": "d8777ca9f14a0a82a9d7a10d2d15ead355cfa52c36df1038e3f31b6ab313814e"
           }
         }
       ],
@@ -96067,12 +97530,12 @@
           "rationale": "Code iterates all stores main first; test shows main's handle resolves and a handle on, or unknown while there is, a lost store gives StoreUnavailable. Caveat: no test has the handle on a healthy non-main store.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1735"
+            "EVD-1762"
           ],
           "recorded_at": "2026-11-24T14:30:23.153919252Z",
           "seal": {
             "by": "server",
-            "mac": "ba1cc7811a71df20e09d660ed574a2f00c68e190886b4834e499ab2b10946fee"
+            "mac": "8b742b4e59109aa415e52f7546cac61a43f34b07f6f1ef9d8cb6d2b7d5f30958"
           }
         }
       ],
@@ -96080,11 +97543,11 @@
       "updated_at": "2026-11-24T14:30:23.153919252Z",
       "seal": {
         "by": "server",
-        "mac": "3679f57ad4c2f2702f53cac9348eab7e54de948e50fd5c84afd5734c5324c251"
+        "mac": "ddb4108eba1cc106176dfd1300a8448eacc4da6f7b3adc6f4ff605e4834b90c2"
       }
     },
     {
-      "id": "CLM-1178",
+      "id": "CLM-1197",
       "statement": "`list_changesets` without `catalog` reads every store (fan-out) and names the catalogs of an unreachable store in `unavailable`.",
       "kind": "functional",
       "level": "software",
@@ -96092,7 +97555,7 @@
       "verification_method": "test",
       "source": "Issue #977: list_changesets without `catalog` fans out over stores",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/mcp/changesets.rs"
@@ -96105,7 +97568,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1736",
+          "id": "EVD-1763",
           "kind": "test",
           "locator": "same test as above, final assertions: listed.unavailable == [\"remote\"], listed.changesets.len() == 1",
           "summary": "list_changesets with catalog None, with one catalog on main (with a changeset) and one on a lost store, lists main's changeset and names remote. Code: open_in_every_store reads each store in chunks of READ_CONCURRENCY with a timeout (changesets.rs:254-312). The fan-out over several healthy stores merging is not tested.",
@@ -96123,7 +97586,7 @@
           "recorded_at": "2026-11-24T14:29:19.695522557Z",
           "seal": {
             "by": "server",
-            "mac": "3ec3b7cd98a28056f1f47447eb596851447884171c1147ca9584eca209676acb"
+            "mac": "b994456e82d0672bc4eb02c253a270aef0d823e340906fd58bb446ffafa3d5b7"
           }
         }
       ],
@@ -96133,12 +97596,12 @@
           "rationale": "Fan-out code reads each store; test shows the healthy store's changeset listed and the lost catalog named.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1736"
+            "EVD-1763"
           ],
           "recorded_at": "2026-11-24T14:30:23.224229291Z",
           "seal": {
             "by": "server",
-            "mac": "83db3da87d6a323a873aeeb9aef177d3b67bf1c041d84907360971168124232d"
+            "mac": "f52e41520f07181c1c1c25290f944c253a20658b59c40899517b4b54aa34d05f"
           }
         }
       ],
@@ -96146,11 +97609,11 @@
       "updated_at": "2026-11-24T14:30:23.224229291Z",
       "seal": {
         "by": "server",
-        "mac": "b33395f375c7d039d1d197a91fba98bc846534e18af22049403e6b4e3762cbbe"
+        "mac": "d0573d6a2ed07077ed31e5e8c8fb09487482f9f247d6d384863258bbdfe459ed"
       }
     },
     {
-      "id": "CLM-1179",
+      "id": "CLM-1198",
       "statement": "A write (`open_changeset` on a catalog) to an unreachable store fails with StoreUnavailable, and the message does not name the store.",
       "kind": "functional",
       "level": "software",
@@ -96158,7 +97621,7 @@
       "verification_method": "test",
       "source": "Issue #977: writes to an unavailable store fail with StoreUnavailable",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/mcp/changesets.rs",
@@ -96172,7 +97635,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1737",
+          "id": "EVD-1764",
           "kind": "test",
           "locator": "cargo test --lib unavailable_tests::a_write_to_an_unavailable_store_fails_with_store_unavailable (ok)",
           "summary": "open_changeset on remote (store lost) returns StoreUnavailable and the error string does not contain the store name.",
@@ -96190,7 +97653,7 @@
           "recorded_at": "2026-11-24T14:29:19.774106374Z",
           "seal": {
             "by": "server",
-            "mac": "522bb36dd421d5fe50d5be5b9405519a19a15d80858ee4ec29e38ea6d25f3196"
+            "mac": "dbf3ceca93c33a6d6723848f4bf079c44d5b11d8400b392c9b7d5f81d5636643"
           }
         }
       ],
@@ -96200,12 +97663,12 @@
           "rationale": "Test asserts StoreUnavailable and that the message omits the store name.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1737"
+            "EVD-1764"
           ],
           "recorded_at": "2026-11-24T14:30:23.298773258Z",
           "seal": {
             "by": "server",
-            "mac": "494a5f2e1ea52cd18f6802f9fdd198eca5bdab8e59f0106a615ce2d2c6cb3f71"
+            "mac": "11c7bfad4c7632960cc2a81612cd8e6df64963dba1dabdfcd08a1becc94358f1"
           }
         }
       ],
@@ -96213,11 +97676,11 @@
       "updated_at": "2026-11-24T14:30:23.298773258Z",
       "seal": {
         "by": "server",
-        "mac": "79a1cae6d649d19dc22990e1f7a894466eccd1e9607f6edac200cc4f4da5906d"
+        "mac": "e39ba174fd087b4802822d4b8c0ddcd2fc908e07cb1547c0b86da0ae10a09dcd"
       }
     },
     {
-      "id": "CLM-1180",
+      "id": "CLM-1199",
       "statement": "The three tests named by the plan exist in src/mcp/unavailable_tests.rs, make a store really unavailable (its row repointed at a closed port and its pool dropped, no mocked flag), and use bounded timeouts, not sleeps.",
       "kind": "constraint",
       "level": "artifact",
@@ -96225,7 +97688,7 @@
       "verification_method": "test",
       "source": "Issue #977: the three named tests exist and make a store really unavailable (no mocked flag) and use bounded waits not sleeps",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/mcp/unavailable_tests.rs",
@@ -96239,7 +97702,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1738",
+          "id": "EVD-1765",
           "kind": "test",
           "locator": "src/mcp/unavailable_tests.rs:72,149,201; src/mcp/testing.rs make_unreachable; cargo test --lib unavailable_tests (7 passed)",
           "summary": "All three plan-named tests exist (lines 73, 150, 202) and pass. make_unreachable UPDATEs the stores row to a just-closed local port and calls Stores::forget to drop the pool, so connects are really refused; no flag or mock. Every call goes through bounded() (tokio timeout, 30 s); grep for sleep finds only a comment saying nothing sleeps.",
@@ -96257,7 +97720,7 @@
           "recorded_at": "2026-11-24T14:29:48.754088863Z",
           "seal": {
             "by": "server",
-            "mac": "ede652d3959894c0e91cf56db49aea57114613fb7f213813b9beb77ff8012f35"
+            "mac": "9bebef68cd2793fe85044e8d0835e77295cb185612445a0f0571819ab71f0cc6"
           }
         }
       ],
@@ -96267,12 +97730,12 @@
           "rationale": "Names present, tests pass, unreachability is a repointed row plus dropped pool, waits are tokio timeouts, no sleeps.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1738"
+            "EVD-1765"
           ],
           "recorded_at": "2026-11-24T14:30:23.371880258Z",
           "seal": {
             "by": "server",
-            "mac": "bd4f66f8a9ddf9708810b0d033aeeca925a871458249df6d7abd841ecca8617f"
+            "mac": "8a6e912a318817af941e0ff1d9ded0a9d0e327b98700802524c27c9df204083a"
           }
         }
       ],
@@ -96280,11 +97743,11 @@
       "updated_at": "2026-11-24T14:30:23.371880258Z",
       "seal": {
         "by": "server",
-        "mac": "494a0942ba067841957dbc6486a88772876182605e8447cd801f7f1ee991533c"
+        "mac": "f119a7a636c785b3970b05d6f33128f50c73843f0ee5fe51ba50aa2ad9ad995d"
       }
     },
     {
-      "id": "CLM-1181",
+      "id": "CLM-1200",
       "statement": "docs/reference/tools.md changes only by adding the `unavailable` field to the descriptions of list_catalogs, list_changesets and search.",
       "kind": "documentation",
       "level": "artifact",
@@ -96292,7 +97755,7 @@
       "verification_method": "inspection",
       "source": "Issue #977: docs/reference/tools.md gets the `unavailable` field only",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "docs/reference/tools.md"
@@ -96305,7 +97768,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1739",
+          "id": "EVD-1766",
           "kind": "inspection",
           "locator": "git diff origin/milestone/958-catalog-stores..HEAD -- docs/reference/tools.md",
           "summary": "Three hunks only (6 lines changed): one sentence appended to each of the List Catalogs, List Changesets and Search Concepts descriptions, each naming `unavailable`. Nothing else in the file changed.",
@@ -96323,7 +97786,7 @@
           "recorded_at": "2026-11-24T14:29:48.849519733Z",
           "seal": {
             "by": "server",
-            "mac": "19ee1b04bfb2816652674e767ecd3bb88e36f0bdf690a682ec8b7d7967e9b434"
+            "mac": "c0e58878b9344df45bb4882bfddb4cb54222a7c9c111d5237053d1f937d409b9"
           }
         }
       ],
@@ -96333,12 +97796,12 @@
           "rationale": "Diff of tools.md is three one-sentence appends naming `unavailable`.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1739"
+            "EVD-1766"
           ],
           "recorded_at": "2026-11-24T14:30:23.446301694Z",
           "seal": {
             "by": "server",
-            "mac": "28a21d59ac6b001ae7f70b21a92ce82cdd55e6d022bcc010150cd1ff58c907ba"
+            "mac": "9bed0ccb2a58c1e0ed37bb7675166e9b903a54fc341a180a0348cfd6ff567136"
           }
         }
       ],
@@ -96346,11 +97809,11 @@
       "updated_at": "2026-11-24T14:30:23.446301694Z",
       "seal": {
         "by": "server",
-        "mac": "8e08529e8108bb719b36ba3b505747958466593c2f1de1bd7468c034879bdb8f"
+        "mac": "47dbb2005bfd3448c0654319f319386cf94ea730fcc7b57c9c68622b61c60f27"
       }
     },
     {
-      "id": "CLM-1182",
+      "id": "CLM-1201",
       "statement": "Exactly one changelog entry changelog/<ts>-m21-task-18-<slug>.md was added, with Added, Changed and Notes sections.",
       "kind": "documentation",
       "level": "artifact",
@@ -96358,7 +97821,7 @@
       "verification_method": "inspection",
       "source": "Issue #977: one changelog entry changelog/<ts>-m21-task-18-<slug>.md with Added/Changed/Notes sections",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "changelog/2026-11-24T13-38-53Z-m21-task-18-reads-across-stores.md"
@@ -96371,7 +97834,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1740",
+          "id": "EVD-1767",
           "kind": "inspection",
           "locator": "changelog/2026-11-24T13-38-53Z-m21-task-18-reads-across-stores.md; git diff --stat shows one changelog file",
           "summary": "One new file in the range under changelog/, named with timestamp, m21-task-18 and a slug; it has ## Added, ## Changed and ## Notes headings.",
@@ -96385,7 +97848,7 @@
           "recorded_at": "2026-11-24T14:29:48.924711097Z",
           "seal": {
             "by": "server",
-            "mac": "b4db53deb8cfff2fdac6b1256a9910959889052b56d5320ab2b464c2ace957fe"
+            "mac": "6240ca6a965386ba8de77409c8ff4b7592079b17fb9c8bd01442b9a7ae116794"
           }
         }
       ],
@@ -96395,12 +97858,12 @@
           "rationale": "One correctly named entry with the three sections.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1740"
+            "EVD-1767"
           ],
           "recorded_at": "2026-11-24T14:30:23.518777292Z",
           "seal": {
             "by": "server",
-            "mac": "ddd3b8c3f260db5d33aed8204e0058cffc9bdf340e47f6614f67a697520656cc"
+            "mac": "f0c61ffecd92c4bfb2dd3f8a50fdcccac502358b774679b66bae3ae9db901c2c"
           }
         }
       ],
@@ -96408,11 +97871,11 @@
       "updated_at": "2026-11-24T14:30:23.518777292Z",
       "seal": {
         "by": "server",
-        "mac": "1f6601f300d2d0fc0d0d78100c4b8be35a3017d31148d5912a923bb7c49df1aa"
+        "mac": "8bd78c871f82647d4a0e61476fda844599a0bbdc9656ab0cd29c1485560f389e"
       }
     },
     {
-      "id": "CLM-1183",
+      "id": "CLM-1202",
       "statement": "The plan's Task 18 carries a dated \"> **Corrected (issue #977\" note describing where the code differs.",
       "kind": "documentation",
       "level": "artifact",
@@ -96420,7 +97883,7 @@
       "verification_method": "inspection",
       "source": "Issue #977: the plan is corrected with a dated \"> **Corrected (issue #977\" note if code differs",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
@@ -96433,7 +97896,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1741",
+          "id": "EVD-1768",
           "kind": "inspection",
           "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:642-647",
           "summary": "Task 18 gains a block starting \"> **Corrected (issue #977, 2026-11-24).** Shipped:\" with five bullets describing directory, merging reads, P3 reads, changesets and tests; its content matches the diff.",
@@ -96451,7 +97914,7 @@
           "recorded_at": "2026-11-24T14:29:48.999683501Z",
           "seal": {
             "by": "server",
-            "mac": "cdb5b3b81a36a32f367605881129235244b82177d1219b083cec4af945f5bf07"
+            "mac": "02d8226d1c0d37ef0d29aaa8d40d31395df1cbd9c431d3f3c76c5714d31a7302"
           }
         }
       ],
@@ -96461,12 +97924,12 @@
           "rationale": "The dated Corrected note is present in Task 18 and matches the code.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1741"
+            "EVD-1768"
           ],
           "recorded_at": "2026-11-24T14:30:23.600813088Z",
           "seal": {
             "by": "server",
-            "mac": "0bd2c46d3b7ae50c28eee409e7eb32d0544d805b87aea61ba144b7445dc4256d"
+            "mac": "03b77c37174ce1cf210e8272d1310d71dc1d28a6955513916695f14df31de050"
           }
         }
       ],
@@ -96474,11 +97937,11 @@
       "updated_at": "2026-11-24T14:30:23.600813088Z",
       "seal": {
         "by": "server",
-        "mac": "c33d05436aa238f68d387b01668eb94c22e8b3542ddc4694ca889f776e08626f"
+        "mac": "3b9a61005fa2a8f7838c5436424cdc06e0971a9fc3c2e47fa1257fcad2f418cc"
       }
     },
     {
-      "id": "CLM-1184",
+      "id": "CLM-1203",
       "statement": "The directory's generation probe asks stores together, at most 8 at a time, each within `store_connect_timeout`, and reports the stores it could not reach instead of failing.",
       "kind": "functional",
       "level": "component",
@@ -96486,7 +97949,7 @@
       "verification_method": "analysis",
       "source": "PR body: The directory's generation probe asks stores together (at most 8 at a time), each within `store_connect_timeout`, and reports the stores it could not reach instead of failing.",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/cache/directory.rs",
@@ -96501,7 +97964,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1742",
+          "id": "EVD-1769",
           "kind": "inspection",
           "locator": "src/cache/directory.rs:291-345",
           "summary": "fill_generations groups ids by store, runs them through stream::iter(..).buffer_unordered(READ_CONCURRENCY) (= 8, stores/mod.rs:30), wraps each read in tokio::time::timeout(connect_timeout), and returns the set of stores answering StoreUnavailable instead of an error. Not covered by a test that counts concurrency; behavior is by reading.",
@@ -96519,7 +97982,7 @@
           "recorded_at": "2026-11-24T14:29:49.081106212Z",
           "seal": {
             "by": "server",
-            "mac": "c94634e7b88d0e2e608df55a5917d98f3fc4ea3fc090f146abd656996960ddb8"
+            "mac": "0bfb0070863659e7f34a52b1955ce8889fc6c71cfbef50c1ad407cfa91a76325"
           }
         }
       ],
@@ -96529,12 +97992,12 @@
           "rationale": "Code matches each part of the statement (buffer_unordered(8), per-store timeout, down set returned).",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1742"
+            "EVD-1769"
           ],
           "recorded_at": "2026-11-24T14:30:23.673597307Z",
           "seal": {
             "by": "server",
-            "mac": "f281d7dd46d3acd0a806d836c4712fcdea260868a9a4f694b74dd703c5b3212e"
+            "mac": "e637b7c2582b2c534ceabd9f91fa10dd14373a7a2b2e5f71764566b0afaa5113"
           }
         }
       ],
@@ -96542,11 +98005,11 @@
       "updated_at": "2026-11-24T14:30:23.673597307Z",
       "seal": {
         "by": "server",
-        "mac": "45b20d037b4a4468d7742f4b59040d69ee94df926e658d006d9b1dba54c03027"
+        "mac": "e77c5f071963b73702632e8ac1c2019a4fc65029095a58c8f12c25c7429cf344"
       }
     },
     {
-      "id": "CLM-1185",
+      "id": "CLM-1204",
       "statement": "A call probes a lost store once, not once per catalog.",
       "kind": "performance",
       "level": "component",
@@ -96554,7 +98017,7 @@
       "verification_method": "analysis",
       "source": "PR body: A call probes a lost store once, not once per catalog.",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/mcp/context.rs",
@@ -96569,7 +98032,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1743",
+          "id": "EVD-1770",
           "kind": "inspection",
           "locator": "src/mcp/context.rs:436-500,1260-1335; src/cache/directory.rs:384-410",
           "summary": "ToolContext keeps a per-call `down` set. select() passes it as known_down so resolve_or_unavailable short-circuits for later catalogs on that store; state() and held_state return StoreUnavailable from the set without connecting; resolve_many probes once per store. No test counts probes or connect attempts.",
@@ -96587,7 +98050,7 @@
           "recorded_at": "2026-11-24T14:29:49.161437209Z",
           "seal": {
             "by": "server",
-            "mac": "dac6c2de799b4113adbd6cd59a7720a2f14d2135a9f7d19471dc8a9593d81925"
+            "mac": "043b15157b30820986f9806e425a05a507701e8482fa8316c631c45107392400"
           }
         }
       ],
@@ -96597,12 +98060,12 @@
           "rationale": "Per-call down set short-circuits later catalogs on a known-down store; supported by reading, no probe-count test (integrity 2).",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1743"
+            "EVD-1770"
           ],
           "recorded_at": "2026-11-24T14:30:23.749071177Z",
           "seal": {
             "by": "server",
-            "mac": "d71ca473f74cd38ae903957dfff6ba2b5981a994b4b2b066571c710ac3cdeb1f"
+            "mac": "646e0b03fee013d37d52de538494772a332f962b7e7db14d47ab63b29e2a7300"
           }
         }
       ],
@@ -96610,11 +98073,11 @@
       "updated_at": "2026-11-24T14:30:23.749071177Z",
       "seal": {
         "by": "server",
-        "mac": "2b23e744173cf5cd4c5172349be5b9ff4fb6523de4fd9c3e175a956c25ebd038"
+        "mac": "14d6991260e67c11e4955dda7eda10bcefc2a126ead91bb4d150aea9d71d7d21"
       }
     },
     {
-      "id": "CLM-1186",
+      "id": "CLM-1205",
       "statement": "A credential's ceiling no longer fails while a store is down (ceiling_over_grants uses resolve_many's tolerant result).",
       "kind": "functional",
       "level": "component",
@@ -96622,7 +98085,7 @@
       "verification_method": "analysis",
       "source": "PR body: A credential's ceiling no longer fails while a store is down.",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/cache/credentials.rs"
@@ -96636,7 +98099,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1744",
+          "id": "EVD-1771",
           "kind": "inspection",
           "locator": "src/cache/credentials.rs:451-455",
           "summary": "ceiling_over_grants destructures `(rows, _unreachable)` from the now-tolerant resolve_many and builds the ceiling from the account-database rows, so a down store no longer produces an error there. No test exercises it with a lost store.",
@@ -96654,7 +98117,7 @@
           "recorded_at": "2026-11-24T14:29:49.232041004Z",
           "seal": {
             "by": "server",
-            "mac": "e2a4c64d2c6d083a94b5f55f4069bbd6117856d94d6a67f6b7dd55047f9eda88"
+            "mac": "fe1742afa45d8676e513a9b1fd5950abb33579ed256d6104af2faa042eee1073"
           }
         }
       ],
@@ -96664,12 +98127,12 @@
           "rationale": "The code path now ignores unreachable stores; supported by reading only.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1744"
+            "EVD-1771"
           ],
           "recorded_at": "2026-11-24T14:30:23.825237720Z",
           "seal": {
             "by": "server",
-            "mac": "1d243e0d7039bcda2cbc964585ce0d31ab340792266cda23760a2a120c9f6918"
+            "mac": "853ed21c16e19cc28b7bf87f06eab8928408fc4830903e39e0c2c3d477fe094e"
           }
         }
       ],
@@ -96677,11 +98140,11 @@
       "updated_at": "2026-11-24T14:30:23.825237720Z",
       "seal": {
         "by": "server",
-        "mac": "b9c02ca853447c64871be3af807387acad2218b385f599977e301cf0b7ad0a33"
+        "mac": "f46cd6a499cfac5ddb48c15de32a3c029cce8d8c54cb9f222c2f8160e4c707cd"
       }
     },
     {
-      "id": "CLM-1187",
+      "id": "CLM-1206",
       "statement": "`cited_by` is unchanged by this PR and still fails with StoreUnavailable when a store is down.",
       "kind": "functional",
       "level": "component",
@@ -96689,7 +98152,7 @@
       "verification_method": "analysis",
       "source": "PR body: `cited_by` is unchanged and still fails with `StoreUnavailable` when a store is down",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/mcp/cited_by.rs"
@@ -96703,7 +98166,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1745",
+          "id": "EVD-1772",
           "kind": "inspection",
           "locator": "src/mcp/cited_by.rs:111; git diff --stat (cited_by.rs absent)",
           "summary": "cited_by.rs is not in the diff and still calls the strict ctx.states(); that function was not modified (only states_or_unavailable added), and a down catalog's state() returns StoreUnavailable, so it still fails.",
@@ -96721,7 +98184,7 @@
           "recorded_at": "2026-11-24T14:29:49.316981690Z",
           "seal": {
             "by": "server",
-            "mac": "b7bdbf41813c56c05f006bfbf98441fe4f5c7de1e61c7d866029f604a1a742b5"
+            "mac": "64a6ae532b20f856875df82eaae35debda5ae69d947ba08d5334f08534682a11"
           }
         }
       ],
@@ -96731,12 +98194,12 @@
           "rationale": "cited_by untouched and uses the strict states().",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1745"
+            "EVD-1772"
           ],
           "recorded_at": "2026-11-24T14:30:23.895713940Z",
           "seal": {
             "by": "server",
-            "mac": "5211252d2c4b8630d72acbad091659816c5042e7db313fd35b8cee14752cef6a"
+            "mac": "90890cdc5ffe073f4b3d09af32f97662f0b7f9fb3714ee9d54e1b4e50ec094aa"
           }
         }
       ],
@@ -96744,11 +98207,11 @@
       "updated_at": "2026-11-24T14:30:23.895713940Z",
       "seal": {
         "by": "server",
-        "mac": "46878661601a45b7b395977f4b3c7f4cc6fab0b63e041a196fbc79ab22dc3c86"
+        "mac": "756ab8c25b28f36ce4c76e6c03b05b65e73ce7c043a118e77c4026e350cd6b1d"
       }
     },
     {
-      "id": "CLM-1188",
+      "id": "CLM-1207",
       "statement": "The PR's non-test change keeps the doc comments of the items it touches attached to the right item (the `MAIN_STORE` doc is not left on `READ_CONCURRENCY`).",
       "kind": "non_functional",
       "level": "unit",
@@ -96756,7 +98219,7 @@
       "verification_method": "inspection",
       "source": "CLAUDE.md: doc comments for all public items, keep comments up to date; src/stores/mod.rs diff",
       "derived_from": [
-        "CLM-1169"
+        "CLM-1188"
       ],
       "artifacts": [
         "src/stores/mod.rs"
@@ -96769,7 +98232,7 @@
       },
       "evidence": [
         {
-          "id": "EVD-1746",
+          "id": "EVD-1773",
           "kind": "inspection",
           "locator": "src/stores/mod.rs:26-32",
           "summary": "The line \"/// The name of the store every existing catalog is on after migration 0036.\" now sits directly above the READ_CONCURRENCY doc, joined to it as one doc comment, while `const MAIN_STORE` has no doc. READ_CONCURRENCY's rustdoc therefore begins with a sentence about the main store.",
@@ -96787,11 +98250,11 @@
           "recorded_at": "2026-11-24T14:29:49.387640256Z",
           "seal": {
             "by": "server",
-            "mac": "6fddfdc4eee9b169c9f7ce849c09d1ad0d6caa91e0f9307b805daafbeb93473a"
+            "mac": "2e425c9f351408fb252ead5fce98c54b517ece4969d4c111ccd78b5daf535ae9"
           }
         },
         {
-          "id": "EVD-1752",
+          "id": "EVD-1779",
           "kind": "inspection",
           "locator": "src/stores/mod.rs:26-32 at bed114a",
           "summary": "READ_CONCURRENCY now has its own doc; the \"name of the store every existing catalog is on\" line sits directly above const MAIN_STORE.",
@@ -96809,7 +98272,7 @@
           "recorded_at": "2026-11-24T14:33:45.074420458Z",
           "seal": {
             "by": "server",
-            "mac": "72b7959f3759b53a95ab90a40ef49021489508f08cd64edd95a7af566918d11e"
+            "mac": "5a96cdc24fb7bf36883cb72d581ee5b394f4a2e104da0cac6787db8c97fb6d20"
           }
         }
       ],
@@ -96819,12 +98282,12 @@
           "rationale": "The PR inserted READ_CONCURRENCY between MAIN_STORE's doc line and MAIN_STORE, so MAIN_STORE lost its doc and READ_CONCURRENCY's doc starts with an unrelated sentence. Fix: in src/stores/mod.rs move the line \"/// The name of the store every existing catalog is on after migration 0036.\" from above READ_CONCURRENCY's doc to directly above `const MAIN_STORE`.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1746"
+            "EVD-1773"
           ],
           "recorded_at": "2026-11-24T14:30:23.980342736Z",
           "seal": {
             "by": "server",
-            "mac": "16e4522865f601b08952ea8978875191b1d9b7cf4f920314bf476792f3a91885"
+            "mac": "300700925471aec033a8bafb40b30f87df6c8048ec5d0c770c96918fa0292cf9"
           }
         },
         {
@@ -96832,12 +98295,12 @@
           "rationale": "Fixed in bed114a: each doc comment is on its own item.",
           "auditor": "claude-sonnet-5-5",
           "evidence_ids": [
-            "EVD-1752"
+            "EVD-1779"
           ],
           "recorded_at": "2026-11-24T14:33:49.672432165Z",
           "seal": {
             "by": "server",
-            "mac": "fa91fcc9357c7cc7d1a029fef68606cb69a4ab166fcc454607897a8652acb3e9"
+            "mac": "899aaa4ea087a89aac9cac9c38774e94acfeec9d6459cb232fc33b949fab47ff"
           }
         }
       ],
@@ -96845,7 +98308,7 @@
       "updated_at": "2026-11-24T14:33:49.672432165Z",
       "seal": {
         "by": "server",
-        "mac": "dc764bd9592166a4b246b32512e028b917fe680ab66e9cb274c64772a61adec4"
+        "mac": "11cdf8b23bdcbfe6655c8fdbca167161a4e1f53968d4b3e74eab05c2564f6a1a"
       }
     }
   ]
