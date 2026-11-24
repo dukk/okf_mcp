@@ -1919,6 +1919,16 @@ changeset open each hold the key's row `FOR KEY SHARE` until their store
 commit, so the deletion waits for them and the cleanup it owes then finds
 what they wrote.
 
+One failure never ends the run. The only error that stops it is the first
+read of which stores have rows (the account database cannot be reached).
+Everything else is tied to one store or one row and stays there: a store
+that cannot be opened, a store whose rows cannot be read, a row that fails,
+and even counting a failed try (say the row itself is locked by another
+session) are logged with the store and the row's `id` and the run goes on to
+the next row and store. A try that could not be counted is logged at error
+level as `a store cleanup failed and its try could not be counted`; the row
+keeps its old `attempts` and is tried on the next run.
+
 ### Deletion rules
 
 Deleting a user takes everything that is only theirs, in one transaction:

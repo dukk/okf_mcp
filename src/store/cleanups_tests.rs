@@ -14,7 +14,7 @@ use crate::store::changesets::{self, EntryRow};
 use crate::store::maintenance::runs;
 use crate::store::users::tests::{key_for, seed_catalog_owned_by, seed_user};
 use crate::store::users::{self, DeleteOptions};
-use crate::stores::{AccountDb, PoolSettings};
+use crate::stores::PoolSettings;
 
 fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 11, 23, 12, 0, 0).unwrap()
@@ -196,6 +196,127 @@ async fn cleanup_retries_an_unreachable_store_without_blocking_others() {
         .await
         .unwrap();
     assert_eq!(left, [("down".to_string(), 2)]);
+}
+
+/// The `store_cleanups` rows and their `attempts`, by store.
+async fn cleanup_rows(pool: &PgPool) -> Vec<(String, i32)> {
+    sqlx::query_as("SELECT store, attempts FROM store_cleanups ORDER BY store")
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+/// Begins a transaction on `pool` holding `store`'s cleanup rows
+/// `FOR UPDATE`, so neither removing nor counting them can go ahead.
+async fn hold_cleanup_rows_of(pool: &PgPool, store: &str) -> Transaction<'static, Postgres> {
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM store_cleanups WHERE store = $1 FOR UPDATE")
+        .bind(store)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    holder
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cleanup_whose_failure_cannot_be_counted_never_stops_another_store() {
+    // Arrange: alice's key owes `main` and a second store; another
+    // connection holds `main`'s outbox row `FOR UPDATE`, so the attempt
+    // fails removing it and counting the failed try fails too.
+    let accounts = test_db().await;
+    let second = test_db().await;
+    seed_user(&accounts.pool, "alice", None).await;
+    seed_catalog_owned_by(&accounts.pool, TEST_TEAM).await;
+    let key = key_for(&accounts.pool, "alice", "alice-laptop", false).await;
+    add_store_on(&accounts.pool, "second", &second.pool).await;
+    let remote_id: i64 = sqlx::query_scalar(
+        "INSERT INTO catalogs (name, created_at, store, provisioned_at) \
+         VALUES ('remote', now(), 'second', now()) RETURNING id",
+    )
+    .fetch_one(&accounts.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO catalog.catalog_state (id) VALUES ($1)")
+        .bind(remote_id)
+        .execute(&second.pool)
+        .await
+        .unwrap();
+    let on_second = open_on(&second.pool, remote_id, &key).await;
+    delete_alice(&accounts.pool).await;
+    let holder = hold_cleanup_rows_of(&accounts.pool, "main").await;
+    let stores = registry(&accounts.pool, password_of(&second.url));
+
+    // Act: `main` sorts first. The outer timeout only fails the test if
+    // the run hangs.
+    let report = tokio::time::timeout(
+        Duration::from_secs(15),
+        run_bounded(&stores, now(), quick()),
+    )
+    .await
+    .expect("the database bound ends both waits long before the backstop")
+    .expect("a row whose try cannot be counted does not end the run");
+
+    // Assert, with the lock still held: `second` settled; `main`'s row is
+    // kept as it was, its try uncounted.
+    assert_eq!(report, Report { done: 1, failed: 1 });
+    assert_eq!(state_of(&second.pool, on_second).await, "discarded");
+    assert_eq!(
+        cleanup_rows(&accounts.pool).await,
+        [("main".to_string(), 0)]
+    );
+
+    // Once the lock is released the next run settles it.
+    holder.rollback().await.unwrap();
+    let again = tokio::time::timeout(
+        Duration::from_secs(15),
+        run_bounded(&stores, now(), quick()),
+    )
+    .await
+    .expect("the run is bounded")
+    .unwrap();
+    stores.forget_all().await;
+    assert_eq!(again, Report { done: 1, failed: 0 });
+    assert!(cleanup_rows(&accounts.pool).await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreachable_store_whose_failures_cannot_be_counted_never_stops_another_store() {
+    // Arrange: a deleted key owes `down`, which cannot be opened (no
+    // credential), and `main`; another connection holds `down`'s outbox
+    // row `FOR UPDATE`, so counting its failed try fails.
+    let db = test_db().await;
+    seed_user(&db.pool, "alice", None).await;
+    seed_catalog_owned_by(&db.pool, TEST_TEAM).await;
+    let key = key_for(&db.pool, "alice", "alice-laptop", false).await;
+    let changeset = open_on(&db.pool, shared_id(&db.pool).await, &key).await;
+    sqlx::query(
+        "INSERT INTO stores (name, location_kind, host, port, database, credential_kind, \
+         credential_ref, created_at) \
+         VALUES ('down', 'host', 'db.example.internal', 5432, 'okf', 'env', 'UNSET_PASSWORD', now())",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    delete_alice(&db.pool).await;
+    let holder = hold_cleanup_rows_of(&db.pool, "down").await;
+    let stores = Stores::with_environment(db.pool.clone(), settings(), Arc::new(|_| None));
+
+    // Act: `down` sorts before `main`.
+    let report = tokio::time::timeout(
+        Duration::from_secs(15),
+        run_bounded(&stores, now(), quick()),
+    )
+    .await
+    .expect("the database bound ends the wait long before the backstop")
+    .expect("a store whose failures cannot be counted does not end the run");
+    stores.forget_all().await;
+
+    // Assert, with the lock still held: `main` settled; `down`'s row is
+    // kept, its try uncounted.
+    assert_eq!(report, Report { done: 1, failed: 1 });
+    assert_eq!(state_of(&db.pool, changeset).await, "discarded");
+    assert_eq!(cleanup_rows(&db.pool).await, [("down".to_string(), 0)]);
+    holder.rollback().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -573,14 +694,13 @@ async fn a_maintenance_claim_paused_after_its_key_read_never_leaves_a_deleted_ke
         .await
         .unwrap();
     let claim = {
-        let (accounts, store) = (AccountDb::of(&db.pool), CatalogDb::main_of(&db.pool));
+        let store = CatalogDb::main_of(&db.pool);
         let actor = Actor {
             key_id: key.clone(),
             actor: "agent/alice".to_string(),
         };
         tokio::spawn(async move {
             runs::claim(
-                &accounts,
                 &store,
                 catalog_id,
                 &actor,

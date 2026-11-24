@@ -116,3 +116,24 @@ other paths.
 | `lock_key` without `FOR KEY SHARE` | `a_maintenance_claim_paused_after_its_key_read_never_leaves_a_deleted_key_behind` |
 | store half of a catalog cleanup in an unbounded `db.begin()` | `a_store_row_lock_fails_that_cleanup_at_the_database_and_another_store_settles` (hits its 15 s limit) |
 | account half of a catalog cleanup in an unbounded `begin()` | `a_held_default_key_lock_fails_a_catalog_cleanup_and_leaves_a_one_connection_pool_usable` (hits its 15 s limit) |
+
+## Review round 3
+
+- One rule for errors in a `CleanupStores` run, stated on `cleanups::run`:
+  only the first read of which stores have rows ends it. Every other error
+  is tied to one store or one row, logged with the store and the row id,
+  and contained: a store that cannot be opened, a store's row listing, a
+  failed or overrun attempt, the `owe_deleted_catalogs` backstop (now its
+  own bounded transaction), and counting a failed try. `note_failure`
+  returns nothing; when counting fails it logs `a store cleanup failed and
+  its try could not be counted` at error level and the row keeps its
+  `attempts`. Every account-side step runs under the `LIMITS.attempt`
+  backstop too.
+- `runs::claim` lost its unused `accounts` parameter (90 callers updated
+  mechanically) and with it the `too_many_arguments` allowance.
+
+### Mutation checks, round 3
+
+| Mutation | Test that failed |
+|---|---|
+| `note_failure(...).await?` on both branches (the round 2 code) | `a_cleanup_whose_failure_cannot_be_counted_never_stops_another_store` and `an_unreachable_store_whose_failures_cannot_be_counted_never_stops_another_store` (the run returns an error) |

@@ -19,6 +19,7 @@
 //! counts the tries); a row past [`GIVE_UP_ATTEMPTS`] is logged at error
 //! level on every run and kept. The deletion itself never waits for this.
 
+use std::future::Future;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -194,29 +195,44 @@ pub async fn owe_catalog(
 /// it itself).
 ///
 /// # Arguments
-/// * `conn` - an account connection.
+/// * `accounts` - the account database.
 /// * `now` - the server clock.
+/// * `wait` - the database-side bound.
 ///
 /// # Errors
-/// [`OkfError::Database`].
+/// [`OkfError::Database`] or `Busy`.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "cleanups.owe_orphans"))]
-async fn owe_deleted_catalogs(conn: &mut PgConnection, now: DateTime<Utc>) -> Result<(), OkfError> {
+async fn owe_deleted_catalogs(
+    accounts: &AccountDb,
+    now: DateTime<Utc>,
+    wait: Duration,
+) -> Result<(), OkfError> {
+    let mut tx = account_tx(accounts, wait).await?;
     sqlx::query(
         "INSERT INTO store_cleanups (store, kind, subject, created_at) \
          SELECT store, 'catalog', id::text, $1 FROM catalogs WHERE deleted_at IS NOT NULL \
          ON CONFLICT (store, kind, subject) DO NOTHING",
     )
     .bind(now)
-    .execute(&mut *conn)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
 /// Drains `store_cleanups`: for each store with rows, opens it and settles
-/// up to 100 of them (`BATCH_PER_STORE`). A store that cannot be opened, a
-/// row that fails, and a row that overruns [`LIMITS`] are logged, counted in
-/// `attempts` and left for the next run; none of them stops another store or
-/// row.
+/// up to 100 of them (`BATCH_PER_STORE`).
+///
+/// The rule for errors: only an error that makes the whole run impossible
+/// ends it, and that is reading which stores have rows (the account
+/// database cannot be reached, or cannot answer). Every other error belongs
+/// to one store or one row, is logged at error or warning level with the
+/// store and the row's id (never a secret), and is contained there: the run
+/// goes on to the next row and the next store. That covers a store that
+/// cannot be opened, a store whose rows cannot be read, a row that fails or
+/// overruns [`LIMITS`], the backstop that writes missing catalog cleanups,
+/// and counting a failed try itself (a row whose try cannot be counted is
+/// kept as it was, and tried again on the next run).
 ///
 /// # Arguments
 /// * `stores` - the registry of stores (the account database holds the
@@ -227,8 +243,8 @@ async fn owe_deleted_catalogs(conn: &mut PgConnection, now: DateTime<Utc>) -> Re
 /// How many rows finished and how many failed.
 ///
 /// # Errors
-/// [`OkfError::Database`] reading the list of rows; a failure on one row is
-/// not an error here.
+/// [`OkfError::Database`] or `Busy` reading which stores have rows; a
+/// failure on one store or row is not an error here.
 #[tracing::instrument(level = "debug", skip_all)]
 pub async fn run(stores: &Stores, now: DateTime<Utc>) -> Result<Report, OkfError> {
     run_bounded(stores, now, LIMITS).await
@@ -236,9 +252,10 @@ pub async fn run(stores: &Stores, now: DateTime<Utc>) -> Result<Report, OkfError
 
 /// [`run`] under `limits`. Every statement it issues, on the account
 /// database and on a store, is in a transaction with the database-side bound
-/// applied, and no attempt holds an account connection while it takes a
-/// store's or the reverse, so a lock held by someone else fails the attempt
-/// at the database and the run goes on.
+/// applied, every step is under the `attempt` backstop, and no attempt holds
+/// an account connection while it takes a store's or the reverse, so a lock
+/// held by someone else fails the attempt at the database and the run goes
+/// on.
 ///
 /// # Arguments
 /// * `stores` - the registry of stores.
@@ -254,64 +271,143 @@ async fn run_bounded(
     limits: Limits,
 ) -> Result<Report, OkfError> {
     let accounts = stores.accounts();
-    let mut tx = account_tx(&accounts, limits.wait).await?;
-    owe_deleted_catalogs(&mut tx, now).await?;
-    let names: Vec<String> =
-        sqlx::query_scalar("SELECT DISTINCT store FROM store_cleanups ORDER BY store")
-            .fetch_all(&mut *tx)
-            .await?;
-    tx.commit().await?;
+    // The backstop failing only delays a lost row to a later run.
+    if let Err(error) = backstop(limits, owe_deleted_catalogs(&accounts, now, limits.wait)).await {
+        split_event!(
+            error,
+            { kind = error.kind(), },
+            { %error, },
+            "writing the cleanups of deleted catalogs failed; the next run tries again"
+        );
+    }
+    // The one step whose failure ends the run.
+    let names = backstop(limits, stores_with_rows(&accounts, limits.wait)).await?;
     let mut report = Report::default();
-    for name in names {
-        let mut tx = account_tx(&accounts, limits.wait).await?;
-        let rows: Vec<Due> = sqlx::query_as(
-            "SELECT id, kind, subject, attempts FROM store_cleanups \
-             WHERE store = $1 ORDER BY attempts, id LIMIT $2",
-        )
-        .bind(&name)
-        .bind(BATCH_PER_STORE)
+    for name in &names {
+        run_store(stores, name, now, limits, &mut report).await;
+    }
+    Ok(report)
+}
+
+/// `step` under the `attempt` backstop of `limits`: past it, the step is
+/// dropped and fails with `Busy`.
+///
+/// # Errors
+/// The step's own error, or `Busy` past the backstop.
+#[tracing::instrument(level = "trace", skip_all)]
+async fn backstop<T>(
+    limits: Limits,
+    step: impl Future<Output = Result<T, OkfError>>,
+) -> Result<T, OkfError> {
+    tokio::time::timeout(limits.attempt, step)
+        .await
+        .unwrap_or_else(|_| {
+            Err(OkfError::Busy {
+                reason: "a store cleanup step ran past its limit".to_string(),
+            })
+        })
+}
+
+/// The names of the stores with cleanup rows, in name order.
+///
+/// # Errors
+/// [`OkfError::Database`] or `Busy`.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "cleanups.stores_with_rows"))]
+async fn stores_with_rows(accounts: &AccountDb, wait: Duration) -> Result<Vec<String>, OkfError> {
+    let mut tx = account_tx(accounts, wait).await?;
+    let names = sqlx::query_scalar("SELECT DISTINCT store FROM store_cleanups ORDER BY store")
         .fetch_all(&mut *tx)
         .await?;
-        tx.commit().await?;
-        let db = match StoreName::parse(&name) {
-            Ok(store) => stores.get(&store).await,
-            Err(error) => Err(error),
-        };
-        match &db {
-            Ok(db) => {
-                let attempt = Attempt {
-                    db,
-                    now,
-                    wait: limits.wait,
-                };
-                for row in &rows {
-                    let outcome = tokio::time::timeout(limits.attempt, attempt.settle(row))
-                        .await
-                        .unwrap_or_else(|_| {
-                            Err(OkfError::StoreUnavailable {
-                                store: name.clone(),
-                            })
-                        });
-                    match outcome {
-                        Ok(()) => report.done += 1,
-                        Err(error) => {
-                            report.failed += 1;
-                            note_failure(stores, &name, row, &error, limits.wait).await?;
-                        }
-                    }
-                }
+    tx.commit().await?;
+    Ok(names)
+}
+
+/// Up to `BATCH_PER_STORE` rows of `store`, the least tried first.
+///
+/// # Errors
+/// [`OkfError::Database`] or `Busy`.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "cleanups.rows_of"))]
+async fn rows_of(accounts: &AccountDb, store: &str, wait: Duration) -> Result<Vec<Due>, OkfError> {
+    let mut tx = account_tx(accounts, wait).await?;
+    let rows = sqlx::query_as(
+        "SELECT id, kind, subject, attempts FROM store_cleanups \
+         WHERE store = $1 ORDER BY attempts, id LIMIT $2",
+    )
+    .bind(store)
+    .bind(BATCH_PER_STORE)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows)
+}
+
+/// One store's turn in a run: reads its rows, opens it and settles each row,
+/// adding to `report`. Every error here is logged and contained (see
+/// [`run`]).
+///
+/// # Arguments
+/// * `stores` - the registry of stores.
+/// * `name` - the store's name, as the rows hold it.
+/// * `now` - the server clock.
+/// * `limits` - the bounds on one attempt.
+/// * `report` - the run's tally.
+#[tracing::instrument(level = "debug", skip_all, fields(okf.store = name))]
+async fn run_store(
+    stores: &Stores,
+    name: &str,
+    now: DateTime<Utc>,
+    limits: Limits,
+    report: &mut Report,
+) {
+    let rows = match backstop(limits, rows_of(&stores.accounts(), name, limits.wait)).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            split_event!(
+                error,
+                { kind = error.kind(), store = name, },
+                { %error, },
+                "reading a store's cleanups failed; the next run tries again"
+            );
+            return;
+        }
+    };
+    let db = match StoreName::parse(name) {
+        Ok(store) => stores.get(&store).await,
+        Err(error) => Err(error),
+    };
+    let db = match db {
+        Ok(db) => db,
+        // The store cannot be opened: every row of it waits.
+        Err(error) => {
+            for row in &rows {
+                report.failed += 1;
+                note_failure(stores, name, row, &error, limits).await;
             }
-            // The store cannot be opened: every row of it waits, and the
-            // next store is tried.
+            return;
+        }
+    };
+    let attempt = Attempt {
+        db: &db,
+        now,
+        wait: limits.wait,
+    };
+    for row in &rows {
+        // Past the backstop the store stopped answering.
+        let outcome = tokio::time::timeout(limits.attempt, attempt.settle(row))
+            .await
+            .unwrap_or_else(|_| {
+                Err(OkfError::StoreUnavailable {
+                    store: name.to_string(),
+                })
+            });
+        match outcome {
+            Ok(()) => report.done += 1,
             Err(error) => {
-                for row in &rows {
-                    report.failed += 1;
-                    note_failure(stores, &name, row, error, limits.wait).await?;
-                }
+                report.failed += 1;
+                note_failure(stores, name, row, &error, limits).await;
             }
         }
     }
-    Ok(report)
 }
 
 /// Begins an account transaction whose waits are bounded by `wait`.
@@ -360,42 +456,69 @@ async fn bound_waits(tx: &mut PgConnection, wait: Duration) -> Result<(), OkfErr
     Ok(())
 }
 
-/// Counts a failed try, and logs it: a warning, or an error once the row is
-/// past [`GIVE_UP_ATTEMPTS`].
+/// Counts a failed try of `row` and logs it: a warning, or an error once
+/// the row is past [`GIVE_UP_ATTEMPTS`]. Counting can fail too (the row is
+/// locked, the account database stops answering): that is logged at error
+/// level and the row is kept as it was, to be tried again on the next run;
+/// it never ends the run (see [`run`]).
 ///
-/// # Errors
-/// [`OkfError::Database`] counting the try.
+/// # Arguments
+/// * `stores` - the registry of stores.
+/// * `store` - the row's store.
+/// * `row` - the row that failed.
+/// * `error` - why it failed.
+/// * `limits` - the bounds on counting it.
 #[tracing::instrument(level = "debug", skip_all)]
-async fn note_failure(
-    stores: &Stores,
-    store: &str,
-    row: &Due,
-    error: &OkfError,
-    wait: Duration,
-) -> Result<(), OkfError> {
-    let mut tx = account_tx(&stores.accounts(), wait).await?;
-    sqlx::query("UPDATE store_cleanups SET attempts = attempts + 1 WHERE id = $1")
-        .bind(row.id)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
+async fn note_failure(stores: &Stores, store: &str, row: &Due, error: &OkfError, limits: Limits) {
+    let counted = backstop(
+        limits,
+        count_failure(&stores.accounts(), row.id, limits.wait),
+    )
+    .await;
     let attempts = row.attempts + 1;
-    if attempts > GIVE_UP_ATTEMPTS {
-        split_event!(
+    match counted {
+        Err(count_error) => split_event!(
             error,
-            { kind = error.kind(), store, cleanup = row.kind.as_str(), attempts, },
+            {
+                kind = error.kind(),
+                count_kind = count_error.kind(),
+                store,
+                cleanup = row.kind.as_str(),
+                cleanup_id = row.id,
+                attempts = row.attempts,
+            },
+            { %error, %count_error, },
+            "a store cleanup failed and its try could not be counted; it is kept and tried again"
+        ),
+        Ok(()) if attempts > GIVE_UP_ATTEMPTS => split_event!(
+            error,
+            { kind = error.kind(), store, cleanup = row.kind.as_str(), cleanup_id = row.id, attempts, },
             { %error, },
             "a store cleanup keeps failing; it is kept and tried again"
-        );
-    } else {
-        tracing::warn!(
+        ),
+        Ok(()) => tracing::warn!(
             kind = error.kind(),
             store,
             cleanup = row.kind.as_str(),
+            cleanup_id = row.id,
             attempts,
             "a store cleanup failed; it will be tried again"
-        );
+        ),
     }
+}
+
+/// Adds one to the `attempts` of cleanup row `id`.
+///
+/// # Errors
+/// [`OkfError::Database`] or `Busy`.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "cleanups.count_failure"))]
+async fn count_failure(accounts: &AccountDb, id: i64, wait: Duration) -> Result<(), OkfError> {
+    let mut tx = account_tx(accounts, wait).await?;
+    sqlx::query("UPDATE store_cleanups SET attempts = attempts + 1 WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(())
 }
 
