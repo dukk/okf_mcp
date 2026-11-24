@@ -161,6 +161,129 @@ impl TestApp {
             .expect("repoint the store");
         self.app.stores().forget(store).await;
     }
+
+    /// Points `store` at a server that accepts connections and never answers,
+    /// and drops its pool: a connect hangs until the registry's own bound
+    /// ends it, as a store behind a dead network does. Every connection it
+    /// accepts is counted, so a test can tell how many times a call tried
+    /// to reach the store.
+    ///
+    /// # Arguments
+    /// * `store` - a store registered by [`TestApp::catalog_on_new_store`].
+    ///
+    /// # Returns
+    /// The server; dropping it closes the port.
+    ///
+    /// # Panics
+    /// If the port cannot be bound or the row cannot be changed.
+    pub(crate) async fn make_stalled(&self, store: &crate::stores::StoreName) -> StalledStore {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a port");
+        let port = listener.local_addr().expect("its address").port();
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&accepted);
+        let task = tokio::spawn(async move {
+            // Held, not dropped: a dropped socket would refuse, not stall.
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                held.push(socket);
+            }
+        });
+        self.repoint(store, port).await;
+        StalledStore { accepted, task }
+    }
+
+    /// Puts a forwarding proxy in front of `store` and reopens its pool
+    /// through it, so the pool holds connections that [`StoreProxy::stop`]
+    /// can cut: an outage that begins after the pool was established.
+    ///
+    /// # Arguments
+    /// * `store` - a store registered by [`TestApp::catalog_on_new_store`].
+    ///
+    /// # Returns
+    /// The proxy.
+    ///
+    /// # Panics
+    /// If the port cannot be bound, the row cannot be read or changed, or
+    /// the store does not open through the proxy.
+    pub(crate) async fn front_with_a_proxy(&self, store: &crate::stores::StoreName) -> StoreProxy {
+        let (host, port): (String, i32) =
+            sqlx::query_as("SELECT host, port FROM stores WHERE name = $1")
+                .bind(store.as_str())
+                .fetch_one(self.app.accounts().executor())
+                .await
+                .expect("read the store's address");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a port");
+        let proxy_port = listener.local_addr().expect("its address").port();
+        let target = format!("{host}:{port}");
+        let task = tokio::spawn(async move {
+            // Dropping the set aborts every forwarding task, closing their sockets.
+            let mut forwards = tokio::task::JoinSet::new();
+            while let Ok((mut client, _)) = listener.accept().await {
+                let target = target.clone();
+                forwards.spawn(async move {
+                    if let Ok(mut upstream) = tokio::net::TcpStream::connect(target).await {
+                        let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+                    }
+                });
+            }
+        });
+        self.repoint(store, proxy_port).await;
+        // One idle connection through the proxy, so the pool exists.
+        let db = self.app.stores().get(store).await.expect("open through the proxy");
+        drop(db.executor().acquire().await.expect("a connection through the proxy"));
+        StoreProxy { task }
+    }
+
+    /// Points `store`'s row at `127.0.0.1:port` and drops its open pool.
+    async fn repoint(&self, store: &crate::stores::StoreName, port: u16) {
+        sqlx::query("UPDATE stores SET host = '127.0.0.1', port = $2 WHERE name = $1")
+            .bind(store.as_str())
+            .bind(i32::from(port))
+            .execute(self.app.accounts().executor())
+            .await
+            .expect("repoint the store");
+        self.app.stores().forget(store).await;
+    }
+}
+
+/// A server that accepts connections and never answers
+/// ([`TestApp::make_stalled`]).
+pub(crate) struct StalledStore {
+    accepted: Arc<std::sync::atomic::AtomicUsize>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl StalledStore {
+    /// How many connections it has accepted so far.
+    pub(crate) fn accepted(&self) -> usize {
+        self.accepted.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Drop for StalledStore {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// A forwarding proxy in front of a store ([`TestApp::front_with_a_proxy`]).
+pub(crate) struct StoreProxy {
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl StoreProxy {
+    /// Takes the store away: every open connection through the proxy is cut
+    /// and its port is closed, so a new connect is refused.
+    pub(crate) async fn stop(self) {
+        self.task.abort();
+        // Finished once the listener and the forwarding tasks are dropped.
+        let _ = self.task.await;
+    }
 }
 
 /// Creates each catalog, imports its files now, and loads the app with the

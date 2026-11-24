@@ -158,6 +158,9 @@ async fn every_reachable(app: &App, ctx: &ToolContext) -> Result<Vec<String>, Ok
         // One on an unreachable store is kept, unloaded: the search names
         // it in its `unavailable` list instead of failing for it.
         if page.unavailable.contains(&row.name) {
+            // The page spent a timeout on this store: the search's
+            // selection and loads must not spend another.
+            ctx.mark_down(row);
             names.push(row.name.clone());
             continue;
         }

@@ -481,11 +481,14 @@ impl ToolContext {
 
     /// Notes that `row`'s store could not be reached in this call, so the
     /// catalog is unavailable and no other catalog on the store is probed.
+    /// A caller that read a directory page and found stores down tells the
+    /// call, so the selection and the state loads that follow do not spend a
+    /// timeout on the same store again.
     ///
     /// # Arguments
     /// * `row` - a catalog on the unreachable store.
     #[tracing::instrument(level = "trace", skip_all)]
-    fn mark_down(&self, row: &CatalogRow) {
+    pub(crate) fn mark_down(&self, row: &CatalogRow) {
         let mut down = locked(&self.down);
         down.stores.insert(row.store.clone());
         down.catalogs.insert(row.name.clone(), row.store.clone());

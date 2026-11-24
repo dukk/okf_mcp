@@ -128,6 +128,9 @@ pub(crate) async fn list(ctx: &ToolContext, after: Option<&str>) -> Result<Catal
     let mut unavailable = page.unavailable;
     for row in &page.items {
         if unavailable.contains(&row.name) {
+            // The page spent a timeout on this store: the selection below
+            // must not spend another.
+            ctx.mark_down(row);
             continue;
         }
         // A listing's snapshot fields; a catalog whose data does not build
@@ -137,6 +140,7 @@ pub(crate) async fn list(ctx: &ToolContext, after: Option<&str>) -> Result<Catal
             Ok(None) => continue,
             // The store went away since the page was read.
             Err(OkfError::StoreUnavailable { .. }) => {
+                ctx.mark_down(row);
                 unavailable.push(row.name.clone());
                 continue;
             }
