@@ -141,6 +141,7 @@ async fn storage_round_trip_on_a_real_catalog() {
         &db.pool,
         &okf_mcp::store::catalogs::NewCatalog {
             name: "pg",
+            display_name: &okf_mcp::labels::DisplayName::default(),
             description: "",
             owner_team: support::server::OWNER,
         },
@@ -178,7 +179,11 @@ async fn storage_round_trip_on_a_real_catalog() {
     );
 
     let started = Instant::now();
-    let state = CatalogState::load(&db.pool, "pg").await.unwrap();
+    let row = catalogs::row_by_name(&db.pool, "pg")
+        .await
+        .unwrap()
+        .expect("pg");
+    let state = CatalogState::load(&db.pool, &row).await.unwrap();
     eprintln!("load snapshot: {:?}", started.elapsed());
     // `current()` hands out an `Arc` (a shared pointer) to the loaded
     // snapshot, so the borrows below stay valid while `state` could swap.

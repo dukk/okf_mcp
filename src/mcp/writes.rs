@@ -32,6 +32,8 @@ pub struct CreateConceptParams {
     pub index_summary: Option<String>,
     /// The index.md section to list it under (default: the section the server chooses for it); needs `index_summary`.
     pub index_section: Option<String>,
+    /// With `index_summary`, the new folder's summary in its parent's index.md (default: a TODO); for nested new folders, the innermost. Refused if the folder exists.
+    pub folder_summary: Option<String>,
     /// Who wrote it, for the `generated` stamp (default: the key's actor).
     pub by: Option<String>,
     /// The changeset to write to: the handle `open_changeset` returned.
@@ -114,6 +116,7 @@ pub(crate) async fn create_concept(
         body,
         index_summary,
         index_section,
+        folder_summary,
         by,
         changeset,
     } = params;
@@ -124,6 +127,7 @@ pub(crate) async fn create_concept(
             body: &body,
             index_summary: index_summary.as_deref(),
             index_section: index_section.as_deref(),
+            folder_summary: folder_summary.as_deref(),
         };
         ops::create_concept(ws, op_ctx, &new)
     })
@@ -231,7 +235,8 @@ impl OkfServer {
                        the new concept's path, `.md` optional (e.g. /infra/ntp). Needs `type` in \
                        `frontmatter`; the server writes `generated: { by, at }` itself. With \
                        `index_summary`, also lists it in its folder's index.md (creating folder \
-                       indexes as needed). Write access.",
+                       indexes as needed); `folder_summary` describes a new folder there. \
+                       Write access.",
         annotations(
             title = "Create Concept",
             read_only_hint = false,
@@ -453,7 +458,7 @@ pub struct LogParams {
 /// `index`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct IndexParams {
-    /// The concept to list, with or without `.md`, e.g. `/infra/ntp`; its folder's index.md must exist (`repair_indexes` creates missing ones).
+    /// The concept to list, with or without `.md`, e.g. `/infra/ntp`; its folder's index.md must exist (`repair_indexes` creates missing ones). Or a folder, e.g. `/infra/`, to set its listing's summary in its parent's index.md.
     pub path: String,
     /// The text after the link's ` - `.
     pub summary: String,
@@ -749,7 +754,8 @@ impl OkfServer {
         description = "Set a concept's `generated` (content written) or append to \
                        its `verified` (checked against the real system) with { by, at: now }, in \
                        the changeset `changeset` names (open one with open_changeset). `by` \
-                       defaults to the key's actor. Write access.",
+                       defaults to the key's actor. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). \
+                       Write access.",
         annotations(
             title = "Stamp Concept",
             read_only_hint = false,
@@ -773,7 +779,8 @@ impl OkfServer {
         description = "Replace a concept's `reviewed` with { by, at: now, outcome, \
                        note } and queue any `questions` in open_questions, in the changeset \
                        `changeset` names (open one with open_changeset). `by` defaults to the \
-                       key's actor. Write access.",
+                       key's actor. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). \
+                       Write access.",
         annotations(
             title = "Record Review",
             read_only_hint = false,
@@ -796,7 +803,8 @@ impl OkfServer {
         title = "Add Question",
         description = "Queue one question in a concept's open_questions without \
                        recording a review, in the changeset `changeset` names (open one with \
-                       open_changeset). Write access.",
+                       open_changeset). Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). \
+                       Write access.",
         annotations(
             title = "Add Question",
             read_only_hint = false,
@@ -820,7 +828,7 @@ impl OkfServer {
         description = "Remove one queued question, by its 1-based number in \
                        open_questions or its exact text, deleting the key when none are left, in \
                        the changeset `changeset` names (open one with open_changeset). Write \
-                       access.",
+                       access. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result).",
         annotations(
             title = "Resolve Question",
             read_only_hint = false,
@@ -843,7 +851,8 @@ impl OkfServer {
         title = "Add Source",
         description = "Append an entry (id, resource, title, author) to a \
                        concept's `sources`, refusing a duplicate id, in the changeset `changeset` \
-                       names (open one with open_changeset). Write access.",
+                       names (open one with open_changeset); `cited_by` finds a source's citations. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). \
+                       Write access.",
         annotations(
             title = "Add Source",
             read_only_hint = false,
@@ -868,7 +877,8 @@ impl OkfServer {
                        when none are left, in the changeset `changeset` names (open one with \
                        open_changeset). Refused while a footnote in the body still cites it (its \
                        label is the id, or its definition names the id, title or resource): \
-                       remove the citation first. Write access.",
+                       remove the citation first. `cited_by` finds a source's citations. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). \
+                       Write access.",
         annotations(
             title = "Remove Source",
             read_only_hint = false,
@@ -915,9 +925,11 @@ impl OkfServer {
         title = "Add Index Entry",
         description = "List a concept in its folder's index.md as `* \
                        [Title](name.md) - summary`, in the changeset `changeset` names (open one \
-                       with open_changeset); nothing happens if it is already linked. Replayed at \
+                       with open_changeset); nothing happens if it is already linked (a name with a space, `)`, `#` or `:` is written percent-encoded, e.g. `a%20b.md`; an older raw bullet for it counts as linked, with a note; repair_indexes rewrites it). Replayed at \
                        publish onto an index.md that changed meanwhile, unless a free edit of \
-                       that index.md follows. Write access.",
+                       that index.md follows. With a folder `path` (`/infra/`), sets the summary \
+                       of its listing in the parent's index.md instead, replayed the same way. \
+                       Write access.",
         annotations(
             title = "Add Index Entry",
             read_only_hint = false,
@@ -943,10 +955,14 @@ impl OkfServer {
                        log.md, an index.md for every folder holding concepts, each folder's \
                        listing in its parent's # Sections, and each concept's listing in its \
                        folder's index.md (its title and description; TODO placeholders where \
-                       they are missing, each named in `notes`). Only adds: existing text, \
-                       listings and summaries are kept, and a second run changes nothing. A file or \
-                       folder no markdown link can list (a space, `)` or `#` in its path, or a \
-                       `]` in a folder name) is not listed; `notes` names it. \
+                       they are missing, each named in `notes`). Existing text, listings and \
+                       summaries are kept, except an old raw (unencoded) concept or folder \
+                       listing whose link never resolves, such as `[A](a b.md)` or \
+                       `[My docs](my docs/)`: its destination is \
+                       percent-encoded in place, or the bullet removed beside a working one, \
+                       and `notes` quotes each. A second run changes nothing. A file or folder \
+                       no markdown link can list (a `]` in a folder name) is not listed; \
+                       `notes` names it. \
                        Review the result with pending_changes before publishing. Write access.",
         annotations(
             title = "Repair Indexes",
@@ -996,7 +1012,7 @@ mod tests {
 
     /// The text of `path` as reads through the changeset `handle` see it.
     async fn seen(ctx: &ToolContext, handle: &str, path: &str) -> String {
-        let state = ctx.app().catalog("pg").unwrap();
+        let state = ctx.app().catalog("pg").await.unwrap().unwrap();
         let pinned = ctx.pin(Some(handle)).await.unwrap();
         let view = ctx.view(&state, pinned.as_ref()).await.unwrap();
         view.snapshot()
@@ -1031,6 +1047,7 @@ mod tests {
                 body: "# NTP\n\nSee [A](/a.md).\n".to_string(),
                 index_summary: None,
                 index_section: None,
+                folder_summary: None,
                 by: None,
                 changeset: handle.clone(),
             },
@@ -1230,7 +1247,7 @@ mod bookkeeping_tests {
 
     /// The text of `path` as reads through the changeset `handle` see it.
     async fn seen(ctx: &ToolContext, handle: &str, path: &str) -> String {
-        let state = ctx.app().catalog("pg").unwrap();
+        let state = ctx.app().catalog("pg").await.unwrap().unwrap();
         let pinned = ctx.pin(Some(handle)).await.unwrap();
         let view = ctx.view(&state, pinned.as_ref()).await.unwrap();
         view.snapshot()
@@ -1313,7 +1330,7 @@ mod bookkeeping_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn the_concept_commands_edit_frontmatter_as_free_edits() {
+    async fn the_concept_commands_edit_frontmatter_as_replayable_edits() {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
@@ -1405,9 +1422,29 @@ mod bookkeeping_tests {
         );
         assert!(text.contains("https://example.com/runbook"), "{text}");
         assert!(!text.contains("spare"), "{text}");
-        // Frontmatter edits carry no replay: they conflict on a stale base.
+        // Frontmatter edits are stored as replayable operations (issue #830).
         assert_eq!(last.touched, ["/a.md"]);
-        assert_eq!(entry(&test, &last.changeset, "a.md").await.replay, None);
+        let stored = entry(&test, &last.changeset, "a.md").await.replay;
+        let ops: Vec<&str> = stored
+            .as_ref()
+            .and_then(|ops| ops.as_array())
+            .expect("the frontmatter edits are replayable")
+            .iter()
+            .map(|op| op["op"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ops,
+            [
+                "stamp",
+                "add_question",
+                "add_question",
+                "remove_question",
+                "set_reviewed",
+                "add_source",
+                "add_source",
+                "remove_source"
+            ]
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1604,8 +1641,8 @@ mod repair_tests {
         .await
     }
 
-    fn published_text(test: &TestApp, path: &str) -> Option<String> {
-        let loaded = test.app.catalog("pg").unwrap().current();
+    async fn published_text(test: &TestApp, path: &str) -> Option<String> {
+        let loaded = test.app.catalog("pg").await.unwrap().unwrap().current();
         loaded
             .snapshot()
             .get(path)
@@ -1635,6 +1672,7 @@ mod repair_tests {
             body: format!("# {title}\n"),
             index_summary: Some(summary.to_string()),
             index_section: None,
+            folder_summary: None,
             by: None,
             changeset: handle.to_string(),
         }
@@ -1682,7 +1720,7 @@ mod repair_tests {
 
         assert!(published.report.published, "{published:?}");
         assert_eq!(logged.touched, ["/log.md"]);
-        let root = published_text(&test, "index.md").unwrap();
+        let root = published_text(&test, "index.md").await.unwrap();
         assert!(
             root.contains("* [Hello](hello.md) - The first note."),
             "{root}"
@@ -1694,11 +1732,12 @@ mod repair_tests {
         );
         // The nested indexes are created and linked from their parents.
         assert!(root.contains("* [Infra](infra/) - "), "{root}");
-        let infra = published_text(&test, "infra/index.md").unwrap();
+        let infra = published_text(&test, "infra/index.md").await.unwrap();
         assert!(infra.contains("* [Hosts](hosts/) - "), "{infra}");
-        let hosts = published_text(&test, "infra/hosts/index.md").unwrap();
+        let hosts = published_text(&test, "infra/hosts/index.md").await.unwrap();
         assert!(hosts.contains("* [Web](web.md) - A host."), "{hosts}");
         assert!(published_text(&test, "log.md")
+            .await
             .unwrap()
             .contains("* **Update:** Added the first notes."));
     }
@@ -1732,22 +1771,24 @@ mod repair_tests {
             now: chrono::Utc::now(),
         };
         let imported = "---\nokf_version: \"0.2\"\n---\n# Imported\n";
-        crate::store::import::import(
-            test.app.pool(),
-            "pg",
-            crate::mcp::testing::files(&[("index.md", imported), ("log.md", "# Log\n")]),
-            &options,
-        )
-        .await
-        .unwrap();
-        test.app.poll().await.unwrap();
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::import::import(
+                test.app.pool(),
+                "pg",
+                crate::mcp::testing::files(&[("index.md", imported), ("log.md", "# Log\n")]),
+                &options,
+            )
+            .await
+            .unwrap();
+        })
+        .await;
 
         let refused = publish_as(&ctx, &handle).await.unwrap_err();
 
         // The import's index.md is revision 2, so the edit based on
         // revision 1 conflicts instead of overwriting it.
         assert!(matches!(refused, OkfError::Conflict { .. }), "{refused:?}");
-        assert_eq!(published_text(&test, "index.md").unwrap(), imported);
+        assert_eq!(published_text(&test, "index.md").await.unwrap(), imported);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1755,7 +1796,7 @@ mod repair_tests {
         let test = legacy().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        assert_eq!(published_text(&test, "index.md"), None);
+        assert_eq!(published_text(&test, "index.md").await, None);
 
         let refused = create_concept(&ctx, concept("/b", "B", "b", &handle))
             .await
@@ -1790,10 +1831,10 @@ mod repair_tests {
             "{report:?}"
         );
         // Staged: nothing is live before publish.
-        assert_eq!(published_text(&test, "index.md"), None);
+        assert_eq!(published_text(&test, "index.md").await, None);
         let published = publish_as(&ctx, &handle).await.unwrap();
         assert!(published.report.published);
-        let root = published_text(&test, "index.md").unwrap();
+        let root = published_text(&test, "index.md").await.unwrap();
         assert!(
             root.starts_with("---\nokf_version: \"0.2\"\n---\n"),
             "{root}"
@@ -1803,10 +1844,10 @@ mod repair_tests {
             root.contains("* [Infra](infra/) - TODO: describe this folder"),
             "{root}"
         );
-        let infra = published_text(&test, "infra/index.md").unwrap();
+        let infra = published_text(&test, "infra/index.md").await.unwrap();
         assert!(infra.contains("* [NTP](ntp.md) - Hosts sync."), "{infra}");
         assert_eq!(
-            published_text(&test, "log.md").unwrap(),
+            published_text(&test, "log.md").await.unwrap(),
             "# Knowledge Catalog Update Log\n"
         );
 
@@ -1832,7 +1873,7 @@ mod repair_tests {
         let refused = repair(&reader, &handle).await.unwrap_err();
 
         assert!(matches!(refused, OkfError::Forbidden { .. }), "{refused:?}");
-        assert_eq!(published_text(&test, "index.md"), None);
+        assert_eq!(published_text(&test, "index.md").await, None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1870,21 +1911,589 @@ mod repair_tests {
         .await
         .unwrap();
         publish_as(&second, &second_handle).await.unwrap();
-        let curated_root = published_text(&test, "index.md").unwrap();
-        let curated_infra = published_text(&test, "infra/index.md").unwrap();
+        let curated_root = published_text(&test, "index.md").await.unwrap();
+        let curated_infra = published_text(&test, "infra/index.md").await.unwrap();
 
         // The first repair replays onto the curated files: nothing is
         // overwritten, and nothing listed twice.
         let published = publish_as(&first, &first_handle).await.unwrap();
 
         assert!(published.report.published, "{published:?}");
-        assert_eq!(published_text(&test, "index.md").unwrap(), curated_root);
         assert_eq!(
-            published_text(&test, "infra/index.md").unwrap(),
+            published_text(&test, "index.md").await.unwrap(),
+            curated_root
+        );
+        assert_eq!(
+            published_text(&test, "infra/index.md").await.unwrap(),
             curated_infra
         );
         assert!(curated_root.contains("Curated words.") && curated_infra.contains("Our systems."));
         assert_eq!(curated_root.matches("(a.md)").count(), 1, "{curated_root}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_staged_raw_listing_rewrite_replays_onto_an_index_changed_meanwhile() {
+        // Issue #717: the raw bullet written before #453 is rewritten in the
+        // changeset; another writer edits the index and publishes first, and
+        // publish redoes the rewrite onto their text.
+        let raw_index = "# D\n\nAbout d.\n\n# Concepts\n\n* [Odd](a b.md) - An odd one.\n";
+        let odd = "---\ntype: Note\ntitle: Odd\ndescription: An odd one.\n---\n";
+        let test = app_with(
+            &[(
+                "pg",
+                &[
+                    ("index.md", "# Root\n\n# Sections\n\n* [D](d/) - d\n"),
+                    ("log.md", "# Log\n"),
+                    ("d/index.md", raw_index),
+                    ("d/a b.md", odd),
+                ],
+            )],
+            Config::default(),
+        )
+        .await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let first_handle = open(&first).await;
+        let second_handle = open(&second).await;
+
+        let report = repair(&first, &first_handle).await.unwrap();
+        assert_eq!(report.touched, ["/d/index.md"], "{report:?}");
+        assert!(
+            report.notes.iter().any(|note| note
+                == "rewrote the raw listing of /d/a b.md in /d/index.md: \
+                    * [Odd](a b.md) - An odd one. -> * [Odd](a%20b.md) - An odd one."),
+            "{report:?}"
+        );
+        edit_document(
+            &second,
+            EditDocumentParams {
+                path: "/d/index.md".to_string(),
+                old_str: "About d.".to_string(),
+                new_str: "Curated words.".to_string(),
+                replace_all: false,
+                changeset: second_handle.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        publish_as(&second, &second_handle).await.unwrap();
+
+        let published = publish_as(&first, &first_handle).await.unwrap();
+
+        assert!(published.report.published, "{published:?}");
+        assert_eq!(
+            published_text(&test, "d/index.md").await.unwrap(),
+            "# D\n\nCurated words.\n\n# Concepts\n\n* [Odd](a%20b.md) - An odd one.\n"
+        );
+        let again_handle = open(&first).await;
+        let again = repair(&first, &again_handle).await.unwrap();
+        assert!(again.touched.is_empty(), "{again:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_staged_raw_folder_listing_rewrite_replays_onto_an_index_changed_meanwhile() {
+        // Issue #731: the raw `# Sections` bullet of a folder is rewritten in
+        // the changeset; another writer edits the parent index and publishes
+        // first, and publish redoes the rewrite onto their text, with no
+        // second listing of the folder.
+        let raw_root = "# Root\n\nAbout it.\n\n# Sections\n\n* [My docs](my docs/) - Mine.\n";
+        let note = "---\ntype: Note\ntitle: C\ndescription: c\n---\n";
+        let test = app_with(
+            &[(
+                "pg",
+                &[
+                    ("index.md", raw_root),
+                    ("log.md", "# Log\n"),
+                    ("my docs/index.md", "# My docs\n\n* [C](c.md) - c\n"),
+                    ("my docs/c.md", note),
+                ],
+            )],
+            Config::default(),
+        )
+        .await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let first_handle = open(&first).await;
+        let second_handle = open(&second).await;
+
+        let report = repair(&first, &first_handle).await.unwrap();
+        assert_eq!(report.touched, ["/index.md"], "{report:?}");
+        assert!(
+            report.notes.iter().any(|note| note
+                == "rewrote the raw listing of /my docs/ in /index.md: \
+                    * [My docs](my docs/) - Mine. -> * [My docs](my%20docs/) - Mine."),
+            "{report:?}"
+        );
+        edit_document(
+            &second,
+            EditDocumentParams {
+                path: "/index.md".to_string(),
+                old_str: "About it.".to_string(),
+                new_str: "Curated words.".to_string(),
+                replace_all: false,
+                changeset: second_handle.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        publish_as(&second, &second_handle).await.unwrap();
+
+        let published = publish_as(&first, &first_handle).await.unwrap();
+
+        assert!(published.report.published, "{published:?}");
+        assert_eq!(
+            published_text(&test, "index.md").await.unwrap(),
+            "# Root\n\nCurated words.\n\n# Sections\n\n* [My docs](my%20docs/) - Mine.\n"
+        );
+        let again_handle = open(&first).await;
+        let again = repair(&first, &again_handle).await.unwrap();
+        assert!(again.touched.is_empty(), "{again:?}");
+    }
+}
+
+/// Issue #668: describing a new folder needs no free edit of its parent
+/// index, so two changesets that each create a folder both publish.
+#[cfg(test)]
+mod folder_summary_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::mcp::changesets::{publish, PublishParams, Published};
+    use crate::mcp::restructure::{
+        move_concept, split_concept, MoveConceptParams, SplitConceptParams,
+    };
+    use crate::mcp::testing::{app_with, changeset_row, open, writer, TestApp};
+    use crate::store::changesets;
+
+    const ROOT: &str = "# Catalog\n\nAbout.\n\n# Sections\n\n* [Infra](infra/) - Systems.\n";
+    const TIME: &str = concat!(
+        "---\ntype: System\ntitle: Time\ndescription: The clock.\n---\n# Time\n\n",
+        "## Ports\n\nUDP 123.\n",
+    );
+    const OTHER: &str = concat!(
+        "---\ntype: Note\ntitle: Other\ndescription: Another.\n---\n# Other\n\n",
+        "## Notes\n\nSome notes.\n",
+    );
+
+    async fn pg(extra: &[(&'static str, &'static str)]) -> TestApp {
+        pg_with(ROOT, extra).await
+    }
+
+    /// The catalog with `root` as its root index, plus `extra` files.
+    async fn pg_with(root: &'static str, extra: &[(&'static str, &'static str)]) -> TestApp {
+        let mut files: Vec<(&str, &str)> = vec![
+            ("index.md", root),
+            ("log.md", "# Log\n"),
+            (
+                "infra/index.md",
+                "# Infra\n\nSystems.\n\n# Concepts\n\n* [Time](time.md) - The clock.\n\
+                 * [Other](other.md) - Another.\n",
+            ),
+            ("infra/time.md", TIME),
+            ("infra/other.md", OTHER),
+        ];
+        files.extend_from_slice(extra);
+        app_with(&[("pg", &files)], Config::default()).await
+    }
+
+    async fn published_text(test: &TestApp, path: &str) -> String {
+        let loaded = test.app.catalog("pg").await.unwrap().unwrap().current();
+        loaded
+            .snapshot()
+            .get(path)
+            .map(|doc| doc.text().to_string())
+            .unwrap_or_else(|| panic!("{path} is not published"))
+    }
+
+    async fn publish_as(ctx: &ToolContext, handle: &str) -> Result<Published, OkfError> {
+        let params = PublishParams {
+            message: "folders".to_string(),
+            changeset: handle.to_string(),
+        };
+        publish(ctx, params).await
+    }
+
+    fn concept(
+        path: &str,
+        title: &str,
+        folder_summary: Option<&str>,
+        handle: &str,
+    ) -> CreateConceptParams {
+        let frontmatter = serde_json::json!({"type": "Note", "title": title});
+        CreateConceptParams {
+            path: path.to_string(),
+            frontmatter: frontmatter.as_object().unwrap().clone(),
+            body: format!("# {title}\n"),
+            index_summary: Some(format!("About {title}.")),
+            index_section: None,
+            folder_summary: folder_summary.map(str::to_string),
+            by: None,
+            changeset: handle.to_string(),
+        }
+    }
+
+    fn describe(path: &str, summary: &str, handle: &str) -> IndexParams {
+        IndexParams {
+            path: path.to_string(),
+            summary: summary.to_string(),
+            section: None,
+            title: None,
+            changeset: handle.to_string(),
+        }
+    }
+
+    /// One session's work: a concept in a new top-level folder `folder`,
+    /// described either with `folder_summary` or with the TODO and then
+    /// `index` on the folder; with `extra`, also a log entry and a concept
+    /// listed in the root index.
+    async fn create_folder(
+        ctx: &ToolContext,
+        handle: &str,
+        folder: &str,
+        at_create: bool,
+        extra: bool,
+    ) {
+        let summary = format!("All about {folder}.");
+        let path = format!("/{folder}/first.md");
+        let given = at_create.then_some(summary.as_str());
+        let created = create_concept(ctx, concept(&path, "First", given, handle))
+            .await
+            .unwrap();
+        if at_create {
+            assert!(
+                created
+                    .notes
+                    .iter()
+                    .any(|n| n == &format!("created /{folder}/index.md; replace its TODO line")),
+                "{created:?}"
+            );
+        } else {
+            assert!(
+                created
+                    .notes
+                    .iter()
+                    .any(|n| n.contains("with index on the folder's path")),
+                "{created:?}"
+            );
+            index(ctx, describe(&format!("/{folder}/"), &summary, handle))
+                .await
+                .unwrap();
+        }
+        if extra {
+            let root_concept = format!("/{folder}-note.md");
+            create_concept(ctx, concept(&root_concept, "Note", None, handle))
+                .await
+                .unwrap();
+            let text = format!("made /{folder}/");
+            let params = LogParams {
+                text,
+                kind: None,
+                changeset: handle.to_string(),
+            };
+            log(ctx, params).await.unwrap();
+        }
+    }
+
+    /// Two changesets each create a new top-level folder; both publish, and
+    /// the root lists both folders with their real summaries.
+    async fn two_new_folders_both_publish(at_create: bool, extra: bool) {
+        let test = pg(&[]).await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let (a, b) = (open(&first).await, open(&second).await);
+        create_folder(&first, &a, "learning", at_create, extra).await;
+        create_folder(&second, &b, "preferences", at_create, extra).await;
+
+        let one = publish_as(&first, &a).await.unwrap();
+        let two = publish_as(&second, &b).await.unwrap();
+
+        assert!(
+            one.report.published && two.report.published,
+            "{one:?} {two:?}"
+        );
+        assert!(
+            two.report.replayed.contains(&"/index.md".to_string()),
+            "{two:?}"
+        );
+        let root = published_text(&test, "index.md").await;
+        assert!(
+            root.contains("* [Learning](learning/) - All about learning.\n"),
+            "{root}"
+        );
+        assert!(
+            root.contains("* [Preferences](preferences/) - All about preferences.\n"),
+            "{root}"
+        );
+        assert!(!root.contains("TODO"), "{root}");
+        if extra {
+            assert!(
+                root.contains("* [Note](learning-note.md) - About Note."),
+                "{root}"
+            );
+            assert!(
+                root.contains("* [Note](preferences-note.md) - About Note."),
+                "{root}"
+            );
+            let log = published_text(&test, "log.md").await;
+            assert!(
+                log.contains("made /learning/") && log.contains("made /preferences/"),
+                "{log}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn two_folders_described_with_folder_summary_both_publish() {
+        two_new_folders_both_publish(true, false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn two_folders_described_after_the_todo_both_publish() {
+        two_new_folders_both_publish(false, false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn two_folders_with_folder_summary_a_log_entry_and_a_listing_both_publish() {
+        two_new_folders_both_publish(true, true).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn two_folders_described_after_the_todo_with_a_log_entry_and_a_listing_both_publish() {
+        two_new_folders_both_publish(false, true).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_summary_whose_listing_another_changeset_removed_fails_at_publish() {
+        let root = concat!(
+            "# Catalog\n\nAbout.\n\n# Sections\n\n* [Infra](infra/) - Systems.\n",
+            "* [Learning](learning/) - TODO: describe this folder\n",
+        );
+        let test = pg_with(root, &[("learning/index.md", "# Learning\n")]).await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let (a, b) = (open(&first).await, open(&second).await);
+        index(&first, describe("/learning/", "What we learn.", &a))
+            .await
+            .unwrap();
+        // The other session drops the folder's listing (a free edit) first.
+        edit_document(
+            &second,
+            EditDocumentParams {
+                path: "/index.md".to_string(),
+                old_str: "* [Learning](learning/) - TODO: describe this folder\n".to_string(),
+                new_str: String::new(),
+                replace_all: false,
+                changeset: b.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        publish_as(&second, &b).await.unwrap();
+        let after_removal = published_text(&test, "index.md").await;
+
+        let error = publish_as(&first, &a).await.unwrap_err();
+
+        let OkfError::Refused { reason } = &error else {
+            panic!("not Refused: {error:?}")
+        };
+        assert!(
+            reason.contains("index.md no longer lists /learning/"),
+            "{reason}"
+        );
+        assert_eq!(published_text(&test, "index.md").await, after_removal);
+        assert!(!after_removal.contains("What we learn."), "{after_removal}");
+        // Nothing was published: the changeset still holds the edit.
+        assert!(entry(&test, &a, "index.md").await.replay.is_some());
+    }
+
+    /// `pending_changes` names the replay error publish would refuse with,
+    /// in place of a diff of the stored text (issue #787).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pending_changes_shows_a_summary_whose_listing_is_gone_as_a_replay_error() {
+        use crate::mcp::changesets::{pending_changes, PendingParams};
+        let root = concat!(
+            "# Catalog\n\nAbout.\n\n# Sections\n\n* [Infra](infra/) - Systems.\n",
+            "* [Learning](learning/) - TODO: describe this folder\n",
+        );
+        let test = pg_with(root, &[("learning/index.md", "# Learning\n")]).await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let (a, b) = (open(&first).await, open(&second).await);
+        index(&first, describe("/learning/", "What we learn.", &a))
+            .await
+            .unwrap();
+        edit_document(
+            &second,
+            EditDocumentParams {
+                path: "/index.md".to_string(),
+                old_str: "* [Learning](learning/) - TODO: describe this folder\n".to_string(),
+                new_str: String::new(),
+                replace_all: false,
+                changeset: b.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        publish_as(&second, &b).await.unwrap();
+
+        let params = PendingParams {
+            changeset: a.clone(),
+        };
+        let pending = pending_changes(&first, params).await.unwrap();
+
+        let file = &pending.files[0];
+        assert_eq!(
+            (
+                file.path.as_str(),
+                file.stale,
+                file.replayable,
+                file.replayed
+            ),
+            ("/index.md", true, true, false)
+        );
+        let reason = file.replay_error.as_deref().unwrap();
+        assert!(
+            reason.contains("index.md no longer lists /learning/"),
+            "{reason}"
+        );
+        assert_eq!(
+            file.diff,
+            format!("Publish cannot replay this entry onto the published text: {reason}\n")
+        );
+        // Publish refuses with the same reason.
+        let error = publish_as(&first, &a).await.unwrap_err();
+        assert_eq!(error.to_string(), reason);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_free_edit_after_index_on_a_folder_is_stale_checked() {
+        let test = pg(&[]).await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let (a, b) = (open(&first).await, open(&second).await);
+        index(&first, describe("/infra/", "Our systems.", &a))
+            .await
+            .unwrap();
+        let described = entry(&test, &a, "index.md").await;
+        edit_document(
+            &first,
+            EditDocumentParams {
+                path: "/index.md".to_string(),
+                old_str: "About.".to_string(),
+                new_str: "About ours.".to_string(),
+                replace_all: false,
+                changeset: a.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let edited = entry(&test, &a, "index.md").await;
+        create_folder(&second, &b, "learning", true, false).await;
+        publish_as(&second, &b).await.unwrap();
+
+        let error = publish_as(&first, &a).await.unwrap_err();
+
+        assert_eq!(
+            described.replay.expect("index on a folder is replayable")[0]["op"],
+            "set_listing_summary"
+        );
+        assert_eq!(edited.replay, None);
+        assert!(matches!(error, OkfError::Conflict { .. }), "{error:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_move_and_a_split_into_new_folders_both_publish() {
+        let test = pg(&[]).await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let (a, b) = (open(&first).await, open(&second).await);
+        let moved = MoveConceptParams {
+            old: "/infra/time".to_string(),
+            new: "/clocks/time.md".to_string(),
+            folder_summary: Some("Every clock.".to_string()),
+            changeset: a.clone(),
+        };
+        let moved = move_concept(&first, moved).await.unwrap();
+        let split = SplitConceptParams {
+            path: "/infra/other".to_string(),
+            section: "Notes".to_string(),
+            to: "/notes/other-notes.md".to_string(),
+            kind: None,
+            title: None,
+            description: Some("Notes on other.".to_string()),
+            stub: None,
+            sources: None,
+            folder_summary: Some("Loose notes.".to_string()),
+            by: None,
+            changeset: b.clone(),
+        };
+        let split = split_concept(&second, split).await.unwrap();
+
+        let one = publish_as(&second, &b).await.unwrap();
+        let two = publish_as(&first, &a).await.unwrap();
+
+        assert!(
+            moved
+                .notes
+                .iter()
+                .any(|n| n == "created /clocks/index.md; replace its TODO line"),
+            "{moved:?}"
+        );
+        assert!(
+            split
+                .notes
+                .iter()
+                .any(|n| n == "created /notes/index.md; replace its TODO line"),
+            "{split:?}"
+        );
+        assert!(
+            one.report.published && two.report.published,
+            "{one:?} {two:?}"
+        );
+        assert!(
+            two.report.replayed.contains(&"/index.md".to_string()),
+            "{two:?}"
+        );
+        let root = published_text(&test, "index.md").await;
+        assert!(
+            root.contains("* [Clocks](clocks/) - Every clock.\n"),
+            "{root}"
+        );
+        assert!(
+            root.contains("* [Notes](notes/) - Loose notes.\n"),
+            "{root}"
+        );
+    }
+
+    /// The entry for `path` of the changeset `handle` names.
+    async fn entry(test: &TestApp, handle: &str, path: &str) -> crate::store::changesets::EntryRow {
+        let row = changeset_row(test, handle).await;
+        changesets::entries(test.app.pool(), row.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.path == path)
+            .unwrap_or_else(|| panic!("no entry for {path}"))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_secret_in_a_folder_summary_is_refused() {
+        let test = pg(&[]).await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        // Built at run time, so no source file holds a secret-shaped string.
+        let secret = format!("password = {}", "Ab1".repeat(4));
+
+        let created = create_concept(&ctx, concept("/ops/x.md", "X", Some(&secret), &handle)).await;
+        let described = index(&ctx, describe("/infra/", &secret, &handle)).await;
+
+        assert!(
+            matches!(created, Err(OkfError::SecretDetected { .. })),
+            "{created:?}"
+        );
+        assert!(
+            matches!(described, Err(OkfError::SecretDetected { .. })),
+            "{described:?}"
+        );
     }
 }
 
@@ -1941,5 +2550,285 @@ mod set_frontmatter_value_schema_tests {
             json!({"path": "/a", "key": "k", "changeset": "c"}),
         );
         assert!(missing.is_err());
+    }
+}
+
+/// Issue #830: the frontmatter bookkeeping tools (`stamp`, `review`,
+/// `question`, `unquestion`, `add_source`, `remove_source`) replay onto
+/// text another changeset published since, instead of forcing a discard.
+#[cfg(test)]
+mod frontmatter_replay_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::mcp::changesets::{pending_changes, publish, PendingParams, PublishParams};
+    use crate::mcp::testing::{app_with, open, writer, TestApp};
+
+    const NTP: &str = concat!(
+        "---\ntype: System\ntitle: NTP\ndescription: Hosts sync.\n",
+        "sources:\n  - id: s0\n    resource: https://example.com/ntp\n",
+        "open_questions:\n  - \"Old?\"\n---\n# NTP\n",
+    );
+
+    async fn pg() -> TestApp {
+        app_with(&[("pg", &[("infra/ntp.md", NTP)])], Config::default()).await
+    }
+
+    /// Two writers with a changeset each, both on `/infra/ntp.md`'s revision 1.
+    async fn two(test: &TestApp) -> (ToolContext, String, ToolContext, String) {
+        let first = writer(test, "writer-a", "pg").await;
+        let second = writer(test, "writer-b", "pg").await;
+        let (a, b) = (open(&first).await, open(&second).await);
+        (first, a, second, b)
+    }
+
+    async fn publish_as(
+        ctx: &ToolContext,
+        handle: &str,
+    ) -> Result<crate::mcp::changesets::Published, OkfError> {
+        let params = PublishParams {
+            message: "m".to_string(),
+            changeset: handle.to_string(),
+        };
+        publish(ctx, params).await
+    }
+
+    async fn published_ntp(test: &TestApp) -> String {
+        let loaded = test.app.catalog("pg").await.unwrap().unwrap().current();
+        loaded
+            .snapshot()
+            .get("infra/ntp.md")
+            .map(|doc| doc.text().to_string())
+            .unwrap()
+    }
+
+    async fn add(ctx: &ToolContext, handle: &str, id: &str) {
+        let params = AddSourceParams {
+            path: "/infra/ntp.md".to_string(),
+            id: id.to_string(),
+            resource: format!("https://example.com/{id}"),
+            title: None,
+            author: None,
+            changeset: handle.to_string(),
+        };
+        add_source(ctx, params).await.unwrap();
+    }
+
+    async fn stamp_verified(ctx: &ToolContext, handle: &str) {
+        let params = StampParams {
+            path: "/infra/ntp.md".to_string(),
+            field: StampField::Verified,
+            by: Some("other".to_string()),
+            changeset: handle.to_string(),
+        };
+        stamp(ctx, params).await.unwrap();
+    }
+
+    /// `ctx`'s pending entry for the concept: (stale, replayable, replayed, error).
+    async fn shown(ctx: &ToolContext, handle: &str) -> crate::mcp::changesets::PendingFile {
+        let params = PendingParams {
+            changeset: handle.to_string(),
+        };
+        let mut files = pending_changes(ctx, params).await.unwrap().files;
+        assert_eq!(files.len(), 1, "{files:?}");
+        files.remove(0)
+    }
+
+    /// Checks a stale entry replays (shown and published), and returns the
+    /// published text, which then holds the other writer's stamp too.
+    async fn replays(test: &TestApp, first: &ToolContext, a: &str) -> String {
+        let file = shown(first, a).await;
+        assert_eq!(
+            (
+                file.stale,
+                file.replayable,
+                file.replayed,
+                file.replay_error.as_deref()
+            ),
+            (true, true, true, None),
+            "{}",
+            file.diff
+        );
+        let published = publish_as(first, a).await.unwrap();
+        assert_eq!(published.report.replayed, ["/infra/ntp.md"]);
+        let text = published_ntp(test).await;
+        assert!(text.contains("by: other"), "{text}");
+        text
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn add_source_replays_over_a_concurrent_stamp() {
+        let test = pg().await;
+        let (first, a, second, b) = two(&test).await;
+        add(&first, &a, "s1").await;
+        add(&first, &a, "s2").await;
+        stamp_verified(&second, &b).await;
+        publish_as(&second, &b).await.unwrap();
+
+        let text = replays(&test, &first, &a).await;
+
+        assert!(text.contains("id: s1") && text.contains("id: s2"), "{text}");
+        assert!(text.contains("id: s0"), "{text}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn remove_source_replays_over_a_concurrent_stamp() {
+        let test = pg().await;
+        let (first, a, second, b) = two(&test).await;
+        let params = RemoveSourceParams {
+            path: "/infra/ntp.md".to_string(),
+            id: "s0".to_string(),
+            changeset: a.clone(),
+        };
+        remove_source(&first, params).await.unwrap();
+        stamp_verified(&second, &b).await;
+        publish_as(&second, &b).await.unwrap();
+
+        let text = replays(&test, &first, &a).await;
+
+        assert!(!text.contains("sources"), "{text}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn question_and_unquestion_replay_over_a_concurrent_stamp() {
+        let test = pg().await;
+        let (first, a, second, b) = two(&test).await;
+        let question_params = QuestionParams {
+            path: "/infra/ntp.md".to_string(),
+            question: "New?".to_string(),
+            changeset: a.clone(),
+        };
+        question(&first, question_params).await.unwrap();
+        let unquestion_params = UnquestionParams {
+            path: "/infra/ntp.md".to_string(),
+            question: QuestionRef::Number(1),
+            changeset: a.clone(),
+        };
+        unquestion(&first, unquestion_params).await.unwrap();
+        stamp_verified(&second, &b).await;
+        publish_as(&second, &b).await.unwrap();
+
+        let text = replays(&test, &first, &a).await;
+
+        assert!(
+            text.contains("\"New?\"") && !text.contains("Old?"),
+            "{text}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stamp_and_review_replay_over_a_concurrent_source() {
+        let test = pg().await;
+        let (first, a, second, b) = two(&test).await;
+        let review_params = ReviewParams {
+            path: "/infra/ntp.md".to_string(),
+            outcome: "verified".to_string(),
+            note: "Checked it.".to_string(),
+            questions: Some(vec!["Why?".to_string()]),
+            by: Some("reviewer".to_string()),
+            changeset: a.clone(),
+        };
+        review(&first, review_params).await.unwrap();
+        let stamp_params = StampParams {
+            path: "/infra/ntp.md".to_string(),
+            field: StampField::Generated,
+            by: Some("stamper".to_string()),
+            changeset: a.clone(),
+        };
+        stamp(&first, stamp_params).await.unwrap();
+        add(&second, &b, "s9").await;
+        publish_as(&second, &b).await.unwrap();
+
+        let file = shown(&first, &a).await;
+        assert_eq!(
+            (file.stale, file.replayable, file.replayed),
+            (true, true, true),
+            "{}",
+            file.diff
+        );
+        publish_as(&first, &a).await.unwrap();
+
+        let text = published_ntp(&test).await;
+        assert!(text.contains("id: s9"), "{text}");
+        assert!(
+            text.contains("by: reviewer") && text.contains("by: stamper"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\"Why?\"") && text.contains("\"Old?\""),
+            "{text}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_same_source_id_on_both_sides_is_a_replay_error() {
+        let test = pg().await;
+        let (first, a, second, b) = two(&test).await;
+        add(&first, &a, "s1").await;
+        add(&second, &b, "s1").await;
+        publish_as(&second, &b).await.unwrap();
+
+        let file = shown(&first, &a).await;
+
+        assert_eq!(
+            (file.stale, file.replayable, file.replayed),
+            (true, true, false)
+        );
+        let reason = file.replay_error.as_deref().unwrap();
+        assert!(
+            reason.contains("already has a source with id 's1'"),
+            "{reason}"
+        );
+        let error = publish_as(&first, &a).await.unwrap_err();
+        assert_eq!(error.to_string(), reason);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_source_now_cited_cannot_be_removed_on_replay() {
+        let test = pg().await;
+        let (first, a, second, b) = two(&test).await;
+        let params = RemoveSourceParams {
+            path: "/infra/ntp.md".to_string(),
+            id: "s0".to_string(),
+            changeset: a.clone(),
+        };
+        remove_source(&first, params).await.unwrap();
+        let edit = EditDocumentParams {
+            path: "/infra/ntp.md".to_string(),
+            old_str: "# NTP\n".to_string(),
+            new_str: "# NTP\n\nSyncs.[^s0]\n\n[^s0]: s0\n".to_string(),
+            replace_all: false,
+            changeset: b.clone(),
+        };
+        edit_document(&second, edit).await.unwrap();
+        publish_as(&second, &b).await.unwrap();
+
+        let file = shown(&first, &a).await;
+
+        assert_eq!((file.replayable, file.replayed), (true, false));
+        let reason = file.replay_error.as_deref().unwrap();
+        assert!(reason.contains("still cites source 's0'"), "{reason}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_free_edit_on_the_path_still_makes_the_entry_a_conflict() {
+        let test = pg().await;
+        let (first, a, second, b) = two(&test).await;
+        add(&first, &a, "s1").await;
+        let edit = EditDocumentParams {
+            path: "/infra/ntp.md".to_string(),
+            old_str: "# NTP\n".to_string(),
+            new_str: "# NTP\n\nMine.\n".to_string(),
+            replace_all: false,
+            changeset: a.clone(),
+        };
+        edit_document(&first, edit).await.unwrap();
+        stamp_verified(&second, &b).await;
+        publish_as(&second, &b).await.unwrap();
+
+        let file = shown(&first, &a).await;
+        let error = publish_as(&first, &a).await.unwrap_err();
+
+        assert_eq!((file.stale, file.replayable), (true, false));
+        assert!(matches!(error, OkfError::Conflict { .. }), "{error:?}");
     }
 }

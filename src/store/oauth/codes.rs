@@ -12,9 +12,10 @@ use chrono::{DateTime, TimeDelta, Utc};
 use sqlx::PgPool;
 
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::keys::{self, SIGN_IN_CODE_PREFIX};
 use crate::store::audit::{self, Action, AuditActor, Entry, Target};
-use crate::store::catalogs::bump_admin_generation;
+use crate::store::decode_column;
 use crate::store::keys::{is_valid_name, resolve_grants, Access, Grants};
 use crate::store::oauth::clients::{ClientKind, ClientRecord};
 use crate::store::users;
@@ -184,7 +185,9 @@ struct CodeRow {
     user: Option<String>,
 }
 
-impl From<CodeRow> for SignInCodeRecord {
+impl TryFrom<CodeRow> for SignInCodeRecord {
+    type Error = OkfError;
+
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -192,11 +195,11 @@ impl From<CodeRow> for SignInCodeRecord {
             reason = "trivial accessor or conversion: maps a value, no I/O"
         )
     )]
-    fn from(row: CodeRow) -> Self {
-        Self {
+    fn try_from(row: CodeRow) -> Result<Self, OkfError> {
+        Ok(Self {
             id: row.id,
             name: row.name,
-            access: Access::parse(&row.access).expect("the schema checks sign_in_codes.access"),
+            access: decode_column(Access::parse(&row.access), "sign_in_codes.access")?,
             all_catalogs: row.all_catalogs,
             catalogs: row.catalogs,
             default_catalog: row.default_catalog,
@@ -207,7 +210,7 @@ impl From<CodeRow> for SignInCodeRecord {
             grant_id: row.grant_id,
             revoked_at: row.revoked_at,
             user: row.user,
-        }
+        })
     }
 }
 
@@ -395,7 +398,7 @@ pub async fn list(pool: &PgPool) -> Result<Vec<SignInCodeRecord>, OkfError> {
     ))
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().map(SignInCodeRecord::from).collect())
+    rows.into_iter().map(SignInCodeRecord::try_from).collect()
 }
 
 /// The live code a person typed, if it is one.
@@ -433,7 +436,7 @@ pub async fn find_live(
     .bind(now)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(SignInCodeRecord::from))
+    row.map(SignInCodeRecord::try_from).transpose()
 }
 
 /// Revokes a code nobody has redeemed (an expired one too).
@@ -655,6 +658,8 @@ pub async fn redeem(
         .bind(&grant_id)
         .execute(&mut *tx)
         .await?;
+    // The grant's audit row from birth, labelled with the actor it inherits.
+    audit::credential_created(&mut tx, &grant_id, &code.actor).await?;
     let teams = audit::key_teams(&mut tx, &grant_id).await?;
     audit::record(
         &mut tx,
@@ -669,7 +674,7 @@ pub async fn redeem(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::credential(&grant_id)]).await?;
     tx.commit().await?;
     Ok(grant_id)
 }
@@ -844,6 +849,7 @@ mod tests {
                 &db.pool,
                 &crate::store::catalogs::NewCatalog {
                     name,
+                    display_name: &crate::labels::DisplayName::default(),
                     description: "",
                     owner_team: crate::db::TEST_TEAM,
                 },
@@ -1153,6 +1159,17 @@ mod tests {
         assert_eq!(redeemed.state(now()), CodeState::Redeemed);
         assert_eq!(redeemed.redeemed_at, Some(now()));
         assert_eq!(redeemed.grant_id.as_deref(), Some(grant_id.as_str()));
+        // Its audit row from birth, with the code's actor and user (M18
+        // spec Decision 20).
+        let owner: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
+            .bind(crate::db::TEST_USER)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            crate::store::audit::testing::credential_row(&db.pool, &grant_id).await,
+            Some((Some("example-actor".to_string()), Some(owner)))
+        );
         assert!(matches!(
             redeem(&db.pool, &code.id, &client, now()).await,
             Err(OkfError::Refused { .. })
@@ -1493,6 +1510,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "main",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -1744,7 +1762,7 @@ mod tests {
         let db = test_db().await;
         let alice = users::NewUser {
             name: "alice",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
         };
         users::create(&db.pool, &alice, &AuditActor::cli(), now())
             .await
@@ -1808,5 +1826,32 @@ mod tests {
         );
         assert_eq!(list(&db.pool).await.unwrap().len(), 1);
         assert_eq!(code_record(&db.pool, &legacy.id).await.user, None);
+    }
+
+    /// Issue #642: a stored access that is not a known spelling is a
+    /// database error from the readers, not a panic.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_corrupt_access_is_a_database_error() {
+        let db = with_catalogs(&["main"]).await;
+        let names = ["main".to_string()];
+        let created = create(
+            &db.pool,
+            &new_code("laptop", Grants::Catalogs(&names), Some("main")),
+            &crate::store::audit::AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        crate::store::drop_check_constraints(&db.pool, "sign_in_codes").await;
+        sqlx::query("UPDATE sign_in_codes SET access = 'bogus-access'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let listed = list(&db.pool).await;
+        let live = find_live(&db.pool, &created.code, now()).await;
+
+        crate::store::assert_decode_error(listed, "sign_in_codes.access", "bogus-access");
+        crate::store::assert_decode_error(live, "sign_in_codes.access", "bogus-access");
     }
 }

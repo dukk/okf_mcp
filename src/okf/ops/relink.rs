@@ -12,6 +12,13 @@
 //! split on `\n` only, so a `\r\n` file keeps its line endings: only link
 //! targets change. `rewrite_text` (crate-internal) is one file's rewrite,
 //! pure over its text, so a replay can share it with [`rewrite_links`].
+//!
+//! `delete_concept` uses the same link resolution to unlink a deleted
+//! concept from `log.md` files (issue #658): `unlink_text` (crate-internal)
+//! turns each link into it into its link text, and `links_to` is the one
+//! test of "a link into a document" that the edit and the delete's
+//! `StillLinked` check share. Publish replays it through
+//! [`crate::okf::ops::ReplayOp::Unlink`].
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -19,7 +26,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::error::OkfError;
-use crate::okf::markdown::{find_links, resolve_link};
+use crate::okf::markdown::{encode_link_path, find_links, resolve_link, LinkMatch};
 use crate::okf::paths::{dirname, is_concept, outside_link_graph, relpath};
 use crate::okf::pystr::py_unquote;
 use crate::okf::workspace::Workspace;
@@ -230,21 +237,22 @@ fn redirected_target(
     let mut new = if own && new_target == path {
         match fragment {
             Some(fragment) => format!("#{fragment}"),
-            None => format!("/{new_target}"),
+            None => format!("/{}", encode_link_path(&new_target)),
         }
     } else if own || absolute || (base != path && is_concept(path)) {
         // `strip_suffix` gives `Some(folder/)` only when the path ends in `index.md`.
         match new_target.strip_suffix("index.md") {
             Some(folder) if target_part.ends_with('/') && new_target.ends_with("/index.md") => {
-                format!("/{folder}")
+                format!("/{}", encode_link_path(folder))
             }
-            Some(_) | None => format!("/{new_target}"),
+            Some(_) | None => format!("/{}", encode_link_path(&new_target)),
         }
     } else if target_part.ends_with('/') && new_target.ends_with("index.md") {
         // `dirname(ntgt) or "."`: `relpath` reads `""` as the root.
-        format!("{}/", relpath(dirname(&new_target), dirname(path)))
+        let folder = relpath(dirname(&new_target), dirname(path));
+        format!("{}/", encode_link_path(&folder))
     } else {
-        relpath(&new_target, dirname(path))
+        encode_link_path(&relpath(&new_target, dirname(path))).into_owned()
     };
     if let Some(fragment) = fragment {
         if !new.starts_with('#') {
@@ -253,6 +261,103 @@ fn redirected_target(
         }
     }
     Some(new)
+}
+
+/// The links on `line`, a line of the document at `source`, that resolve to
+/// `target`: the one test of "a link into a document" that
+/// `delete_concept`'s `StillLinked` check and its `log.md` unlinking
+/// ([`unlink_text`]) share, so the two never disagree on which links count.
+/// It resolves each link as [`rewrite_text`] (a move) and the snapshot's
+/// link graph do: in-page (`#x`) and external links never count, and a
+/// percent-encoded path is decoded first ([`resolve_link`]).
+///
+/// # Arguments
+/// * `workspace` - resolves directory links (the replay passes an empty one,
+///   which is enough while `target` is a concept).
+/// * `line` - one line, split on `\n`.
+/// * `source` - the document's catalog-relative path, to resolve relative links.
+/// * `target` - the catalog-relative path linked to.
+///
+/// # Returns
+/// The matching links, left to right.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn links_to(
+    workspace: &dyn Workspace,
+    line: &str,
+    source: &str,
+    target: &str,
+) -> Vec<LinkMatch> {
+    find_links(line)
+        .into_iter()
+        .filter(|link| {
+            resolve_link(workspace, &link.target, source)
+                .is_some_and(|resolved| resolved.path == target)
+        })
+        .collect()
+}
+
+/// `delete_concept`'s edit of a `log.md`: every link into `target` becomes
+/// its link text (`[X](/infra/x.md "title")` becomes `X`), so the entry
+/// keeps its words and nothing is left pointing at the deleted concept.
+/// Every other byte is kept, `\r\n` endings included, as [`rewrite_text`]
+/// keeps them, so the op and its replay produce the same text.
+///
+/// # Arguments
+/// * `workspace` - resolves links, as for [`links_to`].
+/// * `path` - the file's catalog-relative path.
+/// * `text` - its content, as stored.
+/// * `target` - the deleted concept's catalog-relative path.
+///
+/// # Returns
+/// The new text, or `None` when no link resolves to `target`.
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) fn unlink_text(
+    workspace: &dyn Workspace,
+    path: &str,
+    text: &str,
+    target: &str,
+) -> Option<String> {
+    let mut changed = false;
+    let lines: Vec<Cow<'_, str>> = text
+        .split('\n')
+        .map(|line| match unlink_line(workspace, path, line, target) {
+            Some(updated) => {
+                changed = true;
+                Cow::Owned(updated)
+            }
+            None => Cow::Borrowed(line),
+        })
+        .collect();
+    changed.then(|| lines.join("\n"))
+}
+
+/// One line of [`unlink_text`]: each link into `target` replaced by its
+/// text, repeated until none is left. A second pass is needed only when a
+/// link's text and what follows it form a new link (`[[a](x.md)](x.md)`
+/// leaves `[a](x.md)`); each pass shortens the line, so it ends, and the
+/// result has no link into `target`, which keeps the replay idempotent.
+///
+/// # Returns
+/// The new line, or `None` when no link resolves to `target`.
+#[tracing::instrument(level = "trace", skip_all)]
+fn unlink_line(workspace: &dyn Workspace, path: &str, line: &str, target: &str) -> Option<String> {
+    let mut current: Option<String> = None;
+    loop {
+        let text = current.as_deref().unwrap_or(line);
+        let links = links_to(workspace, text, path, target);
+        if links.is_empty() {
+            return current;
+        }
+        let mut out = String::with_capacity(text.len());
+        let mut copied = 0;
+        for link in &links {
+            out.push_str(&text[copied..link.range.start]);
+            out.push_str(&link.text);
+            copied = link.range.end;
+        }
+        out.push_str(&text[copied..]);
+        current = Some(out);
+    }
 }
 
 #[cfg(test)]
@@ -352,6 +457,69 @@ mod tests {
         assert_eq!(
             text(&workspace, "AGENTS.md"),
             "See [alpha](moves/alpha.md).\n"
+        );
+    }
+
+    #[test]
+    fn a_rewritten_destination_is_percent_encoded_and_still_resolves() {
+        let workspace = MemWorkspace::from_files([
+            ("moves/alpha.md", "# Alpha\n"),
+            (
+                "moves/beta.md",
+                "[rel](alpha.md#Part) [abs](/moves/alpha.md) [enc](a%20b.md)\n",
+            ),
+            ("moves/a b.md", "# Spaced\n"),
+        ]);
+        let moved = Moved {
+            path: "moves/100% (new).md",
+            written_at: "moves/alpha.md",
+        };
+
+        rewrite_links(
+            &workspace,
+            &redirect("moves/alpha.md", "moves/100% (new).md"),
+            Some(moved),
+        )
+        .unwrap();
+
+        // The new name is encoded, the fragment is kept, and the encoded
+        // link to another file is left as written.
+        assert_eq!(
+            text(&workspace, "moves/beta.md"),
+            "[rel](100%25%20%28new%29.md#Part) [abs](/moves/100%25%20%28new%29.md) [enc](a%20b.md)\n"
+        );
+        // The encoded destination resolves to the moved file.
+        let resolved = resolve_link(&workspace, "100%25%20%28new%29.md", "moves/beta.md");
+        assert_eq!(resolved.unwrap().path, "moves/100% (new).md");
+    }
+
+    #[test]
+    fn an_encoded_link_to_the_moved_file_is_redirected() {
+        let workspace = MemWorkspace::from_files([
+            ("moves/a b.md", "# Spaced\n"),
+            ("moves/beta.md", "[x](a%20b.md)\n"),
+        ]);
+
+        rewrite_links(&workspace, &redirect("moves/a b.md", "moves/c.md"), None).unwrap();
+
+        assert_eq!(text(&workspace, "moves/beta.md"), "[x](c.md)\n");
+    }
+
+    #[test]
+    fn an_angle_bracket_link_to_the_moved_file_is_redirected_and_keeps_its_brackets() {
+        let workspace = MemWorkspace::from_files([
+            ("moves/a b.md", "# Spaced\n"),
+            (
+                "moves/beta.md",
+                "[x](<a b.md#h> \"t\") [y](</moves/a b.md>)\n",
+            ),
+        ]);
+
+        rewrite_links(&workspace, &redirect("moves/a b.md", "moves/c d.md"), None).unwrap();
+
+        assert_eq!(
+            text(&workspace, "moves/beta.md"),
+            "[x](<c%20d.md#h> \"t\") [y](</moves/c%20d.md>)\n"
         );
     }
 

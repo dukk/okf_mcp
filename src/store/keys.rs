@@ -7,22 +7,38 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::store::audit::{self, Action, AuditActor, Entry, Target};
-use crate::store::catalogs::{self, bump_admin_generation, is_unique_violation};
+use crate::store::catalogs::{self, is_unique_violation};
+use crate::store::decode_column;
 use crate::store::users;
 
 /// What a key may do. Each level includes the ones before it, so the
 /// derived `Ord` (`Read < Write < Admin`, the declaration order) answers
 /// "at least write?".
 // `clap::ValueEnum` lets the command line parse `--access read|write|admin`
-// straight into this enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
+// straight into this enum. `Serialize, Deserialize` (serde) store it in
+// Redis inside a pending authorization's offered ceiling (M16 Task 8);
+// `rename_all = "lowercase"` gives the spellings of [`Access::as_str`].
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    clap::ValueEnum,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum Access {
     /// The read tools and export.
     Read,
-    /// Read, plus the write tools and publish.
+    /// Read, plus the write tools, publish and import into granted catalogs.
     Write,
-    /// Write, plus import into granted catalogs and using any key's changeset.
+    /// Write, plus using any key's changeset.
     Admin,
 }
 
@@ -222,6 +238,11 @@ pub struct KeyRecord {
     pub user_id: Option<String>,
     /// Made by its user, so capped by the user's ceiling.
     pub self_issued: bool,
+    /// A grant's last token activity: when its newest token still on record
+    /// was issued (each authorization-code exchange and each refresh issues
+    /// one). `None` for a key, and for a grant with no token on record (none
+    /// issued yet, or all pruned a week after they expired).
+    pub last_activity: Option<DateTime<Utc>>,
 }
 
 /// The row as selected, before `access` is parsed.
@@ -247,6 +268,7 @@ struct KeyRow {
     expires_at: Option<DateTime<Utc>>,
     user_id: Option<String>,
     self_issued: bool,
+    last_activity: Option<DateTime<Utc>>,
 }
 
 /// Is `name` valid under the schema's `api_keys_name_check` constraint? Sign-in
@@ -438,6 +460,7 @@ pub async fn create_provisioner(
     .fetch_one(&mut *tx)
     .await;
     let id = live_name_or(inserted, new.name, new.actor)?;
+    audit::credential_created(&mut tx, &id, new.actor).await?;
     audit::record(
         &mut tx,
         audit,
@@ -451,7 +474,7 @@ pub async fn create_provisioner(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::credential(&id)]).await?;
     tx.commit().await?;
     Ok(CreatedKey { id, key })
 }
@@ -510,7 +533,7 @@ pub async fn create_with_id(
     lock_new_key(&mut tx, new, audit, audit::RowLock::KeyShare).await?;
     let created = insert_key(&mut tx, new, now).await?;
     record_created(&mut tx, &created.id, new, audit, now).await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::credential(&created.id)]).await?;
     tx.commit().await?;
     Ok(created)
 }
@@ -541,7 +564,8 @@ async fn lock_new_key(
     .0)
 }
 
-/// Records creation after inserting the key and its grants, before commit.
+/// Creates the key's audit row ([`audit::credential_created`]), then records
+/// its creation, after inserting the key and its grants, before commit.
 #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.record_created"))]
 async fn record_created(
     conn: &mut PgConnection,
@@ -550,6 +574,7 @@ async fn record_created(
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<(), OkfError> {
+    audit::credential_created(conn, id, new.actor).await?;
     let teams = audit::key_teams(conn, id).await?;
     let (user_id, count): (Option<String>, i64) = sqlx::query_as(
         "SELECT user_id, (SELECT count(*) FROM key_catalogs WHERE key_id = $1) FROM api_keys WHERE id = $1"
@@ -708,7 +733,7 @@ pub async fn create_self_issued(
     }
     let created = insert_key(&mut tx, new, now).await?;
     record_created(&mut tx, &created.id, new, audit, now).await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::credential(&created.id)]).await?;
     tx.commit().await?;
     Ok(created)
 }
@@ -802,13 +827,19 @@ pub(crate) async fn insert_legacy_test_key(
 /// Their ids, in `names`' order.
 ///
 /// # Errors
-/// [`OkfError::CatalogNotSelected`] for the first name with no catalog;
-/// [`OkfError::Database`].
+/// [`OkfError::CatalogNotSelected`] for the first name with no catalog (a
+/// name that cannot be one, a NUL included, counts as one with none:
+/// Postgres refuses a NUL, issue #339); [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.catalog_ids"))]
 pub(crate) async fn catalog_ids(
     conn: &mut PgConnection,
     names: &[String],
 ) -> Result<Vec<i64>, OkfError> {
+    if let Some(name) = names.iter().find(|name| !catalogs::is_valid_name(name)) {
+        return Err(OkfError::CatalogNotSelected {
+            catalog: name.clone(),
+        });
+    }
     // `WITH ORDINALITY` numbers the array's elements, so the rows come back in
     // the caller's order with a NULL id for each unknown name.
     let rows: Vec<(String, Option<i64>)> = sqlx::query_as(
@@ -883,6 +914,90 @@ pub(crate) async fn resolve_grants(
     Ok((granted, default_id))
 }
 
+// The key-record SELECT, shared by `list`, `record_by_hash` and
+// `record_by_id` (a macro so `concat!` can add each query's extra columns
+// and put its `WHERE` before the shared `GROUP BY` at compile time). `levels` is aggregated in the same
+// order as `catalogs`, so the two arrays pair up; `COALESCE(g.access,
+// k.access)` resolves a NULL level to the key's own.
+macro_rules! select_key_records {
+    ($extra:literal, $filter:literal) => {
+        concat!(
+            "SELECT ",
+            $extra,
+            "k.id, k.name, k.sha256, k.access, k.maintenance_report, k.provisioner, \
+                    k.all_catalogs, d.name AS default_catalog, k.actor, k.created_at, \
+                    k.revoked_at, k.expires_at, k.kind, k.client_id, oc.client_name, \
+                    u.name AS user, k.user_id, k.self_issued, \
+                    (SELECT max(t.created_at) FROM oauth_tokens t WHERE t.grant_id = k.id) \
+                        AS last_activity, \
+                    COALESCE(array_agg(c.name ORDER BY c.name) FILTER (WHERE c.name IS NOT NULL), \
+                             '{}'::text[]) AS catalogs, \
+                    COALESCE(array_agg(COALESCE(g.access, k.access) ORDER BY c.name) \
+                                 FILTER (WHERE c.name IS NOT NULL), \
+                             '{}'::text[]) AS levels \
+             FROM api_keys k \
+             LEFT JOIN catalogs d ON d.id = k.default_catalog_id \
+             LEFT JOIN oauth_clients oc ON oc.client_id = k.client_id \
+             LEFT JOIN users u ON u.id = k.user_id \
+             LEFT JOIN key_catalogs g ON g.key_id = k.id \
+             LEFT JOIN catalogs c ON c.id = g.catalog_id ",
+            $filter,
+            " GROUP BY k.id, d.name, oc.client_name, u.name"
+        )
+    };
+}
+
+/// `TryFrom`, not `From`: a stored access or kind that is not a known
+/// spelling (a hand-edited row) is an error, not a panic (issue #642).
+impl TryFrom<KeyRow> for KeyRecord {
+    type Error = OkfError;
+
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
+    fn try_from(row: KeyRow) -> Result<Self, OkfError> {
+        let catalog_access = row
+            .catalogs
+            .iter()
+            .cloned()
+            .zip(row.levels.iter())
+            .map(|(catalog, level)| {
+                Ok((
+                    catalog,
+                    decode_column(Access::parse(level), "key_catalogs.access")?,
+                ))
+            })
+            .collect::<Result<_, OkfError>>()?;
+        Ok(KeyRecord {
+            id: row.id,
+            name: row.name,
+            sha256: row.sha256,
+            access: decode_column(Access::parse(&row.access), "api_keys.access")?,
+            provisioner: row.provisioner,
+            maintenance_report: row.maintenance_report,
+            all_catalogs: row.all_catalogs,
+            catalogs: row.catalogs,
+            catalog_access,
+            default_catalog: row.default_catalog,
+            actor: row.actor,
+            created_at: row.created_at,
+            revoked_at: row.revoked_at,
+            expires_at: row.expires_at,
+            kind: decode_column(KeyKind::parse(&row.kind), "api_keys.kind")?,
+            client_id: row.client_id,
+            client_name: row.client_name,
+            user: row.user,
+            user_id: row.user_id,
+            self_issued: row.self_issued,
+            last_activity: row.last_activity,
+        })
+    }
+}
+
 /// Every key, by id, with its granted catalogs.
 ///
 /// # Arguments
@@ -895,63 +1010,109 @@ pub(crate) async fn resolve_grants(
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.list"))]
 pub async fn list(pool: &PgPool) -> Result<Vec<KeyRecord>, OkfError> {
-    // `levels` is aggregated in the same order as `catalogs`, so the two
-    // arrays pair up; `COALESCE(g.access, k.access)` resolves a NULL level
-    // to the key's own.
-    let rows = sqlx::query_as::<_, KeyRow>(
-        "SELECT k.id, k.name, k.sha256, k.access, k.maintenance_report, k.provisioner, k.all_catalogs, \
-                d.name AS default_catalog, k.actor, k.created_at, k.revoked_at, k.expires_at, \
-                k.kind, k.client_id, oc.client_name, u.name AS user, k.user_id, k.self_issued, \
-                COALESCE(array_agg(c.name ORDER BY c.name) FILTER (WHERE c.name IS NOT NULL), \
-                         '{}'::text[]) AS catalogs, \
-                COALESCE(array_agg(COALESCE(g.access, k.access) ORDER BY c.name) \
-                             FILTER (WHERE c.name IS NOT NULL), \
-                         '{}'::text[]) AS levels \
-         FROM api_keys k \
-         LEFT JOIN catalogs d ON d.id = k.default_catalog_id \
-         LEFT JOIN oauth_clients oc ON oc.client_id = k.client_id \
-         LEFT JOIN users u ON u.id = k.user_id \
-         LEFT JOIN key_catalogs g ON g.key_id = k.id \
-         LEFT JOIN catalogs c ON c.id = g.catalog_id \
-         GROUP BY k.id, d.name, oc.client_name, u.name ORDER BY k.name, k.actor, k.created_at, k.id",
-    )
+    let rows = sqlx::query_as::<_, KeyRow>(concat!(
+        select_key_records!("", ""),
+        " ORDER BY k.name, k.actor, k.created_at, k.id"
+    ))
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            let catalog_access = row
-                .catalogs
-                .iter()
-                .cloned()
-                .zip(row.levels.iter().map(|level| {
-                    Access::parse(level).expect("the schema checks key_catalogs.access")
-                }))
-                .collect();
-            KeyRecord {
-                id: row.id,
-                name: row.name,
-                sha256: row.sha256,
-                access: Access::parse(&row.access).expect("the schema checks api_keys.access"),
-                provisioner: row.provisioner,
-                maintenance_report: row.maintenance_report,
-                all_catalogs: row.all_catalogs,
-                catalogs: row.catalogs,
-                catalog_access,
-                default_catalog: row.default_catalog,
-                actor: row.actor,
-                created_at: row.created_at,
-                revoked_at: row.revoked_at,
-                expires_at: row.expires_at,
-                kind: KeyKind::parse(&row.kind).expect("the schema checks api_keys.kind"),
-                client_id: row.client_id,
-                client_name: row.client_name,
-                user: row.user,
-                user_id: row.user_id,
-                self_issued: row.self_issued,
-            }
+    // `KeyRecord::try_from` is the `TryFrom<KeyRow>` above; collecting
+    // `Result`s stops at the first error.
+    rows.into_iter().map(KeyRecord::try_from).collect()
+}
+
+/// A key or grant with the audit id its accesses are recorded with: what
+/// the credential cache holds (M18 Decision 9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CredentialRecord {
+    /// The row.
+    pub record: KeyRecord,
+    /// Its `audit_credentials` id; `None` for a row without one (a key from
+    /// before the audit log that the backfill did not see).
+    pub audit_credential: Option<i64>,
+}
+
+/// [`KeyRow`] with its audit id, as `record_by_hash` and `record_by_id`
+/// select it.
+#[derive(sqlx::FromRow)]
+struct CredentialRow {
+    // `flatten`: the key's columns are read into the nested struct.
+    #[sqlx(flatten)]
+    key: KeyRow,
+    audit_credential: Option<i64>,
+}
+
+impl TryFrom<CredentialRow> for CredentialRecord {
+    type Error = OkfError;
+
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
+    fn try_from(row: CredentialRow) -> Result<Self, OkfError> {
+        Ok(Self {
+            record: KeyRecord::try_from(row.key)?,
+            audit_credential: row.audit_credential,
         })
-        .collect())
+    }
+}
+
+/// The key whose secret hashes to `sha256`, with its audit id, in one
+/// query: what the credential cache loads an API key with (M18 Decision 9).
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `sha256` - the presented key's SHA-256 ([`crate::keys::hash`]).
+///
+/// # Returns
+/// Its record, revoked or not, or `None` for no such key. An OAuth grant has
+/// no hash, so it is never found here.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.record_by_hash"))]
+pub async fn record_by_hash(
+    pool: &PgPool,
+    sha256: &[u8; 32],
+) -> Result<Option<CredentialRecord>, OkfError> {
+    let row = sqlx::query_as::<_, CredentialRow>(select_key_records!(
+        "(SELECT a.id FROM audit_credentials a WHERE a.credential_id = k.id) \
+             AS audit_credential, ",
+        "WHERE k.sha256 = $1"
+    ))
+    // `as_slice`: Postgres's `bytea` binds from a byte slice.
+    .bind(sha256.as_slice())
+    .fetch_optional(pool)
+    .await?;
+    row.map(CredentialRecord::try_from).transpose()
+}
+
+/// The key or grant with this id, with its audit id, in one query: what the
+/// credential cache loads an OAuth grant with (M18 Decision 9).
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `id` - its `api_keys.id`.
+///
+/// # Returns
+/// Its record, revoked or not, or `None` for no such row.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.record_by_id"))]
+pub async fn record_by_id(pool: &PgPool, id: &str) -> Result<Option<CredentialRecord>, OkfError> {
+    let row = sqlx::query_as::<_, CredentialRow>(select_key_records!(
+        "(SELECT a.id FROM audit_credentials a WHERE a.credential_id = k.id) \
+             AS audit_credential, ",
+        "WHERE k.id = $1"
+    ))
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    row.map(CredentialRecord::try_from).transpose()
 }
 
 /// Sets the independent maintenance-report capability on an active key.
@@ -1086,7 +1247,7 @@ async fn set_maintenance_report_with(
             now,
         )
         .await?;
-        bump_admin_generation(&mut tx).await?;
+        invalidate(&mut tx, &[Invalidation::credential(&id)]).await?;
     } else {
         // `resolve_active` accepts an exact generated id even if revoked.
         let active: bool = sqlx::query_scalar(
@@ -1105,8 +1266,9 @@ async fn set_maintenance_report_with(
     Ok(id)
 }
 
-/// Revokes a key: it authenticates nothing from then on (M4 notices within
-/// `poll_interval`), and bumps the administrative generation.
+/// Revokes a key: it authenticates nothing from then on (every replica drops
+/// it on the change feed's `credential` message, or within `credential_ttl`
+/// should the message be lost), and bumps the administrative generation.
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -1166,6 +1328,32 @@ async fn revoke_with(
             reason: format!("no active key {id:?}"),
         });
     }
+    record_revocation(&mut tx, &id, audit, serde_json::json!({}), now).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// Records a revocation the transaction just made and bumps the
+/// administrative generation: what every revocation of a key or grant does
+/// after its `UPDATE`, whoever asked for it.
+///
+/// # Arguments
+/// * `conn` - the revocation's transaction, its people already locked.
+/// * `id` - the revoked key's or grant's id.
+/// * `audit` - who revoked it.
+/// * `details` - the entry's details (`{}` for an operator's revocation).
+/// * `now` - the revocation time.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.record_revocation"))]
+async fn record_revocation(
+    conn: &mut PgConnection,
+    id: &str,
+    audit: &AuditActor,
+    details: serde_json::Value,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
     // `|target| ...` is a closure (Python's `lambda target: ...`): the
     // action follows the target `record_change` reads once.
     let action = |target: &Target<'_>| {
@@ -1175,10 +1363,156 @@ async fn revoke_with(
             Action::KeyRevoked
         }
     };
-    record_change(&mut tx, &id, action, audit, serde_json::json!({}), now).await?;
-    bump_admin_generation(&mut tx).await?;
+    record_change(conn, id, action, audit, details, now).await?;
+    invalidate(conn, &[Invalidation::credential(id)]).await?;
+    Ok(())
+}
+
+/// The audit label of housekeeping's idle-grant revocations: entries show
+/// the actor as `system:idle-grant-revocation`.
+pub const IDLE_REVOCATION_ACTOR: &str = "idle-grant-revocation";
+
+/// Which `api_keys` rows (aliased `k`) are idle OAuth grants: a live grant
+/// (never a key) with no live token (unrevoked and unexpired, `$1` being
+/// now) whose last token activity, or its creation when it has no token on
+/// record, is before `$2`.
+///
+/// Every token is issued by an authorization-code exchange or a refresh,
+/// and refreshing needs a live refresh token, so a grant this matches can
+/// gain no new token: no client can still be using it. A grant made by a
+/// consent or a code redemption is matched only once `$2` has passed its
+/// creation. An issue already admitted when the pass runs (a refresh that
+/// validated its token just before it expired) holds the grant's share
+/// lock (`store::oauth::tokens::lock_grant`) until it commits, so the
+/// pass's `FOR UPDATE` waits for it and the re-check then sees its new
+/// tokens.
+///
+/// A macro, not a `const`, so `concat!` can splice it into the two queries
+/// at compile time: sqlx refuses SQL built with `format!` at run time.
+macro_rules! idle_grant {
+    () => {
+        "k.kind = 'oauth' AND k.revoked_at IS NULL \
+         AND NOT EXISTS (SELECT 1 FROM oauth_tokens t \
+                         WHERE t.grant_id = k.id AND t.revoked_at IS NULL AND t.expires_at > $1) \
+         AND COALESCE((SELECT max(t.created_at) FROM oauth_tokens t WHERE t.grant_id = k.id), \
+                      k.created_at) < $2"
+    };
+}
+
+/// A grant [`revoke_idle_grants`] revoked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdleRevocation {
+    /// The grant's id.
+    pub id: String,
+    /// Its last activity: its newest token's issue time, else its creation.
+    pub last_activity: DateTime<Utc>,
+}
+
+/// Revokes every OAuth grant that has been idle since before
+/// `idle_before` and holds no live token (`idle_grant!`), each the way an
+/// operator's `oauth grant revoke` does: one transaction that locks its
+/// people and its row, revokes it, records `oauth.grant_revoked` (actor
+/// `system:idle-grant-revocation`, details `{"reason": "idle",
+/// "last_activity": ...}`) and bumps the administrative generation. Static
+/// keys (`kind = 'key'`) are never touched.
+///
+/// Safe to run on several replicas at once: each grant is re-checked under
+/// its row lock, so a grant another pass (or an operator) revoked meanwhile
+/// is skipped, and revoked and audited once.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `idle_before` - the cut-off: `now` minus `oauth.idle_grant_revoke_after`.
+/// * `now` - the revocation time (server clock).
+///
+/// # Returns
+/// The grants this call revoked, in id order.
+///
+/// # Errors
+/// [`OkfError::Database`]. A grant whose owner or catalogs changed while it
+/// was being locked is skipped for the next pass, not an error.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.revoke_idle_grants"))]
+pub async fn revoke_idle_grants(
+    pool: &PgPool,
+    idle_before: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<Vec<IdleRevocation>, OkfError> {
+    let candidates: Vec<String> = sqlx::query_scalar(concat!(
+        "SELECT k.id FROM api_keys k WHERE ",
+        idle_grant!(),
+        " ORDER BY k.id"
+    ))
+    .bind(now)
+    .bind(idle_before)
+    .fetch_all(pool)
+    .await?;
+    let audit = AuditActor::system(IDLE_REVOCATION_ACTOR);
+    let mut revoked = Vec::new();
+    for id in candidates {
+        match revoke_if_idle(pool, &id, idle_before, &audit, now).await {
+            Ok(Some(last_activity)) => revoked.push(IdleRevocation { id, last_activity }),
+            // Revoked meanwhile, or no longer idle.
+            Ok(None) => {}
+            // `lock_credential_people` refuses a grant whose owner or
+            // catalogs changed while it locked them; the next pass retries.
+            Err(OkfError::Refused { .. }) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(revoked)
+}
+
+/// One grant of [`revoke_idle_grants`], in its own transaction.
+///
+/// # Returns
+/// The grant's last activity if this revoked it; `None` if it is gone, was
+/// revoked meanwhile or is no longer idle (nothing is recorded then).
+///
+/// # Errors
+/// [`OkfError::Refused`] from `lock_credential_people`; [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "keys.revoke_if_idle"))]
+async fn revoke_if_idle(
+    pool: &PgPool,
+    id: &str,
+    idle_before: DateTime<Utc>,
+    audit: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>, OkfError> {
+    // Dropping `tx` without `commit` (the early return) rolls it back.
+    let mut tx = pool.begin().await?;
+    // The same lock order as `revoke_with`: the people, then the row
+    // (`FOR UPDATE`), so a second pass waits here for the first to commit.
+    audit::lock_credential_people(&mut tx, audit, id, false, &audit::People::default()).await?;
+    // Started after the row lock was granted, so it reads the committed
+    // state; `idle_grant!` again, so a grant revoked or used meanwhile is
+    // left alone.
+    let last_activity: Option<DateTime<Utc>> = sqlx::query_scalar(concat!(
+        "UPDATE api_keys k SET revoked_at = $1 WHERE k.id = $3 AND ",
+        idle_grant!(),
+        " RETURNING COALESCE((SELECT max(t.created_at) FROM oauth_tokens t \
+                              WHERE t.grant_id = k.id), k.created_at)"
+    ))
+    .bind(now)
+    .bind(idle_before)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(last_activity) = last_activity else {
+        return Ok(None);
+    };
+    record_revocation(
+        &mut tx,
+        id,
+        audit,
+        serde_json::json!({
+            "reason": "idle",
+            "last_activity": crate::clock::format_timestamp(last_activity),
+        }),
+        now,
+    )
+    .await?;
     tx.commit().await?;
-    Ok(id)
+    Ok(Some(last_activity))
 }
 
 /// Revokes a key selected by immutable id or an unambiguous live name.
@@ -1295,7 +1629,7 @@ async fn grant_with(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::credential(&id)]).await?;
     tx.commit().await?;
     Ok(id)
 }
@@ -1416,7 +1750,7 @@ async fn ungrant_with(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::credential(&id)]).await?;
     tx.commit().await?;
     Ok(id)
 }
@@ -1565,7 +1899,7 @@ async fn set_user(
         now,
     )
     .await?;
-    bump_admin_generation(conn).await?;
+    invalidate(conn, &[Invalidation::credential(id)]).await?;
     Ok(Some(name))
 }
 
@@ -1798,6 +2132,9 @@ async fn require_named_grants(conn: &mut PgConnection, id: &str) -> Result<(), O
 #[cfg(test)]
 #[path = "keys/audit_tests.rs"]
 mod audit_tests;
+#[cfg(test)]
+#[path = "keys/idle_tests.rs"]
+mod idle_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1808,6 +2145,20 @@ mod tests {
 
     fn now() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 11, 2, 12, 0, 0).unwrap()
+    }
+
+    /// The JSON spelling (Redis, M16 Task 8) is the stored spelling.
+    #[test]
+    fn access_json_is_its_stored_spelling() {
+        for access in [Access::Read, Access::Write, Access::Admin] {
+            let json = serde_json::to_value(access).expect("serializes");
+
+            assert_eq!(json, serde_json::json!(access.as_str()));
+            assert_eq!(
+                serde_json::from_value::<Access>(json).expect("deserializes"),
+                access
+            );
+        }
     }
 
     fn new_key<'a>(name: &'a str, grants: Grants<'a>, default: Option<&'a str>) -> NewKey<'a> {
@@ -1854,6 +2205,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "main",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -1917,6 +2269,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -1929,6 +2282,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "work",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -1980,6 +2334,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -2063,6 +2418,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -2075,6 +2431,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "work",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -2229,6 +2586,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -2266,6 +2624,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -2290,6 +2649,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "work",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -2434,25 +2794,78 @@ mod tests {
                 .expect("a key row has a hash"),
             &replacement.key
         ));
-        let cache = crate::auth::KeyCache::from_records(
-            records,
-            std::collections::HashMap::new(),
-            Default::default(),
-            Default::default(),
-            now(),
-        );
+        // What the credential cache loads for each secret: one row by hash.
+        let live = |found: Option<CredentialRecord>| {
+            found.is_some_and(|found| found.record.revoked_at.is_none())
+        };
+        let by_hash = async |key: &str| record_by_hash(&db.pool, &crate::keys::hash(key)).await;
         assert!(
-            cache.find(&first.key, now()).is_none(),
+            !live(by_hash(&first.key).await.unwrap()),
             "the revoked key is refused"
         );
         assert!(
-            cache.find(&second.key, now()).is_some(),
+            live(by_hash(&second.key).await.unwrap()),
             "the other actor still works"
         );
         assert!(
-            cache.find(&replacement.key, now()).is_some(),
+            live(by_hash(&replacement.key).await.unwrap()),
             "the reissued key works"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn one_credential_is_read_by_hash_or_by_id_with_its_audit_id() {
+        let db = test_db().await;
+        let created = create_with_id(
+            &db.pool,
+            &NewKey {
+                name: "laptop",
+                access: Access::Read,
+                maintenance_report: false,
+                grants: Grants::All,
+                default_catalog: None,
+                actor: "laptop",
+                user: crate::db::TEST_USER,
+                self_issued: false,
+                expires_at: None,
+                levels: &[],
+            },
+            &crate::store::audit::AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        let audit_id: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM audit_credentials WHERE credential_id = $1")
+                .bind(&created.id)
+                .fetch_optional(&db.pool)
+                .await
+                .unwrap();
+
+        let by_hash = record_by_hash(&db.pool, &crate::keys::hash(&created.key))
+            .await
+            .unwrap()
+            .expect("found by its secret's hash");
+        let by_id = record_by_id(&db.pool, &created.id)
+            .await
+            .unwrap()
+            .expect("found by id");
+        let unknown = record_by_hash(&db.pool, &crate::keys::hash("okf_nope"))
+            .await
+            .unwrap();
+        let listed = list(&db.pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|record| record.id == created.id)
+            .unwrap();
+
+        assert_eq!(by_hash, by_id);
+        assert_eq!(by_hash.record, listed, "the same record `list` reads");
+        assert!(audit_id.is_some());
+        assert_eq!(by_hash.audit_credential, audit_id);
+        assert_eq!(unknown, None);
+        assert_eq!(record_by_id(&db.pool, "no-such-id").await.unwrap(), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2462,6 +2875,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "work",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -2565,6 +2979,7 @@ mod tests {
                 &db.pool,
                 &crate::store::catalogs::NewCatalog {
                     name,
+                    display_name: &crate::labels::DisplayName::default(),
                     description: "",
                     owner_team: crate::db::TEST_TEAM,
                 },
@@ -2676,6 +3091,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "work",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -2806,6 +3222,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "main",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -2818,6 +3235,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "other",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -2974,7 +3392,7 @@ mod tests {
     async fn alice(pool: &PgPool) {
         let new = users::NewUser {
             name: "alice",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
         };
         users::create(pool, &new, &AuditActor::cli(), now())
             .await
@@ -3139,6 +3557,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "main",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -3291,6 +3710,7 @@ mod tests {
                 &db.pool,
                 &crate::store::catalogs::NewCatalog {
                     name,
+                    display_name: &crate::labels::DisplayName::default(),
                     description: "",
                     owner_team: crate::db::TEST_TEAM,
                 },
@@ -3357,6 +3777,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -3427,6 +3848,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -3532,6 +3954,7 @@ mod tests {
                 &db.pool,
                 &crate::store::catalogs::NewCatalog {
                     name,
+                    display_name: &crate::labels::DisplayName::default(),
                     description: "",
                     owner_team: crate::db::TEST_TEAM,
                 },
@@ -3654,6 +4077,7 @@ mod tests {
             pool,
             &crate::store::catalogs::NewCatalog {
                 name: "main",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -4005,6 +4429,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "main",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -4066,5 +4491,91 @@ mod tests {
         }
         let principal = crate::auth::Principal::from(record);
         assert!(principal.provisioner && !principal.reaches("main"));
+    }
+
+    /// Issue #642: a stored access or kind that is not a known spelling is a
+    /// database error from the key readers, not a panic.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_corrupt_access_or_kind_is_a_database_error() {
+        let db = test_db().await;
+        let id = "corrupt-key";
+        insert_legacy_test_key(&db.pool, id, Access::Write, "actor", now()).await;
+        crate::store::drop_check_constraints(&db.pool, "api_keys").await;
+
+        // Each round corrupts one column, reads, then puts the column right.
+        for (column, bad, good, set) in [
+            (
+                "access",
+                "bogus-access",
+                "write",
+                "UPDATE api_keys SET access = $1 WHERE id = $2",
+            ),
+            (
+                "kind",
+                "bogus-kind",
+                "key",
+                "UPDATE api_keys SET kind = $1 WHERE id = $2",
+            ),
+        ] {
+            sqlx::query(set)
+                .bind(bad)
+                .bind(id)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+
+            let listed = list(&db.pool).await;
+            let by_id = record_by_id(&db.pool, id).await;
+
+            let name = format!("api_keys.{column}");
+            crate::store::assert_decode_error(listed, &name, bad);
+            crate::store::assert_decode_error(by_id, &name, bad);
+            sqlx::query(set)
+                .bind(good)
+                .bind(id)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+    }
+    /// Issue #642, review of PR #939: the per-catalog level is its own decode
+    /// path (`key_catalogs.access`, read through the aggregated pairs).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_corrupt_catalog_grant_level_is_a_database_error() {
+        let db = test_db().await;
+        catalogs::create(
+            &db.pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "main",
+                display_name: &crate::labels::DisplayName::default(),
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &crate::store::audit::AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        let names = ["main".to_string()];
+        let created = create_with_id(
+            &db.pool,
+            &new_key("laptop", Grants::Catalogs(&names), None),
+            &crate::store::audit::AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        crate::store::drop_check_constraints(&db.pool, "key_catalogs").await;
+        sqlx::query("UPDATE key_catalogs SET access = 'bogus-level' WHERE key_id = $1")
+            .bind(&created.id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let listed = list(&db.pool).await;
+        let by_id = record_by_id(&db.pool, &created.id).await;
+
+        crate::store::assert_decode_error(listed, "key_catalogs.access", "bogus-level");
+        crate::store::assert_decode_error(by_id, "key_catalogs.access", "bogus-level");
     }
 }

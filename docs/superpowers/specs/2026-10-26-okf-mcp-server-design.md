@@ -238,6 +238,14 @@ recomputed from the content on every write, so they can never disagree with it.
 
 ### In-memory snapshot
 
+> **Superseded in part (milestone 18, issue #695).** A catalog's snapshot is no
+> longer built for every catalog at start-up and held for the life of the process.
+> Snapshots live in a bounded, weighted cache (`catalog_cache_bytes`), load on first
+> use, and are checked against the catalog directory row on every use; overlays have
+> a byte budget (`overlay_cache_bytes`). Read
+> `docs/superpowers/specs/2026-11-18-okf-bounded-memory-design.md` (decisions 2 to 6)
+> for what ships; the description below is the shape of a snapshot, which is unchanged.
+
 Each catalog holds an `RwLock<Arc<Snapshot>>` built from its `documents` rows. A
 snapshot holds every document's parsed frontmatter, body, headings and anchors, the
 link graph (outbound and inbound), the search fields, the secret findings and, built
@@ -280,6 +288,10 @@ retries.
 The server runs one replica. It notices changes made outside it (a CLI import) through
 the catalog's `generation` counter (see "Publish"). A second replica would need the same
 check before every read, or Postgres `LISTEN`/`NOTIFY`; that is not planned.
+
+> **Corrected (M16, 2026-11-17).** Several replicas are supported with `[redis]`; see
+> `2026-11-17-okf-multi-replica-design.md`. A publish on one replica is seen on another within
+> `poll_interval`, as above. Without `[redis]`, one replica is still required.
 
 ### Crate layout
 
@@ -372,7 +384,7 @@ and a read sees the drafts only when it names the changeset. The parameters belo
 | `index` | `path`, `summary`, `section?`, `title?` | Port of `index`. Replayable |
 | `move_concept` | `old`, `new` | Port of `mv`: the concept's listing moves to the new folder (`ensure_index` for a new one) and every link to it is rewritten, keeping its style and anchor. Returns touched files and notes. The old path becomes a deletion entry. Listing and link edits in `index.md` and `log.md` replay at publish (`Unlist`, `ListBullet`, `Relink`); the concept and other linking files are free edits |
 | `split_concept` | `path`, `section`, `to`, `type?` (default `Note`; a blank one is refused, as for `create_concept`), `title?`, `description?`, `stub?`, `sources?` (`okf.py`'s `--source` ids), `by?` | Port of `split`; returns touched files and `okf.py`'s notes. The parent and the new concept are free edits; the new listing and link edits in `index.md` and `log.md` replay |
-| `delete_concept` | `path` | Removes the concept and its listing in its folder's `index.md` (a replayable `Unlist`); the concept becomes a deletion entry. Refuses with `StillLinked` while any other document links to it (`log.md` and other `index.md` files included, the folder's own listing bullet not), listing those links. Refuses `index.md`, `log.md`, the root readmes and machinery. An emptied folder keeps its `index.md`, and a note says so |
+| `delete_concept` | `path` | Removes the concept and its listing in its folder's `index.md` (a replayable `Unlist`); the concept becomes a deletion entry. Its links in `log.md` files become plain text, the link text kept (a replayable `Unlink`, issue #658), since only the `log` tool writes `log.md` and it only appends. Refuses with `StillLinked` while any other document links to it (other `index.md` files included, the folder's own listing bullet not), listing those links. Refuses `index.md`, `log.md`, the root readmes and machinery. An emptied folder keeps its `index.md`, and a note says so |
 | `publish` | `message` | See "Publish" below |
 | `discard` | `paths?` | Drops the changeset's entries: the named paths, or all of them, which also marks the changeset `discarded`; its handle is refused from then on, so new work needs `open_changeset`. Takes publish's locks in publish's order, so a write queued behind a closing discard is refused and stores nothing |
 | `revert` | `path`, `revision` | Adds the document's content at `revision` (or its deletion) to the changeset, for review and publish like any other edit. Subject to every write rule, so machinery cannot be reverted. A revert is a free edit (no replay); a revision whose content is not UTF-8 is refused, and a revived file is not executable (scripts are machinery, which revert refuses anyway). Sending a file the changeset created back to absent leaves no entry for it |
@@ -452,9 +464,10 @@ when a person really did the verifying); AGENTS.md's honesty rule still applies.
      `delete_concept` add, rename or remove an `index.md` bullet. The operations are
      `Log { date, bullet }`, `ListBullet { target, bullet, section, create_section }`,
      `CreateIndex { folder }`, `Unlist { target, bullet }` (remove the bullet listing a
-     path; with `bullet`, refuse a listing that changed since) and `Relink { redirect }`
+     path; with `bullet`, refuse a listing that changed since), `Relink { redirect }`
      (redirect the links into a moved document or section, in an `index.md` or
-     `log.md`) (`okf::ops::ReplayOp`). A move to another folder is `Unlist` on the old
+     `log.md`) and `Unlink { target }` (turn a deleted concept's links in a `log.md` into
+     their link text; issue #658) (`okf::ops::ReplayOp`). A move to another folder is `Unlist` on the old
      index and `ListBullet` on the new one. They are stored as JSON with an `op` tag and
      re-applied by `okf::ops::replay`, which shares its text edits with the ops
      themselves. Text that no operation changes keeps its bytes; text a bookkeeping
@@ -638,7 +651,7 @@ One `thiserror` enum, `OkfError`:
 | `EditMismatch { path, matches }` | `old_str` found 0 or more than 1 times |
 | `LintFailed { errors, warnings }` | Publish refused: lint errors in changed files or links into deleted paths (`errors`), with the rest as `warnings`; HTTP 422 |
 | `Conflict { files }` | Publish found documents changed since this changeset read them; `files` lists each path with its base and current revision; HTTP 409 |
-| `StillLinked { path, links }` | `delete_concept` refused: other documents link to the concept; `path` and each `links[].source` are catalog-relative with a leading `/` (`/infra/x.md`, `/hub.md`), as tool results (`touched`, `message`) and `Conflict` write them; `links` lists each (source, line). Not counted: its folder's own listing bullet, its links to itself, the root `AGENTS.md`, `CLAUDE.md` and `README.md` (as publish's link check); `log.md` and other `index.md` files count; HTTP 409 |
+| `StillLinked { path, links }` | `delete_concept` refused: other documents link to the concept; `path` and each `links[].source` are catalog-relative with a leading `/` (`/infra/x.md`, `/hub.md`), as tool results (`touched`, `message`) and `Conflict` write them; `links` lists each (source, line). Not counted: its folder's own listing bullet, its links to itself, the root `AGENTS.md`, `CLAUDE.md` and `README.md` (as publish's link check), and links from a `log.md`, which the delete turns into plain text (issue #658); other `index.md` files count; HTTP 409 |
 | `Busy` | The database aborted the request to resolve a lock conflict (`40P01`, `40001`); nothing was stored; retry (HTTP 503). The changeset store's entry writes also answer it if their changeset is no longer open, a backstop: `write::apply` locks the changeset first and refuses a closed one with `Refused` (see "Publish") |
 | `UnknownChangeset { changeset }` | No changeset with this handle that the key may use: none exists, it belongs to another key, or its catalog is out of the key's reach, all worded alike so a key cannot probe for other keys' handles; HTTP 404 |
 | `Database` | Any database failure (details logged, not returned) |
@@ -1069,7 +1082,8 @@ Deviations planned:
   every other document they are free edits.
 - `delete_concept` refuses with a new error, `StillLinked { path, links }` (HTTP 409);
   links from `log.md` and other `index.md` files count, the folder's own listing does
-  not; an emptied folder keeps its `index.md`.
+  not; an emptied folder keeps its `index.md`. (Issue #658 later stopped `log.md` links from refusing:
+  the delete turns them into plain text with a replayable `Unlink`.)
 - `split_concept`'s `type` defaults to `Note`, and its `sources` is `okf.py`'s
   `--source`.
 - `history` stays per path: a move ends the old path's history with `delete` and
@@ -1332,4 +1346,5 @@ Raised in M2 reviews and filed as issues (label `milestone-3`):
 - An automated mirror of a catalog to git. Export on request covers it.
 - Admin MCP tools (catalog and key management stay subcommands and routes).
 - MCP resources and prompts (tools only for now).
-- More than one replica.
+- More than one replica. (Corrected, M16, 2026-11-17: several replicas are supported with
+  `[redis]`; see `2026-11-17-okf-multi-replica-design.md`.)

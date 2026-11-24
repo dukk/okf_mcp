@@ -6,10 +6,14 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
+use crate::labels::DisplayName;
+use crate::okf::ops::replay::ROOT_HEADING;
 use crate::okf::ops::starter_files;
 use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
 use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
+use crate::store::ceiling::MemberAccess;
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::store::teams;
 
@@ -18,7 +22,19 @@ pub const STARTER_MESSAGE: &str = "create catalog";
 
 /// The first key of every catalog lock (`okf` in ASCII), separating this
 /// crate's advisory locks from anyone else's on a shared database.
-const CATALOG_LOCK_NAMESPACE: i32 = 0x006f_6b66;
+pub(crate) const CATALOG_LOCK_NAMESPACE: i32 = 0x006f_6b66;
+
+/// A catalog's published generation as one committed write left it: what
+/// a replica announces so the others refresh that catalog's snapshot
+/// (issue #659).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CatalogGeneration {
+    /// The catalog's id (`catalogs.id`), never reused, so an announcement
+    /// cannot reach a catalog created again under the same name.
+    pub catalog_id: i64,
+    /// The generation the write committed.
+    pub generation: i64,
+}
 
 /// A catalog row.
 // `derive(sqlx::FromRow)` maps a result row's columns onto the fields by
@@ -29,6 +45,8 @@ pub struct Catalog {
     pub id: i64,
     /// Unique name, `[a-z0-9-]+`.
     pub name: String,
+    /// Its display name; empty when unset.
+    pub display_name: String,
     /// Free text.
     pub description: String,
     /// Bumped by every publish and import.
@@ -44,7 +62,7 @@ pub struct Catalog {
 // each query's tail at compile time; see `select_users!` in users.rs).
 macro_rules! select_catalogs {
     () => {
-        "SELECT c.id, c.name, c.description, c.generation, c.created_at, \
+        "SELECT c.id, c.name, c.display_name, c.description, c.generation, c.created_at, \
                 (SELECT t.name FROM teams t WHERE t.id = c.owner_team_id) AS owner_team \
          FROM catalogs c"
     };
@@ -70,6 +88,9 @@ pub fn is_valid_name(name: &str) -> bool {
 pub struct NewCatalog<'a> {
     /// The new catalog's name, `[a-z0-9-]+`.
     pub name: &'a str,
+    /// Its display name (empty when unset), validated by
+    /// [`DisplayName::parse`].
+    pub display_name: &'a DisplayName,
     /// Free text.
     pub description: &'a str,
     /// The name of the team that owns it.
@@ -105,6 +126,7 @@ pub async fn create(
 ) -> Result<Catalog, OkfError> {
     let NewCatalog {
         name,
+        display_name,
         description,
         owner_team,
     } = *new;
@@ -131,15 +153,17 @@ pub async fn create(
     // new row, but the owner's name is the one just resolved: hand it back
     // as `$5`.
     let inserted = sqlx::query_as::<_, Catalog>(
-        "INSERT INTO catalogs (name, description, created_at, owner_team_id) \
-         VALUES ($1, $2, $3, $4) \
-         RETURNING id, name, description, generation, created_at, $5::text AS owner_team",
+        "INSERT INTO catalogs (name, description, created_at, owner_team_id, display_name) \
+         VALUES ($1, $2, $3, $4, $6) \
+         RETURNING id, name, display_name, description, generation, created_at, \
+                   $5::text AS owner_team",
     )
     .bind(name)
     .bind(description)
     .bind(now)
     .bind(&team_id)
     .bind(owner_team)
+    .bind(display_name.as_str())
     // `&mut *tx` borrows the transaction's connection: the query runs inside it.
     .fetch_one(&mut *tx)
     .await;
@@ -165,7 +189,17 @@ pub async fn create(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(
+        &mut tx,
+        &[
+            Invalidation::CatalogMeta {
+                id: catalog.id,
+                name: catalog.name.clone(),
+            },
+            Invalidation::Team { id: team_id },
+        ],
+    )
+    .await?;
     tx.commit().await?;
     Ok(catalog)
 }
@@ -174,7 +208,8 @@ pub async fn create(
 ///
 /// # Arguments
 /// * `conn` - the creating transaction's connection.
-/// * `catalog` - the new row (its name and description fill the index).
+/// * `catalog` - the new row (its display name, else "Catalog", is the
+///   index's heading, and its description the paragraph).
 /// * `actor` - recorded as `updated_by` and the revisions' `actor`.
 /// * `now` - the creation time.
 ///
@@ -187,7 +222,12 @@ async fn write_starter_files(
     actor: &str,
     now: DateTime<Utc>,
 ) -> Result<(), OkfError> {
-    let files = starter_files(&catalog.name, &catalog.description, now);
+    let heading = if catalog.display_name.is_empty() {
+        ROOT_HEADING
+    } else {
+        &catalog.display_name
+    };
+    let files = starter_files(heading, &catalog.description, now);
     // The derived columns (kind, title) come from a snapshot, as an
     // import's do; two small files, so building it inline is cheap.
     let workspace =
@@ -262,25 +302,26 @@ pub async fn set_owner(
     )
     .await?;
     let team_id = teams::id_of(&mut tx, team).await?;
-    // As in `update_description`: the subquery reads the row as it was
+    // As in `update_details`: the subquery reads the row as it was
     // before the `UPDATE`, under its row lock, so this returns the owner it
     // replaced even with two changes racing. The outer `Option` is "no such
     // catalog"; the old owner's id and name are `None` for a catalog that
     // had none.
-    let previous: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+    let previous: Option<(i64, Option<String>, Option<String>)> = sqlx::query_as(
         "UPDATE catalogs c SET owner_team_id = $2 \
          FROM (SELECT id, owner_team_id FROM catalogs WHERE name = $1 FOR UPDATE) old \
          WHERE c.id = old.id \
-         RETURNING old.owner_team_id, \
+         RETURNING c.id, old.owner_team_id, \
                    (SELECT t.name FROM teams t WHERE t.id = old.owner_team_id)",
     )
     .bind(name)
     .bind(&team_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (previous_id, previous) = previous.ok_or_else(|| OkfError::CatalogNotSelected {
-        catalog: name.to_string(),
-    })?;
+    let (catalog_id, previous_id, previous) =
+        previous.ok_or_else(|| OkfError::CatalogNotSelected {
+            catalog: name.to_string(),
+        })?;
     if previous_id.as_deref() == Some(team_id.as_str()) {
         // Dropping `tx` rolls back the `UPDATE`, which wrote the same value.
         return Ok(previous);
@@ -306,40 +347,101 @@ pub async fn set_owner(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    // The catalog, and both owners: each team's catalogs changed.
+    let mut invalidations = vec![Invalidation::CatalogMeta {
+        id: catalog_id,
+        name: name.to_string(),
+    }];
+    invalidations.extend(previous_id.map(|id| Invalidation::Team { id }));
+    invalidations.push(Invalidation::Team { id: team_id });
+    invalidate(&mut tx, &invalidations).await?;
     tx.commit().await?;
     Ok(previous)
 }
 
-/// Replaces a catalog's description, records
-/// `catalog.description_changed`, and bumps the administrative generation,
-/// in one transaction. The catalog's `generation` is left alone: its
-/// content did not change, so its snapshot is not rebuilt. The same text
-/// again changes nothing, so it writes and records nothing.
+/// A change of a catalog's display name and/or description:
+/// [`update_details`]' input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetailsChange<'a> {
+    /// The catalog's name.
+    pub catalog: &'a str,
+    /// The new display name, or `None` to leave it.
+    pub display_name: Option<&'a DisplayName>,
+    /// The new description (empty is allowed, as for `create`), or `None`
+    /// to leave it.
+    pub description: Option<&'a str>,
+    /// As [`MaintenanceChange::owner`]: `Some(users.id)` when the caller may
+    /// make the change only as an owner of the catalog's owner team.
+    pub owner: Option<&'a str>,
+}
+
+/// What a catalog's details were before [`update_details`].
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct Details {
+    /// Its display name; empty when unset.
+    pub display_name: String,
+    /// Its description.
+    pub description: String,
+}
+
+/// Replaces a catalog's display name and/or description, records
+/// `catalog.display_name_changed` and `catalog.description_changed` for
+/// each field that changed (its new length in characters, never the text),
+/// and bumps the administrative generation (the key cache's labels read
+/// both), in one transaction. The catalog's `generation` is left alone: its
+/// content did not change, so its snapshot is not rebuilt. A field given
+/// its current value is no change: when nothing changes, nothing is
+/// written or recorded.
+///
+/// Lock order (`tools/agentic/lessons.md`), as [`set_maintenance`]'s: the
+/// users the entries resolve ([`audit::lock_people`]), then, for an owner,
+/// its membership row (`lock_owner`), then the catalog row, then
+/// `server_state`.
 ///
 /// # Arguments
 /// * `pool` - the database.
-/// * `name` - the catalog's name.
-/// * `description` - the new free text (empty is allowed, as for `create`).
+/// * `change` - the catalog, the fields to set, and the owner to check, if any.
 /// * `actor` - who, for the audit log.
 /// * `now` - the server clock.
 ///
 /// # Returns
-/// The description it had before.
+/// The display name and description it had before.
 ///
 /// # Errors
-/// [`OkfError::CatalogNotSelected`] if there is no such catalog (a
-/// malformed name included); [`OkfError::Database`] otherwise, a failed
-/// audit write included.
-#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.update_description"))]
-pub async fn update_description(
+/// [`OkfError::CatalogNotSelected`] for an unknown or malformed catalog
+/// without an owner check; [`OkfError::Forbidden`] when the owner check
+/// fails (an unknown catalog included, so it reveals nothing);
+/// [`OkfError::Database`] otherwise, a failed audit write included.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.update_details"))]
+pub async fn update_details(
     pool: &PgPool,
-    name: &str,
-    description: &str,
+    change: &DetailsChange<'_>,
     actor: &AuditActor,
     now: DateTime<Utc>,
-) -> Result<String, OkfError> {
-    check_name(name)?;
+) -> Result<Details, OkfError> {
+    let DetailsChange {
+        catalog: name,
+        display_name,
+        description,
+        owner,
+    } = *change;
+    let not_owner = || OkfError::Forbidden {
+        reason: format!(
+            "this needs admin on catalog {name:?}, or an owner of its team signed in to the \
+             console"
+        ),
+    };
+    // The refusal for "no such catalog": an owner learns nothing from it.
+    let not_found = || match owner {
+        Some(_) => not_owner(),
+        None => OkfError::CatalogNotSelected {
+            catalog: name.to_string(),
+        },
+    };
+    if !is_valid_name(name) {
+        // A NUL would be a database error if it were bound.
+        return Err(not_found());
+    }
     let mut tx = pool.begin().await?;
     audit::lock_people(
         &mut tx,
@@ -350,41 +452,163 @@ pub async fn update_description(
         },
     )
     .await?;
-    // A subquery reads the row as it was before the `UPDATE` (one
-    // statement sees one snapshot), so this returns the old text; the row
-    // lock the `UPDATE` takes keeps two updates from both reading the same.
-    let previous: Option<(i64, String)> = sqlx::query_as(
-        "UPDATE catalogs c SET description = $2 \
-         FROM (SELECT id, description FROM catalogs WHERE name = $1 FOR UPDATE) old \
-         WHERE c.id = old.id RETURNING c.id, old.description",
+    let owner_team = match owner {
+        Some(user_id) => Some(lock_owner(&mut tx, name, user_id, not_owner).await?),
+        None => None,
+    };
+    // `DisplayName::as_str` borrows the text; `Option::map` applies it only
+    // to `Some`, and a `None` binds as SQL NULL, which `COALESCE` turns into
+    // the column's current value. The subquery reads the row as it was
+    // before the `UPDATE` (one statement sees one snapshot), under its row
+    // lock, so this returns the old values even with two changes racing.
+    // `FOR NO KEY UPDATE`: neither column is a key, so foreign-key checks
+    // (`FOR KEY SHARE`) on the catalog need not wait for it.
+    let row: Option<(i64, Option<String>, String, String)> = sqlx::query_as(
+        "UPDATE catalogs c SET display_name = COALESCE($2, c.display_name), \
+                               description = COALESCE($3, c.description) \
+         FROM (SELECT id, owner_team_id, display_name, description FROM catalogs \
+               WHERE name = $1 FOR NO KEY UPDATE) old \
+         WHERE c.id = old.id \
+         RETURNING c.id, old.owner_team_id, old.display_name, old.description",
     )
     .bind(name)
+    .bind(display_name.map(DisplayName::as_str))
     .bind(description)
     .fetch_optional(&mut *tx)
     .await?;
-    let (catalog_id, previous) = previous.ok_or_else(|| OkfError::CatalogNotSelected {
-        catalog: name.to_string(),
-    })?;
-    if previous == description {
-        // Dropping `tx` rolls back the `UPDATE`, which wrote the same text.
+    let (catalog_id, team, previous_display_name, previous_description) =
+        row.ok_or_else(not_found)?;
+    // Under the row lock the owner team is fixed: a catalog moved to
+    // another team after the membership was read is refused.
+    if owner_team.is_some() && owner_team != team {
+        return Err(not_owner());
+    }
+    let previous = Details {
+        display_name: previous_display_name,
+        description: previous_description,
+    };
+    // Each field that changed: its action and its new text. `filter` keeps
+    // a `Some` only when the closure answers `true`.
+    let changed = [
+        (
+            Action::CatalogDisplayNameChanged,
+            display_name
+                .map(DisplayName::as_str)
+                .filter(|new| *new != previous.display_name),
+        ),
+        (
+            Action::CatalogDescriptionChanged,
+            description.filter(|new| *new != previous.description),
+        ),
+    ];
+    if changed.iter().all(|(_, text)| text.is_none()) {
+        // Dropping `tx` rolls back the `UPDATE`, which wrote the same values.
         return Ok(previous);
     }
-    record_catalog(
+    for (action, text) in changed {
+        // `let .. else`: skip a field that did not change.
+        let Some(text) = text else { continue };
+        record_catalog(
+            &mut tx,
+            actor,
+            CatalogEvent {
+                action,
+                catalog_id,
+                catalog: name,
+                // The length in characters, never the text.
+                details: serde_json::json!({"length": text.chars().count()}),
+            },
+            now,
+        )
+        .await?;
+    }
+    invalidate(
         &mut tx,
-        actor,
-        CatalogEvent {
-            action: Action::CatalogDescriptionChanged,
-            catalog_id,
-            catalog: name,
-            // The length in characters, never the text.
-            details: serde_json::json!({"length": description.chars().count()}),
-        },
-        now,
+        &[Invalidation::CatalogMeta {
+            id: catalog_id,
+            name: name.to_string(),
+        }],
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
     tx.commit().await?;
     Ok(previous)
+}
+
+/// Holds `user_id`'s owner membership of catalog `name`'s owner team for the
+/// rest of the transaction (`FOR SHARE OF m`), so a concurrent removal or
+/// demotion waits for the change rather than racing it. The caller still
+/// checks, under the catalog's row lock, that the catalog's owner team is
+/// the one this returns (a catalog moved meanwhile).
+///
+/// # Arguments
+/// * `conn` - the change's transaction.
+/// * `name` - the catalog (a valid name; the caller checks it).
+/// * `user_id` - `users.id` of the would-be owner.
+/// * `not_owner` - builds the refusal to return.
+///
+/// # Returns
+/// The owner team's id.
+///
+/// # Errors
+/// `not_owner()` when the user is no owner of the catalog's team (an
+/// unknown catalog included); [`OkfError::Database`].
+// `impl Fn() -> OkfError` takes any closure that builds the error, like
+// passing a zero-argument callable in Python; it runs only on a refusal.
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.lock_owner"))]
+pub(crate) async fn lock_owner(
+    conn: &mut PgConnection,
+    name: &str,
+    user_id: &str,
+    not_owner: impl Fn() -> OkfError,
+) -> Result<String, OkfError> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT m.team_id FROM catalogs c \
+         JOIN team_members m ON m.team_id = c.owner_team_id \
+         WHERE c.name = $1 AND m.user_id = $2 AND m.role = 'owner' FOR SHARE OF m",
+    )
+    .bind(name)
+    .bind(user_id)
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or_else(not_owner)
+}
+
+/// As [`lock_owner`], but only for a shared team: an owner of a personal
+/// team gets nothing, so it cannot share its personal catalogs (issue #352).
+/// Used by the member-access and entitlement controls, not by the
+/// maintenance switch or the details editor, which keep their reach.
+///
+/// # Arguments
+/// * `conn` - the change's transaction.
+/// * `name` - the catalog (a valid name; the caller checks it).
+/// * `user_id` - `users.id` of the would-be owner.
+/// * `not_owner` - builds the refusal to return.
+///
+/// # Returns
+/// The owner team's id.
+///
+/// # Errors
+/// `not_owner()` when the user is no owner of the catalog's team, the team
+/// is personal, or the catalog does not exist; [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.lock_shared_team_owner"))]
+pub(crate) async fn lock_shared_team_owner(
+    conn: &mut PgConnection,
+    name: &str,
+    user_id: &str,
+    not_owner: impl Fn() -> OkfError,
+) -> Result<String, OkfError> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT m.team_id FROM catalogs c \
+         JOIN teams t ON t.id = c.owner_team_id \
+         JOIN team_members m ON m.team_id = t.id \
+         WHERE c.name = $1 AND m.user_id = $2 AND m.role = 'owner' \
+           AND t.personal_of IS NULL FOR SHARE OF m",
+    )
+    .bind(name)
+    .bind(user_id)
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or_else(not_owner)
 }
 
 /// A catalog's maintenance flag, `on` or `off`, as the CLI, the REST body
@@ -531,21 +755,10 @@ pub async fn set_maintenance(
         },
     )
     .await?;
-    // `FOR SHARE OF m` holds the owner's membership row, so a concurrent
+    // `lock_owner` holds the owner's membership row, so a concurrent
     // removal or demotion waits for this change rather than racing it.
     let owner_team = match owner {
-        Some(user_id) => Some(
-            sqlx::query_scalar::<_, String>(
-                "SELECT m.team_id FROM catalogs c \
-                 JOIN team_members m ON m.team_id = c.owner_team_id \
-                 WHERE c.name = $1 AND m.user_id = $2 AND m.role = 'owner' FOR SHARE OF m",
-            )
-            .bind(name)
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or_else(not_owner)?,
-        ),
+        Some(user_id) => Some(lock_owner(&mut tx, name, user_id, not_owner).await?),
         None => None,
     };
     // The subquery reads the row before the `UPDATE`, so this returns the
@@ -591,7 +804,14 @@ pub async fn set_maintenance(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(
+        &mut tx,
+        &[Invalidation::CatalogMeta {
+            id: catalog_id,
+            name: name.to_string(),
+        }],
+    )
+    .await?;
     tx.commit().await?;
     Ok(previous)
 }
@@ -638,6 +858,333 @@ pub async fn find<'e>(executor: impl PgExecutor<'e>, name: &str) -> Result<Catal
             catalog: name.to_string(),
         })
 }
+
+/// An owner team's suspension, as the directory holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuspendedRow {
+    /// The owner team's name.
+    pub team: String,
+    /// Its notice, if any.
+    pub notice: Option<String>,
+    /// The owner team's label, so a refusal names the team without a label
+    /// lookup (M18 Task 12). The directory drops the row when the team's
+    /// label or its personal owner's can change.
+    pub team_label: String,
+}
+
+/// A catalog's row with its access facts (M18 spec Decisions 6 and 9): what a
+/// request needs to know about a catalog without reading its content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogRow {
+    /// `catalogs.id`, never reused.
+    pub id: i64,
+    /// Unique name, `[a-z0-9-]+`.
+    pub name: String,
+    /// Its display name; empty when unset.
+    pub display_name: String,
+    /// Free text.
+    pub description: String,
+    /// Bumped by every publish and import.
+    pub generation: i64,
+    /// The owner team's name.
+    pub owner_team: Option<String>,
+    /// The owner team's id (`teams.id`).
+    pub owner_team_id: Option<String>,
+    /// The owner team's suspension, if it is suspended.
+    pub suspended: Option<SuspendedRow>,
+    /// `NOT catalogs.maintenance`.
+    pub maintenance_off: bool,
+    /// The owner team's `audit_teams.id` (the gates' `CatalogScope::team`).
+    pub audit_team: Option<i64>,
+    /// What members of the owner team reach through self-issued credentials
+    /// and console sessions: one half of every user's ceiling on this
+    /// catalog ([`crate::store::ceiling::level_on`], issue #728).
+    pub member_access: MemberAccess,
+}
+
+/// [`CatalogRow`] as the query returns it: the suspension as two columns.
+#[derive(sqlx::FromRow)]
+struct CatalogRowColumns {
+    id: i64,
+    name: String,
+    display_name: String,
+    description: String,
+    generation: i64,
+    owner_team: Option<String>,
+    owner_team_id: Option<String>,
+    suspended: bool,
+    suspension_notice: Option<String>,
+    team_display_name: Option<String>,
+    team_personal: bool,
+    team_owner_display_name: Option<String>,
+    team_owner_email: Option<String>,
+    maintenance_off: bool,
+    audit_team: Option<i64>,
+    member_access: String,
+}
+
+impl From<CatalogRowColumns> for CatalogRow {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    fn from(columns: CatalogRowColumns) -> Self {
+        // A catalog is suspended when its owner team is.
+        let suspended = columns
+            .suspended
+            .then(|| columns.owner_team.clone())
+            .flatten()
+            .map(|team| {
+                let owner = columns.team_personal.then(|| {
+                    crate::labels::user_label(
+                        columns
+                            .team_owner_display_name
+                            .as_deref()
+                            .unwrap_or_default(),
+                        columns.team_owner_email.as_deref(),
+                    )
+                });
+                SuspendedRow {
+                    team_label: crate::labels::team_label(
+                        columns.team_display_name.as_deref().unwrap_or_default(),
+                        owner.as_deref(),
+                    ),
+                    team,
+                    notice: columns.suspension_notice,
+                }
+            });
+        Self {
+            id: columns.id,
+            name: columns.name,
+            display_name: columns.display_name,
+            description: columns.description,
+            generation: columns.generation,
+            owner_team: columns.owner_team,
+            owner_team_id: columns.owner_team_id,
+            suspended,
+            maintenance_off: columns.maintenance_off,
+            audit_team: columns.audit_team,
+            // The schema's CHECK allows only the three spellings; anything
+            // else would reach nothing through the team, never more.
+            member_access: MemberAccess::parse(&columns.member_access)
+                .unwrap_or(MemberAccess::None),
+        }
+    }
+}
+
+// The directory's SELECT, shared by the four queries below. The owner,
+// suspension, maintenance and audit-team columns are what every access
+// check reads about the catalog it acts on (M18 spec Decision 9).
+macro_rules! select_catalog_rows {
+    () => {
+        "SELECT c.id, c.name, c.display_name, c.description, c.generation, \
+                t.name AS owner_team, c.owner_team_id, \
+                (t.suspended_at IS NOT NULL) AS suspended, t.suspension_notice, \
+                t.display_name AS team_display_name, \
+                (t.personal_of IS NOT NULL) AS team_personal, \
+                pu.display_name AS team_owner_display_name, \
+                pu.email::text AS team_owner_email, \
+                NOT c.maintenance AS maintenance_off, a.id AS audit_team, \
+                c.member_access \
+         FROM catalogs c \
+         LEFT JOIN teams t ON t.id = c.owner_team_id \
+         LEFT JOIN users pu ON pu.id = t.personal_of \
+         LEFT JOIN audit_teams a ON a.team_id = c.owner_team_id"
+    };
+}
+
+/// The row of the catalog called `name`, with its access facts.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `name` - the catalog's name; a malformed one (which Postgres might
+///   refuse, such as one with a NUL) is the same as an unknown one.
+///
+/// # Returns
+/// Its row, or `None` if there is no such catalog.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.row_by_name"))]
+pub async fn row_by_name<'e>(
+    executor: impl PgExecutor<'e>,
+    name: &str,
+) -> Result<Option<CatalogRow>, OkfError> {
+    if !is_valid_name(name) {
+        return Ok(None);
+    }
+    let row = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE c.name = $1"
+    ))
+    .bind(name)
+    .fetch_optional(executor)
+    .await?;
+    Ok(row.map(CatalogRow::from))
+}
+
+/// The row of the catalog with this `catalogs.id`, with its access facts:
+/// for a caller that holds an id (a changeset's catalog), so it reaches that
+/// incarnation and never another catalog created since under the name.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `id` - the catalog's id.
+///
+/// # Returns
+/// Its row, or `None` if there is no catalog with that id (it was deleted).
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.row_by_id"))]
+pub async fn row_by_id<'e>(
+    executor: impl PgExecutor<'e>,
+    id: i64,
+) -> Result<Option<CatalogRow>, OkfError> {
+    let row =
+        sqlx::query_as::<_, CatalogRowColumns>(concat!(select_catalog_rows!(), " WHERE c.id = $1"))
+            .bind(id)
+            .fetch_optional(executor)
+            .await?;
+    Ok(row.map(CatalogRow::from))
+}
+
+/// The rows of the catalogs called `names`, in one query.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `names` - catalog names; malformed ones and ones that do not exist are
+///   left out of the answer.
+///
+/// # Returns
+/// The rows found, ordered by name.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.rows_by_names"))]
+pub async fn rows_by_names<'e>(
+    executor: impl PgExecutor<'e>,
+    names: &[String],
+) -> Result<Vec<CatalogRow>, OkfError> {
+    // Drop what Postgres could not take (a NUL) or cannot match.
+    let valid: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|name| is_valid_name(name))
+        .collect();
+    if valid.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE c.name = ANY($1) ORDER BY c.name"
+    ))
+    .bind(valid)
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(CatalogRow::from).collect())
+}
+
+/// One page of catalog rows, ordered by name.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `after` - the last name of the previous page (exclusive); `None` for
+///   the first page.
+/// * `limit` - the most rows to return.
+///
+/// # Returns
+/// Up to `limit` rows, ordered by name.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.page"))]
+pub async fn page<'e>(
+    executor: impl PgExecutor<'e>,
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<CatalogRow>, OkfError> {
+    // A cursor Postgres cannot take (a NUL) can match nothing, so it is the
+    // end of the list.
+    if after.is_some_and(|name| name.contains('\0')) {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE ($1::text IS NULL OR c.name > $1) ORDER BY c.name LIMIT $2"
+    ))
+    .bind(after)
+    .bind(limit)
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(CatalogRow::from).collect())
+}
+
+/// One page of the catalogs a user's ceiling reaches, ordered by name
+/// (issue #728): those owned by one of `teams` with a `member_access` other
+/// than `none`, and those in `entitled`. Each team's catalogs are read from
+/// the `catalogs_member_reach` index (owner team, name) one page at a time,
+/// so the cost is bounded by the teams, the entitlements and the page,
+/// never by how many catalogs a team owns.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction.
+/// * `teams` - the user's `teams.id`s.
+/// * `entitled` - the `catalogs.id`s the user is entitled to.
+/// * `after` - the last name of the previous page (exclusive); `None` for
+///   the first page.
+/// * `limit` - the most rows to return.
+///
+/// # Returns
+/// Up to `limit` rows, ordered by name.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.ceiling_page"))]
+pub async fn ceiling_page<'e>(
+    executor: impl PgExecutor<'e>,
+    teams: &[String],
+    entitled: &[i64],
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<CatalogRow>, OkfError> {
+    // As in `page`: a cursor Postgres cannot take matches nothing.
+    if after.is_some_and(|name| name.contains('\0')) || (teams.is_empty() && entitled.is_empty()) {
+        return Ok(Vec::new());
+    }
+    // `LATERAL` runs the inner query once per team (like a loop over
+    // `unnest`), each an index range scan stopping after `limit` rows.
+    let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE c.id IN ( \
+              SELECT owned.id FROM unnest($1::text[]) AS team (id) \
+              CROSS JOIN LATERAL ( \
+                  SELECT i.id FROM catalogs i \
+                  WHERE i.owner_team_id = team.id AND i.member_access <> 'none' \
+                    AND ($3::text IS NULL OR i.name > $3) \
+                  ORDER BY i.name LIMIT $4) owned \
+              UNION \
+              (SELECT i.id FROM catalogs i \
+               WHERE i.id = ANY($2) AND ($3::text IS NULL OR i.name > $3) \
+               ORDER BY i.name LIMIT $4)) \
+          ORDER BY c.name LIMIT $4"
+    ))
+    .bind(teams)
+    .bind(entitled)
+    .bind(after)
+    .bind(limit)
+    .fetch_all(executor)
+    .await?;
+    Ok(rows.into_iter().map(CatalogRow::from).collect())
+}
+
+// Its own file: the directory's queries are tested away from `tests` below.
+#[cfg(test)]
+#[path = "catalogs_rows_tests.rs"]
+mod rows_tests;
 
 /// Deletes a catalog with its documents, history, changesets and grants
 /// (cascading foreign keys), under the catalog's lock, and bumps the
@@ -691,12 +1238,12 @@ pub async fn delete(
     lock(&mut tx, catalog.id).await?;
     // A delete that waited on the lock may find the row already gone. The
     // generation is the one no publish can move any more.
-    let still_there: Option<i64> =
-        sqlx::query_scalar("SELECT generation FROM catalogs WHERE id = $1 FOR UPDATE")
+    let still_there: Option<(i64, Option<String>)> =
+        sqlx::query_as("SELECT generation, owner_team_id FROM catalogs WHERE id = $1 FOR UPDATE")
             .bind(catalog.id)
             .fetch_optional(&mut *tx)
             .await?;
-    let Some(generation) = still_there else {
+    let Some((generation, owner_team_id)) = still_there else {
         return Err(OkfError::CatalogNotSelected {
             catalog: name.to_string(),
         });
@@ -743,7 +1290,13 @@ pub async fn delete(
         .bind(catalog.id)
         .execute(&mut *tx)
         .await?;
-    bump_admin_generation(&mut tx).await?;
+    // The catalog, and its owner's list of catalogs.
+    let mut invalidations = vec![Invalidation::CatalogMeta {
+        id: catalog.id,
+        name: catalog.name,
+    }];
+    invalidations.extend(owner_team_id.map(|id| Invalidation::Team { id }));
+    invalidate(&mut tx, &invalidations).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -889,21 +1442,6 @@ pub fn check_incarnation(catalog: &str, found: i64, expected: Option<i64>) -> Re
     }
 }
 
-/// Bumps `server_state.admin_generation` inside the caller's transaction.
-///
-/// # Arguments
-/// * `conn` - the transaction's connection (pass `&mut tx`).
-///
-/// # Errors
-/// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.bump_admin_generation"))]
-pub(crate) async fn bump_admin_generation(conn: &mut PgConnection) -> Result<(), OkfError> {
-    sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
-        .execute(&mut *conn)
-        .await?;
-    Ok(())
-}
-
 /// The current administrative generation (design "Noticing changes made
 /// outside the server").
 ///
@@ -962,6 +1500,100 @@ pub(crate) mod tests {
         Utc.with_ymd_and_hms(2026, 11, 2, 12, 0, 0).unwrap()
     }
 
+    /// [`update_details`] of the description alone, with no owner check:
+    /// what `update_description` was before M17.
+    ///
+    /// # Returns
+    /// The description before.
+    async fn describe(
+        pool: &PgPool,
+        name: &str,
+        description: &str,
+        actor: &AuditActor,
+        now: DateTime<Utc>,
+    ) -> Result<String, OkfError> {
+        let change = DetailsChange {
+            catalog: name,
+            display_name: None,
+            description: Some(description),
+            owner: None,
+        };
+        update_details(pool, &change, actor, now)
+            .await
+            .map(|previous| previous.description)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_stores_the_display_name_and_find_reads_it() {
+        // Arrange
+        let db = test_db().await;
+        let display = DisplayName::parse("Work notes").unwrap();
+
+        // Act
+        let row = create(
+            &db.pool,
+            &NewCatalog {
+                name: "m-0000000000000001",
+                display_name: &display,
+                description: "",
+                owner_team: TEST_TEAM,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        // Assert: both the `RETURNING` row and a later read carry it.
+        assert_eq!(row.display_name, "Work notes");
+        let found = find(&db.pool, "m-0000000000000001").await.unwrap();
+        assert_eq!(found.display_name, "Work notes");
+        let listed = list(&db.pool).await.unwrap();
+        assert_eq!(listed[0].display_name, "Work notes");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_database_refuses_an_over_long_display_name_on_every_table() {
+        // Arrange: a user and its personal team (the fixture), and a catalog.
+        let db = test_db().await;
+        create(
+            &db.pool,
+            &NewCatalog {
+                name: "pg",
+                display_name: &DisplayName::default(),
+                description: "",
+                owner_team: TEST_TEAM,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        // `AssertSqlSafe`: `table` is one of the literals below.
+        for table in ["users", "teams", "catalogs"] {
+            // Act and assert: 80 characters fit (`char_length` counts
+            // characters, so 80 two-byte ones do too); 81 are refused.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {table} SET display_name = repeat('\u{e9}', 80)"
+            )))
+            .execute(&db.pool)
+            .await
+            .unwrap_or_else(|error| panic!("{table}: 80 characters should fit: {error}"));
+            let refused = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {table} SET display_name = repeat('x', 81)"
+            )))
+            .execute(&db.pool)
+            .await;
+            let error = refused.expect_err("the CHECK should refuse 81 characters");
+            assert_eq!(
+                error.as_database_error().and_then(|e| e.constraint()),
+                Some(format!("{table}_display_name_length").as_str()),
+                "{table}"
+            );
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn create_list_and_find() {
         let db = test_db().await;
@@ -972,6 +1604,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "pgrace's catalog",
                 owner_team: TEST_TEAM,
             },
@@ -984,6 +1617,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "aa-work",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1013,6 +1647,42 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_catalogs_heading_is_its_display_name_else_catalog() {
+        let db = test_db().await;
+        let named = DisplayName::parse("Work notes").unwrap();
+        let mut headings = Vec::new();
+        for (name, display_name) in [("named", &named), ("plain", &DisplayName::default())] {
+            let catalog = create(
+                &db.pool,
+                &NewCatalog {
+                    name,
+                    display_name,
+                    description: "About it.",
+                    owner_team: TEST_TEAM,
+                },
+                &AuditActor::cli(),
+                now(),
+            )
+            .await
+            .unwrap();
+            let rows = documents::published(&db.pool, catalog.id).await.unwrap();
+            let index = rows.iter().find(|row| row.path == "index.md").unwrap();
+            headings.push(String::from_utf8(index.content.clone()).unwrap());
+        }
+
+        assert!(
+            headings[0].contains("# Work notes\n\nAbout it.\n"),
+            "{}",
+            headings[0]
+        );
+        assert!(
+            headings[1].contains("# Catalog\n\nAbout it.\n"),
+            "{}",
+            headings[1]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_new_catalog_holds_its_starter_files_at_generation_0() {
         let db = test_db().await;
 
@@ -1020,6 +1690,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "pgrace's catalog",
                 owner_team: TEST_TEAM,
             },
@@ -1034,7 +1705,7 @@ pub(crate) mod tests {
             .iter()
             .map(|row| (row.path.as_str(), row.content.as_slice(), row.revision))
             .collect();
-        let starter = starter_files("pg", "pgrace's catalog", now());
+        let starter = starter_files("Catalog", "pgrace's catalog", now());
         assert_eq!(
             stored,
             [
@@ -1042,7 +1713,7 @@ pub(crate) mod tests {
                 ("log.md", starter[1].1.as_bytes(), 1),
             ]
         );
-        assert!(starter[0].1.contains("# pg\n\npgrace's catalog\n"));
+        assert!(starter[0].1.contains("# Catalog\n\npgrace's catalog\n"));
         assert_eq!(pg.generation, 0);
         // The derived columns are filled in, as an import's are.
         let kinds: Vec<(String, Option<String>)> =
@@ -1081,6 +1752,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1104,6 +1776,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: "nobody",
             },
@@ -1125,7 +1798,7 @@ pub(crate) mod tests {
         let db = test_db().await;
         let alice = crate::store::users::NewUser {
             name: "alice",
-            display_name: "",
+            display_name: &DisplayName::default(),
         };
         crate::store::users::create(&db.pool, &alice, &AuditActor::cli(), now())
             .await
@@ -1134,6 +1807,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1193,6 +1867,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1223,7 +1898,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn update_description_replaces_it_and_returns_the_old_text() {
+    async fn update_details_replaces_the_description_and_returns_the_old_text() {
         let db = test_db().await;
         // Read first: the fixture user already bumped the generation.
         let start = admin_generation(&db.pool).await.unwrap();
@@ -1231,6 +1906,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "copy",
                 owner_team: TEST_TEAM,
             },
@@ -1240,7 +1916,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let previous = update_description(
+        let previous = describe(
             &db.pool,
             "pg",
             "source of truth",
@@ -1249,7 +1925,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        let cleared = update_description(&db.pool, "pg", "", &AuditActor::cli(), Utc::now())
+        let cleared = describe(&db.pool, "pg", "", &AuditActor::cli(), Utc::now())
             .await
             .unwrap();
 
@@ -1272,6 +1948,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "start",
                 owner_team: TEST_TEAM,
             },
@@ -1289,7 +1966,7 @@ pub(crate) mod tests {
         let spawn_update = |text: &'static str| {
             let pool = db.pool.clone();
             tokio::spawn(async move {
-                update_description(&pool, "pg", text, &AuditActor::cli(), Utc::now()).await
+                describe(&pool, "pg", text, &AuditActor::cli(), Utc::now()).await
             })
         };
         let first = spawn_update("one");
@@ -1313,13 +1990,12 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn update_description_refuses_an_unknown_catalog() {
+    async fn update_details_refuses_an_unknown_catalog() {
         let db = test_db().await;
         // Read first: the fixture user already bumped the generation.
         let start = admin_generation(&db.pool).await.unwrap();
 
-        let outcome =
-            update_description(&db.pool, "nope", "x", &AuditActor::cli(), Utc::now()).await;
+        let outcome = describe(&db.pool, "nope", "x", &AuditActor::cli(), Utc::now()).await;
 
         assert!(matches!(
             outcome,
@@ -1337,6 +2013,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1353,6 +2030,7 @@ pub(crate) mod tests {
                         &db.pool,
                         &NewCatalog {
                             name,
+                            display_name: &DisplayName::default(),
                             description: "",
                             owner_team: TEST_TEAM
                         },
@@ -1369,6 +2047,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1392,6 +2071,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1441,6 +2121,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1473,6 +2154,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1555,7 +2237,7 @@ pub(crate) mod tests {
         let db = test_db().await;
         let family = crate::store::teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &DisplayName::default(),
             owner: crate::db::TEST_USER,
         };
         crate::store::teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -1574,6 +2256,7 @@ pub(crate) mod tests {
                 &pool,
                 &NewCatalog {
                     name: "pg",
+                    display_name: &DisplayName::default(),
                     description: "",
                     owner_team: "family",
                 },
@@ -1604,6 +2287,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1644,6 +2328,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewCatalog {
                 name: "pg",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -1703,6 +2388,7 @@ pub(crate) mod tests {
     async fn seed(pool: &PgPool, name: &str) -> Catalog {
         let new = NewCatalog {
             name,
+            display_name: &DisplayName::default(),
             description: "",
             owner_team: TEST_TEAM,
         };
@@ -1713,7 +2399,7 @@ pub(crate) mod tests {
     async fn family(pool: &PgPool) {
         let team = crate::store::teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &DisplayName::default(),
             owner: crate::db::TEST_USER,
         };
         crate::store::teams::create(pool, &team, &AuditActor::cli(), now())
@@ -1811,14 +2497,14 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn update_description_records_its_length_and_nothing_for_the_same_text() {
+    async fn update_details_records_the_description_length_and_nothing_for_the_same_text() {
         let db = test_db().await;
         seed(&db.pool, "pg").await;
 
-        update_description(&db.pool, "pg", "naïve", &AuditActor::cli(), now())
+        describe(&db.pool, "pg", "naïve", &AuditActor::cli(), now())
             .await
             .unwrap();
-        let previous = update_description(&db.pool, "pg", "naïve", &AuditActor::cli(), now())
+        let previous = describe(&db.pool, "pg", "naïve", &AuditActor::cli(), now())
             .await
             .unwrap();
 
@@ -1869,13 +2555,14 @@ pub(crate) mod tests {
         let actor = AuditActor::cli();
         let new = NewCatalog {
             name: "other",
+            display_name: &DisplayName::default(),
             description: "",
             owner_team: TEST_TEAM,
         };
 
         let created = create(&db.pool, &new, &actor, now()).await;
         let moved = set_owner(&db.pool, "pg", "family", &actor, now()).await;
-        let described = update_description(&db.pool, "pg", "new", &actor, now()).await;
+        let described = describe(&db.pool, "pg", "new", &actor, now()).await;
         let deleted = delete(&db.pool, "pg", false, &actor, now()).await;
 
         assert!(created.is_err() && moved.is_err() && described.is_err() && deleted.is_err());
@@ -1905,9 +2592,7 @@ pub(crate) mod tests {
         let moved = set_owner(&db.pool, bad, TEST_TEAM, &actor, now())
             .await
             .map(|_| ());
-        let described = update_description(&db.pool, bad, "", &actor, now())
-            .await
-            .map(|_| ());
+        let described = describe(&db.pool, bad, "", &actor, now()).await.map(|_| ());
         let deleted = delete(&db.pool, bad, false, &actor, now()).await;
 
         // A NUL would be a database error (a 500) if it were bound.
@@ -1925,7 +2610,7 @@ pub(crate) mod tests {
     async fn join_test_team(pool: &PgPool, name: &str, role: crate::store::teams::Role) -> String {
         let user = crate::store::users::NewUser {
             name,
-            display_name: "",
+            display_name: &DisplayName::default(),
         };
         crate::store::users::create(pool, &user, &AuditActor::cli(), now())
             .await
@@ -2141,5 +2826,358 @@ pub(crate) mod tests {
         assert_eq!(switched.unwrap(), Switch::On);
         assert!(demoted.is_ok(), "{demoted:?}");
         assert!(!maintenance_of(&db.pool, "pg").await);
+    }
+
+    // ---- Display names (M17 Task 3) ----
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn update_details_changes_either_field_and_records_each() {
+        // Arrange
+        let db = test_db().await;
+        seed(&db.pool, "pg").await;
+        let display = DisplayName::parse("Work notes").unwrap();
+        let cli = AuditActor::cli();
+        let change = |display_name, description| DetailsChange {
+            catalog: "pg",
+            display_name,
+            description,
+            owner: None,
+        };
+        let start = admin_generation(&db.pool).await.unwrap();
+
+        // Act: the display name alone, then both, then both again.
+        let first = update_details(&db.pool, &change(Some(&display), None), &cli, now())
+            .await
+            .unwrap();
+        let after_first = admin_generation(&db.pool).await.unwrap();
+        let renamed = DisplayName::parse("Notes, naïve").unwrap();
+        let both = change(Some(&renamed), Some("about"));
+        let second = update_details(&db.pool, &both, &cli, now()).await.unwrap();
+        let after_second = admin_generation(&db.pool).await.unwrap();
+        let again = update_details(&db.pool, &both, &cli, now()).await.unwrap();
+
+        // Assert: each answer is the state before it.
+        assert_eq!(
+            first,
+            Details {
+                display_name: String::new(),
+                description: String::new(),
+            }
+        );
+        assert_eq!(
+            (second.display_name.as_str(), second.description.as_str()),
+            ("Work notes", "")
+        );
+        assert_eq!(
+            (again.display_name.as_str(), again.description.as_str()),
+            ("Notes, naïve", "about")
+        );
+        let row = find(&db.pool, "pg").await.unwrap();
+        assert_eq!(
+            (
+                row.display_name.as_str(),
+                row.description.as_str(),
+                row.generation
+            ),
+            ("Notes, naïve", "about", 0),
+            "the content generation is left alone"
+        );
+        assert_eq!(after_first, start + 1);
+        assert_eq!(after_second, after_first + 1, "one bump for two fields");
+        assert_eq!(
+            admin_generation(&db.pool).await.unwrap(),
+            after_second,
+            "the same values bump nothing"
+        );
+        let renames = entries(&db.pool, "catalog.display_name_changed").await;
+        assert_eq!(renames.len(), 2, "{renames:?}");
+        assert_eq!(renames[0].target.as_deref(), Some("pg"));
+        assert_eq!(renames[0].teams, [crate::db::TEST_USER]);
+        // Characters, not bytes; never the text.
+        assert_eq!(renames[0].details, json!({"length": 10}));
+        assert_eq!(renames[1].details, json!({"length": 12}));
+        let described = entries(&db.pool, "catalog.description_changed").await;
+        assert_eq!(described.len(), 1, "{described:?}");
+        assert_eq!(described[0].details, json!({"length": 5}));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn update_details_as_owner_checks_the_owner_team() {
+        use crate::store::teams::Role;
+        // Arrange: `pg` belongs to the test team, `elsewhere` to `family`.
+        let db = test_db().await;
+        seed(&db.pool, "pg").await;
+        family(&db.pool).await;
+        seed(&db.pool, "elsewhere").await;
+        set_owner(&db.pool, "elsewhere", "family", &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        let owner = join_test_team(&db.pool, "olive", Role::Owner).await;
+        let member = join_test_team(&db.pool, "max", Role::Member).await;
+        let as_user = |user_id: &str| AuditActor {
+            user_id: Some(user_id.to_string()),
+            ..AuditActor::cli()
+        };
+        let display = DisplayName::parse("Mine").unwrap();
+        let change = |catalog, owner| DetailsChange {
+            catalog,
+            display_name: Some(&display),
+            description: Some("ours"),
+            owner: Some(owner),
+        };
+
+        // Act
+        let by_member =
+            update_details(&db.pool, &change("pg", &member), &as_user(&member), now()).await;
+        let elsewhere = update_details(
+            &db.pool,
+            &change("elsewhere", &owner),
+            &as_user(&owner),
+            now(),
+        )
+        .await;
+        let unknown =
+            update_details(&db.pool, &change("nope", &owner), &as_user(&owner), now()).await;
+        let malformed =
+            update_details(&db.pool, &change("p\0g", &owner), &as_user(&owner), now()).await;
+        let by_owner =
+            update_details(&db.pool, &change("pg", &owner), &as_user(&owner), now()).await;
+
+        // Assert: every refusal is the same `Forbidden`, so an unknown
+        // catalog reveals nothing, and only the owner's change landed.
+        for outcome in [by_member, elsewhere, unknown, malformed] {
+            assert!(
+                matches!(outcome, Err(OkfError::Forbidden { .. })),
+                "{outcome:?}"
+            );
+        }
+        assert_eq!(by_owner.unwrap().display_name, "");
+        let pg = find(&db.pool, "pg").await.unwrap();
+        assert_eq!(
+            (pg.display_name.as_str(), pg.description.as_str()),
+            ("Mine", "ours")
+        );
+        let other = find(&db.pool, "elsewhere").await.unwrap();
+        assert_eq!(
+            (other.display_name.as_str(), other.description.as_str()),
+            ("", "")
+        );
+        assert_eq!(
+            entries(&db.pool, "catalog.display_name_changed")
+                .await
+                .len(),
+            1
+        );
+        assert_eq!(
+            entries(&db.pool, "catalog.description_changed").await.len(),
+            1
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owners_rename_and_their_demotion_at_once_both_finish() {
+        use crate::store::teams::{self, Membership, Role};
+        // Arrange
+        let db = test_db().await;
+        seed(&db.pool, "pg").await;
+        let owner = join_test_team(&db.pool, "olive", Role::Owner).await;
+        let limit = std::time::Duration::from_secs(30);
+        // Hold the catalog row: the rename takes the owner's membership row
+        // (`lock_owner`), then waits here.
+        let mut holder = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM catalogs WHERE name = 'pg' FOR UPDATE")
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        let pool = db.pool.clone();
+        let owner_id = owner.clone();
+        let rename = tokio::spawn(async move {
+            let actor = AuditActor {
+                user_id: Some(owner_id.clone()),
+                ..AuditActor::cli()
+            };
+            let display = DisplayName::parse("Mine").unwrap();
+            let change = DetailsChange {
+                catalog: "pg",
+                display_name: Some(&display),
+                description: None,
+                owner: Some(&owner_id),
+            };
+            update_details(&pool, &change, &actor, now()).await
+        });
+        tokio::time::timeout(limit, until_locks_are_awaited(&db.pool, 1))
+            .await
+            .expect("the rename waits on the catalog row");
+        let pool = db.pool.clone();
+        let demotion = tokio::spawn(async move {
+            let membership = Membership {
+                team: TEST_TEAM,
+                user: "olive",
+                role: Role::Member,
+            };
+            teams::set_member(&pool, &membership, &AuditActor::cli(), now()).await
+        });
+        tokio::time::timeout(limit, until_locks_are_awaited(&db.pool, 2))
+            .await
+            .expect("the demotion waits on the rename's membership hold");
+
+        // Act
+        holder.rollback().await.unwrap();
+        let renamed = tokio::time::timeout(limit, rename)
+            .await
+            .expect("the rename finishes within 30 seconds")
+            .unwrap();
+        let demoted = tokio::time::timeout(limit, demotion)
+            .await
+            .expect("the demotion finishes within 30 seconds")
+            .unwrap();
+
+        // Assert: the demotion waited for the rename's hold on the membership.
+        assert!(renamed.is_ok(), "{renamed:?}");
+        assert!(demoted.is_ok(), "{demoted:?}");
+        assert_eq!(find(&db.pool, "pg").await.unwrap().display_name, "Mine");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owner_demoted_while_their_rename_waits_is_refused() {
+        use crate::store::teams::{self, Membership, Role};
+        // Arrange
+        let db = test_db().await;
+        seed(&db.pool, "pg").await;
+        let owner = join_test_team(&db.pool, "olive", Role::Owner).await;
+        let limit = std::time::Duration::from_secs(30);
+        // Hold `server_state`: olive's demotion takes her membership row,
+        // then waits here at its generation bump.
+        let mut holder = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM server_state FOR UPDATE")
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        let pool = db.pool.clone();
+        let demotion = tokio::spawn(async move {
+            let membership = Membership {
+                team: TEST_TEAM,
+                user: "olive",
+                role: Role::Member,
+            };
+            teams::set_member(&pool, &membership, &AuditActor::cli(), now()).await
+        });
+        tokio::time::timeout(limit, until_locks_are_awaited(&db.pool, 1))
+            .await
+            .expect("the demotion waits on server_state");
+        // Olive's rename then waits on the membership row (`lock_owner`).
+        let pool = db.pool.clone();
+        let rename = tokio::spawn(async move {
+            let actor = AuditActor {
+                user_id: Some(owner.clone()),
+                ..AuditActor::cli()
+            };
+            let display = DisplayName::parse("Mine").unwrap();
+            let change = DetailsChange {
+                catalog: "pg",
+                display_name: Some(&display),
+                description: None,
+                owner: Some(&owner),
+            };
+            update_details(&pool, &change, &actor, now()).await
+        });
+        tokio::time::timeout(limit, until_locks_are_awaited(&db.pool, 2))
+            .await
+            .expect("the rename waits on the membership row");
+
+        // Act
+        holder.rollback().await.unwrap();
+        let demoted = tokio::time::timeout(limit, demotion)
+            .await
+            .expect("the demotion finishes within 30 seconds")
+            .unwrap();
+        let renamed = tokio::time::timeout(limit, rename)
+            .await
+            .expect("the rename finishes within 30 seconds")
+            .unwrap();
+
+        // Assert: the owner check read the membership after the demotion.
+        assert!(demoted.is_ok(), "{demoted:?}");
+        assert!(
+            matches!(renamed, Err(OkfError::Forbidden { .. })),
+            "{renamed:?}"
+        );
+        assert_eq!(find(&db.pool, "pg").await.unwrap().display_name, "");
+        assert!(entries(&db.pool, "catalog.display_name_changed")
+            .await
+            .is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owners_rename_of_a_catalog_moved_while_it_waits_is_refused() {
+        use crate::store::teams::Role;
+        // Arrange: olive owns the test team, which owns `pg`; `family` is
+        // another team.
+        let db = test_db().await;
+        seed(&db.pool, "pg").await;
+        family(&db.pool).await;
+        let owner = join_test_team(&db.pool, "olive", Role::Owner).await;
+        let limit = std::time::Duration::from_secs(30);
+        // Hold the catalog row: the rename passes `lock_owner` (olive owns
+        // the catalog's team now), then waits here.
+        let mut holder = db.pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM catalogs WHERE name = 'pg' FOR UPDATE")
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        let pool = db.pool.clone();
+        let rename = tokio::spawn(async move {
+            let actor = AuditActor {
+                user_id: Some(owner.clone()),
+                ..AuditActor::cli()
+            };
+            let display = DisplayName::parse("Mine").unwrap();
+            let change = DetailsChange {
+                catalog: "pg",
+                display_name: Some(&display),
+                description: Some("ours"),
+                owner: Some(&owner),
+            };
+            update_details(&pool, &change, &actor, now()).await
+        });
+        tokio::time::timeout(limit, until_locks_are_awaited(&db.pool, 1))
+            .await
+            .expect("the rename waits on the catalog row");
+        // The holder moves the catalog to `family` while the rename waits.
+        sqlx::query(
+            "UPDATE catalogs SET owner_team_id = (SELECT id FROM teams WHERE name = 'family') \
+             WHERE name = 'pg'",
+        )
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+        let before = admin_generation(&mut *holder).await.unwrap();
+
+        // Act
+        holder.commit().await.unwrap();
+        let renamed = tokio::time::timeout(limit, rename)
+            .await
+            .expect("the rename finishes within 30 seconds")
+            .unwrap();
+
+        // Assert: under the row lock the owner team is no longer olive's,
+        // so the old team's owner is refused and nothing is written.
+        assert!(
+            matches!(renamed, Err(OkfError::Forbidden { .. })),
+            "{renamed:?}"
+        );
+        let pg = find(&db.pool, "pg").await.unwrap();
+        assert_eq!(
+            (pg.display_name.as_str(), pg.description.as_str()),
+            ("", "")
+        );
+        assert_eq!(pg.owner_team.as_deref(), Some("family"));
+        assert_eq!(admin_generation(&db.pool).await.unwrap(), before);
+        for action in [
+            "catalog.display_name_changed",
+            "catalog.description_changed",
+        ] {
+            assert!(entries(&db.pool, action).await.is_empty(), "{action}");
+        }
     }
 }

@@ -131,10 +131,12 @@ async fn the_links_tab_shows_backlinks_and_a_revision_opens_its_diff() {
         now: Utc::now(),
     };
     let edited = ALPHA.replace("Nothing yet.", "Two settings.");
-    import(&server.db.pool, "main", main_catalog(&edited), &options)
-        .await
-        .expect("import the edit");
-    server.app.poll().await.expect("load the edit");
+    crate::support::server::applied(&server.app, async {
+        import(&server.db.pool, "main", main_catalog(&edited), &options)
+            .await
+            .expect("import the edit");
+    })
+    .await;
     drive(server.base.clone(), move |ui| {
         ui.login(&key);
         ui.open("/browse/main/systems/beta.md");
@@ -175,6 +177,157 @@ async fn search_finds_alpha_and_opens_it() {
             .contains("main /systems/alpha.md"));
         ui.click("#search-results a[data-path='/systems/alpha.md']");
         ui.wait_text("#concept-title", "Alpha");
+    })
+    .await;
+}
+
+/// Three catalogs, each holding one concept that says "needle", and a key
+/// on all three, with the search cap at `cap`.
+async fn needle_server(cap: u32) -> (TestServer, String) {
+    let note = |name: &str| files(&[("index.md", "# Index\n"), (name, "# Needle\n\nneedle\n")]);
+    let server = TestServer::start(
+        vec![
+            ("one", note("one.md")),
+            ("two", note("two.md")),
+            ("three", note("three.md")),
+        ],
+        Config {
+            search_fanout_max: cap,
+            ..Config::default()
+        },
+    )
+    .await;
+    let key = server
+        .key(
+            "browse-needle",
+            Access::Read,
+            &["one", "two", "three"],
+            Some("one"),
+        )
+        .await;
+    (server, key)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn search_within_the_cap_names_no_catalogs_and_shows_no_chooser() {
+    let (server, key) = needle_server(3).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/search/needle");
+        ui.wait_text("#search-count", "3 hits");
+        assert!(!ui.present("#search-chooser"));
+        // The request names no catalogs: the server's own every-reachable path applies.
+        let urls = ui.eval(
+            "() => performance.getEntriesByType('resource').map(entry => entry.name).filter(name => name.includes('/api/v1/search'))",
+            json!(null),
+        );
+        let urls = urls.as_array().expect("urls");
+        assert_eq!(urls.len(), 1, "{urls:?}");
+        assert!(!urls[0].as_str().unwrap_or_default().contains("catalogs="), "{urls:?}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn search_past_the_cap_asks_for_a_choice_and_limits_it() {
+    let (server, key) = needle_server(2).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/search/needle");
+        ui.wait_visible("#search-chooser");
+        // The current catalog and the first other one are chosen to start.
+        ui.wait_text("#search-cap", "2 of at most 2");
+        ui.wait_text("#search-count", "2 hits");
+        let enabled = ui.eval(
+            "() => [...document.querySelectorAll('#search-chooser input:not(:disabled)')].map(box => box.value).sort()",
+            json!(null),
+        );
+        assert_eq!(enabled, json!(["one", "three"]), "the unchosen box is disabled at the cap");
+        // Unchecking one frees the third box; search only the one left.
+        ui.click("#search-chooser input[value=one]");
+        ui.wait_text("#search-cap", "1 of at most 2");
+        ui.click("#search-form button[type=submit]");
+        ui.wait_text("#search-count", "1 hit");
+        let shown = ui.text("#search-results");
+        assert!(shown.contains("three /three.md"), "{shown}");
+    })
+    .await;
+}
+
+/// The number of `/api/v1/search` requests the page has made.
+const SEARCH_REQUESTS: &str = "() => performance.getEntriesByType('resource') \
+    .filter(entry => entry.name.includes('/api/v1/search')).length";
+
+/// The values of the checked boxes in the chooser, sorted.
+const CHECKED: &str = "() => [...document.querySelectorAll('#search-chooser input:checked')] \
+    .map(box => box.value).sort()";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_empty_choice_is_kept_and_searches_nothing() {
+    let (server, key) = needle_server(2).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/search/needle");
+        ui.wait_text("#search-count", "2 hits");
+        assert_eq!(ui.eval(SEARCH_REQUESTS, json!(null)), json!(1));
+        ui.click("#search-chooser input[value=one]");
+        ui.click("#search-chooser input[value=three]");
+        ui.wait_text("#search-cap", "Choose at least one catalog");
+        assert_eq!(ui.eval(CHECKED, json!(null)), json!([]));
+        // Search is off, and a submit anyway (Enter in the box) does nothing.
+        assert_eq!(
+            ui.eval(
+                "() => document.querySelector('#search-form button').disabled",
+                json!(null)
+            ),
+            json!(true)
+        );
+        ui.eval(
+            "() => document.querySelector('#search-form').requestSubmit()",
+            json!(null),
+        );
+        // Opening the search again (a reload of the link) keeps the empty choice
+        // instead of restoring the defaults, and sends no request.
+        ui.eval("() => { location.hash = '#/search/Needle'; }", json!(null));
+        ui.wait_text("#search-none", "Choose at least one catalog");
+        assert_eq!(
+            ui.eval(CHECKED, json!(null)),
+            json!([]),
+            "no default is restored"
+        );
+        assert_eq!(
+            ui.eval(SEARCH_REQUESTS, json!(null)),
+            json!(1),
+            "no request was sent"
+        );
+        // Choosing one again enables Search and searches only that one.
+        ui.click("#search-chooser input[value=two]");
+        ui.click("#search-form button[type=submit]");
+        ui.wait_text("#search-count", "1 hit");
+        assert!(ui.text("#search-results").contains("two /two.md"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_chosen_catalog_that_is_no_longer_reachable_drops_out_of_the_choice() {
+    let (server, key) = needle_server(1).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/search");
+        ui.wait_visible("#search-chooser");
+        assert_eq!(ui.eval(CHECKED, json!(null)), json!(["one"]));
+        // The identity is read again and `one` is gone from it; two remain,
+        // still more than the cap of 1.
+        ui.eval(
+            "async () => { const { store } = await import('/ui/js/core/store.js'); \
+               store.whoami.catalogs = store.whoami.catalogs.filter(name => name !== 'one'); \
+               location.hash = '#/search/needle'; }",
+            json!(null),
+        );
+        ui.wait_text("#search-none", "Choose at least one catalog");
+        assert_eq!(ui.eval(CHECKED, json!(null)), json!([]));
+        assert_eq!(ui.eval(SEARCH_REQUESTS, json!(null)), json!(0));
     })
     .await;
 }
@@ -291,6 +444,81 @@ async fn a_section_link_on_a_long_concept_loads_the_body_and_reaches_the_heading
         ui.wait_visible("#markdown-body");
         ui.click(deep_link);
         assert_deep_in_view(ui);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_suspended_view_names_the_catalog_and_its_team_by_label() {
+    let (server, key) = server().await;
+    server.set_catalog_label("main", "Work notes").await;
+    server.set_user_label("tester", "Tess").await;
+    crate::support::server::applied(&server.app, async {
+        okf_mcp::store::teams::suspend(
+            &server.db.pool,
+            "tester",
+            Some("Paused for review."),
+            &okf_mcp::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("suspend the owner team");
+    })
+    .await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/browse/main");
+        ui.wait_text("#browse-suspended", "Work notes is unavailable");
+        let shown = ui.text("#browse-suspended");
+        assert!(
+            shown.contains("Its team Tess's team is suspended."),
+            "{shown}"
+        );
+        // URLs keep slugs.
+        ui.wait_visible("#browse-suspended a[href='#/transfer/main']");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_export_link_uses_the_filename_the_server_chose() {
+    let (server, key) = server().await;
+    server.set_catalog_label("main", "Work notes").await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/transfer");
+        // The picker offers the label; its value stays the slug.
+        ui.wait_text("#transfer-catalog", "Work notes");
+        ui.click("#export-btn");
+        ui.wait_visible("#export-link");
+        let link = ui.eval(
+            "() => { const a = document.querySelector('#export-link'); \
+             return { download: a.download, text: a.textContent }; }",
+            json!(null),
+        );
+        assert_eq!(link["download"], "work-notes-main.tar.gz", "{link}");
+        let text = link["text"].as_str().expect("a link text");
+        assert!(text.contains("Save work-notes-main.tar.gz again"), "{link}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_export_filename_falls_back_to_the_slug_without_a_usable_header() {
+    let (server, key) = server().await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        let names = ui.eval(
+            "async () => { const { exportFilename } = await import('/ui/js/pages/transfer.js'); \
+             return [exportFilename('attachment; filename=\"a-main.tar.gz\"', 'main'), \
+             exportFilename(null, 'main'), exportFilename('attachment', 'main'), \
+             exportFilename('attachment; filename=\"../x.tar.gz\"', 'main')]; }",
+            json!(null),
+        );
+        assert_eq!(
+            names,
+            json!(["a-main.tar.gz", "main.tar.gz", "main.tar.gz", "main.tar.gz"])
+        );
     })
     .await;
 }

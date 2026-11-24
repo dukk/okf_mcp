@@ -164,6 +164,15 @@ where
     // connection and then the row lock (which still orders writers in other
     // processes, and publish and discard). `_queued` is held until return.
     let _queued = app.write_queue().lock(row.id).await;
+    // A snapshot behind the database (this replica was not told of a publish
+    // elsewhere) would give the entry an older base revision than the text
+    // it edits, and publish would replay or conflict for nothing (issue
+    // #672). One generation read, and a rebuild only if it moved. Before the
+    // transaction: a rebuild waits for the rebuild lock and a connection, and
+    // nothing here holds a pooled connection yet (issue #671).
+    let before = state.current().generation();
+    state.refresh(app.pool(), app.rebuild_locks()).await?;
+    app.catalog_cache().refreshed_if_moved(&state, before).await;
     // Dropping `tx` without `commit()` (any `?` below) rolls everything back:
     // a refused edit leaves no entry behind.
     let mut tx = app.pool().begin().await?;
@@ -214,15 +223,28 @@ where
     for Touched { path, file } in files {
         // `remove` takes the entry out of the map (no copy).
         let previous = existing.remove(&path);
+        // The revision in the in-memory snapshot this write's overlay is
+        // built on, refreshed at the start of this call. A snapshot is only
+        // ever swapped in from committed state, so it never runs ahead of the
+        // database: a publish that commits after it was taken leaves this
+        // base behind the published revision, and publish reports a Conflict.
+        // (The row lock orders writers of this changeset; it does not hold
+        // off other changesets' publishes.)
         let published = overlay.base().revision(&path);
         let replay = outcome.replay.get(&path);
-        match new_entry(previous.as_ref(), published, replay, path, file) {
+        // A rebased path (a revert) starts again on `published`: its earlier
+        // entry no longer decides the base or the replay (issue #788).
+        let kept = previous
+            .as_ref()
+            .filter(|_| !outcome.rebased.contains(&path));
+        match new_entry(kept, published, replay, path, file) {
             Ok(entry) => {
                 changesets::upsert_entry(&mut tx, changeset_row.id, &entry, now).await?;
                 paths.push(format!("/{}", entry.path));
             }
             // Nothing published and nothing left: drop the changeset's own
-            // entry for it (a file it created, then removed), if any.
+            // entry for it (a file it created, then removed, or one deleted
+            // since that a revert sent back to absent), if any.
             Err(path) if previous.is_some() => {
                 let paths = [path];
                 changesets::remove_entries(&mut tx, changeset_row.id, Some(&paths), now).await?;
@@ -253,7 +275,7 @@ where
     tx.commit().await?;
     // The version moved, so the cached overlay is stale; dropping it now
     // also frees its memory before the next read rebuilds it.
-    app.overlays().forget(changeset_row.id);
+    app.overlays().forget(changeset_row.id).await;
     Ok(WriteReport {
         catalog: state.name().to_string(),
         changeset: changeset_row.handle,
@@ -272,7 +294,9 @@ where
 /// either deletes it or reports a conflict.
 ///
 /// # Arguments
-/// * `previous` - the path's entry before this edit, if any.
+/// * `previous` - the path's entry before this edit, if any; `None` too for
+///   a path the edit rebased ([`OpOutcome::rebased`]), which starts again
+///   on `published`.
 /// * `published` - the path's published revision now, if any.
 /// * `new_ops` - this edit's replay operations for the path, if any.
 /// * `path` - the normalized path.
@@ -433,7 +457,7 @@ mod tests {
     use crate::okf::workspace::Workspace;
     use crate::store::catalogs::tests::{until_a_lock_is_awaited, AWAITED_LOCKS};
     use crate::store::import::{import, ImportOptions, ImportScope};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
 
     const NOTE: &str = "---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# A\n";
@@ -453,6 +477,7 @@ mod tests {
             replay: BTreeMap::new(),
             message: "test".to_string(),
             notes: Vec::new(),
+            rebased: BTreeSet::new(),
         }
     }
 
@@ -700,8 +725,11 @@ mod tests {
         import(test.app.pool(), "pg", republished, &options)
             .await
             .unwrap();
-        let state = test.app.catalog("pg").unwrap();
-        state.refresh(test.app.pool()).await.unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
+        state
+            .refresh(test.app.pool(), test.app.rebuild_locks())
+            .await
+            .unwrap();
         assert_eq!(state.current().revision("a.md"), Some(2));
 
         write(&ctx, &handle, "a.md", format!("{NOTE}Two.\n"))
@@ -778,7 +806,7 @@ mod tests {
         let author = writer(&test, "writer-a", "pg").await;
         let handle = open(&author).await;
         let other_handle = open(&author).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let pinned = author.changeset(&handle, Access::Read).await.unwrap();
         let other = author.changeset(&other_handle, Access::Read).await.unwrap();
         // The view before the write, to show the write invalidates the cache.

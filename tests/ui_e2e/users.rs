@@ -20,7 +20,7 @@ use okf_mcp::store::user_sessions;
 use okf_mcp::store::users::{self, NewUser};
 
 use crate::catalogs::switcher;
-use crate::harness::drive;
+use crate::harness::{drive, Ui};
 use crate::self_service::{console_base, login_server, member, EMAIL, PASSWORD};
 use crate::support::server::{files, TestServer, OWNER};
 use okf_mcp::store::audit::AuditActor;
@@ -109,13 +109,15 @@ async fn a_user_whose_only_key_is_revoked_is_deleted_from_the_console() {
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     let alice = NewUser {
         name: "alice",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
     };
     users::create(&server.db.pool, &alice, &AuditActor::cli(), Utc::now())
         .await
         .expect("create alice");
-    key_of(&server, "alice", "alice-laptop", true).await;
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        key_of(&server, "alice", "alice-laptop", true).await;
+    })
+    .await;
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         ui.open("/users");
@@ -129,7 +131,7 @@ async fn a_user_whose_only_key_is_revoked_is_deleted_from_the_console() {
             "keys, grants and sign-in codes (revoked ones too)",
         );
         ui.click("#confirm-ok");
-        ui.wait_text("#toasts", "Deleted user alice.");
+        ui.wait_text("#toasts", "Deleted user Unnamed user.");
         ui.wait_hidden("#user-detail");
         ui.wait_hidden("[data-test=user-alice]");
     })
@@ -151,13 +153,15 @@ async fn a_delete_clicked_again_while_it_runs_sends_one_request() {
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     let alice = NewUser {
         name: "alice",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
     };
     users::create(&server.db.pool, &alice, &AuditActor::cli(), Utc::now())
         .await
         .expect("create alice");
-    key_of(&server, "alice", "alice-laptop", false).await;
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        key_of(&server, "alice", "alice-laptop", false).await;
+    })
+    .await;
     assert_eq!(keys_of(&server, "alice").await, 1);
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&admin);
@@ -225,7 +229,7 @@ async fn a_last_owner_or_an_owned_catalog_refuses_the_delete_until_cleared() {
     for name in ["alice", "bob", "carol"] {
         let user = NewUser {
             name,
-            display_name: "",
+            display_name: &okf_mcp::labels::DisplayName::default(),
         };
         users::create(pool, &user, &AuditActor::cli(), Utc::now())
             .await
@@ -233,7 +237,7 @@ async fn a_last_owner_or_an_owned_catalog_refuses_the_delete_until_cleared() {
     }
     let family = NewTeam {
         name: "family",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
         owner: "alice",
     };
     teams::create(
@@ -256,19 +260,22 @@ async fn a_last_owner_or_an_owned_catalog_refuses_the_delete_until_cleared() {
     )
     .await
     .expect("add carol");
-    catalogs::create(
-        pool,
-        &okf_mcp::store::catalogs::NewCatalog {
-            name: "bobs",
-            description: "",
-            owner_team: "bob",
-        },
-        &okf_mcp::store::audit::AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("create bob's catalog");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        catalogs::create(
+            pool,
+            &okf_mcp::store::catalogs::NewCatalog {
+                name: "bobs",
+                display_name: &okf_mcp::labels::DisplayName::default(),
+                description: "",
+                owner_team: "bob",
+            },
+            &okf_mcp::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("create bob's catalog");
+    })
+    .await;
     let ran = drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         // alice: the server refuses, and reading her again then fails; the
@@ -301,7 +308,7 @@ async fn a_last_owner_or_an_owned_catalog_refuses_the_delete_until_cleared() {
         ui.click("[data-catalog=bobs]");
         ui.select("#catalog-owner-select", OWNER);
         ui.click("#catalog-owner-save");
-        ui.wait_text("[data-test=catalog-owner-bobs]", OWNER);
+        ui.wait_text("[data-test=catalog-owner-bobs]", "'s team");
         ui.open("/users");
         ui.click("[data-test=user-bob]");
         ui.wait_visible("#user-delete:not([disabled])");
@@ -329,8 +336,8 @@ const STRAY_TEXT: &str = "() => [...document.querySelector('#main .view').childN
 async fn no_page_prints_a_stray_null_under_its_content() {
     let server = server().await;
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
-    let writer = server
-        .key("console-writer", Access::Write, &["main"], Some("main"))
+    let reader = server
+        .key("console-reader", Access::Read, &["main"], Some("main"))
         .await;
     drive(server.base.clone(), move |ui| {
         // An admin reaching every catalog: no "needs every catalog" note
@@ -339,7 +346,7 @@ async fn no_page_prints_a_stray_null_under_its_content() {
         for (route, loaded) in [
             ("/users", format!("[data-test=user-{OWNER}]")),
             ("/teams", format!("[data-test=team-{OWNER}]")),
-            ("/catalogs", "code[data-catalog=main]".to_string()),
+            ("/catalogs", "[data-catalog=main]".to_string()),
         ] {
             ui.open(route);
             ui.wait_visible(&loaded);
@@ -351,8 +358,9 @@ async fn no_page_prints_a_stray_null_under_its_content() {
         }
         ui.click("#signout");
         ui.wait_visible("#login");
-        // A write key: no import panel on Import & export.
-        ui.login(&writer);
+        // A read key: no import panel on Import & export (a write key gets
+        // one since issue #260).
+        ui.login(&reader);
         ui.open("/transfer");
         ui.wait_visible("#export-panel");
         assert!(!ui.page.is_visible("#import-panel").expect("visible"));
@@ -383,12 +391,14 @@ async fn an_admin_sets_an_email_and_the_admin_flag_and_sends_a_setup_email() {
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     let user = NewUser {
         name: "alice",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
     };
-    users::create(&server.db.pool, &user, &AuditActor::cli(), Utc::now())
-        .await
-        .expect("create alice");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        users::create(&server.db.pool, &user, &AuditActor::cli(), Utc::now())
+            .await
+            .expect("create alice");
+    })
+    .await;
     let ran = drive(console_base(&server), move |ui| {
         ui.login(&admin);
         ui.open("/users");
@@ -406,7 +416,7 @@ async fn an_admin_sets_an_email_and_the_admin_flag_and_sends_a_setup_email() {
         ui.click("#user-invite");
         ui.wait_text("#toasts", "Queued a setup email to alice@example.com");
         ui.click("#user-admin-toggle");
-        ui.wait_text("#toasts", "alice is now an admin");
+        ui.wait_text("#toasts", "is now an admin");
         ui.wait_visible("#user-admin-toggle:checked");
         ui.wait_text("[data-test=user-alice]", "admin");
         // A full admin key gets no "needs every catalog" note, and the
@@ -434,19 +444,21 @@ async fn clearing_the_last_admin_is_refused_with_the_reason_and_the_drawer_stays
     let server = login_server().await;
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     server.user_with_password("alice", EMAIL, PASSWORD).await;
-    users::set_admin(
-        &server.db.pool,
-        "alice",
-        AdminChange {
-            on: true,
-            allow_last: false,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("make alice the one admin user");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        users::set_admin(
+            &server.db.pool,
+            "alice",
+            AdminChange {
+                on: true,
+                allow_last: false,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("make alice the one admin user");
+    })
+    .await;
     let ran = drive(console_base(&server), move |ui| {
         ui.login(&admin);
         ui.open("/users");
@@ -510,7 +522,7 @@ async fn an_admin_entitles_catalogs_and_the_member_sees_them() {
         // My keys (Task 14a) offers exactly the ceiling, at its levels.
         ui.open("/my-keys");
         ui.click("#my-key-new");
-        ui.wait_visible("#my-key-form");
+        ui.wait_visible("#my-key-form select[name=level-other]");
         assert_eq!(
             ui.eval(
                 "() => [...document.querySelectorAll('#my-key-form select[name=level-other] option')] \
@@ -694,19 +706,21 @@ async fn a_refusal_whose_reread_fails_keeps_its_reason_and_working_controls() {
     let server = login_server().await;
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     server.user_with_password("alice", EMAIL, PASSWORD).await;
-    users::set_admin(
-        &server.db.pool,
-        "alice",
-        AdminChange {
-            on: true,
-            allow_last: false,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("make alice the one admin user");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        users::set_admin(
+            &server.db.pool,
+            "alice",
+            AdminChange {
+                on: true,
+                allow_last: false,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("make alice the one admin user");
+    })
+    .await;
     let ran = drive(console_base(&server), move |ui| {
         ui.login(&admin);
         ui.open("/users");
@@ -745,12 +759,14 @@ async fn a_write_that_settles_after_its_user_was_reopened_updates_the_new_drawer
     server.user_with_password("alice", EMAIL, PASSWORD).await;
     let bob = NewUser {
         name: "bob",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
     };
-    users::create(&server.db.pool, &bob, &AuditActor::cli(), Utc::now())
-        .await
-        .expect("create bob");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        users::create(&server.db.pool, &bob, &AuditActor::cli(), Utc::now())
+            .await
+            .expect("create bob");
+    })
+    .await;
     let ran = drive(console_base(&server), move |ui| {
         ui.login(&admin);
         ui.open("/users");
@@ -783,9 +799,9 @@ async fn a_write_that_settles_after_its_user_was_reopened_updates_the_new_drawer
         ui.click("#user-email-form button[type=submit]");
         ui.click("#drawer-close");
         ui.click("[data-test=user-bob]");
-        ui.wait_text("#drawer-title", "bob");
+        ui.wait_text("#drawer-title", "Unnamed user");
         ui.release_held();
-        assert_eq!(ui.text("#drawer-title"), "bob");
+        assert_eq!(ui.text("#drawer-title"), "Unnamed user");
         ui.wait_text("[data-test=user-bob-email]", "none");
     })
     .await;
@@ -807,7 +823,10 @@ async fn the_users_filter_matches_names_and_emails() {
     for (name, display_name) in [("alice", ""), ("bob", "Robert Example")] {
         users::create(
             pool,
-            &NewUser { name, display_name },
+            &NewUser {
+                name,
+                display_name: &okf_mcp::labels::DisplayName::parse(display_name).unwrap(),
+            },
             &AuditActor::cli(),
             Utc::now(),
         )
@@ -856,6 +875,131 @@ async fn the_users_filter_matches_names_and_emails() {
         ui.wait_visible("[data-test=user-carol]");
         ui.wait_hidden("[data-test=user-bob]");
         ui.wait_hidden("[data-test=user-alice]");
+    })
+    .await;
+}
+
+/// The value of the input `selector`.
+fn input_value(ui: &Ui, selector: &str) -> serde_json::Value {
+    ui.eval(
+        "(selector) => document.querySelector(selector).value",
+        serde_json::json!(selector),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_users_table_and_drawer_show_the_label_and_the_display_name_saves() {
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    let alice = NewUser {
+        name: "alice",
+        display_name: &okf_mcp::labels::DisplayName::parse("Alice Example").expect("a name"),
+    };
+    crate::support::server::applied(&server.app, async {
+        users::create(&server.db.pool, &alice, &AuditActor::cli(), Utc::now())
+            .await
+            .expect("create alice");
+    })
+    .await;
+    let too_long = "x".repeat(81);
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/users");
+        // The label heads the cell, with the slug beneath it.
+        let cell = ui.wait_text("[data-test=user-alice]", "Alice Example");
+        assert!(cell.contains("alice"), "{cell}");
+        ui.click("[data-test=user-alice]");
+        assert_eq!(
+            ui.wait_text("#drawer-title", "Alice Example"),
+            "Alice Example"
+        );
+        assert_eq!(input_value(ui, "#user-display-name"), "Alice Example");
+        ui.fill("#user-display-name", "Alice B");
+        ui.click("#user-display-name-save");
+        ui.wait_text("#toasts", "Display name saved");
+        ui.wait_text("#drawer-title", "Alice B");
+        ui.wait_text("[data-test=user-alice]", "Alice B");
+        ui.fill("#user-display-name", &too_long);
+        ui.click("#user-display-name-save");
+        ui.wait_text("#toasts", "longer than 80 characters");
+        ui.wait_text("#user-refusal", "longer than 80 characters");
+        ui.wait_text("[data-test=user-alice]", "Alice B");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let stored = users::find(&server.db.pool, "alice").await.expect("alice");
+    assert_eq!(stored.display_name, "Alice B");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_display_name_counts_characters_not_utf16_units() {
+    // 80 supplementary-plane characters are 160 UTF-16 units: the input
+    // takes them all (it has no maxlength), and the server accepts 80 and
+    // refuses 81.
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    let alice = NewUser {
+        name: "alice",
+        display_name: &okf_mcp::labels::DisplayName::default(),
+    };
+    crate::support::server::applied(&server.app, async {
+        users::create(&server.db.pool, &alice, &AuditActor::cli(), Utc::now())
+            .await
+            .expect("create alice");
+    })
+    .await;
+    let exactly = "\u{1F600}".repeat(80);
+    let over = "\u{1F600}".repeat(81);
+    let shown = exactly.clone();
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/users");
+        ui.click("[data-test=user-alice]");
+        ui.wait_visible("#user-display-name");
+        ui.fill("#user-display-name", &exactly);
+        ui.click("#user-display-name-save");
+        ui.wait_text("#toasts", "Display name saved");
+        ui.wait_text("#drawer-title", &shown);
+        ui.fill("#user-display-name", &over);
+        ui.click("#user-display-name-save");
+        ui.wait_text("#user-refusal", "longer than 80 characters");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let stored = users::find(&server.db.pool, "alice").await.expect("alice");
+    assert_eq!(stored.display_name.chars().count(), 80);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_older_list_read_that_answers_late_never_redraws_the_users_table() {
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/users");
+        ui.wait_visible("#user-new:not([disabled])");
+        // The list read after creating "older" is sent at once but answers
+        // late: the server's answer lists "older" only.
+        ui.click("#user-new");
+        ui.fill("#user-form input[name=name]", "older");
+        ui.hold_answer("GET", "/api/v1/users", || {
+            ui.click("#user-form button[type=submit]")
+        });
+        // A newer write's list read answers first and lists both users.
+        ui.click("#user-new");
+        ui.fill("#user-form input[name=name]", "newer");
+        ui.click("#user-form button[type=submit]");
+        ui.wait_visible("[data-test=user-newer]");
+        // The older answer, released now, must not replace the newer table.
+        ui.release_held();
+        assert!(
+            ui.present("[data-test=user-newer]") && ui.present("[data-test=user-older]"),
+            "the older read redrew the users table"
+        );
     })
     .await;
 }

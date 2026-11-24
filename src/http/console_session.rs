@@ -4,11 +4,12 @@
 //! cookie. MCP and the archive routes keep bearer-only `require_key`, so a
 //! cookie never reaches them.
 //!
-//! A session's principal is built on every request from the key cache (the
-//! user's admin flag and ceiling as of the last reload), never from what
+//! A session's principal is built on every request from the user cache (the
+//! user's admin flag and ceiling as they are now), never from what
 //! was read at sign-in: the flag can change between the password check and
 //! the session's first request.
 
+use std::fmt::Write as _;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +20,7 @@ use axum::http::{header, Extensions, HeaderMap, HeaderValue, Method};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::app::App;
@@ -27,10 +29,9 @@ use crate::config::AuthConfig;
 use crate::error::OkfError;
 use crate::http::requester::ClientIp;
 use crate::http::AppError;
-use crate::store::ceiling;
 use crate::store::passwords::PasswordStamp;
 use crate::store::user_sessions::{self, NewSession, SessionStart};
-use crate::store::users::{self, UserAuth};
+use crate::store::users::UserAuth;
 use crate::telemetry::subscriber::split_event;
 
 /// The session cookie (plan Decision 9).
@@ -39,6 +40,53 @@ pub const COOKIE: &str = "okf_session";
 /// The header a cookie-authenticated write must carry, equal to the
 /// session's CSRF token.
 pub const CSRF_HEADER: &str = "x-okf-csrf";
+
+/// The header that names, opaquely, the account an `/api/v1` answer was
+/// made for (a user for a session, the key for a bearer credential), so the
+/// mobile reader's worker never files one account's answers under another's.
+pub const ACCOUNT_HEADER: &str = "x-okf-account";
+
+/// Whose answer an `/api/v1` response is, for [`account_tag`]. A user id
+/// and a key id live in different namespaces, so each variant hashes under
+/// its own prefix and a key named like a user's id never shares its tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Account<'a> {
+    /// A console session's user, by user id.
+    User(&'a str),
+    /// A bearer credential (API key or OAuth grant), by key id.
+    Key(&'a str),
+}
+
+/// An opaque, stable tag for `account`: 16 hex digits of SHA-256 of a
+/// prefixed id, so the header names no user and no key, and carries no
+/// secret (an id is never a credential).
+///
+/// # Arguments
+/// * `account` - the session's user or the bearer credential's key.
+///
+/// # Returns
+/// The header value.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn account_tag(account: Account<'_>) -> HeaderValue {
+    // `match` on the enum is exhaustive: a new kind of account must pick
+    // its own prefix.
+    let prefixed = match account {
+        Account::User(id) => format!("okf-account:user:{id}"),
+        Account::Key(id) => format!("okf-account:key:{id}"),
+    };
+    let digest = Sha256::digest(prefixed.as_bytes());
+    // The first 8 bytes as 16 lowercase hex digits, appended to one
+    // preallocated `String` (Python: `hexdigest()[:16]`).
+    let hex = digest
+        .iter()
+        .take(8)
+        .fold(String::with_capacity(16), |mut hex, byte| {
+            // `write!` into a `String` cannot fail; `let _` drops the `Ok`.
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
+    HeaderValue::from_str(&hex).expect("hex digits are a valid header value")
+}
 
 /// A cookie's `SameSite` attribute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -317,8 +365,8 @@ fn is_safe_method(method: &Method) -> bool {
     matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
-/// A user's sign-in identity: from the key cache, else (a user created
-/// since the last reload) from the database.
+/// A user's sign-in identity, from the user cache (which reads a user it
+/// does not hold yet from the database).
 ///
 /// # Arguments
 /// * `app` - the shared state.
@@ -331,10 +379,11 @@ fn is_safe_method(method: &Method) -> bool {
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn session_user(app: &App, user_id: &str) -> Result<Option<UserAuth>, OkfError> {
-    match app.keys().user_admin(user_id) {
-        Some(user) => Ok(Some(user)),
-        None => users::find_auth(app.pool(), user_id).await,
-    }
+    Ok(app
+        .credentials()
+        .user(user_id)
+        .await?
+        .map(|user| user.auth.clone()))
 }
 
 /// The user of the console session this request's cookie names, for a
@@ -367,38 +416,14 @@ pub(crate) async fn signed_in_user(
     }
 }
 
-/// The principal of a live session's user, built now from the key cache
-/// (or, for a user created since the last reload, from the database).
+/// The principal of a live session's user, built now from the user cache
+/// (which reads a user it does not hold yet from the database).
 ///
 /// # Errors
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
 async fn session_principal(app: &App, user_id: &str) -> Result<Option<Principal>, OkfError> {
-    if let Some(user) = app.keys().user_admin(user_id) {
-        return Ok(Some(Principal::for_session(
-            &user,
-            app.keys().ceiling_of(user_id),
-            app.keys().suspensions(),
-            app.keys().gates(),
-        )));
-    }
-    // Not in the cache yet: two queries, until the next reload.
-    let Some(user) = users::find_auth(app.pool(), user_id).await? else {
-        return Ok(None);
-    };
-    match ceiling::ceiling_of(app.pool(), &user.name).await {
-        // The current cache's suspensions are right for a user it does not
-        // know yet: suspension is per catalog, not per user.
-        Ok(ceiling) => Ok(Some(Principal::for_session(
-            &user,
-            ceiling,
-            app.keys().suspensions(),
-            app.keys().gates(),
-        ))),
-        // Deleted between the two reads.
-        Err(OkfError::UnknownName { .. }) => Ok(None),
-        Err(other) => Err(other),
-    }
+    app.session_principal(user_id).await
 }
 
 /// [`unauthorized`], also clearing a session cookie that no longer works.
@@ -418,7 +443,9 @@ fn unauthorized_clearing(app: &App) -> Response {
 /// axum middleware for `/api/v1`: a bearer credential, else a session
 /// cookie (with [`CSRF_HEADER`] on anything but GET, HEAD and OPTIONS).
 /// Inserts the `Arc<Principal>` and, for a cookie, the [`ConsoleSession`]
-/// into the request's extensions.
+/// into the request's extensions. Every answer the route gives carries
+/// [`ACCOUNT_HEADER`] (`account_tag`); the refusals this middleware gives
+/// itself (401, 403, 500) do not.
 ///
 /// # Arguments
 /// * `app` - the shared state (the layer's state).
@@ -426,7 +453,7 @@ fn unauthorized_clearing(app: &App) -> Response {
 /// * `next` - the rest of the stack.
 ///
 /// # Returns
-/// The route's response; 401 with the challenge (clearing a dead cookie);
+/// The route's response, with [`ACCOUNT_HEADER`]; 401 with the challenge (clearing a dead cookie);
 /// 403 for a cookie write without the CSRF token; 500 if a lookup fails.
 // Used as `axum::middleware::from_fn_with_state(app, require_principal)`;
 // axum fills each argument from the request (the extractor pattern).
@@ -452,9 +479,13 @@ pub async fn require_principal(
                 "authenticated"
             );
             crate::auth::record_on_request_span(request.extensions(), &principal);
+            // Taken before `principal` moves into the extensions.
+            let tag = account_tag(Account::Key(&principal.key_id));
             request.extensions_mut().insert(principal);
             insert_client_ip(&app, &mut request);
-            return next.run(request).await;
+            let mut response = next.run(request).await;
+            response.headers_mut().insert(ACCOUNT_HEADER, tag);
+            return response;
         }
         Some(Ok(None)) => return unauthorized(&app),
         // `AppError` logs it and answers 500 without detail.
@@ -490,6 +521,8 @@ pub async fn require_principal(
         "authenticated by a console session"
     );
     crate::auth::record_on_request_span(request.extensions(), &principal);
+    // The session's user is the account this answer is for.
+    let tag = account_tag(Account::User(&row.user_id));
     request.extensions_mut().insert(Arc::new(principal));
     request.extensions_mut().insert(ConsoleSession {
         id,
@@ -497,7 +530,9 @@ pub async fn require_principal(
         expires_at: row.expires_at,
     });
     insert_client_ip(&app, &mut request);
-    next.run(request).await
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(ACCOUNT_HEADER, tag);
+    response
 }
 
 /// Starts a console session: a new random id (never the one the browser
@@ -775,6 +810,21 @@ mod tests {
         assert!(!printed.contains("csrf-token-secret"), "{printed}");
         assert!(printed.contains("<redacted>"), "{printed}");
     }
+
+    #[test]
+    fn account_tags_are_stable_opaque_and_distinct() {
+        let alice = account_tag(Account::User("user-alice"));
+        assert_eq!(alice, account_tag(Account::User("user-alice")));
+        assert_ne!(alice, account_tag(Account::User("user-bob")));
+        // A key named like a user's id is still another account.
+        assert_ne!(alice, account_tag(Account::Key("user-alice")));
+        let text = alice.to_str().expect("ascii");
+        assert_eq!(text.len(), 16);
+        assert!(text
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()));
+        assert!(!text.contains("alice"));
+    }
 }
 
 #[cfg(test)]
@@ -782,7 +832,7 @@ mod http_tests {
     use axum::http::StatusCode;
     use chrono::Utc;
 
-    use super::COOKIE;
+    use super::{account_tag, Account, ACCOUNT_HEADER, COOKIE};
     use crate::http::api::testing::{
         keys, login_app, user_with_password, Browser, Payload, PASSWORD,
     };
@@ -797,19 +847,21 @@ mod http_tests {
     async fn a_session_reaches_the_api_with_exactly_its_ceiling() {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        ceiling::entitle(
-            test.app.pool(),
-            &NewEntitlement {
-                user: "alice",
-                catalog: "main",
-                access: Access::Read,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("entitle");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            ceiling::entitle(
+                test.app.pool(),
+                &NewEntitlement {
+                    user: "alice",
+                    catalog: "main",
+                    access: Access::Read,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("entitle");
+        })
+        .await;
         let mut browser = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
 
         let whoami = browser
@@ -840,12 +892,15 @@ mod http_tests {
         assert_eq!(whoami["access"], "read");
         assert_eq!(whoami["all_catalogs"], false);
         assert_eq!(whoami["catalogs"], serde_json::json!(["main"]));
+        // Issue #736: the level on each listed catalog, resolved per catalog.
+        assert_eq!(whoami["levels"], serde_json::json!({ "main": "read" }));
         assert_eq!(whoami["teams"], serde_json::json!(["alice"]));
         let session = session.json();
         assert_eq!(session["user"], "alice");
         assert_eq!(session["email"], "alice@example.com");
         assert_eq!(session["admin"], false);
-        assert_eq!(session["ceiling"], serde_json::json!({ "main": "read" }));
+        // Issue #736: no ceiling (whoami's `levels` and /me/ceiling page it).
+        assert!(session.get("ceiling").is_none(), "{session}");
         assert!(session["csrf"]
             .as_str()
             .is_some_and(|csrf| csrf.len() >= 43));
@@ -916,19 +971,21 @@ mod http_tests {
     async fn an_admin_users_session_is_an_admin_on_every_catalog() {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        users::set_admin(
-            test.app.pool(),
-            "alice",
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("set admin");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            users::set_admin(
+                test.app.pool(),
+                "alice",
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("set admin");
+        })
+        .await;
         let mut browser = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
 
         let whoami = browser
@@ -957,19 +1014,21 @@ mod http_tests {
         // exists, so `set_admin` had no session to end.
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        users::set_admin(
-            test.app.pool(),
-            "alice",
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("set admin");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            users::set_admin(
+                test.app.pool(),
+                "alice",
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("set admin");
+        })
+        .await;
         let passwords::SignInOutcome::Ok(passwords::Verified { user: checked, .. }) =
             passwords::verify(test.app.pool(), "alice@example.com", PASSWORD, Utc::now())
                 .await
@@ -978,20 +1037,21 @@ mod http_tests {
             panic!("the password was refused");
         };
         assert!(checked.is_admin, "admin when the password was checked");
-        users::set_admin(
-            test.app.pool(),
-            "alice",
-            AdminChange {
-                on: false,
-                allow_last: true,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("clear admin");
-        // What the API's `settle` and the poll loop do after a change.
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            users::set_admin(
+                test.app.pool(),
+                "alice",
+                AdminChange {
+                    on: false,
+                    allow_last: true,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("clear admin");
+        })
+        .await;
         let (_, session) = super::start_session(&test.app, &checked, None, "okf-test")
             .await
             .expect("start the session with the stale user");
@@ -1115,6 +1175,56 @@ mod http_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn api_answers_name_their_account_and_refusals_do_not() {
+        let test = login_app().await;
+        let keys = keys(&test).await;
+        let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
+        let mut browser = Browser::signed_in(&test, "alice@example.com", PASSWORD).await;
+
+        let by_session = browser
+            .send(&test, "GET", "/api/v1/session", Payload::Empty)
+            .await;
+        let csrf = browser.csrf.take();
+        let forbidden = browser
+            .send(&test, "DELETE", "/api/v1/session", Payload::Empty)
+            .await;
+        browser.csrf = csrf;
+        browser.bearer = Some(keys.read.clone());
+        let by_key = browser
+            .send(&test, "GET", "/api/v1/whoami", Payload::Empty)
+            .await;
+        browser.bearer = Some("okf_not-a-real-key".to_string());
+        let refused = browser
+            .send(&test, "GET", "/api/v1/whoami", Payload::Empty)
+            .await;
+
+        assert_eq!(by_session.status, StatusCode::OK);
+        assert_eq!(
+            by_session.headers.get(ACCOUNT_HEADER),
+            Some(&account_tag(Account::User(&alice.id))),
+            "a session's answer names its user"
+        );
+        assert_eq!(by_key.status, StatusCode::OK);
+        let key_id = by_key.json()["key_id"]
+            .as_str()
+            .expect("whoami names its key")
+            .to_string();
+        assert_eq!(
+            by_key.headers.get(ACCOUNT_HEADER),
+            Some(&account_tag(Account::Key(&key_id))),
+            "a key's answer names the key"
+        );
+        assert_ne!(
+            by_key.headers.get(ACCOUNT_HEADER),
+            by_session.headers.get(ACCOUNT_HEADER)
+        );
+        assert_eq!(forbidden.status, StatusCode::FORBIDDEN);
+        assert_eq!(forbidden.headers.get(ACCOUNT_HEADER), None);
+        assert_eq!(refused.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(refused.headers.get(ACCOUNT_HEADER), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_cookie_never_reaches_mcp_or_the_archive_routes() {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
@@ -1198,7 +1308,13 @@ mod http_tests {
 
         assert_eq!(export.status, StatusCode::OK, "{}", export.text());
         assert_eq!(&export.body[..2], &[0x1f, 0x8b], "a gzip archive");
-        assert_eq!(import.status, StatusCode::FORBIDDEN, "import needs admin");
+        // Import needs `write` (issue #260): past the check, the empty body
+        // is read and refused as no archive.
+        assert_eq!(import.status, StatusCode::BAD_REQUEST, "{}", import.text());
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&import.body).expect("json")["error"],
+            "ImportRefused"
+        );
         assert_eq!(
             no_csrf.status,
             StatusCode::FORBIDDEN,
@@ -1341,15 +1457,16 @@ mod http_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_user_new_to_the_cache_is_read_from_the_database() {
+    async fn a_user_is_read_from_the_database_on_first_use() {
         let test = login_app().await;
         let pool = test.app.pool();
-        // Created and entitled with no poll: the cache does not know bob.
+        // Created and entitled with no poll: the user cache reads bob on
+        // his first request.
         users::create(
             pool,
             &users::NewUser {
                 name: "bob",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             Utc::now(),
@@ -1372,8 +1489,6 @@ mod http_tests {
             .fetch_one(pool)
             .await
             .expect("bob's id");
-        assert_eq!(test.app.keys().user_admin(&bob_id), None);
-
         let principal = super::session_principal(&test.app, &bob_id)
             .await
             .expect("look up")
@@ -1383,8 +1498,13 @@ mod http_tests {
             .expect("look up");
 
         assert_eq!(principal.key_id, "session:bob");
-        assert_eq!(principal.level("main"), Some(Access::Write));
-        assert_eq!(principal.level("other"), None);
+        let directory = test.app.directory();
+        let main = directory.resolve("main").await.unwrap().expect("main");
+        assert_eq!(principal.level_at(&main), Some(Access::Write));
+        // `other` may not exist here: either way bob does not reach it.
+        if let Some(other) = directory.resolve("other").await.unwrap() {
+            assert_eq!(principal.level_at(&other), None);
+        }
         assert!(nobody.is_none());
     }
 

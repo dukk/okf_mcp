@@ -2,16 +2,17 @@
 //! user also creates its personal team, so every user can own catalogs.
 //! Users are addressed by name; ids stay inside SQL.
 
-use std::collections::HashMap;
-
 use chrono::{DateTime, Utc};
 use serde_json::json;
 use sqlx::{PgConnection, PgPool};
 
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
+use crate::labels::DisplayName;
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock, Target};
-use crate::store::catalogs::{bump_admin_generation, is_unique_violation, is_valid_name};
+use crate::store::catalogs::{is_unique_violation, is_valid_name};
 use crate::store::changesets::{self, ChangesetState};
+use crate::store::passwords::PasswordStamp;
 use crate::store::user_sessions;
 
 /// A user to create.
@@ -21,14 +22,17 @@ use crate::store::user_sessions;
 pub struct NewUser<'a> {
     /// `[a-z0-9-]+`; also its personal team's name.
     pub name: &'a str,
-    /// Free text shown beside the name.
-    pub display_name: &'a str,
+    /// Its display name (empty when unset), validated by
+    /// [`DisplayName::parse`]; its personal team gets the same one.
+    pub display_name: &'a DisplayName,
 }
 
 /// A stored user.
 // `sqlx::FromRow` maps a result row's columns onto the fields by name.
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct UserRecord {
+    /// `users.id`, for the audit log; never shown (see `UserView`).
+    pub id: String,
     /// Its name.
     pub name: String,
     /// Its display name (may be empty).
@@ -56,6 +60,8 @@ pub struct UserAuth {
     pub id: String,
     /// Its name.
     pub name: String,
+    /// Its display name; empty when unset.
+    pub display_name: String,
     /// Its email address, if set.
     pub email: Option<String>,
     /// Whether its session acts as an admin.
@@ -68,7 +74,7 @@ pub struct UserAuth {
 // column's type plain for every reader.
 macro_rules! select_users {
     () => {
-        "SELECT u.name, u.display_name, u.created_at, \
+        "SELECT u.id, u.name, u.display_name, u.created_at, \
                 (SELECT count(*) FROM api_keys k WHERE k.user_id = u.id) \
               + (SELECT count(*) FROM sign_in_codes s WHERE s.user_id = u.id) AS credentials, \
                 COALESCE((SELECT array_agg(t.name ORDER BY t.name) FROM team_members m \
@@ -85,7 +91,7 @@ macro_rules! select_users {
 // (`email_tokens`, `passwords`), which splice it into their own `concat!`.
 macro_rules! user_auth_columns {
     () => {
-        "u.id, u.name, u.email::text AS email, u.is_admin"
+        "u.id, u.name, u.display_name, u.email::text AS email, u.is_admin"
     };
 }
 pub(crate) use user_auth_columns;
@@ -219,7 +225,7 @@ pub async fn create(
         "INSERT INTO users (name, display_name, created_at) VALUES ($1, $2, $3) RETURNING id",
     )
     .bind(new.name)
-    .bind(new.display_name)
+    .bind(new.display_name.as_str())
     .bind(now)
     .fetch_one(&mut *tx)
     .await;
@@ -231,7 +237,7 @@ pub async fn create(
          VALUES ($1, $2, $3, $4) RETURNING id",
     )
     .bind(new.name)
-    .bind(new.display_name)
+    .bind(new.display_name.as_str())
     .bind(&user_id)
     .bind(now)
     .fetch_one(&mut *tx)
@@ -246,7 +252,11 @@ pub async fn create(
     .bind(now)
     .execute(&mut *tx)
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(
+        &mut tx,
+        &[Invalidation::user(&user_id), Invalidation::team(&team_id)],
+    )
+    .await?;
     audit::record(
         &mut tx,
         actor,
@@ -260,8 +270,9 @@ pub async fn create(
     audit::team_ref(&mut tx, new.name).await?;
     tx.commit().await?;
     Ok(UserRecord {
+        id: user_id,
         name: new.name.to_string(),
-        display_name: new.display_name.to_string(),
+        display_name: new.display_name.as_str().to_string(),
         created_at: now,
         credentials: 0,
         teams: vec![new.name.to_string()],
@@ -681,9 +692,9 @@ pub async fn set_email(
             .bind(&user_id)
             .execute(&mut *tx)
             .await?;
-        // The key cache holds every user's email for console sessions
-        // (`auth_by_id`), so a change reloads it.
-        bump_admin_generation(&mut tx).await?;
+        // The user cache holds the email for console sessions, so a change
+        // drops its entry.
+        invalidate(&mut tx, &[Invalidation::user(&user_id)]).await?;
         // Never the address: only that it changed (spec "People in entries").
         let details = json!({ "cleared": email.is_none() });
         audit::record(
@@ -694,6 +705,72 @@ pub async fn set_email(
         )
         .await?;
     }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Sets a user's display name, records `user.display_name_changed` (its
+/// new length in characters, never the text) and bumps the administrative
+/// generation (the key cache's labels read it). The same text again is no
+/// change: it writes and records nothing. The user's personal team keeps
+/// its own `display_name` column: its label follows the user's.
+///
+/// The user's row is locked (`FOR UPDATE`, which `set_admin` also takes)
+/// with the actor's rows before anything else (`audit::lock_people`), so a
+/// provisioner's refusal of an admin user cannot race a promotion.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `name` - the user's name.
+/// * `display_name` - the new display name (empty clears it).
+/// * `actor` - who, for the audit log; a provisioner is refused an admin.
+/// * `now` - the server clock.
+///
+/// # Errors
+/// [`OkfError::Forbidden`] for a provisioner and an admin user;
+/// [`OkfError::UnknownName`] (a malformed name included);
+/// [`OkfError::Database`], a failed audit write included.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.set_display_name"))]
+pub async fn set_display_name(
+    pool: &PgPool,
+    name: &str,
+    display_name: &DisplayName,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    // A malformed name (a NUL, which Postgres refuses) names nobody.
+    if !is_valid_name(name) {
+        return Err(unknown(name));
+    }
+    let mut tx = pool.begin().await?;
+    let (user_id, is_admin) = lock_target(&mut tx, name, RowLock::Update, actor).await?;
+    audit::refuse_admin_target(actor, is_admin, name)?;
+    // The subquery reads the old value (the row is already locked), so
+    // `changed` compares it with the new one in the same statement.
+    let changed = sqlx::query_scalar::<_, bool>(
+        "UPDATE users u SET display_name = $2 \
+         FROM (SELECT id, display_name FROM users WHERE id = $1) old \
+         WHERE u.id = old.id \
+         RETURNING old.display_name <> u.display_name",
+    )
+    .bind(&user_id)
+    .bind(display_name.as_str())
+    .fetch_one(&mut *tx)
+    .await?;
+    if !changed {
+        // Dropping `tx` rolls back the `UPDATE`, which wrote the same text.
+        return Ok(());
+    }
+    invalidate(&mut tx, &[Invalidation::user(&user_id)]).await?;
+    // The length in characters, never the text (spec "People in entries").
+    let details = json!({ "length": display_name.as_str().chars().count() });
+    audit::record(
+        &mut tx,
+        actor,
+        &user_entry(Action::UserDisplayNameChanged, &user_id, details),
+        now,
+    )
+    .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -777,7 +854,7 @@ pub async fn set_admin(
         .await?;
     // The session store owns its SQL; `&mut *tx` runs it in this transaction.
     user_sessions::revoke_all(&mut *tx, &user_id, None).await?;
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::user(&user_id)]).await?;
     let details = json!({ "from": previous, "to": on });
     audit::record(
         &mut tx,
@@ -857,7 +934,7 @@ pub async fn find_record_by_email(
 /// The user with id `user_id`.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `executor` - a pool, connection or transaction.
 /// * `user_id` - a `users.id`.
 ///
 /// # Returns
@@ -866,40 +943,25 @@ pub async fn find_record_by_email(
 /// # Errors
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.find_auth"))]
-pub async fn find_auth(pool: &PgPool, user_id: &str) -> Result<Option<UserAuth>, OkfError> {
+pub async fn find_auth(
+    executor: impl sqlx::PgExecutor<'_>,
+    user_id: &str,
+) -> Result<Option<UserAuth>, OkfError> {
     Ok(sqlx::query_as::<_, UserAuth>(concat!(
         "SELECT ",
         user_auth_columns!(),
         " FROM users u WHERE u.id = $1"
     ))
     .bind(user_id)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?)
 }
 
-/// Every user's sign-in identity, by id, for the key cache: console
-/// sessions are built from it without a query.
-///
-/// # Arguments
-/// * `pool` - the database.
-///
-/// # Returns
-/// The users, keyed by id.
-///
-/// # Errors
-/// [`OkfError::Database`].
-#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.auth_by_id"))]
-pub async fn auth_by_id(pool: &PgPool) -> Result<HashMap<String, UserAuth>, OkfError> {
-    let users =
-        sqlx::query_as::<_, UserAuth>(concat!("SELECT ", user_auth_columns!(), " FROM users u"))
-            .fetch_all(pool)
-            .await?;
-    // `(user.id.clone(), user)`: the map owns a copy of the id as its key.
-    Ok(users
-        .into_iter()
-        .map(|user| (user.id.clone(), user))
-        .collect())
-}
+/// Deletes a user's undelivered feedback (`$1`: the user's name). The
+/// predicate is the one of the partial index `feedback_undelivered_user`
+/// (migration 0035), so the planner can use it.
+const DELETE_UNDELIVERED_FEEDBACK: &str =
+    "DELETE FROM feedback WHERE user_slug = $1 AND status IN ('pending', 'failed')";
 
 /// What a user deletion removed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -920,6 +982,210 @@ const SOLE_OWNED_TEAMS: &str = "\
                       WHERE o.team_id = t.id AND o.role = 'owner' AND o.user_id <> $1) \
     ORDER BY t.name";
 
+/// The start of the refusal [`DeleteOptions::unless_shared_member`] gives:
+/// the reason is this text, `: ` and the quoted team names, in id order. No
+/// other deletion refusal starts with it (they start `user "<name>" cannot
+/// be deleted`), so a client matches on this prefix.
+pub const SHARED_MEMBER_REFUSAL: &str = "the user is a member of shared team(s)";
+
+/// What [`delete`] allows and requires of the user it deletes.
+///
+/// The `Default` is the API's: the last admin user stays, and shared-team
+/// memberships go with the user.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeleteOptions {
+    /// Lets the last admin user go (the CLI, with operator access; never
+    /// the API).
+    pub allow_last_admin: bool,
+    /// Refuses the deletion while the user is a member of any team but its
+    /// own personal one, in any role and suspended or not. Checked under the
+    /// same locks as the delete, so an external system's "delete only if
+    /// unshared" has no read-then-delete race.
+    pub unless_shared_member: bool,
+}
+
+impl DeleteOptions {
+    /// The command line's: it may delete the last admin user.
+    pub const OPERATOR: Self = Self {
+        allow_last_admin: true,
+        unless_shared_member: false,
+    };
+}
+
+/// How the person deleting their own account proved it is them, moments
+/// before ([`delete_own`]). Checked again under the user's row lock, so a
+/// change that commits in between refuses the deletion.
+// `Copy`: two borrowed values, cheap to pass by value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Proof<'a> {
+    /// The current password matched; the user's stored password must still
+    /// be the one it matched (a reset or change meanwhile refuses).
+    Password(&'a PasswordStamp),
+    /// A fresh passkey assertion verified; the passkey (its raw credential
+    /// id) must still be the user's (a removal meanwhile refuses).
+    Passkey(&'a [u8]),
+}
+
+/// A signed-in person's request to delete their own account
+/// (`DELETE /api/v1/me`, issue #355). `Debug` is redacted where it holds a
+/// secret.
+pub struct OwnDeletion<'a> {
+    /// The session user's `users.id`; the name must still name it.
+    pub user_id: &'a str,
+    /// The session user's name.
+    pub name: &'a str,
+    /// The raw id of the asking session (the cookie's value), which must
+    /// still be in force.
+    pub session_id: &'a str,
+    /// How the person re-authenticated.
+    pub proof: Proof<'a>,
+}
+
+// Hand-written (Python's `__repr__`): the session id is a credential.
+impl std::fmt::Debug for OwnDeletion<'_> {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "Display or Debug impl: runs inside the subscriber while it formats an event"
+        )
+    )]
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OwnDeletion")
+            .field("user_id", &self.user_id)
+            .field("name", &self.name)
+            .field("session_id", &"<redacted>")
+            .field("proof", &self.proof)
+            .finish()
+    }
+}
+
+/// Deletes the signed-in person's own account (issue #355): exactly
+/// [`delete`] with the API's [`DeleteOptions`] (so the last admin user
+/// stays, and every other refusal of `delete` applies), the person as the
+/// actor, and, under the user's row lock, three more checks:
+/// - the name still names `own.user_id`;
+/// - the asking session is still in force (held `FOR SHARE`, as a password
+///   change from a session holds it), so a sign-out-everywhere, reset or
+///   admin change that ended it refuses the deletion;
+/// - the [`Proof`] still holds: the stored password is the one the typed
+///   password matched, or the asserted passkey is still the user's.
+///
+/// Keys, grants, sign-in codes, sessions, passkeys, linked identities,
+/// emailed links, entitlements, memberships and the personal team all go
+/// in that one transaction, or nothing does.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `own` - who asks, from which session, with what proof.
+/// * `actor` - the person, for the audit log (`user.deleted`).
+/// * `now` - the server clock.
+///
+/// # Returns
+/// What went.
+///
+/// # Errors
+/// [`OkfError::Unauthenticated`] once the session has ended or the user is
+/// gone; [`OkfError::Forbidden`] when the password changed or the passkey
+/// was removed since it was checked; otherwise as [`delete`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete_own"))]
+pub async fn delete_own(
+    pool: &PgPool,
+    own: &OwnDeletion<'_>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<DeletedUser, OkfError> {
+    match delete_checked(
+        pool,
+        own.name,
+        DeleteOptions::default(),
+        Some(own),
+        actor,
+        now,
+    )
+    .await
+    {
+        // The session's own name naming nobody: the user went meanwhile.
+        Err(OkfError::UnknownName { noun: "user", .. }) => Err(session_ended()),
+        other => other,
+    }
+}
+
+/// The 401 for a deletion whose session (or user) is gone.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+    )
+)]
+fn session_ended() -> OkfError {
+    OkfError::Unauthenticated {
+        reason: "this session has ended; sign in again".to_string(),
+    }
+}
+
+/// [`delete_own`]'s checks, run under the user's row lock (which every
+/// writer of the password, a passkey or a session's user takes first, or
+/// which, for a session revoke, never follows a session row lock).
+///
+/// # Arguments
+/// * `conn` - the deletion's transaction, holding the user `FOR UPDATE`.
+/// * `own` - the request.
+/// * `user_id` - the id the name resolved to under the lock.
+/// * `now` - the server clock.
+///
+/// # Errors
+/// As [`delete_own`]; [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.check_own_deletion"))]
+async fn check_own_deletion(
+    conn: &mut PgConnection,
+    own: &OwnDeletion<'_>,
+    user_id: &str,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    if user_id != own.user_id
+        || !user_sessions::hold_live(&mut *conn, own.session_id, own.user_id, now).await?
+    {
+        return Err(session_ended());
+    }
+    let holds = match own.proof {
+        Proof::Password(stamp) => {
+            // The row is ours `FOR UPDATE`: a plain read sees the hash as
+            // it stays until we commit.
+            let stored: Option<String> =
+                sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+                    .bind(user_id)
+                    .fetch_one(&mut *conn)
+                    .await?;
+            stored.as_deref() == Some(stamp.as_str())
+        }
+        Proof::Passkey(credential_id) => {
+            // A removal locks the user first (`passkeys::remove`), so it
+            // either committed before us or waits for us.
+            let found: Option<i32> = sqlx::query_scalar(
+                "SELECT 1 FROM user_passkeys WHERE user_id = $1 AND credential_id = $2",
+            )
+            .bind(user_id)
+            .bind(credential_id)
+            .fetch_optional(&mut *conn)
+            .await?;
+            found.is_some()
+        }
+    };
+    if !holds {
+        return Err(OkfError::Forbidden {
+            reason: match own.proof {
+                Proof::Password(_) => "the password changed meanwhile; give the current one again",
+                Proof::Passkey(_) => "that passkey was removed meanwhile; confirm again",
+            }
+            .to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Deletes a user and everything that is only theirs, in one transaction
 /// (spec Part 3): its keys, grants and sign-in codes (revoked ones too),
 /// sessions, sign-in methods, emailed links, entitlements, memberships and
@@ -930,7 +1196,8 @@ const SOLE_OWNED_TEAMS: &str = "\
 /// Lock order: every admin row in id order, then the user with every other
 /// user its entries resolve (the actor, its credential's owner, the people
 /// of its open changesets' personal owner teams), in id order
-/// ([`audit::lock_people`], as [`set_admin`]), then its personal team, then
+/// ([`audit::lock_people`], as [`set_admin`]), then (for [`delete_own`]
+/// only) the asking session's row `FOR SHARE`, then its personal team, then
 /// its shared teams in id order, then its keys and grants in id order, then
 /// their open changesets in id order. A key or code being created for the
 /// user holds the user `FOR KEY SHARE` (`id_of`); the deletion waits for it
@@ -944,8 +1211,7 @@ const SOLE_OWNED_TEAMS: &str = "\
 /// # Arguments
 /// * `pool` - the database.
 /// * `name` - the user's name.
-/// * `allow_last_admin` - lets the last admin user go (the CLI, with
-///   operator access; never the API).
+/// * `options` - what the deletion allows and requires ([`DeleteOptions`]).
 /// * `actor` - who, for the audit log; a provisioner is refused an admin.
 /// * `now` - the server clock.
 ///
@@ -955,14 +1221,38 @@ const SOLE_OWNED_TEAMS: &str = "\
 /// # Errors
 /// [`OkfError::UnknownName`] (a malformed name included);
 /// [`OkfError::Forbidden`] for a provisioner and an admin user;
-/// [`OkfError::Refused`] naming the catalogs its personal team owns, the
-/// shared teams it is the only owner of, or that it is the last admin user;
-/// [`OkfError::Database`].
+/// [`OkfError::Refused`] naming the shared team the user is a member of
+/// (with [`DeleteOptions::unless_shared_member`]), the catalogs its personal
+/// team owns, the shared teams it is the only owner of, or that it is the
+/// last admin user; [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete"))]
 pub async fn delete(
     pool: &PgPool,
     name: &str,
-    allow_last_admin: bool,
+    options: DeleteOptions,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<DeletedUser, OkfError> {
+    delete_checked(pool, name, options, None, actor, now).await
+}
+
+/// The one deletion path: [`delete`], plus [`delete_own`]'s checks when
+/// `own` is given, run right after the user's row is locked.
+///
+/// # Arguments
+/// As [`delete`]; `own` - a self-service deletion's request, if it is one.
+///
+/// # Returns
+/// What went.
+///
+/// # Errors
+/// As [`delete`] and [`delete_own`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "users.delete_checked"))]
+async fn delete_checked(
+    pool: &PgPool,
+    name: &str,
+    options: DeleteOptions,
+    own: Option<&OwnDeletion<'_>>,
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<DeletedUser, OkfError> {
@@ -1004,6 +1294,12 @@ pub async fn delete(
         .await?
         .ok_or_else(|| unknown(name))?;
     audit::refuse_admin_target(actor, is_admin, name)?;
+    // Under the user's lock and before any team, catalog or key: the
+    // session and passkey rows it reads are the user's children, which no
+    // writer locks before a team or a key.
+    if let Some(own) = own {
+        check_own_deletion(&mut tx, own, &user_id, now).await?;
+    }
     // The personal team: a catalog assigned to it concurrently takes
     // `FOR KEY SHARE` on this row, so either it waits for this delete (and
     // then fails its foreign-key check), or this waits for it and the
@@ -1014,13 +1310,16 @@ pub async fn delete(
             .bind(&user_id)
             .fetch_optional(&mut *tx)
             .await?;
-    // Its shared teams, so no owner is added or removed while we count.
-    sqlx::query(
-        "SELECT t.id FROM teams t JOIN team_members m ON m.team_id = t.id \
+    // Its shared teams, so no owner is added or removed while we count. A
+    // membership added concurrently needs this user row `FOR KEY SHARE`
+    // (its foreign key), which the lock above holds off until we finish, so
+    // the names read here are the memberships the delete removes.
+    let shared: Vec<String> = sqlx::query_scalar(
+        "SELECT t.name FROM teams t JOIN team_members m ON m.team_id = t.id \
          WHERE m.user_id = $1 AND t.personal_of IS NULL ORDER BY t.id FOR UPDATE OF t",
     )
     .bind(&user_id)
-    .execute(&mut *tx)
+    .fetch_all(&mut *tx)
     .await?;
     let owned: Vec<String> =
         sqlx::query_scalar("SELECT name FROM catalogs WHERE owner_team_id = $1 ORDER BY name")
@@ -1031,6 +1330,28 @@ pub async fn delete(
         .bind(&user_id)
         .fetch_all(&mut *tx)
         .await?;
+    // First, so it wins over every other refusal: a client that asked for
+    // this precondition always gets this answer (issue #535).
+    if options.unless_shared_member {
+        // Another user's personal team can have members too
+        // (`teams::set_member`): only the user's own is not "shared". No
+        // lock on those rows: a membership added concurrently needs this
+        // user row `FOR KEY SHARE`, which we hold off.
+        let in_others: Vec<String> = sqlx::query_scalar(
+            "SELECT t.name FROM teams t JOIN team_members m ON m.team_id = t.id \
+             WHERE m.user_id = $1 AND t.personal_of IS NOT NULL AND t.personal_of <> $1 \
+             ORDER BY t.id",
+        )
+        .bind(&user_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let teams: Vec<String> = shared.iter().chain(&in_others).cloned().collect();
+        if !teams.is_empty() {
+            return Err(OkfError::Refused {
+                reason: format!("{SHARED_MEMBER_REFUSAL}: {}", quoted(&teams)),
+            });
+        }
+    }
     let blocker = if !owned.is_empty() {
         Some(format!(
             "its personal team owns catalog(s) {}; delete them or move them to another team \
@@ -1042,7 +1363,7 @@ pub async fn delete(
             "it is the last owner of team(s) {}; add another owner first",
             quoted(&sole)
         ))
-    } else if is_admin && !allow_last_admin && admins.len() <= 1 {
+    } else if is_admin && !options.allow_last_admin && admins.len() <= 1 {
         Some("it is the last admin user; make another user an admin first".to_string())
     } else {
         None
@@ -1082,6 +1403,14 @@ pub async fn delete(
         now,
     )
     .await?;
+    // Every team the user is in (its personal team included), read before
+    // the deletes below cascade the memberships: each loses a member. No
+    // lock: a membership added concurrently waits on the user row we hold.
+    let member_of: Vec<String> =
+        sqlx::query_scalar("SELECT team_id FROM team_members WHERE user_id = $1 ORDER BY team_id")
+            .bind(&user_id)
+            .fetch_all(&mut *tx)
+            .await?;
     // The team row goes before the user row, because `teams.personal_of`
     // restricts the user's delete; its memberships cascade with it.
     if let Some(team_id) = &team_id {
@@ -1090,6 +1419,23 @@ pub async fn delete(
             .execute(&mut *tx)
             .await?;
     }
+    // Feedback not yet delivered (`pending`, or `failed` with no one to
+    // retry it for) must not outlive its sender: a pending row would still
+    // be forwarded with the name as `sender.userId`. `feedback` has no
+    // foreign key by design (migration 0022), so it goes here. `sent` rows
+    // are delivered already and the hourly prune removes them. A try that
+    // claims its row (`feedback::take`) after this commits finds nothing
+    // and the job ends as skipped. A post already claimed before it is not
+    // cancelled and can still reach Forminit: waiting for it would hold
+    // these locks across an outside call bounded only by its 30 s timeout.
+    // Settling that try then finds no row, so it is not posted again
+    // (review of PR #951). The rows are taken in no order relative to
+    // other writers: nothing else locks a feedback row together with a
+    // user.
+    sqlx::query(DELETE_UNDELIVERED_FEEDBACK)
+        .bind(name)
+        .execute(&mut *tx)
+        .await?;
     // Before the user row goes: it finds the user's credentials through
     // `api_keys` and `sign_in_codes`, which that delete cascades.
     audit::forget_person(&mut tx, &user_id).await?;
@@ -1099,7 +1445,13 @@ pub async fn delete(
         .bind(&user_id)
         .execute(&mut *tx)
         .await?;
-    bump_admin_generation(&mut tx).await?;
+    // The user, each of its keys and grants (the cascade revoked them all),
+    // and each team it was in.
+    let invalidations: Vec<Invalidation> = std::iter::once(Invalidation::user(&user_id))
+        .chain(keys.iter().map(|key| Invalidation::credential(key)))
+        .chain(member_of.iter().map(|team| Invalidation::team(team)))
+        .collect();
+    invalidate(&mut tx, &invalidations).await?;
     tx.commit().await?;
     Ok(deleted)
 }
@@ -1214,6 +1566,7 @@ pub(crate) mod tests {
             pool,
             &crate::store::catalogs::NewCatalog {
                 name: "shared",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: team,
             },
@@ -1247,7 +1600,7 @@ pub(crate) mod tests {
             pool,
             &NewUser {
                 name,
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -1294,19 +1647,94 @@ pub(crate) mod tests {
             .with_timezone(&Utc)
     }
 
+    // `static` values live for the whole run, so the `NewUser<'static>`
+    // and `NewTeam<'static>` fixtures below can borrow them. `LazyLock`
+    // builds each on first use (`DisplayName::parse` is not a `const fn`),
+    // and `&ALICE_EXAMPLE` derefs to a `&DisplayName`.
+    static ALICE_EXAMPLE: std::sync::LazyLock<DisplayName> =
+        std::sync::LazyLock::new(|| DisplayName::parse("Alice Example").unwrap());
+    static UNSET: std::sync::LazyLock<DisplayName> = std::sync::LazyLock::new(DisplayName::default);
+
     fn alice() -> NewUser<'static> {
         NewUser {
             name: "alice",
-            display_name: "Alice Example",
+            display_name: &ALICE_EXAMPLE,
         }
     }
 
     fn family_owned_by_alice() -> teams::NewTeam<'static> {
         teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &UNSET,
             owner: "alice",
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn user_auth_carries_the_display_name() {
+        // Arrange: a user with a display name and an email.
+        let db = test_db().await;
+        let display = DisplayName::parse("Alice Example").unwrap();
+        create(
+            &db.pool,
+            &NewUser {
+                name: "alice",
+                display_name: &display,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        set_email(
+            &db.pool,
+            "alice",
+            Some("alice@example.com"),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        // Act: two readers built from `user_auth_columns!`.
+        let by_email = find_by_email(&db.pool, "alice@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        let by_id = find_auth(&db.pool, &by_email.id).await.unwrap().unwrap();
+
+        // Assert
+        assert_eq!(by_email.display_name, "Alice Example");
+        assert_eq!(by_id.display_name, "Alice Example");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_gives_the_personal_team_the_users_display_name() {
+        // Arrange
+        let db = test_db().await;
+        let display = DisplayName::parse("Alice Example").unwrap();
+
+        // Act
+        let created = create(
+            &db.pool,
+            &NewUser {
+                name: "alice",
+                display_name: &display,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        // Assert
+        assert_eq!(created.display_name, "Alice Example");
+        let team: String =
+            sqlx::query_scalar("SELECT display_name FROM teams WHERE name = 'alice'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(team, "Alice Example");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1397,7 +1825,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn auth_by_id_holds_every_user_by_id() {
+    async fn find_auth_reads_one_user_by_id() {
         let db = test_db().await;
         let alice = seed_user(&db.pool, "alice", Some("alice@example.com")).await;
         set_admin(
@@ -1412,20 +1840,18 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-
-        let users = auth_by_id(&db.pool).await.unwrap();
-
         let stored = find_by_email(&db.pool, "alice@example.com")
             .await
             .unwrap()
             .expect("alice");
-        assert_eq!(users.get(&stored.id), Some(&stored));
+
+        let found = find_auth(&db.pool, &stored.id).await.unwrap();
+        let unknown = find_auth(&db.pool, "no-such-id").await.unwrap();
+
+        assert_eq!(found.as_ref(), Some(&stored));
         assert!(stored.is_admin);
         assert_eq!(stored.name, alice.name);
-        assert!(
-            users.values().any(|user| user.name == crate::db::TEST_USER),
-            "every user, not only those with an email"
-        );
+        assert_eq!(unknown, None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1895,7 +2321,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewUser {
                 name: "family",
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -1917,7 +2343,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewUser {
                 name: "Alice",
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -1970,7 +2396,7 @@ pub(crate) mod tests {
             .unwrap();
         let user = NewUser {
             name: "family",
-            display_name: "",
+            display_name: &DisplayName::default(),
         };
         let team = family_owned_by_alice();
 
@@ -2083,9 +2509,15 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        let deleted = delete(&db.pool, "alice", false, &AuditActor::cli(), now())
-            .await
-            .unwrap();
+        let deleted = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(deleted, DeletedUser::default());
         assert!(matches!(
@@ -2102,13 +2534,193 @@ pub(crate) mod tests {
         assert!(after > before, "the delete bumps the admin generation");
     }
 
+    /// A feedback submission for `alice`, as the tool and the console make
+    /// it (`registered`: it names a user).
+    async fn submit_feedback_for_alice(pool: &PgPool) -> Result<String, OkfError> {
+        use crate::mail::feedback::{submit, FeedbackKind, FeedbackOrigin, NewFeedback};
+        let new = NewFeedback {
+            credential: "key-1",
+            user_slug: "alice",
+            registered: true,
+            message: "late",
+            kind: FeedbackKind::Other,
+            origin: FeedbackOrigin::User,
+            tool: None,
+            rating: None,
+            client: "test",
+            credential_kind: "api_key",
+        };
+        submit(pool, &new, 10, now()).await
+    }
+
+    /// Review of PR #951: a submission that starts while a deletion holds
+    /// the user row waits for it and then finds the user gone; it stores
+    /// nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_feedback_submit_that_waited_on_the_users_deletion_is_refused() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        // The deletion's lock, held `FOR UPDATE` as `delete_checked` does.
+        let mut deleting = db.pool.begin().await.unwrap();
+        let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *deleting)
+            .await
+            .unwrap();
+        let user_id: String =
+            sqlx::query_scalar("SELECT id FROM users WHERE name = 'alice' FOR UPDATE")
+                .fetch_one(&mut *deleting)
+                .await
+                .unwrap();
+        let pool = db.pool.clone();
+        let submission = tokio::spawn(async move { submit_feedback_for_alice(&pool).await });
+        let mut probe = db.pool.acquire().await.unwrap();
+        crate::test_locks::wait_waiter(&mut probe, holder).await;
+        sqlx::query("DELETE FROM teams WHERE personal_of = $1")
+            .bind(&user_id)
+            .execute(&mut *deleting)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(&user_id)
+            .execute(&mut *deleting)
+            .await
+            .unwrap();
+        deleting.commit().await.unwrap();
+
+        let outcome = tokio::time::timeout(LOCK_WAIT, submission)
+            .await
+            .expect("the submission waited for the deletion for too long")
+            .unwrap();
+
+        assert!(
+            matches!(outcome, Err(OkfError::Unauthenticated { .. })),
+            "{outcome:?}"
+        );
+        assert_eq!(count(&db.pool, "SELECT count(*) FROM feedback").await, 0);
+    }
+
+    /// Review of PR #951: a submission already holding the user row when the
+    /// deletion starts is stored first, so the deletion waits for it and
+    /// deletes the row it committed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_feedback_submit_in_flight_is_deleted_with_the_user() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        // A submission in flight holds alice `FOR KEY SHARE`.
+        let mut submitting = db.pool.begin().await.unwrap();
+        let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *submitting)
+            .await
+            .unwrap();
+        id_of(&mut submitting, "alice").await.unwrap();
+        let pool = db.pool.clone();
+        let deletion = tokio::spawn(async move {
+            delete(
+                &pool,
+                "alice",
+                DeleteOptions::default(),
+                &AuditActor::cli(),
+                now(),
+            )
+            .await
+        });
+        let mut probe = db.pool.acquire().await.unwrap();
+        crate::test_locks::wait_waiter(&mut probe, holder).await;
+        sqlx::query(
+            "INSERT INTO feedback (id, credential, user_slug, message, kind, origin, \
+                 server_version, client, credential_kind, created_at) \
+             VALUES ('late', 'key-1', 'alice', 'm', 'bug', 'user', '0', 'c', 'api_key', $1)",
+        )
+        .bind(now())
+        .execute(&mut *submitting)
+        .await
+        .unwrap();
+        submitting.commit().await.unwrap();
+
+        tokio::time::timeout(LOCK_WAIT, deletion)
+            .await
+            .expect("the delete waited for the submission for too long")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(count(&db.pool, "SELECT count(*) FROM feedback").await, 0);
+    }
+
+    /// Review of PR #951: the deletion's feedback delete can use the partial
+    /// index on `user_slug`, so it does not scan the table under the user
+    /// and admin locks. (Sequential scans are switched off: on a handful of
+    /// rows the planner would choose one whatever the indexes are.)
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_feedback_delete_on_user_deletion_uses_its_partial_index() {
+        let db = test_db().await;
+        let mut tx = db.pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL enable_seqscan = off")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+
+        let plan: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN {DELETE_UNDELIVERED_FEEDBACK}"
+        )))
+        .bind("alice")
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+
+        let plan = plan.join("\n");
+        assert!(plan.contains("feedback_undelivered_user"), "{plan}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deleting_a_user_removes_its_undelivered_feedback_only() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        seed_user(&db.pool, "bob", None).await;
+        for (id, slug, status) in [
+            ("f-pending", "alice", "pending"),
+            ("f-failed", "alice", "failed"),
+            ("f-sent", "alice", "sent"),
+            ("f-other", "bob", "pending"),
+        ] {
+            sqlx::query(
+                "INSERT INTO feedback (id, credential, user_slug, message, kind, origin, \
+                     server_version, client, credential_kind, status, created_at, finished_at) \
+                 VALUES ($1, 'key-1', $2, 'm', 'bug', 'user', '0', 'c', 'api_key', $3, $4, \
+                     CASE WHEN $3 = 'pending' THEN NULL ELSE $4 END)",
+            )
+            .bind(id)
+            .bind(slug)
+            .bind(status)
+            .bind(now())
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+
+        delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        let left: Vec<String> = sqlx::query_scalar("SELECT id FROM feedback ORDER BY id")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(left, ["f-other", "f-sent"]);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn deleting_a_user_removes_its_credentials_and_keeps_the_history() {
         let db = test_db().await;
         seed_user(&db.pool, "alice", Some("alice@example.com")).await;
         let family = teams::NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &DisplayName::default(),
             owner: crate::db::TEST_USER,
         };
         teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -2155,9 +2767,15 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let deleted = delete(&db.pool, "alice", false, &AuditActor::cli(), now())
-            .await
-            .unwrap();
+        let deleted = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             deleted,
@@ -2241,9 +2859,15 @@ pub(crate) mod tests {
             .unwrap();
         tx.commit().await.unwrap();
 
-        let deleted = delete(&db.pool, "alice", false, &AuditActor::cli(), now())
-            .await
-            .unwrap();
+        let deleted = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(deleted.discarded, 1);
         let state: String = sqlx::query_scalar("SELECT state FROM changesets WHERE id = $1")
@@ -2272,7 +2896,14 @@ pub(crate) mod tests {
         let db = test_db().await;
         seed_user(&db.pool, "alice", None).await;
         seed_catalog_owned_by(&db.pool, "alice").await;
-        let owns = delete(&db.pool, "alice", false, &AuditActor::cli(), now()).await;
+        let owns = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
         catalogs::delete(&db.pool, "shared", true, &AuditActor::cli(), Utc::now())
             .await
             .unwrap();
@@ -2284,7 +2915,14 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        let sole = delete(&db.pool, "alice", false, &AuditActor::cli(), now()).await;
+        let sole = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
         teams::set_member(
             &db.pool,
             &crate::store::teams::Membership {
@@ -2309,8 +2947,22 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        let last_admin = delete(&db.pool, "alice", false, &AuditActor::cli(), now()).await;
-        let by_the_cli = delete(&db.pool, "alice", true, &AuditActor::cli(), now()).await;
+        let last_admin = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
+        let by_the_cli = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::OPERATOR,
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
 
         assert!(reason(owns).contains("catalog(s) \"shared\""));
         assert!(reason(sole).contains("last owner of team(s) \"family\""));
@@ -2320,6 +2972,208 @@ pub(crate) mod tests {
             teams::find(&db.pool, "family").await.unwrap().members.len(),
             1,
             "the other owner stays"
+        );
+    }
+
+    /// Makes `alice` an ordinary member of a new shared team, `family`.
+    async fn alice_joins_family(pool: &PgPool) {
+        teams::create(
+            pool,
+            &family_owned_by_test_user(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        teams::set_member(
+            pool,
+            &crate::store::teams::Membership {
+                team: "family",
+                user: "alice",
+                role: teams::Role::Member,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+    }
+
+    fn family_owned_by_test_user() -> teams::NewTeam<'static> {
+        teams::NewTeam {
+            name: "family",
+            display_name: &UNSET,
+            owner: crate::db::TEST_USER,
+        }
+    }
+
+    const UNLESS_SHARED: DeleteOptions = DeleteOptions {
+        allow_last_admin: false,
+        unless_shared_member: true,
+    };
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unless_shared_member_refuses_a_plain_member_and_deletes_nothing() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        seed_catalog_owned_by(&db.pool, crate::db::TEST_TEAM).await;
+        key_for(&db.pool, "alice", "alice-laptop", false).await;
+        alice_joins_family(&db.pool).await;
+
+        let refused = delete(&db.pool, "alice", UNLESS_SHARED, &AuditActor::cli(), now()).await;
+
+        let reason = reason(refused);
+        assert!(
+            reason == "the user is a member of shared team(s): \"family\"",
+            "{reason}"
+        );
+        assert!(find(&db.pool, "alice").await.is_ok(), "the user stays");
+        assert_eq!(count(&db.pool, "SELECT count(*) FROM api_keys").await, 1);
+        assert_eq!(
+            teams::find(&db.pool, "family").await.unwrap().members.len(),
+            2,
+            "the memberships stay"
+        );
+        // Without the option the same user is deleted, as before.
+        let deleted = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
+        assert!(deleted.is_ok(), "{deleted:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unless_shared_member_wins_over_the_last_owner_refusal_and_counts_suspended_teams() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        let family = teams::NewTeam {
+            name: "family",
+            display_name: &DisplayName::default(),
+            owner: "alice",
+        };
+        teams::create(&db.pool, &family, &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        teams::suspend(&db.pool, "family", None, &AuditActor::cli(), now())
+            .await
+            .unwrap();
+
+        let plain = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
+        let guarded = delete(&db.pool, "alice", UNLESS_SHARED, &AuditActor::cli(), now()).await;
+
+        assert!(reason(plain).contains("last owner of team(s) \"family\""));
+        let guarded = reason(guarded);
+        assert!(guarded.starts_with(SHARED_MEMBER_REFUSAL), "{guarded}");
+        assert!(!guarded.contains("last owner"), "{guarded}");
+        assert!(find(&db.pool, "alice").await.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unless_shared_member_counts_another_users_personal_team() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        seed_user(&db.pool, "bob", None).await;
+        teams::set_member(
+            &db.pool,
+            &crate::store::teams::Membership {
+                team: "alice",
+                user: "bob",
+                role: teams::Role::Member,
+            },
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+
+        let refused = delete(&db.pool, "bob", UNLESS_SHARED, &AuditActor::cli(), now()).await;
+
+        assert_eq!(
+            reason(refused),
+            "the user is a member of shared team(s): \"alice\""
+        );
+        assert!(find(&db.pool, "bob").await.is_ok(), "the user stays");
+        assert_eq!(
+            teams::find(&db.pool, "alice").await.unwrap().members.len(),
+            2,
+            "the membership stays"
+        );
+        let own_only = delete(&db.pool, "alice", UNLESS_SHARED, &AuditActor::cli(), now()).await;
+        assert!(
+            own_only.is_ok(),
+            "an own personal team alone is not shared: {own_only:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unless_shared_member_deletes_a_user_with_no_shared_team() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+
+        let deleted = delete(&db.pool, "alice", UNLESS_SHARED, &AuditActor::cli(), now()).await;
+
+        assert!(deleted.is_ok(), "{deleted:?}");
+        assert!(matches!(
+            find(&db.pool, "alice").await,
+            Err(OkfError::UnknownName { .. })
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_membership_committed_just_before_the_check_is_never_removed_silently() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        teams::create(
+            &db.pool,
+            &family_owned_by_test_user(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
+        // A membership insert in flight holds alice `FOR KEY SHARE` (its
+        // foreign key), so the delete's `FOR UPDATE` waits behind it.
+        let mut joining = db.pool.begin().await.unwrap();
+        sqlx::query(
+            "INSERT INTO team_members (team_id, user_id, role, created_at) \
+             SELECT t.id, u.id, 'member', $1 FROM teams t, users u \
+             WHERE t.name = 'family' AND u.name = 'alice'",
+        )
+        .bind(now())
+        .execute(&mut *joining)
+        .await
+        .unwrap();
+        let pool = db.pool.clone();
+        let deleting = tokio::spawn(async move {
+            delete(&pool, "alice", UNLESS_SHARED, &AuditActor::cli(), now()).await
+        });
+        tokio::time::timeout(LOCK_WAIT, until_a_lock_is_awaited(&db.pool))
+            .await
+            .expect("the delete never reached the user's lock");
+
+        joining.commit().await.unwrap();
+        let outcome = tokio::time::timeout(LOCK_WAIT, deleting)
+            .await
+            .expect("the delete waited for the membership for too long")
+            .unwrap();
+
+        assert!(reason(outcome).starts_with(SHARED_MEMBER_REFUSAL));
+        assert!(find(&db.pool, "alice").await.is_ok(), "the user stays");
+        assert_eq!(
+            teams::find(&db.pool, "family").await.unwrap().members.len(),
+            2,
+            "the membership stays"
         );
     }
 
@@ -2344,7 +3198,14 @@ pub(crate) mod tests {
             ..AuditActor::cli()
         };
 
-        let refused = delete(&db.pool, "alice", true, &provisioner, now()).await;
+        let refused = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::OPERATOR,
+            &provisioner,
+            now(),
+        )
+        .await;
 
         assert!(
             matches!(refused, Err(OkfError::Forbidden { .. })),
@@ -2357,7 +3218,14 @@ pub(crate) mod tests {
     async fn deleting_an_unknown_or_malformed_user_is_unknown_name() {
         let db = test_db().await;
         for name in ["nobody", "a\0b"] {
-            let missing = delete(&db.pool, name, false, &AuditActor::cli(), now()).await;
+            let missing = delete(
+                &db.pool,
+                name,
+                DeleteOptions::default(),
+                &AuditActor::cli(),
+                now(),
+            )
+            .await;
             assert!(
                 matches!(missing, Err(OkfError::UnknownName { noun: "user", .. })),
                 "{name:?}: {missing:?}"
@@ -2377,7 +3245,14 @@ pub(crate) mod tests {
         let entries = "SELECT count(*) FROM audit_entries";
         let recorded = count(&db.pool, entries).await;
 
-        let refused = delete(&db.pool, "alice", false, &AuditActor::cli(), now()).await;
+        let refused = delete(
+            &db.pool,
+            "alice",
+            DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
 
         assert!(reason(refused).contains("catalog"));
         assert_unchanged(&db.pool, 1, generation).await;
@@ -2398,6 +3273,7 @@ pub(crate) mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "shared",
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -2416,10 +3292,16 @@ pub(crate) mod tests {
         // blocks on the personal team's row, which the assignment's
         // foreign-key check holds `FOR KEY SHARE`.
         let pool = db.pool.clone();
-        let deleting =
-            tokio::spawn(
-                async move { delete(&pool, "alice", false, &AuditActor::cli(), now()).await },
-            );
+        let deleting = tokio::spawn(async move {
+            delete(
+                &pool,
+                "alice",
+                DeleteOptions::default(),
+                &AuditActor::cli(),
+                now(),
+            )
+            .await
+        });
         until_a_lock_is_awaited(&db.pool).await;
 
         assigning.commit().await.unwrap();
@@ -2443,10 +3325,16 @@ pub(crate) mod tests {
         let mut creating = db.pool.begin().await.unwrap();
         id_of(&mut creating, "alice").await.unwrap();
         let pool = db.pool.clone();
-        let deletion =
-            tokio::spawn(
-                async move { delete(&pool, "alice", false, &AuditActor::cli(), now()).await },
-            );
+        let deletion = tokio::spawn(async move {
+            delete(
+                &pool,
+                "alice",
+                DeleteOptions::default(),
+                &AuditActor::cli(),
+                now(),
+            )
+            .await
+        });
         until_a_lock_is_awaited(&db.pool).await;
         sqlx::query(
             "INSERT INTO api_keys (id, name, sha256, access, all_catalogs, actor, created_at, \
@@ -2490,10 +3378,16 @@ pub(crate) mod tests {
             .await
             .unwrap();
         let pool = db.pool.clone();
-        let deletion =
-            tokio::spawn(
-                async move { delete(&pool, "alice", false, &AuditActor::cli(), now()).await },
-            );
+        let deletion = tokio::spawn(async move {
+            delete(
+                &pool,
+                "alice",
+                DeleteOptions::default(),
+                &AuditActor::cli(),
+                now(),
+            )
+            .await
+        });
         until_a_lock_is_awaited(&db.pool).await;
         opening.commit().await.unwrap();
 
@@ -2571,8 +3465,9 @@ pub(crate) mod tests {
             .unwrap();
         let pool = db.pool.clone();
         let target_name = target.name.clone();
-        let deleting =
-            tokio::spawn(async move { delete(&pool, &target_name, false, &actor, now()).await });
+        let deleting = tokio::spawn(async move {
+            delete(&pool, &target_name, DeleteOptions::default(), &actor, now()).await
+        });
         until_a_lock_is_awaited(&db.pool).await;
 
         // Act: the writer's next lock, then its commit.
@@ -2711,7 +3606,7 @@ pub(crate) mod tests {
             &db.pool,
             &NewUser {
                 name: "bob",
-                display_name: "",
+                display_name: &DisplayName::default(),
             },
             &cli,
             now(),
@@ -2764,6 +3659,96 @@ pub(crate) mod tests {
             .await
             .is_empty());
         allowed.expect("a provisioner may set a non-admin's email");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_display_name_changes_it_records_its_length_and_bumps() {
+        // Arrange
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", Some("alice@example.com")).await;
+        let cli = AuditActor::cli();
+        let name = DisplayName::parse("Alice Exämple").unwrap();
+        let before = crate::store::catalogs::admin_generation(&db.pool)
+            .await
+            .unwrap();
+
+        // Act: set it, then the same text again.
+        set_display_name(&db.pool, "alice", &name, &cli, now())
+            .await
+            .unwrap();
+        let after_change = crate::store::catalogs::admin_generation(&db.pool)
+            .await
+            .unwrap();
+        set_display_name(&db.pool, "alice", &name, &cli, now())
+            .await
+            .unwrap();
+
+        // Assert
+        assert_eq!(
+            find(&db.pool, "alice").await.unwrap().display_name,
+            "Alice Exämple"
+        );
+        // The personal team's column is left alone: its label is derived.
+        let team: String = sqlx::query_scalar("SELECT display_name FROM teams WHERE name = $1")
+            .bind("alice")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(team, "");
+        assert_eq!(after_change, before + 1);
+        assert_eq!(
+            crate::store::catalogs::admin_generation(&db.pool)
+                .await
+                .unwrap(),
+            after_change,
+            "the same text bumps nothing"
+        );
+        let entries = entries_about(&db.pool, "user.display_name_changed", "alice").await;
+        assert_eq!(entries.len(), 1, "the same text records nothing");
+        assert!(entries[0].teams.is_empty());
+        // Characters, not bytes; never the text.
+        assert_eq!(entries[0].details, json!({"length": 13}));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_provisioner_may_not_rename_an_admin_user() {
+        // Arrange
+        let db = test_db().await;
+        seed_user(&db.pool, "staff", None).await;
+        seed_user(&db.pool, "alice", None).await;
+        set_admin(&db.pool, "staff", admin(true), &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        let name = DisplayName::parse("Renamed").unwrap();
+
+        // Act
+        let refused = set_display_name(&db.pool, "staff", &name, &provisioner(), now()).await;
+        let allowed = set_display_name(&db.pool, "alice", &name, &provisioner(), now()).await;
+        let unknown = set_display_name(&db.pool, "nobody", &name, &AuditActor::cli(), now()).await;
+        let malformed = set_display_name(&db.pool, "a\0b", &name, &AuditActor::cli(), now()).await;
+
+        // Assert
+        assert!(
+            matches!(refused, Err(OkfError::Forbidden { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(find(&db.pool, "staff").await.unwrap().display_name, "");
+        assert!(
+            entries_about(&db.pool, "user.display_name_changed", "staff")
+                .await
+                .is_empty()
+        );
+        allowed.expect("a provisioner may rename a non-admin");
+        assert_eq!(
+            find(&db.pool, "alice").await.unwrap().display_name,
+            "Renamed"
+        );
+        for outcome in [unknown, malformed] {
+            assert!(
+                matches!(outcome, Err(OkfError::UnknownName { .. })),
+                "{outcome:?}"
+            );
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2989,7 +3974,7 @@ pub(crate) mod tests {
         let created = async move {
             let new = NewUser {
                 name: "dave",
-                display_name: "",
+                display_name: &DisplayName::default(),
             };
             create(&pool, &new, &actor, now()).await.map(|_| ())
         };
@@ -3124,3 +4109,7 @@ pub(crate) mod tests {
             .clone()
     }
 }
+
+#[cfg(test)]
+#[path = "users_own_deletion_tests.rs"]
+mod own_deletion_tests;

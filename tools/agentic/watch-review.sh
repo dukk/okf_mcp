@@ -5,15 +5,19 @@
 # exits 0. Meant to run in the background while a coordinator waits.
 #
 # - Posts the bot's re-trigger command ($AGENTIC_RETRIGGER, default "/prrb")
-#   once if the bot has not reacted after ~90 s, or reacted but not reviewed
-#   after ~6 min, but never while the PR is behind main (merge origin/main and
-#   push first; the bot skips a PR that is out of date). Never re-triggers once the bot has given the maximum number
-#   of review rounds (agentic_max_rounds).
+#   once if the bot has not reacted since the watcher started after ~90 s, or
+#   reacted but not reviewed after ~5 min. A reaction from before the watcher
+#   started (an earlier round's) does not count. Never re-triggers once the
+#   bot has given the maximum number of review rounds (agentic_max_rounds).
+# - Exits 5 at once when the PR is behind main or conflicts with it
+#   (mergeStateStatus BEHIND or DIRTY), or when the bot answers with an
+#   "out of date" notice: the bot skips such a PR, so waiting is pointless.
+#   Merge origin/main into the branch, push, and run the watcher again.
 # - Exits 4 at once when the current head has no review and the round cap is
 #   reached: merge with merge-reviewed.sh instead of asking again.
 # - A failed lookup (PR, reviews, reactions) decides nothing on that pass: no
 #   re-trigger and no exit; the next poll retries.
-# - Exits 2 once 30 min ($AGENTIC_WATCH_TIMEOUT seconds) have passed since it
+# - Exits 2 once 15 min ($AGENTIC_WATCH_TIMEOUT seconds) have passed since it
 #   started, whatever happened in between (re-trigger, API failures, a stalled
 #   gh), and prints the bot's latest PR comments: the usual cause is a skip
 #   notice such as "out of date with main" (merge origin/main into the branch
@@ -28,7 +32,7 @@ source "$here/lib.sh"
 
 pr=${1:?usage: watch-review.sh <pr>}
 started=$(agentic_now) # for re-trigger timing
-readonly deadline=$((started + ${AGENTIC_WATCH_TIMEOUT:-1800})) # overall limit; never moves
+readonly deadline=$((started + ${AGENTIC_WATCH_TIMEOUT:-900})) # overall limit; never moves
 agentic_deadline=$deadline # bounds every gh call (lib.sh: agentic_call_budget)
 diagnostics_budget=3
 repo=$(agentic_repo) || { echo "watch-review.sh: could not resolve the repository" >&2; exit 1; }
@@ -37,21 +41,48 @@ retrigger=${AGENTIC_RETRIGGER:-/prrb}
 poll=30
 max_rounds=$(agentic_max_rounds)
 retriggered=0
-warned_behind=0
 head=""
 
-# Posts the re-trigger, but never while the PR is behind main: the bot skips
-# such a PR, so asking would only waste the request.
-retrigger_if_current() {
-    local merge_state
-    if ! merge_state=$(agentic_gh pr view "$pr" -R "$repo" --json mergeStateStatus \
+# Exits 5 when the bot cannot review the PR as it stands: GitHub reports it
+# BEHIND or DIRTY (conflicting) against main, or the bot has answered since
+# the watcher started with an "out of date" notice. Returns 1 when a lookup
+# failed: the PR's state is then unknown, so the caller must not re-trigger
+# on this pass.
+exit_if_out_of_date() {
+    local merge_state notices
+    if merge_state=$(agentic_gh pr view "$pr" -R "$repo" --json mergeStateStatus \
         --jq .mergeStateStatus); then
+        case "$merge_state" in
+            BEHIND | DIRTY)
+                echo "PR $pr is $merge_state against main: merge origin/main, resolve any" \
+                    "conflicts, push, then watch again; the bot skips it as it is"
+                exit 5
+                ;;
+        esac
+    else
         echo "watch-review.sh: could not read the merge state of PR $pr; retrying" >&2
-    elif [ "$merge_state" = BEHIND ]; then
-        [ "$warned_behind" = 1 ] || echo "PR $pr is behind main: merge origin/main and push" \
-            "before the bot is asked again; not re-triggering"
-        warned_behind=1
-    elif agentic_gh pr comment "$pr" -R "$repo" --body "$retrigger" >/dev/null; then
+        return 1
+    fi
+    [ "$retriggered" = 1 ] || return 0
+    if ! notices=$(agentic_api_list "repos/$repo/issues/$pr/comments"); then
+        echo "watch-review.sh: could not read the comments on PR $pr; retrying" >&2
+        return 1
+    else
+        # shellcheck disable=SC2016 # $started is a jq variable
+        notices=$(agentic_jq_bot "$bot" '[.[] | select(.user.login | is_bot)
+            | select((.created_at // null) == null or (.created_at | fromdateiso8601) >= $started)
+            | select(.body | test("out of date"; "i"))] | length' \
+            --argjson started "$started" <<<"$notices")
+        if [ "${notices:-0}" != 0 ]; then
+            echo "the bot says PR $pr is out of date with main: merge origin/main, push," \
+                "then watch again"
+            exit 5
+        fi
+    fi
+}
+
+retrigger() {
+    if agentic_gh pr comment "$pr" -R "$repo" --body "$retrigger" >/dev/null; then
         retriggered=1
         echo "posted $retrigger on PR $pr"
     fi
@@ -76,15 +107,22 @@ while :; do
                 "once the gates pass and every thread has a reply"
             exit 4
         fi
-        if [ "$retriggered" = 0 ]; then
+        if ! exit_if_out_of_date; then
+            : # state unknown: no re-trigger on this pass
+        elif [ "$retriggered" = 0 ]; then
             waited=$(($(agentic_now) - started))
             if ! reactions=$(agentic_api_list "repos/$repo/issues/$pr/reactions"); then
                 echo "watch-review.sh: could not read the reactions on PR $pr; retrying" >&2
             else
-                reacted=$(agentic_jq_bot "$bot" '[.[] | select(.user.login | is_bot)] | length' \
-                    <<<"$reactions")
-                if { [ "$reacted" = 0 ] && [ "$waited" -gt 90 ]; } || [ "$waited" -gt 360 ]; then
-                    retrigger_if_current
+                # Only a reaction since the watcher started shows the bot saw
+                # this push; an earlier round's reaction stays on the PR.
+                # shellcheck disable=SC2016 # $started is a jq variable
+                reacted=$(agentic_jq_bot "$bot" '[.[] | select(.user.login | is_bot)
+                    | select((.created_at // null) == null
+                        or (.created_at | fromdateiso8601) >= $started)] | length' \
+                    --argjson started "$started" <<<"$reactions")
+                if { [ "$reacted" = 0 ] && [ "$waited" -gt 90 ]; } || [ "$waited" -gt 300 ]; then
+                    retrigger
                 fi
             fi
         fi

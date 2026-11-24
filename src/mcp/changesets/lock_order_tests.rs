@@ -29,14 +29,14 @@ async fn pg() -> TestApp {
 }
 
 /// Creates user `name` (an admin user if `admin`) with an every-catalog
-/// key at `access` defaulting to `pg`, polls it in, and returns the
+/// key at `access` defaulting to `pg`, and returns the
 /// context of a connection with that key.
 async fn user_context(test: &TestApp, name: &str, access: Access, admin: bool) -> ToolContext {
     let pool = test.app.pool();
     let cli = AuditActor::cli();
     let user = NewUser {
         name,
-        display_name: name,
+        display_name: &crate::labels::DisplayName::parse(name).unwrap(),
     };
     users::create(pool, &user, &cli, Utc::now())
         .await
@@ -67,8 +67,7 @@ async fn user_context(test: &TestApp, name: &str, access: Access, admin: bool) -
         .await
         .expect("create the key")
         .key;
-    test.app.poll().await.expect("poll the key in");
-    context(test, cached_principal(test, &secret), None)
+    context(test, cached_principal(test, &secret).await, None)
 }
 
 async fn body(ctx: &ToolContext, handle: &str, text: &str) {
@@ -95,9 +94,16 @@ fn delete_in_task(
 ) -> tokio::task::JoinHandle<Result<DeletedUser, OkfError>> {
     let pool = test.app.pool().clone();
     let name = name.to_string();
-    tokio::spawn(
-        async move { users::delete(&pool, &name, false, &AuditActor::cli(), Utc::now()).await },
-    )
+    tokio::spawn(async move {
+        users::delete(
+            &pool,
+            &name,
+            users::DeleteOptions::default(),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+    })
 }
 
 /// Waits until `count` backends of this database wait on a lock.
@@ -141,7 +147,13 @@ async fn a_publish_holding_its_changeset_finishes_before_its_users_deletion() {
     let alice = Arc::new(user_context(&test, "alice", Access::Write, false).await);
     let handle = open(&alice).await;
     body(&alice, &handle, "# A\n\nAlice.\n").await;
-    let catalog_id = test.app.catalog("pg").expect("catalog pg").id();
+    let catalog_id = test
+        .app
+        .catalog("pg")
+        .await
+        .unwrap()
+        .expect("catalog pg")
+        .id();
     let mut holder = test.app.pool().begin().await.expect("begin the holder");
     sqlx::query("SELECT id FROM catalogs WHERE id = $1 FOR NO KEY UPDATE")
         .bind(catalog_id)
@@ -164,6 +176,104 @@ async fn a_publish_holding_its_changeset_finishes_before_its_users_deletion() {
     // waited for it and found nothing open; neither side is `Busy`.
     assert!(published.is_ok(), "{published:?}");
     assert_eq!(deleted.expect("the deletion").discarded, 0);
+    assert_eq!(state_of(&test, &handle).await, ChangesetState::Published);
+}
+
+/// Gives `name` a password and a console session, and answers a start of
+/// the account's deletion as `DELETE /api/v1/me` does it (issue #355), in
+/// its own task: the same deletion path, with the person as the actor and
+/// the re-authentication checked under the user's lock. Prepared before
+/// any lock is held, so only the deletion itself queues.
+async fn own_deletion(
+    test: &TestApp,
+    name: &str,
+) -> impl FnOnce() -> tokio::task::JoinHandle<Result<DeletedUser, OkfError>> {
+    use crate::store::{audit, passwords, user_sessions};
+    let pool = test.app.pool().clone();
+    let user_id = users::id_by_name(&pool, name).await.expect("the user's id");
+    let password = "violet staple orbit lantern";
+    passwords::set(&pool, &user_id, password, Utc::now())
+        .await
+        .expect("set a password");
+    let session = user_sessions::create(
+        &pool,
+        &user_id,
+        None,
+        "",
+        Duration::from_secs(3600),
+        Utc::now(),
+    )
+    .await
+    .expect("a session")
+    .id;
+    let passwords::SignInOutcome::Ok(verified) =
+        passwords::verify_user(&pool, &user_id, password, Utc::now())
+            .await
+            .expect("check the password")
+    else {
+        panic!("the password did not verify");
+    };
+    let actor = AuditActor {
+        source: audit::Source::Console,
+        user_id: Some(user_id.clone()),
+        label: name.to_string(),
+        via: audit::Via::Session,
+        ..AuditActor::cli()
+    };
+    let name = name.to_string();
+    // `move ||`: a closure that owns what it captured, called once later.
+    move || {
+        tokio::spawn(async move {
+            let own = users::OwnDeletion {
+                user_id: &user_id,
+                name: &name,
+                session_id: &session,
+                proof: users::Proof::Password(&verified.stamp),
+            };
+            users::delete_own(&pool, &own, &actor, Utc::now()).await
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_publish_holding_its_changeset_finishes_before_its_users_own_deletion() {
+    // Arrange: as the CLI deletion's test above, with the person deleting
+    // their own account (issue #355), whose extra checks take the session
+    // row after the user and before any team, catalog or changeset.
+    let test = pg().await;
+    let alice = Arc::new(user_context(&test, "alice", Access::Write, false).await);
+    let start_deleting = own_deletion(&test, "alice").await;
+    let handle = open(&alice).await;
+    body(&alice, &handle, "# A\n\nAlice.\n").await;
+    let catalog_id = test
+        .app
+        .catalog("pg")
+        .await
+        .unwrap()
+        .expect("catalog pg")
+        .id();
+    let mut holder = test.app.pool().begin().await.expect("begin the holder");
+    sqlx::query("SELECT id FROM catalogs WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(catalog_id)
+        .execute(&mut *holder)
+        .await
+        .expect("hold the catalog row");
+    let publisher = Arc::clone(&alice);
+    let to_publish = handle.clone();
+    let publishing = tokio::spawn(async move { publish_as(&publisher, &to_publish).await });
+    lock_waiters(&test, 1).await;
+    let deleting = start_deleting();
+    lock_waiters(&test, 2).await;
+
+    // Act
+    holder.rollback().await.expect("release the catalog row");
+    let published = finish(publishing, "the publish").await;
+    let deleted = finish(deleting, "the own deletion").await;
+
+    // Assert: neither deadlocked nor was `Busy`; the deletion waited for
+    // the publish and found nothing open.
+    assert!(published.is_ok(), "{published:?}");
+    assert_eq!(deleted.expect("the own deletion").discarded, 0);
     assert_eq!(state_of(&test, &handle).await, ChangesetState::Published);
 }
 

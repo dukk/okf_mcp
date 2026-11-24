@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog::CatalogState;
 use crate::error::OkfError;
+use crate::labels::directory::Wanted;
 use crate::mcp::context::{is_broken_overlay, require_selected, ToolContext};
 use crate::mcp::{blocking, reply, OkfServer};
 use crate::okf::search::{search_catalogs, CatalogHit, SearchQuery};
@@ -35,7 +36,7 @@ pub struct SearchParams {
     /// description or body; free text matches tags by substring. Empty
     /// matches every concept that passes the filters.
     pub query: String,
-    /// The catalogs to search (default: this connection's catalogs).
+    /// The catalog ids to search (the `name`s from `list_catalogs`; default: this connection's selection, which may be the only catalog the key reaches; when `list_catalogs` shows an empty selection, pass `catalogs`). At most the server's `search_fanout_max` (default 25) distinct catalogs may be named; more is refused.
     pub catalogs: Option<Vec<String>>,
     /// Only concepts of this `type` (case-insensitive).
     // `type` is a Rust keyword, so the field has another name and serde
@@ -63,21 +64,42 @@ pub struct SearchParams {
 pub struct SearchResult {
     /// Best first: concepts holding the whole query in a better field
     /// first, deprecated concepts last, then catalog order, then path.
-    pub hits: Vec<CatalogHit>,
+    pub hits: Vec<LabeledHit>,
     /// Catalogs left out because the `changeset` read through does not
     /// apply over their published files; every other catalog still
     /// answered. Empty when every catalog was searched.
     pub skipped: Vec<SkippedCatalog>,
 }
 
+/// One hit, with its catalog's label beside the catalog id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct LabeledHit {
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
+    /// The hit and its catalog id; `flatten` writes its fields beside `catalog_label`.
+    #[serde(flatten)]
+    pub hit: CatalogHit,
+}
+
 /// A catalog `search` left out, and why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct SkippedCatalog {
-    /// The catalog.
+    /// The catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// The error, as a failed call would report it (`error`, `message`
     /// and what it concerns).
     pub error: serde_json::Value,
+}
+
+/// Runs a search for the MCP tool: as [`run_with`] without plain snippets.
+///
+/// # Errors
+/// As [`run_with`].
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<SearchResult, OkfError> {
+    run_with(ctx, params, false).await
 }
 
 /// Runs a search.
@@ -85,6 +107,7 @@ pub struct SkippedCatalog {
 /// # Arguments
 /// * `ctx` - the call's context.
 /// * `params` - the arguments.
+/// * `plain_snippets` - also make each hit's `snippet_text`.
 ///
 /// # Returns
 /// The merged hits.
@@ -99,19 +122,28 @@ pub struct SkippedCatalog {
 /// and listed in [`SearchResult::skipped`], so one broken changeset does not
 /// fail a search across every catalog.
 #[tracing::instrument(level = "debug", skip_all)]
-pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<SearchResult, OkfError> {
-    let states = ctx.states(params.catalogs.as_deref())?;
+pub(crate) async fn run_with(
+    ctx: &ToolContext,
+    params: SearchParams,
+    plain_snippets: bool,
+) -> Result<SearchResult, OkfError> {
+    check_fanout(
+        params.catalogs.as_deref(),
+        ctx.app().config().search_fanout_max,
+    )?;
+    let states = ctx.states(params.catalogs.as_deref()).await?;
     let pinned = ctx.pin(params.changeset.as_deref()).await?;
     require_selected(pinned.as_ref(), &states)?;
     // A search reads every catalog before it answers: all are admitted at
     // once, or none (a refused call queues no read).
-    ctx.admit_all(&states, AccessKind::Read)?;
+    ctx.admit_all(&states, AccessKind::Read).await?;
     let query = SearchQuery {
         text: params.query,
         concept_type: params.concept_type,
         tags: params.tags,
         status: params.status,
         limit: hit_limit(params.limit),
+        plain_snippets,
     };
     // Each catalog's view (published, or the pinned changeset's overlay), taken
     // once here. Both hold `Arc`s (reference-counted pointers, cheap to
@@ -128,6 +160,7 @@ pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<Searc
                 tracing::warn!(catalog = %state.name(), kind = error.kind(), "search skipped a catalog");
                 skipped.push(SkippedCatalog {
                     catalog: state.name().to_string(),
+                    catalog_label: ctx.catalog_label(state.name()).await?,
                     error: error.to_json(),
                 });
             }
@@ -147,7 +180,48 @@ pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<Searc
         search_catalogs(&catalogs, &query)
     })
     .await;
+    let mut wanted = Wanted::default();
+    for hit in &hits {
+        wanted.catalog(&hit.catalog);
+    }
+    let labels = ctx.labels_for(&wanted).await?;
+    let hits = hits
+        .into_iter()
+        .map(|hit| LabeledHit {
+            catalog_label: labels
+                .catalog(&hit.catalog)
+                .unwrap_or(&hit.catalog)
+                .to_string(),
+            hit,
+        })
+        .collect();
     Ok(SearchResult { hits, skipped })
+}
+
+/// Refuses a search that names more than `most` distinct catalogs (M18 spec
+/// Decision 8), so one request cannot load and scan every catalog by listing
+/// them. The MCP tool and `GET /search` both call it through [`run_with`].
+///
+/// # Arguments
+/// * `named` - the `catalogs` argument; `None` names none, which the
+///   selection bounds itself.
+/// * `most` - `search_fanout_max`.
+///
+/// # Errors
+/// [`OkfError::InvalidPath`] (400, naming `catalogs`) when the list holds
+/// more than `most` distinct names; a name repeated counts once.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn check_fanout(named: Option<&[String]>, most: u32) -> Result<(), OkfError> {
+    let distinct = named
+        .map(|names| names.iter().collect::<std::collections::HashSet<_>>().len())
+        .unwrap_or(0);
+    if distinct > most as usize {
+        return Err(OkfError::InvalidPath {
+            path: "catalogs".to_string(),
+            reason: format!("name at most {most} catalogs to search at once"),
+        });
+    }
+    Ok(())
 }
 
 /// The number of hits a call returns at most.
@@ -236,6 +310,49 @@ mod tests {
         }
     }
 
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn check_fanout_counts_distinct_names_against_the_cap() {
+        assert!(check_fanout(None, 2).is_ok());
+        assert!(check_fanout(Some(&names(&["a", "b"])), 2).is_ok());
+        assert!(check_fanout(Some(&names(&["a", "a", "a", "b"])), 2).is_ok());
+
+        let error = check_fanout(Some(&names(&["a", "b", "c"])), 2).unwrap_err();
+
+        assert!(matches!(&error, OkfError::InvalidPath { path, .. } if path == "catalogs"));
+        assert!(error.to_string().contains("at most 2"), "{error}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_tool_refuses_more_named_catalogs_than_the_cap() {
+        let test = app_with(
+            &[
+                ("a", &[("x.md", TAGGED)]),
+                ("b", &[("x.md", TAGGED)]),
+                ("c", &[("x.md", TAGGED)]),
+            ],
+            Config {
+                search_fanout_max: 2,
+                ..Config::default()
+            },
+        )
+        .await;
+        let ctx = context(&test, principal(&[], Some("a")), None);
+        let mut over = params("", &[]);
+        over.catalogs = Some(names(&["a", "b", "c"]));
+        let mut at = params("", &[]);
+        at.catalogs = Some(names(&["a", "b", "a"]));
+
+        let refused = run(&ctx, over).await.unwrap_err();
+        let allowed = run(&ctx, at).await.unwrap();
+
+        assert!(matches!(refused, OkfError::InvalidPath { .. }), "{refused}");
+        assert_eq!(allowed.hits.len(), 2);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn tags_match_whole_tags_while_free_text_matches_substrings() {
         let test = app_with(&[("pg", &[("router.md", TAGGED)])], Config::default()).await;
@@ -269,7 +386,11 @@ mod tests {
         let found_in_pg = run(&ctx, only_pg).await.unwrap();
 
         let names = |result: &SearchResult| -> Vec<String> {
-            result.hits.iter().map(|hit| hit.catalog.clone()).collect()
+            result
+                .hits
+                .iter()
+                .map(|hit| hit.hit.catalog.clone())
+                .collect()
         };
         assert_eq!(names(&found), ["work", "pg"]);
         // The `catalogs` argument narrows the connection's catalogs.
@@ -307,7 +428,11 @@ mod tests {
 
         let found = run(&ctx, through).await.unwrap();
 
-        let catalogs: Vec<&str> = found.hits.iter().map(|hit| hit.catalog.as_str()).collect();
+        let catalogs: Vec<&str> = found
+            .hits
+            .iter()
+            .map(|hit| hit.hit.catalog.as_str())
+            .collect();
         assert_eq!(catalogs, ["work"]);
         assert_eq!(found.skipped.len(), 1);
         assert_eq!(found.skipped[0].catalog, "pg");
@@ -330,7 +455,9 @@ mod tests {
         // A closed pool fails the changeset lookup, as an outage would.
         test.app.pool().close().await;
         let mut through = params("routes", &[]);
-        through.changeset = Some("any-handle".to_string());
+        // Handle-shaped, so the lookup reaches the closed pool: a malformed
+        // handle is unknown before any SQL (issue #339).
+        through.changeset = Some("0b1e6f2a-9c3d-4e5f-8a7b-123456789abc".to_string());
 
         let result = run(&ctx, through).await;
 
@@ -401,9 +528,9 @@ mod tests {
         let tools = OkfServer::search_router().list_all();
         let tool = tools.iter().find(|tool| tool.name == "search").unwrap();
         let output = tool.output_schema.as_ref().expect("an output schema");
-        // schemars puts `CatalogHit` (with `SearchHit` flattened in) under
+        // schemars puts `LabeledHit` (with `CatalogHit` and `SearchHit` flattened in) under
         // `$defs`, and lists non-`Option` fields as required.
-        let hit = &output["$defs"]["CatalogHit"];
+        let hit = &output["$defs"]["LabeledHit"];
 
         for field in ["lines", "chars"] {
             let property = &hit["properties"][field];
@@ -440,7 +567,8 @@ mod tests {
         let published = run(&ctx, params("routes", &[])).await.unwrap();
         let drafted = run(&ctx, through).await.unwrap();
 
-        let size = |result: &SearchResult| (result.hits[0].hit.lines, result.hits[0].hit.chars);
+        let size =
+            |result: &SearchResult| (result.hits[0].hit.hit.lines, result.hits[0].hit.hit.chars);
         assert_eq!(
             size(&published),
             (TAGGED.lines().count(), TAGGED.chars().count())

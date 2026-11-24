@@ -4,16 +4,20 @@
 //! plain function, which the module's tests call directly.
 
 pub(crate) mod catalogs;
+pub(crate) mod cited_by;
 // The tool classification the annotations are checked against (tests), and
 // the closed list of tool names the `tool` metric label draws from.
 pub(crate) mod annotations;
 pub(crate) mod changesets;
 pub(crate) mod documents;
+pub(crate) mod feedback;
 // `pub` (not `pub(crate)`): the context's helpers, like `ToolResult`,
 // `tool_error` and `reply` below, are used by later tool modules, and a
 // public item is never flagged as dead code meanwhile.
 pub mod context;
 pub(crate) mod history;
+#[cfg(test)]
+mod labels_tests;
 pub(crate) mod maintenance;
 #[cfg(test)]
 mod reference;
@@ -22,7 +26,8 @@ mod restructure;
 pub(crate) mod search;
 #[cfg(test)]
 pub(crate) mod testing;
-mod writes;
+pub(crate) mod whoami;
+pub(crate) mod writes;
 
 use std::sync::Arc;
 
@@ -56,21 +61,76 @@ tokio::task_local! {
 pub const INSTRUCTIONS: &str = "Open Knowledge Format catalogs: concepts (markdown with YAML \
     frontmatter) about systems, projects, people and decisions. Start with `search`, then \
     `get_concept`. Paths look like /infra/time-server.md (the leading slash and .md are \
-    optional). Without a `catalog` argument, tools use this connection's catalogs \
-    (`list_catalogs` shows them). To write, call `open_changeset` first and pass the handle it \
+    optional). Without a `catalog` argument, tools use this connection's selection: the \
+    catalogs the connection or the key's default names, else the only catalog the key \
+    reaches (`list_catalogs` shows it). When `list_catalogs` shows an empty selection, pass \
+    `catalog`. Catalogs, users and teams each have an id (`name`) and a human \
+    `label`. Say the label when talking to people, pass the id in tool calls, and never ask a \
+    person to type an id. To write, call `open_changeset` first and pass the handle it \
     returns as `changeset` to every edit, `publish`, `discard`, `revert` and `pending_changes`; \
     reads take it too to see its drafts, and `list_changesets` finds a lost one. Nothing is \
-    visible to others until `publish`.";
+    visible to others until `publish`. `whoami` says who you act for and the server's time. \
+    When the person asks you to remember something, save it to the catalog (under a fitting \
+    folder) rather than only in the conversation; asking is their consent, so don't ask again. \
+    Don't save what they didn't ask you to keep.";
+
+/// The line [`INSTRUCTIONS`] gains when `[feedback]` is set and
+/// `send_feedback` is offered (issue #674), naming the product.
+///
+/// # Arguments
+/// * `product_name` - the effective `product_name` setting.
+///
+/// # Returns
+/// The line, "To tell Acme Notes's team about ...".
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
+pub fn feedback_instructions(product_name: &str) -> String {
+    format!(
+        "To tell {product_name}'s team about something confusing, broken, missing or good, call \
+         `send_feedback` (it goes through a third-party form service; ask the user before \
+         including catalog content or personal details)."
+    )
+}
 
 /// The public tool reference (`docs/reference/tools.md`), generated from the tool list by a test.
 /// Each tool's description ends with a link to its heading here (the tool's name is the anchor).
 pub const TOOL_REFERENCE_URL: &str =
     "https://github.com/hypotheosis/okf_mcp/blob/main/docs/reference/tools.md";
 
+/// A tool's description as `tools/list` sends it: its own text, then a
+/// link to its heading in the public reference.
+///
+/// # Arguments
+/// * `description` - the tool's own description.
+/// * `name` - the tool's name (the heading's anchor).
+///
+/// # Returns
+/// `"<description> Reference: <TOOL_REFERENCE_URL>#<name>"`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
+    )
+)]
+fn with_reference(description: &str, name: &str) -> String {
+    format!("{description} Reference: {TOOL_REFERENCE_URL}#{name}")
+}
+
 /// The MCP handler: one per session (rmcp's factory makes it).
 pub struct OkfServer {
     app: Arc<App>,
     tool_router: ToolRouter<OkfServer>,
+    // `INSTRUCTIONS`, plus `feedback_instructions` when the tool is offered.
+    instructions: String,
+    // `serverInfo`: `[auth] mcp_server_name`, the version, and the product
+    // name as its display title.
+    server_info: Implementation,
     // Held for the session's life: `okf.mcp.sessions.active` counts it open
     // until the handler is dropped.
     _session: SessionGuard,
@@ -83,33 +143,64 @@ impl OkfServer {
     /// * `app` - the shared state.
     ///
     /// # Returns
-    /// The handler, with every tool registered.
+    /// The handler, with every tool registered, except `send_feedback`
+    /// without `[feedback]`: then it is neither listed nor callable. With
+    /// it, the tool's description and the instructions name the product
+    /// as the `product_name` setting says when the session starts, as
+    /// `serverInfo.title` does; `serverInfo.name` is `[auth]
+    /// mcp_server_name`.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(app: Arc<App>) -> Self {
+        let mut tool_router = Self::tools();
+        let product_name = app.settings().product_name.clone();
+        // `env!` reads this crate's version at compile time.
+        let server_info = Implementation::new(
+            &app.config().auth.mcp_server_name,
+            env!("CARGO_PKG_VERSION"),
+        )
+        .with_title(&product_name);
+        let instructions = if app.config().feedback.is_some() {
+            if let Some(route) = tool_router.map.get_mut(feedback::TOOL) {
+                route.attr.description = Some(
+                    with_reference(&feedback::description(&product_name), feedback::TOOL).into(),
+                );
+            }
+            format!("{INSTRUCTIONS} {}", feedback_instructions(&product_name))
+        } else {
+            tool_router.remove_route(feedback::TOOL);
+            INSTRUCTIONS.to_string()
+        };
         Self {
             _session: app.metrics().mcp_session(),
             app,
-            tool_router: Self::tools(),
+            tool_router,
+            instructions,
+            server_info,
         }
     }
 
     /// The `catalog` label and attribute for a call: the argument's value
-    /// when it names a loaded catalog, else `none`. A name the client typed
-    /// that no catalog bears never becomes a label or an attribute.
+    /// when it names an existing catalog, else `none`. A name the client
+    /// typed that no catalog bears never becomes a label or an attribute.
+    /// The check is a catalog directory lookup (no content is loaded); a
+    /// failed lookup counts as `none`.
     ///
     /// # Arguments
     /// * `arguments` - the call's arguments.
     ///
     /// # Returns
-    /// A loaded catalog's name, or `"none"`.
+    /// An existing catalog's name, or `"none"`.
     #[tracing::instrument(level = "trace", skip_all)]
-    fn catalog_label(&self, arguments: Option<&rmcp::model::JsonObject>) -> String {
-        arguments
+    async fn catalog_label(&self, arguments: Option<&rmcp::model::JsonObject>) -> String {
+        let named = arguments
             .and_then(|arguments| arguments.get("catalog"))
-            .and_then(serde_json::Value::as_str)
-            .filter(|name| self.app.catalog(name).is_some())
-            .unwrap_or("none")
-            .to_string()
+            .and_then(serde_json::Value::as_str);
+        match named {
+            Some(name) if matches!(self.app.catalog_row(name).await, Ok(Some(_))) => {
+                name.to_string()
+            }
+            _ => "none".to_string(),
+        }
     }
 
     /// Every tool: each module's router, joined with `+`.
@@ -130,13 +221,15 @@ impl OkfServer {
             + Self::publish_router()
             + Self::changes_router()
             + Self::restructure_router()
-            + Self::maintenance_router();
+            + Self::maintenance_router()
+            + Self::feedback_router()
+            + Self::whoami_router()
+            + Self::cited_by_router();
         // Point every description at the tool's heading in the public reference. `map` holds
         // each tool as `{ call, attr }`; `attr` is the `Tool` that `tools/list` sends.
         for (name, route) in router.map.iter_mut() {
             let description = route.attr.description.as_deref().unwrap_or_default();
-            route.attr.description =
-                Some(format!("{description} Reference: {TOOL_REFERENCE_URL}#{name}").into());
+            route.attr.description = Some(with_reference(description, name).into());
         }
         router
     }
@@ -196,7 +289,7 @@ impl ServerHandler for OkfServer {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let tool = tool_label(&request.name);
-        let catalog = self.catalog_label(request.arguments.as_ref());
+        let catalog = self.catalog_label(request.arguments.as_ref()).await;
         let parent = tool_span_parent(&context.extensions);
         let span = tracing::info_span!(
             parent: parent,
@@ -244,13 +337,9 @@ impl ServerHandler for OkfServer {
 
     #[tracing::instrument(level = "trace", skip_all)]
     fn get_info(&self) -> ServerConfig {
-        // `env!` reads this crate's name and version at compile time.
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new(
-                env!("CARGO_PKG_NAME"),
-                env!("CARGO_PKG_VERSION"),
-            ))
-            .with_instructions(INSTRUCTIONS)
+            .with_server_info(self.server_info.clone())
+            .with_instructions(self.instructions.clone())
     }
 }
 
@@ -401,6 +490,15 @@ mod tests {
 
     use crate::config::Config;
 
+    /// Issue #831: a client told to "remember this" must save to the catalog, and the
+    /// instruction must not push the model to save what the person didn't ask to keep.
+    #[test]
+    fn the_instructions_tell_a_remember_request_to_save_to_the_catalog() {
+        assert!(INSTRUCTIONS
+            .contains("When the person asks you to remember something, save it to the catalog"));
+        assert!(INSTRUCTIONS.contains("Don't save what they didn't ask you to keep."));
+    }
+
     /// Task 1b: an internal error's text can name a path or echo input, so
     /// the exported event keeps only its kind.
     #[test]
@@ -455,6 +553,44 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn the_server_info_takes_the_configured_name_and_the_product_title() {
+        use crate::config::AuthConfig;
+        use crate::store::audit::AuditActor;
+        use crate::store::settings::{self, SettingKey};
+        let config = Config {
+            auth: AuthConfig {
+                mcp_server_name: "acme-notes".to_string(),
+                product_name: "Acme Notes".to_string(),
+                ..AuthConfig::default()
+            },
+            ..Config::default()
+        };
+        let test = testing::app_with(&[("pg", &[])], config).await;
+
+        let info = OkfServer::new(Arc::clone(&test.app)).get_info().server_info;
+        assert_eq!(info.name, "acme-notes");
+        assert_eq!(info.title.as_deref(), Some("Acme Notes"));
+        assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
+
+        // A Settings override retitles the next session; the name stays.
+        crate::invalidate::testing::applied(&test.app, async {
+            settings::set(
+                test.app.pool(),
+                SettingKey::ProductName,
+                "Other",
+                &AuditActor::cli(),
+                chrono::Utc::now(),
+            )
+            .await
+            .expect("set product_name");
+        })
+        .await;
+        let info = OkfServer::new(Arc::clone(&test.app)).get_info().server_info;
+        assert_eq!(info.name, "acme-notes");
+        assert_eq!(info.title.as_deref(), Some("Other"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn the_server_names_itself_and_needs_a_principal_on_the_request() {
         let test = testing::app_with(&[("pg", &[])], Config::default()).await;
         let server = OkfServer::new(Arc::clone(&test.app));
@@ -467,6 +603,7 @@ mod tests {
         let refused = server.context(&without_key);
 
         assert_eq!(info.server_info.name, env!("CARGO_PKG_NAME"));
+        assert_eq!(info.server_info.title.as_deref(), Some("okf"));
         assert!(info.capabilities.tools.is_some());
         assert_eq!(
             admitted

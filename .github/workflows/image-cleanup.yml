@@ -1,0 +1,36 @@
+# Ages out GHCR images that only carry a `sha-<commit>` tag (pushed by
+# image.yml and maintenance-image.yml on every merge to main). Images with a
+# version tag are kept indefinitely: exclude-tags protects the whole image,
+# including its sha tag, platform manifests and attestations. Untagged
+# leftovers (a sha tag moved by a later rebuild of the same commit) go too.
+name: image-cleanup
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only log what would be deleted"
+        type: boolean
+        default: true
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
+        with:
+          owner: hypotheosis
+          packages: okf-mcp,okf-maintenance
+          delete-tags: sha-*
+          # Release tags are semver (`0.22.0`, `1.0.0-rc.1`).
+          exclude-tags: "*.*.*"
+          delete-untagged: true
+          older-than: 30 days
+          # Scheduled runs delete; manual runs default to a dry run.
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          write-summary: true

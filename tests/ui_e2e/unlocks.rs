@@ -39,16 +39,18 @@ async fn locked_server() -> TestServer {
     )
     .await
     .expect("make staff an admin");
-    settings::set(
-        pool,
-        SettingKey::RequireUnlock,
-        "true",
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("require unlocks");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        settings::set(
+            pool,
+            SettingKey::RequireUnlock,
+            "true",
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("require unlocks");
+    })
+    .await;
     server
 }
 
@@ -89,7 +91,7 @@ async fn a_refused_admin_unlocks_main_reads_it_and_ends_the_unlock() {
         ui.wait_text("#unlocks-table", "staff");
         ui.click("[data-test=unlock-end-main]");
         ui.click("#confirm-ok");
-        ui.wait_text("#toasts", "Ended the unlock of main");
+        ui.wait_text("#toasts", "Ended the unlock of Untitled catalog");
         ui.wait_text("#unlocks-table", "ended");
         ui.open("/browse/main");
         ui.wait_visible("#browse-locked");
@@ -122,7 +124,7 @@ async fn a_non_admin_users_admin_key_is_not_offered_unlock() {
     let pool = &server.db.pool;
     let helper = NewUser {
         name: "helper",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
     };
     users::create(pool, &helper, &AuditActor::cli(), Utc::now())
         .await
@@ -142,7 +144,6 @@ async fn a_non_admin_users_admin_key_is_not_offered_unlock() {
     let key = keys::create(pool, &new, &AuditActor::cli(), Utc::now())
         .await
         .expect("create helper's admin key");
-    server.app.poll().await.expect("poll");
     drive(console_base(&server), move |ui| {
         ui.login(&key);
         ui.open("/browse/main");
@@ -170,7 +171,7 @@ async fn an_owner_switches_maintenance_off_for_its_catalog() {
         ui.wait_visible("#catalog-maintenance:checked");
         ui.wait_text("#catalog-maintenance-state", "on");
         ui.click("#catalog-maintenance");
-        ui.wait_text("#toasts", "Maintenance is off for main");
+        ui.wait_text("#toasts", "Maintenance is off for Untitled catalog");
         ui.wait_visible("#catalog-maintenance:not(:checked)");
         ui.wait_text("#catalog-maintenance-state", "off");
     })
@@ -218,7 +219,7 @@ async fn the_maintenance_switch_sends_one_write_and_keeps_a_refusal() {
         ui.wait_visible("#catalog-maintenance[disabled]");
         assert_eq!(ui.held_matches(), 1, "a double click sent two writes");
         ui.release_held();
-        ui.wait_text("#toasts", "Maintenance is off for main");
+        ui.wait_text("#toasts", "Maintenance is off for Untitled catalog");
         // The reopened drawer shows the write's answer, its refusal gone.
         ui.wait_visible("#catalog-maintenance:not(:checked):not([disabled])");
         ui.wait_hidden("#catalog-maintenance-error");
@@ -241,7 +242,7 @@ async fn a_drawer_opened_after_the_switch_settles_shows_the_saved_value() {
         ui.click("[data-catalog=main]");
         ui.wait_text("#catalog-maintenance-state", "on");
         ui.click("#catalog-maintenance");
-        ui.wait_text("#toasts", "Maintenance is off for main");
+        ui.wait_text("#toasts", "Maintenance is off for Untitled catalog");
         // The write and the read after it have settled.
         ui.wait_text("#catalog-maintenance-state", "off");
         ui.wait_visible("#catalog-maintenance:not(:checked):not([disabled])");
@@ -258,7 +259,7 @@ async fn a_drawer_opened_after_the_switch_settles_shows_the_saved_value() {
         ui.click("#catalog-maintenance");
         assert_eq!(ui.held_matches(), 1, "one click sent two writes");
         ui.release_held();
-        ui.wait_text("#toasts", "Maintenance is on for main");
+        ui.wait_text("#toasts", "Maintenance is on for Untitled catalog");
         ui.wait_visible("#catalog-maintenance:checked:not([disabled])");
     })
     .await;
@@ -326,7 +327,7 @@ async fn an_unlock_is_sent_once_its_refusals_stay_and_a_late_read_never_draws() 
         ui.fail_next("GET", "/unlocks", 503, "the server is unavailable");
         ui.click("[data-test=unlock-end-main]");
         ui.click("#confirm-ok");
-        ui.wait_text("#toasts", "Ended the unlock of main");
+        ui.wait_text("#toasts", "Ended the unlock of Untitled catalog");
         ui.wait_text("#unlocks-table", "ended");
         ui.wait_hidden("[data-test^=unlock-error-]");
         ui.release_held();
@@ -339,6 +340,56 @@ async fn an_unlock_is_sent_once_its_refusals_stay_and_a_late_read_never_draws() 
         ui.click("#unlocks-refresh");
         ui.wait_hidden("#unlocks-stale");
         ui.wait_text("#unlocks-table", "ended");
+    })
+    .await;
+}
+
+/// Issue #749: an admin's shell holds only its own user's label, so the
+/// Unlocks table reads the label of each staff member its rows name: an
+/// admin reads another's unlock by that person's label.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_admin_reads_another_staff_members_unlock_by_label() {
+    const CHIEF_EMAIL: &str = "chief@example.com";
+    let server = locked_server().await;
+    let pool = &server.db.pool;
+    server
+        .user_with_password("chief", CHIEF_EMAIL, PASSWORD)
+        .await;
+    users::set_admin(
+        pool,
+        "chief",
+        AdminChange {
+            on: true,
+            allow_last: true,
+        },
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("make chief an admin");
+    users::set_display_name(
+        pool,
+        "staff",
+        &okf_mcp::labels::DisplayName::parse("Staff Member").expect("a display name"),
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("name staff");
+    drive(console_base(&server), move |ui| {
+        ui.sign_in_password(STAFF_EMAIL, PASSWORD);
+        ui.open("/browse/main");
+        ui.wait_visible("#browse-locked");
+        ui.click("#browse-unlock");
+        fill_unlock(ui, "ticket 7");
+        ui.click("#unlock-form button[type=submit]");
+        ui.wait_text("#toasts", "Unlocked main");
+        ui.click("#signout");
+        ui.wait_visible("#login");
+        ui.sign_in_password(CHIEF_EMAIL, PASSWORD);
+        ui.open("/unlocks");
+        ui.wait_text("#unlocks-table", "ticket 7");
+        ui.wait_text("#unlocks-table", "Staff Member");
     })
     .await;
 }

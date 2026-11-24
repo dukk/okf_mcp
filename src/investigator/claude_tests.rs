@@ -270,6 +270,12 @@ fn investigator_claude_object_parser_rejects_duplicate_fields() {
     }
 }
 
+/// The longest a test polls for something that happens at once on an idle
+/// machine (a child starting, a killed child leaving `/proc`). A poll returns
+/// as soon as its condition holds, so this only matters when the machine is
+/// so loaded that the condition is late (issue #500).
+const POLL_BOUND: Duration = Duration::from_secs(60);
+
 struct Fake {
     dir: tempfile::TempDir,
     config: RunnerConfig,
@@ -315,9 +321,25 @@ impl Fake {
         serde_json::from_slice(&std::fs::read(self.dir.path().join("record.json")).unwrap())
             .unwrap()
     }
+    /// True once the fake has written a complete `record.json`. A child killed
+    /// mid-write leaves a truncated file, which does not count as started.
+    fn has_record(&self) -> bool {
+        std::fs::read(self.dir.path().join("record.json"))
+            .ok()
+            .is_some_and(|bytes| serde_json::from_slice::<Value>(&bytes).is_ok())
+    }
+    /// The pid in the marker `name` once the fake wrote it (see `mark` in the
+    /// fixture), `None` before. A marker, unlike `record.json`, says the child
+    /// reached the state a scenario is about, not only that it started.
+    fn marker_pid(&self, name: &str) -> Option<u64> {
+        let bytes = std::fs::read(self.dir.path().join(name)).ok()?;
+        serde_json::from_slice::<Value>(&bytes).ok()?["pid"].as_u64()
+    }
     async fn started(&self) {
-        for _ in 0..1000 {
-            if self.dir.path().join("record.json").exists() {
+        // A generous bound, not a pace: it returns the moment the fake has
+        // started, and a loaded machine can take seconds to start Python.
+        for _ in 0..(POLL_BOUND.as_millis() / 5) {
+            if self.has_record() {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -332,6 +354,39 @@ impl Fake {
         );
     }
 }
+/// Runs `run_process` against a fresh fake with a short deadline and returns the
+/// result once the child demonstrably started before the deadline fired.
+///
+/// The deadline covers spawning and interpreter start-up, so on a loaded machine a
+/// short deadline can expire before the fake reached its stall (the `reached.json`
+/// marker, written right before it: `record.json` is written earlier, before the
+/// stdin read and the output). Then the run proves nothing about the stall, and
+/// `reaped` may have no pid to read. In that case retry on a fresh fake with a
+/// longer deadline (issue #307, issue #500). Returns the fake, the result and the
+/// number of attempts used.
+async fn run_timed_after_start(
+    scenario: Value,
+    args: Vec<String>,
+    prompt: Vec<u8>,
+) -> (Fake, Result<Vec<u8>, RunnerError>, usize) {
+    for (attempt, millis) in [200u64, 1_000, 5_000, 25_000].into_iter().enumerate() {
+        let fake = Fake::new(scenario.clone());
+        let result = run_process(
+            fake.config.claude_binary.clone(),
+            args.clone(),
+            None,
+            prompt.clone(),
+            CancellationToken::new(),
+            Duration::from_millis(millis),
+        )
+        .await;
+        if fake.marker_pid("reached.json").is_some() {
+            return (fake, result, attempt + 1);
+        }
+    }
+    panic!("fake did not reach its stall within the longest deadline");
+}
+
 fn request() -> ModelRequest {
     ModelRequest {
         prompt: "PRIVATE prompt --tools shell --model attacker".into(),
@@ -498,25 +553,50 @@ async fn investigator_claude_bounds_pipes_and_reaps() {
     fake.reaped();
 }
 
+/// The deadline covers waiting for the pipes to close: a descendant that
+/// keeps them open after the child exits must not hold `run_process` past it.
+///
+/// The fake's descendant holds the pipes until the test releases it, and
+/// publishes `holder.json` (with its pid) before it waits, so an attempt counts
+/// only once the marker shows the pipes were held. Returning with `Child` and
+/// the descendant still alive then proves the deadline ended the run, however
+/// slow the machine is. A deadline that fired before the descendant existed
+/// proves nothing, and the attempt is repeated with a longer one (issue #307,
+/// issue #500).
 #[tokio::test]
 async fn investigator_claude_timeout_includes_pipe_eof() {
     let _test = TEST_LOCK.lock().await;
-    let fake = Fake::new(json!({"hold_pipes":true}));
-    let begin = std::time::Instant::now();
-    let result = run_process(
-        fake.config.claude_binary.clone(),
-        vec![],
-        None,
-        vec![],
-        CancellationToken::new(),
+    let mut ended = None;
+    for deadline in [
         Duration::from_secs(2),
-    )
-    .await;
+        Duration::from_secs(10),
+        Duration::from_secs(40),
+    ] {
+        let fake = Fake::new(json!({"hold_pipes":true}));
+        let result = run_process(
+            fake.config.claude_binary.clone(),
+            vec![],
+            None,
+            vec![],
+            CancellationToken::new(),
+            deadline,
+        )
+        .await;
+        if let Some(holder) = fake.marker_pid("holder.json") {
+            ended = Some((fake, result, holder));
+            break;
+        }
+    }
+    let (fake, result, holder) =
+        ended.expect("the fake never held the pipes within the longest deadline");
     assert_eq!(result.err(), Some(RunnerError::Child));
-    assert!(begin.elapsed() < Duration::from_millis(2900));
     fake.reaped();
-    // Allow the deliberately short-lived fake pipe holder to exit naturally.
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        std::path::Path::new(&format!("/proc/{holder}")).exists(),
+        "the pipe holder was gone before the release: the deadline did not end the run"
+    );
+    // Let the descendant, which exits on this file, go.
+    std::fs::write(fake.dir.path().join("release"), b"").unwrap();
 }
 
 #[tokio::test]
@@ -542,7 +622,7 @@ async fn investigator_claude_drop_and_serialization() {
     running.abort();
     let _ = running.await;
     let pid = first.record()["pid"].as_u64().unwrap();
-    for _ in 0..1000 {
+    for _ in 0..(POLL_BOUND.as_millis() / 5) {
         if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
             break;
         }
@@ -637,49 +717,59 @@ fn investigator_claude_constructor_dedicated_key_only() {
 #[tokio::test]
 async fn investigator_claude_stdin_timeout_cancel_reap() {
     let _test = TEST_LOCK.lock().await;
-    for cancel_now in [false, true] {
-        let fake = Fake::new(json!({"stall":true}));
-        let cancel = CancellationToken::new();
-        let child_cancel = cancel.clone();
-        let binary = fake.config.claude_binary.clone();
-        let task = tokio::spawn(async move {
-            run_process(
-                binary,
-                vec!["--print".into()],
-                Some("synthetic".into()),
-                vec![b'x'; 131_072],
-                child_cancel,
-                Duration::from_millis(200),
-            )
-            .await
-        });
-        fake.started().await;
-        if cancel_now {
-            cancel.cancel();
-        }
-        assert_eq!(
-            task.await.unwrap().err(),
-            Some(if cancel_now {
-                RunnerError::Cancelled
-            } else {
-                RunnerError::Child
-            })
-        );
-        fake.reaped();
-    }
-    let fake = Fake::new(json!({"after_output_stall":true}));
-    assert_eq!(
+    // Timeout: a stdin write that never drains hits the deadline.
+    let (fake, result, _) = run_timed_after_start(
+        json!({"stall":true}),
+        vec!["--print".into()],
+        vec![b'x'; 131_072],
+    )
+    .await;
+    assert_eq!(result.err(), Some(RunnerError::Child));
+    fake.reaped();
+    // Cancel: the deadline is far away so only the cancel can end the run.
+    let fake = Fake::new(json!({"stall":true}));
+    let cancel = CancellationToken::new();
+    let child_cancel = cancel.clone();
+    let binary = fake.config.claude_binary.clone();
+    let task = tokio::spawn(async move {
         run_process(
-            fake.config.claude_binary.clone(),
-            vec![],
-            None,
-            vec![],
-            CancellationToken::new(),
-            Duration::from_millis(200)
+            binary,
+            vec!["--print".into()],
+            Some("synthetic".into()),
+            vec![b'x'; 131_072],
+            child_cancel,
+            Duration::from_secs(120),
         )
         .await
-        .err(),
-        Some(RunnerError::Child)
+    });
+    fake.started().await;
+    cancel.cancel();
+    let outcome = tokio::time::timeout(Duration::from_secs(30), task)
+        .await
+        .expect("cancelled run did not finish within 30 s");
+    assert_eq!(outcome.unwrap().err(), Some(RunnerError::Cancelled));
+    fake.reaped();
+    let (fake, result, _) =
+        run_timed_after_start(json!({"after_output_stall":true}), vec![], vec![]).await;
+    assert_eq!(result.err(), Some(RunnerError::Child));
+    fake.reaped();
+}
+
+/// A fake that starts later than the first deadline must not fail the timeout
+/// check: the helper retries once the child is known to have started.
+#[tokio::test]
+async fn investigator_claude_slow_start_is_retried_not_failed() {
+    let _test = TEST_LOCK.lock().await;
+    let (fake, result, attempts) = run_timed_after_start(
+        json!({"stall":true, "start_delay_ms":500}),
+        vec!["--print".into()],
+        vec![b'x'; 131_072],
+    )
+    .await;
+    assert!(
+        attempts > 1,
+        "a 500 ms start must outlast the 200 ms deadline"
     );
+    assert_eq!(result.err(), Some(RunnerError::Child));
     fake.reaped();
 }

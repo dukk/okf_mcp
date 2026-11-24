@@ -4,6 +4,7 @@ import { store } from './core/store.js';
 import { api, ApiError, authHeaders, setUnauthorizedHandler } from './core/api.js';
 import { start, route } from './core/router.js';
 import { closeDrawer } from './core/drawer.js';
+import { forgetLabels } from './core/labels.js';
 import { toast } from './core/toast.js';
 import { applyBrand, refreshIdentity, refreshUnassigned, setSignedOutHandler } from './core/shell.js';
 import { refreshFindingsBadge } from './pages/findings.js';
@@ -60,6 +61,7 @@ setUnauthorizedHandler(() => {
     const hadKey = !!store.key;
     store.key = null;
     store.whoami = null;
+    forgetLabels();
     store.csrf = null;
     store.session = null;
     showLogin(hadKey ? 'The key was refused. Sign in again.' : 'Your session ended. Sign in again.');
@@ -102,14 +104,16 @@ async function endCookieSession() {
 
 // Forgets the credential once the server has no session left for it, and
 // shows the card at the console's root. The Sign out button calls it, and
-// so does the Account page after signing this browser's session out.
-function signedOut() {
+// so does the Account page after signing this browser's session out, or
+// deleting the account (with `message` for the card).
+function signedOut(message) {
     store.key = null;
     store.whoami = null;
+    forgetLabels();
     store.csrf = null;
     store.session = null;
     history.replaceState(null, '', '/ui/');
-    showLogin();
+    showLogin(message);
 }
 setSignedOutHandler(signedOut);
 

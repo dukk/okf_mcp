@@ -89,6 +89,8 @@ These settle the points where the spec and the code disagree. The spec is correc
    - `oneshot` tests have no `ConnectInfo`; the extractor treats that as "no IP".
 8. **Rate limits.**
    - Per-IP and per-email limits use a new keyed limiter, `http::limits::KeyedLimiter`, built on `oauth::expiring::ExpiringMap` and in memory per process, as M10's are.
+
+     > **Corrected (issue #357, 2026-11-20).** With `[redis]` these limits, the OIDC link allowance and M10's OAuth buckets are kept in Redis and shared by every replica: `SignInLimits` holds `shared::limits::KeyedLimit`s and `OAuth` holds `shared::limits::GlobalLimit`s, each wrapping the in-memory limiter, which still decides alone without `[redis]` and decides when a Redis call fails. Read `src/shared/limits.rs`.
    - Account lockout is durable, in the database: `users.failed_sign_ins` and `users.locked_until`.
 9. **Naming, so nothing collides with MCP sessions** (`session_idle_timeout`, `src/http/sessions.rs`):
    - modules `store::user_sessions` and `http::console_session`;
@@ -25130,6 +25132,8 @@ gh issue create --label enhancement \
 Today only admins set a catalog's team member access and a user's entitlements (user login design, "Non-goals"; M12 plan, deferred table).
 
 Let a team's owners set `member_access` on the catalogs their team owns, and entitle users to those catalogs. The permission check is one function, `store::ceiling::may_set_member_access(principal, catalog)`, which allows admins today: extend it to team owners, and add the console control to the team's drawer. No schema change is needed.
+
+> **Corrected (issue #352).** Delivered differently from this sketch: `may_set_member_access` stays the admin check for keys and the CLI. Owners of a shared team, in a console session only, are checked by the store under row locks (`ceiling::change_member_access`, `entitle_as_owner`, `unentitle_as_owner`), may entitle members of the owning team only, and use the catalog's drawer, not the team's (non-admins have no team drawer). See `docs/operations.md`, "The ceiling and member access".
 EOF
 gh issue create --label enhancement \
   --title "OIDC providers configured in the database" \

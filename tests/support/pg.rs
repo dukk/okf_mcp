@@ -53,7 +53,7 @@ use testcontainers_modules::testcontainers::bollard::query_parameters::{
 use testcontainers_modules::testcontainers::bollard::Docker;
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
 use testcontainers_modules::testcontainers::{
-    ContainerAsync, ContainerRequest, ImageExt, TestcontainersError,
+    ContainerAsync, ContainerRequest, Image, ImageExt, TestcontainersError,
 };
 use tokio::sync::OnceCell;
 
@@ -520,19 +520,20 @@ pub fn postgres_17() -> ContainerRequest<Postgres> {
 ///
 /// # Panics
 /// If every attempt fails (the last error is reported).
-pub async fn start_with_retry(
-    request: impl Fn() -> ContainerRequest<Postgres>,
-) -> ContainerAsync<Postgres> {
+pub async fn start_with_retry<I: Image>(
+    request: impl Fn() -> ContainerRequest<I>,
+) -> ContainerAsync<I> {
     let mut attempt = 1;
     loop {
         let labelled = request().with_startup_timeout(STARTUP_TIMEOUT);
+        let image = labelled.image().name().to_string();
         match start_labelled(labelled, &unique_start_label()).await {
             Ok(container) => return container,
             Err(error) if attempt < START_ATTEMPTS => {
-                tracing::warn!("postgres container start failed, retrying: {error}");
+                tracing::warn!("{image} container start failed, retrying: {error}");
                 attempt += 1;
             }
-            Err(error) => panic!("start a postgres container (is docker reachable?): {error}"),
+            Err(error) => panic!("start a {image} container (is docker reachable?): {error}"),
         }
     }
 }
@@ -558,10 +559,10 @@ pub fn unique_start_label() -> String {
 /// # Errors
 /// The start's error, or, if the cleanup also failed, that error wrapped as
 /// [`TestcontainersError::Other`] (naming both).
-pub async fn start_labelled(
-    request: ContainerRequest<Postgres>,
+pub async fn start_labelled<I: Image>(
+    request: ContainerRequest<I>,
     label: &str,
-) -> Result<ContainerAsync<Postgres>, TestcontainersError> {
+) -> Result<ContainerAsync<I>, TestcontainersError> {
     let start_error = match request.with_label(START_LABEL, label).start().await {
         Ok(container) => return Ok(container),
         Err(error) => error,
@@ -571,6 +572,34 @@ pub async fn start_labelled(
         Err(cleanup_error) => Err(TestcontainersError::other(format!(
             "{start_error}; removing its container also failed: {cleanup_error}"
         ))),
+    }
+}
+
+/// Whether `error` is the kind a start with a zero-length timeout can
+/// legitimately end in: the wait stage's own `StartupTimeout`, or, when the
+/// machine is loaded enough that an earlier stage (pull, create, copy) runs
+/// out of time first, a Docker client, I/O or wrapped error that says it timed
+/// out. Any other error (a refusal, a missing image, a bad request) is not.
+///
+/// # Arguments
+/// * `error` - what a start with a zero-length timeout returned.
+///
+/// # Returns
+/// Whether the error is a timeout of some stage of the start.
+pub fn is_timeout_class(error: &TestcontainersError) -> bool {
+    use testcontainers_modules::testcontainers::core::error::WaitContainerError;
+
+    match error {
+        TestcontainersError::WaitContainer(WaitContainerError::StartupTimeout) => true,
+        TestcontainersError::Io(io) => io.kind() == std::io::ErrorKind::TimedOut,
+        TestcontainersError::Client(_) | TestcontainersError::Other(_) => {
+            let text = error.to_string().to_lowercase();
+            text.contains("timed out") || text.contains("timeout")
+        }
+        TestcontainersError::WaitContainer(_)
+        | TestcontainersError::PortNotExposed { .. }
+        | TestcontainersError::MissingInfo(_)
+        | TestcontainersError::Exec(_) => false,
     }
 }
 

@@ -533,6 +533,39 @@ pub enum CimdError {
     Transport,
 }
 
+impl CimdError {
+    /// Did the fetch fail without the client's host handing over a document
+    /// we could judge? Only then may a cached copy stand in for the refetch.
+    ///
+    /// A document that arrived but is unusable (not JSON, over the size cap)
+    /// was tendered to us in an invalid state, so the authorization fails
+    /// instead (issue #268). A refused non-public address is not that: no
+    /// request was sent and no document arrived, so it counts with the
+    /// failures that leave the cache in use (as before the decision).
+    ///
+    /// # Returns
+    /// `true` for an unresolvable name, a refused address, a timeout, any
+    /// other transport failure or a non-200 answer; `false` for a document
+    /// that arrived unusable.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    fn allows_stale_fallback(&self) -> bool {
+        match self {
+            Self::Unresolvable
+            | Self::PrivateAddress
+            | Self::Timeout
+            | Self::Transport
+            | Self::Status(_) => true,
+            Self::TooLarge | Self::NotJson => false,
+        }
+    }
+}
+
 /// The resolver's refusal of a non-public address; recognized again in
 /// reqwest's error chain.
 #[derive(Debug, thiserror::Error)]
@@ -837,7 +870,9 @@ fn flight_key(url: &str) -> i64 {
 ///
 /// # Errors
 /// [`OAuthError::InvalidClient`] for an unknown DCR id, a bad CIMD URL, a
-/// failed fetch with no usable cached copy, or an invalid document;
+/// failed fetch with no usable cached copy, or an invalid document (a
+/// refetch that delivers an invalid document fails even with a cached copy;
+/// the cached row is left as it was);
 /// [`OAuthError::Server`] for a database failure.
 #[tracing::instrument(level = "debug", skip_all)]
 pub async fn resolve(
@@ -914,7 +949,7 @@ async fn resolve_cimd(
         Ok(fetched) => fetched,
         Err(error) => {
             return match cached {
-                Some(client) if is_usable_stale(&client, now) => {
+                Some(client) if error.allows_stale_fallback() && is_usable_stale(&client, now) => {
                     split_event!(
                         warn,
                         {},
@@ -975,7 +1010,7 @@ async fn register(State(app): State<Arc<App>>, body: Bytes) -> Result<Response, 
     let Some(oauth) = app.oauth().filter(|oauth| oauth.settings.dcr_enabled) else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
-    if !oauth.register_limit.try_take(Instant::now()) {
+    if !oauth.register_limit.try_take(Instant::now()).await {
         app.metrics().rate_limited(Limiter::OauthRegister);
         return Err(OAuthError::SlowDown);
     }
@@ -1604,6 +1639,9 @@ mod tests {
         port: u16,
         hits: Arc<AtomicUsize>,
         failing: Arc<AtomicBool>,
+        /// When set, `/client.json` answers 200 with this body instead of
+        /// the valid document.
+        reply: Arc<std::sync::Mutex<Option<String>>>,
     }
 
     /// Serves `/client.json` (a valid document naming its own URL, cached
@@ -1618,18 +1656,21 @@ mod tests {
         let base = format!("http://127.0.0.1:{port}");
         let hits = Arc::new(AtomicUsize::new(0));
         let failing = Arc::new(AtomicBool::new(false));
+        let reply: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         let client_url = format!("{base}/client.json");
         let (counter, failure) = (Arc::clone(&hits), Arc::clone(&failing));
+        let override_reply = Arc::clone(&reply);
         let router = Router::new()
             .route(
                 "/client.json",
                 // `move` closures own their captures; each request clones the
                 // `Arc`s it needs, as Python closures would share them.
                 get(move || {
-                    let (counter, failure, client_url) = (
+                    let (counter, failure, client_url, override_reply) = (
                         Arc::clone(&counter),
                         Arc::clone(&failure),
                         client_url.clone(),
+                        Arc::clone(&override_reply),
                     );
                     async move {
                         counter.fetch_add(1, Ordering::SeqCst);
@@ -1637,6 +1678,10 @@ mod tests {
                         tokio::time::sleep(Duration::from_millis(200)).await;
                         if failure.load(Ordering::SeqCst) {
                             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                        }
+                        let custom = override_reply.lock().expect("lock").clone();
+                        if let Some(body) = custom {
+                            return body.into_response();
                         }
                         (
                             [(header::CACHE_CONTROL, "max-age=3600")],
@@ -1673,6 +1718,7 @@ mod tests {
             port,
             hits,
             failing,
+            reply,
         }
     }
 
@@ -1964,6 +2010,154 @@ mod tests {
             matches!(too_old, Err(OAuthError::InvalidClient(_))),
             "{too_old:?}"
         );
+    }
+
+    /// Resolves once (caching a valid document) and expires the cache row,
+    /// so the next resolve refetches.
+    async fn cached_but_expired(host: &CimdHost, test: &TestApp, client_id: &str) -> ClientRecord {
+        resolve(&test.app, oauth(test), client_id)
+            .await
+            .expect("first");
+        sqlx::query("UPDATE oauth_clients SET cache_expires_at = now() - interval '1 second'")
+            .execute(test.app.pool())
+            .await
+            .expect("expire");
+        assert_eq!(host.hits.load(Ordering::SeqCst), 1);
+        // The row as stored now, expired, which is what a failed refetch sees.
+        client_rows::find(test.app.pool(), client_id)
+            .await
+            .expect("find")
+            .expect("cached")
+    }
+
+    /// Issue #268: a refetch that arrives intact but fails validation fails
+    /// the authorization, whatever is cached, and leaves the cached row
+    /// exactly as it was (neither replaced nor evicted).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_invalid_refetch_fails_closed_and_keeps_the_cached_row() {
+        let host = cimd_host().await;
+        let test = rig(true).await;
+        let client_id = format!("{}/client.json", host.base);
+        let cached = cached_but_expired(&host, &test, &client_id).await;
+
+        let invalid = [
+            // A changed client_id.
+            json!({
+                "client_id": "https://client.example.com/other.json",
+                "redirect_uris": ["https://client.example.com/callback"]
+            })
+            .to_string(),
+            // Invalid redirect_uris.
+            json!({ "client_id": client_id, "redirect_uris": [] }).to_string(),
+            json!({ "client_id": client_id, "redirect_uris": ["javascript:alert(1)"] }).to_string(),
+            // Delivered intact but not JSON, and over the size cap.
+            "not json".to_string(),
+            padded_json(CIMD_MAX_BYTES),
+        ];
+        for (index, body) in invalid.into_iter().enumerate() {
+            *host.reply.lock().expect("lock") = Some(body);
+            let result = resolve(&test.app, oauth(&test), &client_id).await;
+            assert!(
+                matches!(result, Err(OAuthError::InvalidClient(_))),
+                "case {index}: {result:?}"
+            );
+            assert_eq!(host.hits.load(Ordering::SeqCst), 2 + index, "refetched");
+            let row = client_rows::find(test.app.pool(), &client_id)
+                .await
+                .expect("find")
+                .expect("the cached row is kept");
+            assert_eq!(row, cached, "case {index}: the row is untouched");
+        }
+
+        // The rejection applies to the authorization whose refetch delivered
+        // invalid data; it is not a persistent state. A later transport
+        // failure still serves the retained row, inside its ceiling.
+        host.failing.store(true, Ordering::SeqCst);
+        let later = resolve(&test.app, oauth(&test), &client_id)
+            .await
+            .expect("a later transport failure serves the retained row");
+        assert_eq!(later, cached);
+        host.failing.store(false, Ordering::SeqCst);
+
+        // The host recovers: the kept row is refreshed by the next valid fetch.
+        *host.reply.lock().expect("lock") = None;
+        let healed = resolve(&test.app, oauth(&test), &client_id)
+            .await
+            .expect("valid again");
+        assert!(healed.fetched_at > cached.fetched_at);
+    }
+
+    /// Issue #268: transport failures (a 5xx, a refused connection) serve
+    /// the cached copy within the 24-hour ceiling and fail past it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_transport_failure_serves_stale_within_the_ceiling_only() {
+        let host = cimd_host().await;
+        let test = rig(true).await;
+        let client_id = format!("{}/client.json", host.base);
+        let cached = cached_but_expired(&host, &test, &client_id).await;
+
+        host.failing.store(true, Ordering::SeqCst);
+        let served = resolve(&test.app, oauth(&test), &client_id)
+            .await
+            .expect("stale on a 5xx");
+        assert_eq!(served, cached);
+
+        // A refused connection: a row for a URL whose port nobody listens on.
+        let closed = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            listener.local_addr().expect("address").port()
+        };
+        let dead_id = format!("http://127.0.0.1:{closed}/client.json");
+        let dead = ClientRecord {
+            client_id: dead_id.clone(),
+            ..cached.clone()
+        };
+        client_rows::upsert_cimd(test.app.pool(), &dead)
+            .await
+            .expect("seed");
+        sqlx::query(
+            "UPDATE oauth_clients SET cache_expires_at = now() - interval '1 second' \
+             WHERE client_id = $1",
+        )
+        .bind(&dead_id)
+        .execute(test.app.pool())
+        .await
+        .expect("expire");
+        let served = resolve(&test.app, oauth(&test), &dead_id)
+            .await
+            .expect("stale on a refused connection");
+        assert_eq!(served.client_id, dead_id);
+
+        sqlx::query("UPDATE oauth_clients SET fetched_at = now() - interval '25 hours'")
+            .execute(test.app.pool())
+            .await
+            .expect("age");
+        for id in [&client_id, &dead_id] {
+            let too_old = resolve(&test.app, oauth(&test), id).await;
+            assert!(
+                matches!(too_old, Err(OAuthError::InvalidClient(_))),
+                "{id}: {too_old:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_failures_without_a_document_allow_the_stale_fallback() {
+        for transport in [
+            CimdError::Unresolvable,
+            CimdError::PrivateAddress,
+            CimdError::Timeout,
+            CimdError::Transport,
+            CimdError::Status(500),
+            CimdError::Status(404),
+        ] {
+            assert!(transport.allows_stale_fallback(), "{transport:?}");
+        }
+        for tendered in [CimdError::TooLarge, CimdError::NotJson] {
+            assert!(!tendered.allows_stale_fallback(), "{tendered:?}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

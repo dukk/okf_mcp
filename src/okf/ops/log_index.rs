@@ -25,12 +25,14 @@ use chrono::{DateTime, Utc};
 
 use crate::error::OkfError;
 use crate::okf::doc::Doc;
+use crate::okf::markdown::encode_link_path;
 use crate::okf::ops::replay::{
-    folder_heading, insert_index_bullet_text, lists_target, log_text, missing_heading,
-    new_index_text, root_index_text, ReplayOp, LOG_TEMPLATE,
+    already_lists, first_raw_listing, folder_heading, insert_index_bullet_text, lists_target,
+    log_text, missing_heading, new_index_text, rewrite_raw_listing_text, root_index_text,
+    set_listing_summary_text, ReplayOp, LOG_TEMPLATE,
 };
 use crate::okf::ops::{load_concept, refused, LogKind, OpContext, OpOutcome};
-use crate::okf::paths::{basename, dirname, is_concept, join};
+use crate::okf::paths::{basename, dirname, escapes_root, is_concept, join, normpath};
 use crate::okf::pystr::is_py_space;
 use crate::okf::rules::is_machinery;
 use crate::okf::workspace::Workspace;
@@ -46,6 +48,13 @@ const INDEX: &str = "index.md";
 const FOLDER_TODO: &str = "TODO: describe this folder";
 /// The summary of a concept listing whose concept has no `description`.
 const CONCEPT_TODO: &str = "TODO: describe this concept";
+/// The end of `ensure_index`'s note for a folder it listed with the TODO
+/// placeholder. `okf.py` says "; replace its TODO lines (and the parent's
+/// listing)", which steers to a free edit of the parent index, the one edit
+/// publish cannot replay (issue #668); `tests/parity.rs` translates it.
+pub(crate) const FOLDER_NOTE: &str =
+    "; replace its TODO line, and describe the folder with folder_summary, \
+                           or with index on the folder's path (ending in /)";
 /// The heading folder listings go under.
 const SECTIONS: &str = "Sections";
 
@@ -112,6 +121,10 @@ pub(crate) struct Listing<'a> {
     pub(crate) summary: &'a str,
     /// The heading to list under, if any.
     pub(crate) section: Option<&'a str>,
+    /// Count an older raw (unencoded) bullet as already listing the
+    /// concept: `index` and `repair_indexes` do; creating a concept never
+    /// does, so a new concept always gets its working, encoded listing.
+    pub(crate) accept_raw: bool,
 }
 
 /// `cmd_index` after the concept is loaded: lists it in its folder's
@@ -138,9 +151,25 @@ pub(crate) fn list_concept(
         )));
     }
     let text = workspace.read_text(&index_path)?;
-    if lists_target(workspace, &text, &index_path, listing.concept) {
+    let listed = if listing.accept_raw {
+        already_lists(workspace, &text, &index_path, listing.concept)
+    } else {
+        lists_target(workspace, &text, &index_path, listing.concept)
+    };
+    if listed {
+        if !lists_target(workspace, &text, &index_path, listing.concept) {
+            // Only an older raw bullet lists it: no link resolves, so say so
+            // rather than append a second bullet beside it.
+            outcome.notes.push(format!(
+                "{index_path} lists /{} with a link that does not resolve; change its destination \
+                 to {} (repair_indexes rewrites it)",
+                listing.concept,
+                encode_link_path(basename(listing.concept))
+            ));
+        }
         return Ok(format!("{index_path}: already lists {}", listing.concept));
     }
+    require_link_back(workspace, &index_path, listing)?;
     let bullet = concept_bullet(listing);
     let updated = insert_index_bullet_text(&text, &bullet, listing.section, false)
         .ok_or_else(|| missing_heading(&index_path, listing.section.unwrap_or("")))?;
@@ -158,6 +187,39 @@ pub(crate) fn list_concept(
     Ok(message)
 }
 
+/// The #432 round trip: refuses a listing whose bullet no later run would
+/// read back as a listing of the concept (a label that cannot be written).
+/// `list_concept` runs it before writing; `create_concept` runs it before
+/// it writes anything.
+///
+/// # Arguments
+/// * `workspace` - the catalog.
+/// * `index_path` - the folder index the bullet would go in.
+/// * `listing` - what would be listed.
+///
+/// # Errors
+/// [`OkfError::Refused`] when the bullet does not link back.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn require_link_back(
+    workspace: &dyn Workspace,
+    index_path: &str,
+    listing: &Listing<'_>,
+) -> Result<(), OkfError> {
+    if links_back(
+        workspace,
+        index_path,
+        &concept_bullet(listing),
+        listing.concept,
+    ) {
+        return Ok(());
+    }
+    Err(refused(format!(
+        "no markdown link to /{} can be written in /{index_path} (its title or path cannot be \
+         escaped); list it by editing the index",
+        listing.concept
+    )))
+}
+
 /// The bullet [`list_concept`] writes: `* [<title>](<file name>) - <summary>`,
 /// with `[` and `]` in the title escaped and the summary's whitespace
 /// collapsed.
@@ -166,28 +228,34 @@ fn concept_bullet(listing: &Listing<'_>) -> String {
     let label = listing.title.replace('[', "\\[").replace(']', "\\]");
     format!(
         "* [{label}]({}) - {}",
-        basename(listing.concept),
+        encode_link_path(basename(listing.concept)),
         collapse_whitespace(listing.summary)
     )
 }
 
-/// Port of `cmd_index`: lists a concept in its folder's `index.md`.
+/// Port of `cmd_index`: lists a concept in its folder's `index.md`. A
+/// folder reference instead sets that folder's listing summary in its
+/// parent's index (issue #668, see `describe_folder`); `okf.py` has no
+/// such form.
 ///
 /// # Arguments
 /// * `workspace` - the catalog; `_ctx` is unused (no timestamp).
-/// * `concept` - the concept reference.
+/// * `concept` - the concept reference, or a folder: `/infra/`,
+///   `/infra/index.md`, or `/infra` when no concept `/infra.md` exists.
 /// * `summary` - the text after ` - `.
 /// * `section` - the heading to list under; `None` for `# Concepts`.
 /// * `title` - the link text; `None` (or empty) for the concept's `title`.
 ///
 /// # Returns
-/// The outcome, with a `ListBullet` replay op; nothing is touched when the
-/// index already links the concept.
+/// The outcome, with a `ListBullet` replay op (a folder: a
+/// `SetListingSummary`); nothing is touched when the index already links
+/// the concept (or the folder's listing already has that summary).
 ///
 /// # Errors
 /// As [`crate::okf::ops::stamp`] when loading the concept;
 /// [`OkfError::Refused`] without a title, without a folder `index.md`, or
-/// for a missing `section` heading.
+/// for a missing `section` heading; for a folder, a `section` or `title`,
+/// and `describe_folder`'s errors.
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn index(
     workspace: &dyn Workspace,
@@ -197,7 +265,19 @@ pub fn index(
     section: Option<&str>,
     title: Option<&str>,
 ) -> Result<OpOutcome, OkfError> {
-    let loaded = load_concept(workspace, concept)?;
+    let loaded = match folder_reference(concept) {
+        Some(folder) => return index_folder(workspace, &folder?, summary, section, title),
+        None => match load_concept(workspace, concept) {
+            Ok(loaded) => loaded,
+            // `/infra` names no concept but a folder: describe the folder.
+            Err(OkfError::NotFound { .. })
+                if workspace.exists(&join(&bare_reference(concept), INDEX)) =>
+            {
+                return index_folder(workspace, &bare_reference(concept), summary, section, title);
+            }
+            Err(error) => return Err(error),
+        },
+    };
     // `a.title or data.get("title")`: an empty string counts as absent. Every
     // YAML scalar is a `Value::Str`, so only a list or mapping is dropped here.
     let frontmatter_title = loaded.data.get("title").and_then(Value::as_str);
@@ -210,6 +290,7 @@ pub fn index(
         title,
         summary,
         section,
+        accept_raw: true,
     };
     let mut outcome = OpOutcome::default();
     let message = list_concept(workspace, &listing, &mut outcome)?;
@@ -217,21 +298,109 @@ pub fn index(
     Ok(outcome)
 }
 
+/// `reference` without its leading `/`s and `.`/`..` components.
+#[tracing::instrument(level = "trace", skip_all)]
+fn bare_reference(reference: &str) -> String {
+    let normal = normpath(reference.trim_start_matches('/'));
+    if normal == "." {
+        String::new()
+    } else {
+        normal
+    }
+}
+
+/// The folder a reference names when it is written as one: ending in `/`,
+/// or naming an `index.md` (`/` and `/index.md` are the root, `""`).
+///
+/// # Returns
+/// `None` for any other reference (a concept's); `Some(Err)` with
+/// [`OkfError::InvalidPath`] for a folder outside the catalog.
+#[tracing::instrument(level = "trace", skip_all)]
+fn folder_reference(reference: &str) -> Option<Result<String, OkfError>> {
+    let bare = reference.trim_start_matches('/');
+    let folder = if bare.is_empty() || bare.ends_with('/') {
+        bare.trim_end_matches('/')
+    } else if bare == INDEX {
+        ""
+    } else {
+        bare.strip_suffix("/index.md")?
+    };
+    let folder = bare_reference(folder);
+    if escapes_root(&folder) {
+        return Some(Err(OkfError::InvalidPath {
+            path: reference.to_string(),
+            reason: "is outside the catalog".to_string(),
+        }));
+    }
+    Some(Ok(folder))
+}
+
+/// `index` on a folder: `describe_folder`, refusing the concept-only
+/// arguments.
+#[tracing::instrument(level = "trace", skip_all)]
+fn index_folder(
+    workspace: &dyn Workspace,
+    folder: &str,
+    summary: &str,
+    section: Option<&str>,
+    title: Option<&str>,
+) -> Result<OpOutcome, OkfError> {
+    if section.is_some_and(|s| !s.is_empty()) || title.is_some_and(|t| !t.is_empty()) {
+        return Err(refused(format!(
+            "/{folder}/ is a folder: index sets its listing's summary only; leave out section \
+             and title"
+        )));
+    }
+    describe_folder(workspace, folder, summary)
+}
+
 /// Port of `ensure_index`: makes sure `folder/index.md` exists and is
 /// listed in its parent's index, creating missing ancestor indexes too.
+/// [`ensure_folder_index`] with no summary: every new folder is listed with
+/// the TODO placeholder, as `okf.py` lists it.
+///
+/// # Arguments
+/// * `workspace` - the catalog.
+/// * `folder` - catalog-relative folder; `""` (the root) does nothing.
+/// * `outcome` - gains each file written, its replay ops and notes.
+///
+/// # Errors
+/// As [`ensure_folder_index`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "one-line delegation to an instrumented function"
+    )
+)]
+pub fn ensure_index(
+    workspace: &dyn Workspace,
+    folder: &str,
+    outcome: &mut OpOutcome,
+) -> Result<(), OkfError> {
+    ensure_folder_index(workspace, folder, None, outcome)
+}
+
+/// `ensure_index`, with an optional summary for `folder`'s own listing in
+/// its parent (`folder_summary`, issue #668).
 ///
 /// As in `okf.py`, the folder's own `index.md` is written first; then the
 /// parent is ensured (recursively), and only after that is the folder listed
 /// in it. So the notes come out outermost-first.
 ///
 /// A new index is `# <Folder name>` and a TODO line; its parent gains
-/// `* [<Folder name>](<name>/) - TODO: describe this folder` under
-/// `# Sections` (created when missing), with an absolute `/<folder>/` href
-/// when the parent's bullets are absolute.
+/// `* [<Folder name>](<name>/) - <summary>` under `# Sections` (created
+/// when missing), with an absolute `/<folder>/` href when the parent's
+/// bullets are absolute. The summary is `summary` with its whitespace
+/// collapsed, for `folder` only (the innermost new folder); every ancestor
+/// created on the way, and `folder` without a summary, gets
+/// `TODO: describe this folder`. That default is `okf.py`'s; the summary is
+/// a server-only divergence.
 ///
 /// # Arguments
 /// * `workspace` - the catalog.
 /// * `folder` - catalog-relative folder; `""` (the root) does nothing.
+/// * `summary` - the summary of `folder`'s listing, if it is created.
 /// * `outcome` - gains each file written, its replay ops (`CreateIndex`,
 ///   then the parent's `ListBullet`) and one note per created index.
 ///
@@ -241,9 +410,10 @@ pub fn index(
 /// so run it on a scratch copy (as the write path does) and drop the copy
 /// on error.
 #[tracing::instrument(level = "debug", skip_all)]
-pub fn ensure_index(
+pub fn ensure_folder_index(
     workspace: &dyn Workspace,
     folder: &str,
+    summary: Option<&str>,
     outcome: &mut OpOutcome,
 ) -> Result<(), OkfError> {
     if folder.is_empty() {
@@ -261,25 +431,55 @@ pub fn ensure_index(
         },
     );
     let parent = dirname(folder);
-    ensure_index(workspace, parent, outcome)?;
+    ensure_folder_index(workspace, parent, None, outcome)?;
     let parent_index = join(parent, INDEX);
     let parent_text = workspace.read_text(&parent_index)?;
-    insert_folder_listing(workspace, folder, &parent_text, outcome)?;
-    outcome.notes.push(format!(
-        "created /{folder}/index.md; replace its TODO lines (and the parent's listing)"
-    ));
+    insert_folder_listing(workspace, folder, summary, &parent_text, outcome)?;
+    outcome.notes.push(match summary {
+        Some(_) => format!("created /{folder}/index.md; replace its TODO line"),
+        None => format!("created /{folder}/index.md{FOLDER_NOTE}"),
+    });
+    Ok(())
+}
+
+/// Refuses a `folder_summary` that would describe no new folder: the
+/// concept's folder is the root, or its `index.md` exists already. Checked
+/// before an op writes anything.
+///
+/// # Arguments
+/// * `workspace` - the catalog.
+/// * `folder` - the folder `ensure_folder_index` will be called for.
+///
+/// # Errors
+/// [`OkfError::Refused`], pointing at `index` for an existing folder.
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn check_new_folder(workspace: &dyn Workspace, folder: &str) -> Result<(), OkfError> {
+    if folder.is_empty() {
+        return Err(refused(
+            "folder_summary describes a new folder, and the root is no new folder; leave it out"
+                .to_string(),
+        ));
+    }
+    if workspace.exists(&join(folder, INDEX)) {
+        return Err(refused(format!(
+            "folder_summary describes a new folder, and /{folder}/ exists; leave it out, or \
+             describe /{folder}/ with index (path /{folder}/, summary)"
+        )));
+    }
     Ok(())
 }
 
 /// `ensure_index`'s listing of `folder` in its parent's index:
-/// `* [<Folder name>](<name>/) - TODO: describe this folder` under
-/// `# Sections` (created when missing), with an absolute `/<folder>/` href
-/// when the parent's bullets are absolute. It does not check whether the
-/// parent lists the folder already ([`repair_indexes`] does, first).
+/// `* [<Folder name>](<name>/) - <summary>` (the TODO placeholder without
+/// one) under `# Sections` (created when missing), with an absolute
+/// `/<folder>/` href when the parent's bullets are absolute. It does not
+/// check whether the parent lists the folder already ([`repair_indexes`]
+/// does, first).
 ///
 /// # Arguments
 /// * `workspace` - the catalog.
 /// * `folder` - catalog-relative folder, not the root.
+/// * `summary` - the listing's summary; `None` for the TODO placeholder.
 /// * `parent_text` - the parent's `index.md`, as read.
 /// * `outcome` - gains the parent's `ListBullet` replay op.
 ///
@@ -289,11 +489,12 @@ pub fn ensure_index(
 fn insert_folder_listing(
     workspace: &dyn Workspace,
     folder: &str,
+    summary: Option<&str>,
     parent_text: &str,
     outcome: &mut OpOutcome,
 ) -> Result<(), OkfError> {
     let parent_index = join(dirname(folder), INDEX);
-    let bullet = folder_bullet(folder, parent_text);
+    let bullet = folder_bullet(folder, summary, parent_text);
     let updated = insert_index_bullet_text(parent_text, &bullet, Some(SECTIONS), true)
         .expect("create_section always finds a place for the bullet");
     workspace.write_atomic(&parent_index, &updated)?;
@@ -310,27 +511,109 @@ fn insert_folder_listing(
 }
 
 /// The bullet [`insert_folder_listing`] writes for `folder` in its parent's
-/// index: `* [<Folder name>](<href>) - TODO: describe this folder`, with
-/// the href `/<folder>/` when the parent's bullets are absolute, else
-/// `<name>/`.
+/// index: `* [<Folder name>](<href>) - <summary>`, the summary collapsed (or
+/// `TODO: describe this folder`), with the href `/<folder>/` when the
+/// parent's bullets are absolute, else `<name>/`.
 #[tracing::instrument(level = "trace", skip_all)]
-fn folder_bullet(folder: &str, parent_text: &str) -> String {
+fn folder_bullet(folder: &str, summary: Option<&str>, parent_text: &str) -> String {
     let absolute = parent_text
         .split('\n')
         .any(|line| line.starts_with("* [") && line.contains("](/"));
     let href = if absolute {
-        format!("/{folder}/")
+        format!("/{}/", encode_link_path(folder))
     } else {
-        format!("{}/", basename(folder))
+        format!("{}/", encode_link_path(basename(folder)))
     };
-    format!("* [{}]({href}) - {FOLDER_TODO}", folder_heading(folder))
+    let summary = summary.map_or_else(|| FOLDER_TODO.to_string(), collapse_whitespace);
+    format!("* [{}]({href}) - {summary}", folder_heading(folder))
 }
 
-/// Does `bullet`, written in `index`, link `target`? Not for every path or
-/// label: a link's destination stops at whitespace or `)`, `#` starts its
-/// fragment, and its label ends at the first unescaped `]` (see
-/// [`crate::okf::markdown`]), so `a note.md`, a folder `a]` or a title
-/// ending in `\` cannot be listed this way. The repair checks the exact
+/// `index` on a folder (issue #668): sets the summary of `folder`'s listing
+/// in its parent's `index.md` (the text after ` - `), recording a
+/// [`ReplayOp::SetListingSummary`] so publish redoes it on newer text
+/// instead of conflicting. The label and link stay as they are.
+///
+/// # Arguments
+/// * `workspace` - the catalog.
+/// * `folder` - catalog-relative folder, not the root, e.g. `infra/hosts`.
+/// * `summary` - the new summary; whitespace runs collapse to single spaces.
+///
+/// # Returns
+/// The outcome: `<parent>/index.md: <bullet>`, or nothing touched when the
+/// listing already has that summary.
+///
+/// # Errors
+/// [`OkfError::Refused`] for the root, or when the parent's index does not
+/// list the folder with a working leading link (a raw, unencoded one points
+/// at `repair_indexes`, which rewrites it); [`OkfError::NotFound`] without
+/// the folder's or its parent's `index.md`; the workspace's write error.
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) fn describe_folder(
+    workspace: &dyn Workspace,
+    folder: &str,
+    summary: &str,
+) -> Result<OpOutcome, OkfError> {
+    if folder.is_empty() {
+        return Err(refused(
+            "the root is listed in no index.md; describe the catalog by editing /index.md"
+                .to_string(),
+        ));
+    }
+    let target = join(folder, INDEX);
+    if !workspace.exists(&target) {
+        return Err(OkfError::NotFound {
+            path: format!("/{target}"),
+        });
+    }
+    let parent_index = join(dirname(folder), INDEX);
+    let text = workspace.read_text(&parent_index)?;
+    let summary = collapse_whitespace(summary);
+    let Some(updated) =
+        set_listing_summary_text(workspace, &text, &parent_index, &target, &summary)
+    else {
+        let how = if first_raw_listing(workspace, &text, &parent_index, &target).is_some() {
+            "its listing's link does not resolve; run repair_indexes first"
+        } else {
+            "no bullet there starts with a link to it; repair_indexes lists it"
+        };
+        return Err(refused(format!(
+            "/{parent_index} does not list /{folder}/: {how}"
+        )));
+    };
+    if updated == text {
+        return Ok(OpOutcome::unchanged(format!(
+            "{parent_index}: /{folder}/ already has that summary"
+        )));
+    }
+    workspace.write_atomic(&parent_index, &updated)?;
+    let line = set_line(&updated, &text);
+    let mut outcome = OpOutcome {
+        message: format!("{parent_index}: {line}"),
+        ..OpOutcome::default()
+    };
+    outcome.record(
+        &parent_index,
+        ReplayOp::SetListingSummary { target, summary },
+    );
+    Ok(outcome)
+}
+
+/// The line of `updated` that differs from `before` (the two have the same
+/// number of lines: [`set_listing_summary_text`] rewrites one in place).
+#[tracing::instrument(level = "trace", skip_all)]
+fn set_line<'a>(updated: &'a str, before: &str) -> &'a str {
+    updated
+        .split('\n')
+        .zip(before.split('\n'))
+        .find(|(new, old)| new != old)
+        .map_or("", |(new, _)| new)
+}
+
+/// Does `bullet`, written in `index`, link `target`? Not for every label: a
+/// label ends at the first unescaped `]` (see [`crate::okf::markdown`]), so
+/// a folder `a]` or a title ending in `\` cannot be listed this way. (Paths
+/// are no obstacle: whitespace, `)` and `#` are written percent-encoded.)
+/// The repair checks the exact
 /// bullet it would write and skips one that no later run would recognise.
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
@@ -358,7 +641,8 @@ pub const STARTER_FILE_COUNT: usize = 2;
 /// `okf-catalog-template`'s skeleton, without its people and projects.
 ///
 /// # Arguments
-/// * `name` - the catalog's name, the index's heading.
+/// * `heading` - the root index's heading: the catalog's display name, or
+///   `ROOT_HEADING` (the root index's default heading) when it has none.
 /// * `description` - the catalog's description, the index's paragraph (a
 ///   TODO line when blank).
 /// * `now` - the creation time; its UTC date heads the log entry.
@@ -371,14 +655,14 @@ pub const STARTER_FILE_COUNT: usize = 2;
 /// use chrono::{TimeZone, Utc};
 /// use okf_mcp::okf::ops::starter_files;
 /// let now = Utc.with_ymd_and_hms(2026, 11, 14, 12, 0, 0).unwrap();
-/// let files = starter_files("pg", "Systems.", now);
+/// let files = starter_files("Systems", "About systems.", now);
 /// assert_eq!(files[0].0, "index.md");
-/// assert!(files[0].1.contains("okf_version") && files[0].1.contains("# pg\n\nSystems.\n"));
+/// assert!(files[0].1.contains("okf_version") && files[0].1.contains("# Systems\n\nAbout systems.\n"));
 /// assert!(files[1].1.ends_with("## 2026-11-14\n\n* **Creation:** Created the catalog.\n"));
 /// ```
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn starter_files(
-    name: &str,
+    heading: &str,
     description: &str,
     now: DateTime<Utc>,
 ) -> [(&'static str, String); STARTER_FILE_COUNT] {
@@ -386,7 +670,10 @@ pub fn starter_files(
     let bullet = format!("* **{}:** Created the catalog.", LogKind::Creation.as_str());
     let log = log_text(LOG_TEMPLATE, &date, &bullet)
         .expect("an empty log has no entry under any date yet");
-    [(ROOT_INDEX, root_index_text(name, description)), (LOG, log)]
+    [
+        (ROOT_INDEX, root_index_text(heading, description)),
+        (LOG, log),
+    ]
 }
 
 /// Creates whatever bookkeeping a catalog is missing, never changing what
@@ -396,16 +683,25 @@ pub fn starter_files(
 /// in its folder's index (where `index` puts it). Machinery is skipped,
 /// since no write tool may change it.
 ///
-/// Existing text is only ever added to: headings, prose, bullets and
-/// summaries stay as they are, nothing is removed, and a target an index
-/// already links (however it is worded) is not listed again. So running it
-/// twice changes nothing the second time. A file or folder no markdown link
-/// can list (a space, `)` or `#` in its path, or a label that cannot be
-/// written, such as a folder named `a]`) is not listed; a note names it
-/// instead. Every edit is a replay op
-/// ([`ReplayOp::CreateIndex`], [`ReplayOp::CreateLog`],
-/// [`ReplayOp::ListBullet`]), so publish redoes it onto indexes that changed
-/// meanwhile instead of overwriting them.
+/// Existing text is added to, with one exception: headings, prose, bullets
+/// and summaries stay as they are, and a target an index already links
+/// (however it is worded) is not listed again. The exception is a raw
+/// (unencoded) concept or folder listing that versions before issue #453
+/// wrote, such as `* [A](a b.md) - x` or, under `# Sections`,
+/// `* [My docs](my docs/) - x`, whose link never resolves (issues #717 and
+/// #731): its destination is percent-encoded in place
+/// (`* [A](a%20b.md) - x`, label and summary kept), or the bullet is
+/// removed when another bullet already links the concept or folder; each
+/// gets a note quoting the bullet. Only a bullet
+/// `lists_raw_target` accepts is touched, so a link that resolves to an
+/// existing document, or a name holding a `%XX` escape, is left alone.
+/// Running it twice changes nothing the second time. A file or folder no
+/// markdown link can list (a label that cannot be written, such as a
+/// folder named `a]`) is not listed; a note names it instead. Every edit is
+/// a replay op ([`ReplayOp::CreateIndex`], [`ReplayOp::CreateLog`],
+/// [`ReplayOp::ListBullet`], [`ReplayOp::RewriteRawListing`]), so publish
+/// redoes it onto indexes that changed meanwhile instead of overwriting
+/// them.
 ///
 /// A listing takes the concept's frontmatter `title` (else its first `# `
 /// heading, else its file name) and `description`; what is missing becomes
@@ -423,18 +719,113 @@ pub fn starter_files(
 /// error stay written, so run it on a scratch copy (as the write path does).
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn repair_indexes(workspace: &dyn Workspace) -> Result<OpOutcome, OkfError> {
-    let (mut outcome, placeholders) = repair_counted(workspace)?;
-    outcome.message = repair_message(outcome.touched.len(), placeholders);
+    let (mut outcome, counts) = repair_counted(workspace)?;
+    outcome.message = repair_message(outcome.touched.len(), counts);
     Ok(outcome)
 }
 
-/// [`repair_indexes`]' edits, and how many TODO placeholders they wrote;
-/// the outcome's message is left empty for the caller.
+/// [`repair_indexes`]' fix of the raw (unencoded) bullets older versions
+/// wrote for `target`, a concept (issue #717) or a folder's `index.md` in
+/// its parent's `# Sections` (issue #731): each bullet
+/// [`crate::okf::ops::replay::first_raw_listing`] finds (exactly
+/// `lists_raw_target`'s rules, so a bullet whose parsed link resolves to an
+/// existing document is never touched) is removed when another bullet
+/// already links the target, else its destination is percent-encoded,
+/// keeping the label and the text after it. Each fix is a
+/// [`ReplayOp::RewriteRawListing`] and a note quoting both lines. A rewrite
+/// that would not read back as a listing of the target is skipped with a
+/// note (it cannot happen with an encoded destination; the check is the
+/// same round trip every listing gets).
+///
+/// # Arguments
+/// * `workspace` - the catalog.
+/// * `text` - the index holding the listings, as read.
+/// * `index_path` - its catalog-relative path.
+/// * `target` - the catalog-relative path listed: a concept, or a
+///   folder's `index.md`.
+/// * `outcome` - gains the index's ops and notes.
+///
+/// # Returns
+/// The index's text after the fixes, and how many bullets were fixed.
+///
+/// # Errors
+/// The workspace's write error.
 #[tracing::instrument(level = "trace", skip_all)]
-fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfError> {
+fn rewrite_raw_listings(
+    workspace: &dyn Workspace,
+    text: &str,
+    index_path: &str,
+    target: &str,
+    outcome: &mut OpOutcome,
+) -> Result<(String, usize), OkfError> {
+    // Notes name a folder as `/d/my docs/`, as the folder pass's other notes
+    // do; a concept never ends in `/index.md`, so it is named as it is.
+    let shown = target
+        .strip_suffix("/index.md")
+        .map_or_else(|| target.to_string(), |dir| format!("{dir}/"));
+    let mut current = text.to_string();
+    let mut fixed = 0_usize;
+    // Each pass removes one raw bullet (a rewritten destination is encoded,
+    // so it is never raw again), so the loop ends.
+    while let Some(raw) = first_raw_listing(workspace, &current, index_path, target) {
+        if !links_back(workspace, index_path, &raw.fixed, target) {
+            outcome.notes.push(format!(
+                "did not rewrite the raw listing of /{shown} in /{index_path}: {} \
+                 would not link back",
+                raw.fixed
+            ));
+            break;
+        }
+        let Some((updated, removed)) = rewrite_raw_listing_text(
+            workspace, &current, index_path, target, &raw.line, &raw.fixed,
+        ) else {
+            // Unreachable: `first_raw_listing` took the line from `current`.
+            break;
+        };
+        outcome.notes.push(if removed {
+            format!(
+                "removed the raw listing of /{shown} from /{index_path}, beside a working one: {}",
+                raw.line
+            )
+        } else {
+            format!(
+                "rewrote the raw listing of /{shown} in /{index_path}: {} -> {}",
+                raw.line, raw.fixed
+            )
+        });
+        outcome.record(
+            index_path,
+            ReplayOp::RewriteRawListing {
+                target: target.to_string(),
+                line: raw.line,
+                fixed: raw.fixed,
+            },
+        );
+        current = updated;
+        fixed += 1;
+    }
+    if fixed > 0 {
+        workspace.write_atomic(index_path, &current)?;
+    }
+    Ok((current, fixed))
+}
+
+/// What [`repair_counted`] counted, for the summary message.
+#[derive(Debug, Default, Clone, Copy)]
+struct RepairCounts {
+    /// TODO placeholders written.
+    placeholders: usize,
+    /// Raw listing bullets rewritten or removed (issue #717).
+    rewritten: usize,
+}
+
+/// [`repair_indexes`]' edits, and what they counted; the outcome's message
+/// is left empty for the caller.
+#[tracing::instrument(level = "trace", skip_all)]
+fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, RepairCounts), OkfError> {
     let markdown = workspace.list_markdown()?;
     let mut outcome = OpOutcome::default();
-    let mut placeholders = 0_usize;
+    let mut counts = RepairCounts::default();
     if !workspace.exists(ROOT_INDEX) {
         workspace.write_atomic(ROOT_INDEX, &new_index_text(""))?;
         outcome.record(
@@ -446,7 +837,7 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfEr
         outcome
             .notes
             .push("created /index.md; replace its heading and TODO line".to_string());
-        placeholders += 1;
+        counts.placeholders += 1;
     }
     if !workspace.exists(LOG) {
         workspace.write_atomic(LOG, LOG_TEMPLATE)?;
@@ -490,29 +881,39 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfEr
             outcome
                 .notes
                 .push(format!("created /{index_path}; replace its TODO line"));
-            placeholders += 1;
+            counts.placeholders += 1;
         }
         let parent_index = join(dirname(folder), INDEX);
-        let parent_text = workspace.read_text(&parent_index)?;
-        if !lists_target(workspace, &parent_text, &parent_index, &index_path) {
-            let bullet = folder_bullet(folder, &parent_text);
+        let read = workspace.read_text(&parent_index)?;
+        // A raw `# Sections` bullet older versions wrote for the folder is
+        // fixed first, as a concept's is below (issue #731), so the check
+        // after it sees a working listing and appends no second one.
+        let (parent_text, fixed) =
+            rewrite_raw_listings(workspace, &read, &parent_index, &index_path, &mut outcome)?;
+        counts.rewritten += fixed;
+        if !already_lists(workspace, &parent_text, &parent_index, &index_path) {
+            let bullet = folder_bullet(folder, None, &parent_text);
             if !links_back(workspace, &parent_index, &bullet, &index_path) {
                 outcome
                     .notes
                     .push(unlinkable_note(&format!("{folder}/"), &parent_index));
                 continue;
             }
-            insert_folder_listing(workspace, folder, &parent_text, &mut outcome)?;
+            insert_folder_listing(workspace, folder, None, &parent_text, &mut outcome)?;
             outcome.notes.push(format!(
-                "listed /{folder}/ in /{parent_index} with a TODO summary"
+                "listed /{folder}/ in /{parent_index} with a TODO summary; describe it with \
+                 index on /{folder}/"
             ));
-            placeholders += 1;
+            counts.placeholders += 1;
         }
     }
     for concept in concepts {
         let index_path = join(dirname(concept), INDEX);
-        let text = workspace.read_text(&index_path)?;
-        if lists_target(workspace, &text, &index_path, concept) {
+        let read = workspace.read_text(&index_path)?;
+        let (text, fixed) =
+            rewrite_raw_listings(workspace, &read, &index_path, concept, &mut outcome)?;
+        counts.rewritten += fixed;
+        if already_lists(workspace, &text, &index_path, concept) {
             continue;
         }
         let about = ConceptAbout::read(workspace, concept)?;
@@ -525,6 +926,7 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfEr
             title: &title,
             summary: about.description.as_deref().unwrap_or(CONCEPT_TODO),
             section: None,
+            accept_raw: true,
         };
         if !links_back(workspace, &index_path, &concept_bullet(&listing), concept) {
             outcome.notes.push(unlinkable_note(concept, &index_path));
@@ -534,27 +936,36 @@ fn repair_counted(workspace: &dyn Workspace) -> Result<(OpOutcome, usize), OkfEr
             outcome.notes.push(format!(
                 "listed /{concept} under its file name: it has no title"
             ));
-            placeholders += 1;
+            counts.placeholders += 1;
         }
         if about.description.is_none() {
             outcome.notes.push(format!(
                 "listed /{concept} with a TODO summary: it has no description"
             ));
-            placeholders += 1;
+            counts.placeholders += 1;
         }
         list_concept(workspace, &listing, &mut outcome)?;
     }
-    Ok((outcome, placeholders))
+    Ok((outcome, counts))
 }
 
 /// A repair's summary line.
 #[tracing::instrument(level = "trace", skip_all)]
-fn repair_message(written: usize, placeholders: usize) -> String {
+fn repair_message(written: usize, counts: RepairCounts) -> String {
+    let RepairCounts {
+        placeholders,
+        rewritten,
+    } = counts;
     if written == 0 {
         "indexes complete: nothing to repair".to_string()
-    } else {
+    } else if rewritten == 0 {
         format!(
             "repaired {written} file(s); {placeholders} TODO placeholder(s) to fill in (see notes)"
+        )
+    } else {
+        format!(
+            "repaired {written} file(s); fixed {rewritten} raw listing(s); \
+             {placeholders} TODO placeholder(s) to fill in (see notes)"
         )
     }
 }
@@ -606,8 +1017,8 @@ pub fn repair_catalog(
                 .push("created /index.md from the catalog's name and description".to_string());
         }
     }
-    let (repaired, more) = repair_counted(workspace)?;
-    placeholders += more;
+    let (repaired, mut counts) = repair_counted(workspace)?;
+    counts.placeholders += placeholders;
     for path in &repaired.touched {
         outcome.touch(path);
     }
@@ -620,7 +1031,7 @@ pub fn repair_catalog(
         log(workspace, ctx, LogKind::Update, &text)?;
         outcome.touch(LOG);
     }
-    outcome.message = repair_message(outcome.touched.len(), placeholders);
+    outcome.message = repair_message(outcome.touched.len(), counts);
     Ok(outcome)
 }
 
@@ -781,6 +1192,862 @@ mod tests {
         assert_eq!(again.message, "infra/index.md: already lists infra/ntp.md");
     }
 
+    /// File names the issue (#453) names, one per character class.
+    const AWKWARD_NAMES: [&str; 6] = [
+        "a b.md",
+        "a).md",
+        "a#b.md",
+        "100%.md",
+        "a\u{a0}b.md",
+        "a:b.md",
+    ];
+
+    fn awkward_ws(name: &str, index: &str) -> MemWorkspace {
+        let ws = MemWorkspace::default();
+        ws.write_atomic("d/index.md", index).unwrap();
+        ws.write_atomic(
+            &format!("d/{name}"),
+            "---\ntype: Note\ntitle: Odd\ndescription: An odd one.\n---\n",
+        )
+        .unwrap();
+        ws
+    }
+
+    /// Every link in `text` resolves to a file that exists.
+    fn no_broken_link(ws: &MemWorkspace, text: &str) -> bool {
+        let links = crate::okf::markdown::find_links(text);
+        !links.is_empty()
+            && links.iter().all(|l| {
+                crate::okf::markdown::resolve_link(ws, &l.target, "d/index.md")
+                    .is_none_or(|r| ws.exists(&r.path))
+            })
+    }
+
+    #[test]
+    fn index_links_awkward_names_and_does_not_duplicate() {
+        for name in AWKWARD_NAMES {
+            let ws = awkward_ws(name, "# D\n\n# Concepts\n");
+            let concept = format!("d/{name}");
+
+            let first = index(&ws, &ctx(), &concept, "odd", None, None).unwrap();
+            let after_first = ws.read_to_string("d/index.md").unwrap();
+            let second = index(&ws, &ctx(), &concept, "odd", None, None).unwrap();
+
+            assert!(no_broken_link(&ws, &after_first), "{name}: {after_first}");
+            assert!(
+                lists_target(&ws, &after_first, "d/index.md", &concept),
+                "{name}"
+            );
+            assert!(second.touched.is_empty(), "{name}: duplicated");
+            assert_eq!(
+                ws.read_to_string("d/index.md").unwrap(),
+                after_first,
+                "{name}"
+            );
+            assert!(!first.touched.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn index_does_not_duplicate_an_old_raw_bullet() {
+        // `index` recognises it and leaves it alone, with a note;
+        // `repair_indexes` rewrites it in place (issue #717).
+        // Written before #632: the raw name, which no parser reads back as
+        // the concept for these names.
+        for name in AWKWARD_NAMES {
+            let raw = format!("# D\n\n# Concepts\n\n* [Odd]({name}) - An odd one.\n");
+            let ws = awkward_ws(name, &raw);
+            let concept = format!("d/{name}");
+
+            let outcome = index(&ws, &ctx(), &concept, "odd", None, None).unwrap();
+
+            assert_eq!(ws.read_to_string("d/index.md").unwrap(), raw, "{name}");
+            assert!(outcome.touched.is_empty(), "{name}");
+            // `100%.md` still resolves as written (a bare `%.` is no escape),
+            // so it is an ordinary listing; the rest are unresolvable.
+            let want = usize::from(name != "100%.md");
+            assert_eq!(outcome.notes.len(), want, "{name}: {:?}", outcome.notes);
+            // Repair never appends a second bullet: it encodes the raw
+            // one's destination (`100%.md` is an ordinary listing, kept).
+            repair_indexes(&ws).unwrap();
+            let want = if name == "100%.md" {
+                raw.clone()
+            } else {
+                format!(
+                    "# D\n\n# Concepts\n\n* [Odd]({}) - An odd one.\n",
+                    encode_link_path(name)
+                )
+            };
+            assert_eq!(ws.read_to_string("d/index.md").unwrap(), want, "{name}");
+        }
+    }
+
+    /// The four raw forms the issue (#717) names, one per character class.
+    const RAW_FORMS: [&str; 4] = ["a b.md", "a).md", "a#b.md", "a:b.md"];
+
+    /// [`awkward_ws`] plus the root `index.md` and `log.md`, so a repair of
+    /// it touches only `d/index.md`.
+    fn repairable_ws(name: &str, index: &str) -> MemWorkspace {
+        let ws = awkward_ws(name, index);
+        ws.write_atomic("index.md", "# Root\n\n# Sections\n\n* [D](d/) - d\n")
+            .unwrap();
+        ws.write_atomic("log.md", "# Log\n").unwrap();
+        ws
+    }
+
+    #[test]
+    fn repair_indexes_rewrites_each_raw_form_in_place() {
+        // Relative and absolute, with and without a fragment and a summary:
+        // only the destination changes, and a second run changes nothing.
+        for name in RAW_FORMS {
+            let encoded = encode_link_path(name);
+            let mut cases = vec![
+                (
+                    format!("* [Odd]({name}) - An odd one."),
+                    format!("* [Odd]({encoded}) - An odd one."),
+                ),
+                (
+                    format!("- [O\\]dd]({name}#part) and more"),
+                    format!("- [O\\]dd]({encoded}#part) and more"),
+                ),
+            ];
+            // `/d/a:b.md` is no URI (a scheme cannot start with `/`): it is
+            // a working link, so it is not a raw listing (see below).
+            if name != "a:b.md" {
+                cases.push((
+                    format!("* [Odd](/d/{name})"),
+                    format!("* [Odd](/d/{encoded})"),
+                ));
+            }
+            for (raw, fixed) in cases {
+                let ws = repairable_ws(
+                    name,
+                    &format!("# D\n\nAbout d.\n\n# Concepts\n\n{raw}\n* [X](x.md) - x\n"),
+                );
+
+                let outcome = repair_indexes(&ws).unwrap();
+
+                let got = ws.read_to_string("d/index.md").unwrap();
+                assert_eq!(
+                    got,
+                    format!("# D\n\nAbout d.\n\n# Concepts\n\n{fixed}\n* [X](x.md) - x\n"),
+                    "{raw}"
+                );
+                assert!(
+                    lists_target(&ws, &got, "d/index.md", &format!("d/{name}")),
+                    "{raw}"
+                );
+                assert_eq!(outcome.touched, ["d/index.md"], "{raw}");
+                assert_eq!(
+                    outcome.replay["d/index.md"],
+                    [ReplayOp::RewriteRawListing {
+                        target: format!("d/{name}"),
+                        line: raw.clone(),
+                        fixed: fixed.clone(),
+                    }],
+                    "{raw}"
+                );
+                assert_eq!(
+                    outcome.notes,
+                    [format!(
+                        "rewrote the raw listing of /d/{name} in /d/index.md: {raw} -> {fixed}"
+                    )],
+                    "{raw}"
+                );
+                assert!(
+                    outcome.message.contains("fixed 1 raw listing(s)"),
+                    "{}",
+                    outcome.message
+                );
+                let again = repair_indexes(&ws).unwrap();
+                assert!(
+                    again.touched.is_empty() && again.notes.is_empty(),
+                    "{raw}: {again:?}"
+                );
+                assert_eq!(ws.read_to_string("d/index.md").unwrap(), got, "{raw}");
+            }
+        }
+    }
+
+    #[test]
+    fn repair_indexes_keeps_an_absolute_colon_link_that_already_resolves() {
+        let index = "# D\n\n# Concepts\n\n* [Odd](/d/a:b.md)\n";
+        let ws = repairable_ws("a:b.md", index);
+
+        let outcome = repair_indexes(&ws).unwrap();
+
+        assert!(outcome.touched.is_empty(), "{outcome:?}");
+        assert_eq!(ws.read_to_string("d/index.md").unwrap(), index);
+    }
+
+    #[test]
+    fn repair_indexes_removes_a_raw_duplicate_beside_a_working_bullet() {
+        // Either order, and a second raw copy: one working bullet is left.
+        for name in RAW_FORMS {
+            let encoded = encode_link_path(name);
+            let raw = format!("* [Odd]({name}) - old");
+            let working = format!("* [Odd]({encoded}) - new");
+            for lines in [
+                vec![raw.clone(), working.clone()],
+                vec![working.clone(), raw.clone()],
+                vec![raw.clone(), working.clone(), raw.clone()],
+            ] {
+                let ws = repairable_ws(
+                    name,
+                    &format!("# D\n\n# Concepts\n\n{}\n", lines.join("\n")),
+                );
+
+                let outcome = repair_indexes(&ws).unwrap();
+
+                let got = ws.read_to_string("d/index.md").unwrap();
+                assert_eq!(
+                    got,
+                    format!("# D\n\n# Concepts\n\n{working}\n"),
+                    "{lines:?}"
+                );
+                let removals = lines.len() - 1;
+                assert_eq!(outcome.replay["d/index.md"].len(), removals, "{lines:?}");
+                assert_eq!(
+                    outcome.notes,
+                    vec![
+                        format!("removed the raw listing of /d/{name} from /d/index.md, beside a working one: {raw}");
+                        removals
+                    ],
+                    "{lines:?}"
+                );
+                assert!(repair_indexes(&ws).unwrap().touched.is_empty(), "{lines:?}");
+            }
+        }
+    }
+
+    /// The raw folder names older versions wrote unencoded under
+    /// `# Sections` (issue #731): one per character that ends or changes a
+    /// destination.
+    const RAW_FOLDERS: [&str; 4] = ["a b", "a)b", "a#b", "a:b"];
+
+    /// A catalog whose `d/index.md` holds `sections` under `# Sections`, with
+    /// each folder in `folders` inside `d/` complete (its index lists its one
+    /// concept), so a repair touches only `d/index.md`.
+    fn folder_ws(folders: &[&str], sections: &str) -> MemWorkspace {
+        let ws = MemWorkspace::default();
+        ws.write_atomic("index.md", "# Root\n\n# Sections\n\n* [D](d/) - d\n")
+            .unwrap();
+        ws.write_atomic("log.md", "# Log\n").unwrap();
+        ws.write_atomic(
+            "d/index.md",
+            &format!("# D\n\nAbout d.\n\n# Sections\n\n{sections}\n"),
+        )
+        .unwrap();
+        for folder in folders {
+            ws.write_atomic(&format!("d/{folder}/index.md"), "# N\n\n* [C](c.md) - c\n")
+                .unwrap();
+            ws.write_atomic(
+                &format!("d/{folder}/c.md"),
+                "---\ntype: Note\ntitle: C\ndescription: c\n---\n",
+            )
+            .unwrap();
+        }
+        ws
+    }
+
+    /// A `d/` with the concepts `names` (each with its own title) and the
+    /// given concept bullets in `d/index.md`, plus root `index.md`/`log.md`.
+    fn two_name_ws(names: &[(&str, &str)], bullets: &str) -> MemWorkspace {
+        let ws = repairable_ws(names[0].0, &format!("# D\n\n# Concepts\n\n{bullets}\n"));
+        for (name, title) in names {
+            ws.write_atomic(
+                &format!("d/{name}"),
+                &format!("---\ntype: Note\ntitle: {title}\ndescription: {title}.\n---\n"),
+            )
+            .unwrap();
+        }
+        ws
+    }
+
+    #[test]
+    fn a_raw_bullet_for_a_longer_name_is_not_taken_for_the_shorter_one() {
+        // Issue #734: `a b.md` ends the prefix at `#` (or `)`) inside the
+        // longer name, so the long bullet must never be rewritten to the
+        // short concept, whichever target is looked at first.
+        for (short, long) in [
+            ("a b.md", "a b.md#extra.md"),
+            ("a b.md", "a b.md)x.md"),
+            ("a b.md", "a b.md)x.md#frag.md"),
+        ] {
+            let long_bullet = format!("* [Long]({long}) - long summary");
+            let short_bullet = format!("* [Short]({short}) - short summary");
+            let long_fixed = format!("* [Long]({}) - long summary", encode_link_path(long));
+            let short_fixed = format!("* [Short]({}) - short summary", encode_link_path(short));
+            let ws = two_name_ws(
+                &[(short, "Short"), (long, "Long")],
+                &format!("{long_bullet}\n{short_bullet}"),
+            );
+            let text = ws.read_to_string("d/index.md").unwrap();
+            let (short_path, long_path) = (format!("d/{short}"), format!("d/{long}"));
+
+            // Each target finds only its own bullet, in either order.
+            let found = |target: &str| first_raw_listing(&ws, &text, "d/index.md", target);
+            assert_eq!(found(&short_path).unwrap().line, short_bullet, "{long}");
+            assert_eq!(found(&short_path).unwrap().fixed, short_fixed, "{long}");
+            assert_eq!(found(&long_path).unwrap().line, long_bullet, "{long}");
+            assert_eq!(found(&long_path).unwrap().fixed, long_fixed, "{long}");
+
+            // With only the long bullet, the short target finds nothing and
+            // the long one still does.
+            let only_long = format!("# D\n\n# Concepts\n\n{long_bullet}\n");
+            assert!(first_raw_listing(&ws, &only_long, "d/index.md", &short_path).is_none());
+            assert!(first_raw_listing(&ws, &only_long, "d/index.md", &long_path).is_some());
+            assert!(!crate::okf::ops::replay::lists_raw_target(
+                &ws,
+                &only_long,
+                "d/index.md",
+                &short_path
+            ));
+
+            let outcome = repair_indexes(&ws).unwrap();
+            assert_eq!(
+                ws.read_to_string("d/index.md").unwrap(),
+                format!("# D\n\n# Concepts\n\n{long_fixed}\n{short_fixed}\n"),
+                "{long}: {:?}",
+                outcome.notes
+            );
+        }
+    }
+
+    #[test]
+    fn a_longer_name_with_an_escape_still_keeps_its_bullet_from_the_shorter_target() {
+        // `a b.md#%41.md` is no raw name of its own document (rule 2), yet
+        // its bullet must not be taken for `a b.md`'s.
+        let bullet = "* [Long](a b.md#%41.md) - long";
+        let ws = two_name_ws(&[("a b.md", "Short"), ("a b.md#%41.md", "Long")], bullet);
+        let text = ws.read_to_string("d/index.md").unwrap();
+        assert!(first_raw_listing(&ws, &text, "d/index.md", "d/a b.md").is_none());
+        repair_indexes(&ws).unwrap();
+        assert!(
+            !ws.read_to_string("d/index.md")
+                .unwrap()
+                .contains("(a%20b.md#%41.md)"),
+            "redirected to the shorter concept"
+        );
+    }
+
+    #[test]
+    fn adding_the_short_concept_is_not_suppressed_by_the_long_raw_bullet() {
+        let ws = two_name_ws(
+            &[("a b.md", "Short"), ("a b.md#extra.md", "Long")],
+            "* [Long](a b.md#extra.md) - long summary",
+        );
+        index(&ws, &ctx(), "d/a b.md", "short", None, None).unwrap();
+        let text = ws.read_to_string("d/index.md").unwrap();
+        assert!(
+            text.contains("* [Long](a b.md#extra.md) - long summary"),
+            "{text}"
+        );
+        assert!(text.contains("(a%20b.md)"), "{text}");
+    }
+
+    #[test]
+    fn a_raw_bullet_for_a_longer_name_is_still_rewritten_when_it_is_alone() {
+        // No longer document exists: `a b.md#extra.md` is the short
+        // concept's bullet with a fragment, and it is rewritten as before.
+        let ws = two_name_ws(&[("a b.md", "Short")], "* [Long](a b.md#extra.md) - s");
+        repair_indexes(&ws).unwrap();
+        assert_eq!(
+            ws.read_to_string("d/index.md").unwrap(),
+            "# D\n\n# Concepts\n\n* [Long](a%20b.md#extra.md) - s\n"
+        );
+    }
+
+    #[test]
+    fn a_raw_folder_bullet_for_a_longer_concept_name_is_left_alone() {
+        // The folder pass shares the code: `a b/index.md#x.md` (or `)x.md`)
+        // is a concept of the folder `a b`, whose own listing
+        // `a b/index.md` ends at `#` (or `)`). The folder target skips the
+        // bullet; no pass rewrites it (the concept's pass reads only its
+        // own folder's index), so it stays as written, never misdirected (the folder is listed anew).
+        for long in ["index.md#x.md", "index.md)x.md"] {
+            let bullet = format!("* [Long](a b/{long}) - long");
+            let ws = folder_ws(&["a b"], &bullet);
+            ws.write_atomic(
+                &format!("d/a b/{long}"),
+                "---\ntype: Note\ntitle: Long\ndescription: long.\n---\n",
+            )
+            .unwrap();
+            let before = ws.read_to_string("d/index.md").unwrap();
+
+            assert!(first_raw_listing(&ws, &before, "d/index.md", "d/a b/index.md").is_none());
+            repair_indexes(&ws).unwrap();
+            // The long bullet is byte for byte as written; the folder, not
+            // listed by it, gets its own encoded listing appended.
+            let after = ws.read_to_string("d/index.md").unwrap();
+            assert!(after.contains(&format!("{bullet}\n")), "{long}: {after}");
+            assert!(after.contains("(a%20b/)"), "{long}: {after}");
+            assert!(!after.contains("a%20b/index.md"), "{long}: {after}");
+        }
+    }
+
+    #[test]
+    fn repair_indexes_rewrites_each_raw_folder_form_in_place() {
+        // The folder link old versions wrote (`name/`), the index file
+        // itself (`name/index.md`), each relative and `/`-absolute, with a
+        // fragment and trailing text: only the destination changes, nothing
+        // is appended, and a second run changes nothing.
+        for name in RAW_FOLDERS {
+            let encoded = encode_link_path(name);
+            let mut cases = vec![
+                (
+                    format!("* [Odd]({name}/) - TODO: describe this folder"),
+                    format!("* [Odd]({encoded}/) - TODO: describe this folder"),
+                ),
+                (
+                    format!("- [O\\]dd]({name}/index.md#part) and more"),
+                    format!("- [O\\]dd]({encoded}/index.md#part) and more"),
+                ),
+            ];
+            // `/d/a:b/` is no URI (a scheme cannot start with `/`): it is a
+            // working link, so it is not a raw listing (see below).
+            if name != "a:b" {
+                cases.push((
+                    format!("* [Odd](/d/{name}/) - x"),
+                    format!("* [Odd](/d/{encoded}/) - x"),
+                ));
+                cases.push((
+                    format!("* [Odd](/d/{name}/index.md)"),
+                    format!("* [Odd](/d/{encoded}/index.md)"),
+                ));
+            }
+            for (raw, fixed) in cases {
+                let ws = folder_ws(&[name], &format!("{raw}\n* [X](x/) - x"));
+                let target = format!("d/{name}/index.md");
+
+                let outcome = repair_indexes(&ws).unwrap();
+
+                let got = ws.read_to_string("d/index.md").unwrap();
+                assert_eq!(
+                    got,
+                    format!("# D\n\nAbout d.\n\n# Sections\n\n{fixed}\n* [X](x/) - x\n"),
+                    "{raw}"
+                );
+                assert!(lists_target(&ws, &got, "d/index.md", &target), "{raw}");
+                assert_eq!(outcome.touched, ["d/index.md"], "{raw}");
+                assert_eq!(
+                    outcome.replay["d/index.md"],
+                    [ReplayOp::RewriteRawListing {
+                        target,
+                        line: raw.clone(),
+                        fixed: fixed.clone(),
+                    }],
+                    "{raw}"
+                );
+                assert_eq!(
+                    outcome.notes,
+                    [format!(
+                        "rewrote the raw listing of /d/{name}/ in /d/index.md: {raw} -> {fixed}"
+                    )],
+                    "{raw}"
+                );
+                assert!(
+                    outcome.message.contains("fixed 1 raw listing(s)"),
+                    "{}",
+                    outcome.message
+                );
+                let again = repair_indexes(&ws).unwrap();
+                assert!(
+                    again.touched.is_empty() && again.notes.is_empty(),
+                    "{raw}: {again:?}"
+                );
+                assert_eq!(ws.read_to_string("d/index.md").unwrap(), got, "{raw}");
+            }
+        }
+    }
+
+    #[test]
+    fn repair_indexes_rewrites_a_raw_folder_bullet_in_the_root_index() {
+        // A top-level folder: its listing sits in the root `index.md`.
+        let ws = MemWorkspace::default();
+        ws.write_atomic(
+            "index.md",
+            "# Root\n\n# Sections\n\n* [My docs](my docs/) - mine\n",
+        )
+        .unwrap();
+        ws.write_atomic("log.md", "# Log\n").unwrap();
+        ws.write_atomic("my docs/index.md", "# My docs\n\n* [C](c.md) - c\n")
+            .unwrap();
+        ws.write_atomic(
+            "my docs/c.md",
+            "---\ntype: Note\ntitle: C\ndescription: c\n---\n",
+        )
+        .unwrap();
+
+        let outcome = repair_indexes(&ws).unwrap();
+
+        assert_eq!(
+            ws.read_to_string("index.md").unwrap(),
+            "# Root\n\n# Sections\n\n* [My docs](my%20docs/) - mine\n"
+        );
+        assert_eq!(outcome.touched, ["index.md"], "{outcome:?}");
+        assert!(repair_indexes(&ws).unwrap().touched.is_empty());
+    }
+
+    #[test]
+    fn repair_indexes_keeps_an_absolute_colon_folder_link_that_already_resolves() {
+        let sections = "* [Odd](/d/a:b/) - x";
+        let ws = folder_ws(&["a:b"], sections);
+
+        let outcome = repair_indexes(&ws).unwrap();
+
+        assert!(outcome.touched.is_empty(), "{outcome:?}");
+        assert_eq!(
+            ws.read_to_string("d/index.md").unwrap(),
+            format!("# D\n\nAbout d.\n\n# Sections\n\n{sections}\n")
+        );
+    }
+
+    #[test]
+    fn repair_indexes_removes_a_raw_folder_duplicate_beside_a_working_bullet() {
+        // Either order, a second raw copy, and a working bullet in each form
+        // the parser reads as the folder: one working bullet is left, never
+        // a second one appended.
+        for name in RAW_FOLDERS {
+            let encoded = encode_link_path(name);
+            let raw = format!("* [Odd]({name}/) - old");
+            for working in [
+                format!("* [Odd]({encoded}/) - new"),
+                format!("* [Odd]({encoded}/index.md) - new"),
+                format!("* [Odd]({encoded}) - new"),
+            ] {
+                for lines in [
+                    vec![raw.clone(), working.clone()],
+                    vec![working.clone(), raw.clone()],
+                    vec![raw.clone(), working.clone(), raw.clone()],
+                ] {
+                    let ws = folder_ws(&[name], &lines.join("\n"));
+
+                    let outcome = repair_indexes(&ws).unwrap();
+
+                    let got = ws.read_to_string("d/index.md").unwrap();
+                    assert_eq!(
+                        got,
+                        format!("# D\n\nAbout d.\n\n# Sections\n\n{working}\n"),
+                        "{lines:?}"
+                    );
+                    let removals = lines.len() - 1;
+                    assert_eq!(outcome.replay["d/index.md"].len(), removals, "{lines:?}");
+                    assert_eq!(
+                        outcome.notes,
+                        vec![
+                            format!(
+                                "removed the raw listing of /d/{name}/ from /d/index.md, \
+                                 beside a working one: {raw}"
+                            );
+                            removals
+                        ],
+                        "{lines:?}"
+                    );
+                    assert!(repair_indexes(&ws).unwrap().touched.is_empty(), "{lines:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn repair_indexes_leaves_a_raw_folder_name_with_a_percent_escape_alone() {
+        // `x%41 y/` decodes to `xA y/`: its raw form cannot be told from an
+        // encoded name, so the bullet is not a raw listing (rule 2). The
+        // folder gets its own, encoded bullet and the old line stays.
+        let name = "x%41 y";
+        let raw = format!("* [Odd]({name}/) - old");
+        let ws = folder_ws(&[name], &raw);
+
+        let outcome = repair_indexes(&ws).unwrap();
+
+        let got = ws.read_to_string("d/index.md").unwrap();
+        assert!(got.contains(&format!("{raw}\n")), "{got}");
+        assert!(got.contains("](x%2541%20y/)"), "{got}");
+        assert!(!outcome.replay["d/index.md"]
+            .iter()
+            .any(|op| matches!(op, ReplayOp::RewriteRawListing { .. })));
+        assert!(repair_indexes(&ws).unwrap().touched.is_empty());
+    }
+
+    #[test]
+    fn repair_indexes_leaves_a_folder_link_to_another_existing_document_alone() {
+        // With a folder `d/a` beside `d/a)b` and `d/a#b`, `[A](a)b/)` and
+        // `[A](a#b/)` are working links to `d/a/index.md` (rule 3): never
+        // rewritten. Each other folder gets its own encoded bullet, and
+        // `d/a` is not listed again.
+        for name in ["a)b", "a#b"] {
+            let line = format!("* [A]({name}/) - a");
+            let ws = folder_ws(&["a", name], &line);
+
+            let outcome = repair_indexes(&ws).unwrap();
+
+            let got = ws.read_to_string("d/index.md").unwrap();
+            assert!(
+                got.starts_with(&format!("# D\n\nAbout d.\n\n# Sections\n\n{line}\n")),
+                "{got}"
+            );
+            assert!(
+                got.contains(&format!("]({}/)", encode_link_path(name))),
+                "{got}"
+            );
+            assert_eq!(got.matches("](a/)").count(), 0, "{got}");
+            assert!(
+                outcome.replay["d/index.md"]
+                    .iter()
+                    .all(|op| matches!(op, ReplayOp::ListBullet { .. })),
+                "{name}: {outcome:?}"
+            );
+            assert!(repair_indexes(&ws).unwrap().touched.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn repair_indexes_rewrites_the_first_of_two_raw_bullets_and_removes_the_second() {
+        let ws = repairable_ws(
+            "a b.md",
+            "# D\n\n* [One](a b.md) - 1\n* [Two](a b.md) - 2\n",
+        );
+
+        let outcome = repair_indexes(&ws).unwrap();
+
+        assert_eq!(
+            ws.read_to_string("d/index.md").unwrap(),
+            "# D\n\n* [One](a%20b.md) - 1\n"
+        );
+        assert_eq!(outcome.notes.len(), 2, "{:?}", outcome.notes);
+        assert!(
+            outcome.message.contains("fixed 2 raw listing(s)"),
+            "{}",
+            outcome.message
+        );
+    }
+
+    #[test]
+    fn repair_indexes_leaves_a_raw_name_with_a_percent_escape_alone() {
+        // `x%41 y.md` decodes to `xA y.md`: its raw form cannot be told from
+        // an encoded name, so the bullet is not a raw listing (rule 2). The
+        // concept gets its own, encoded bullet and the old line stays.
+        let name = "x%41 y.md";
+        let raw = format!("* [Odd]({name}) - old");
+        let ws = repairable_ws(name, &format!("# D\n\n# Concepts\n\n{raw}\n"));
+
+        let outcome = repair_indexes(&ws).unwrap();
+
+        let got = ws.read_to_string("d/index.md").unwrap();
+        assert!(got.contains(&format!("{raw}\n")), "{got}");
+        assert!(got.contains("](x%2541%20y.md)"), "{got}");
+        assert!(!outcome.replay["d/index.md"]
+            .iter()
+            .any(|op| matches!(op, ReplayOp::RewriteRawListing { .. })));
+    }
+
+    #[test]
+    fn repair_indexes_leaves_a_link_to_another_existing_document_alone() {
+        // `[A](a.md).md)` and `[A](a.md#b.md)` are working links to `d/a.md`
+        // (rule 3): never rewritten, even though `d/a.md).md` exists too.
+        for name in ["a.md).md", "a.md#b.md"] {
+            let line = format!("* [A]({name}) - a");
+            let ws = repairable_ws("a.md", &format!("# D\n\n# Concepts\n\n{line}\n"));
+            let text = "---\ntype: Note\ntitle: B\ndescription: b\n---\n";
+            ws.write_atomic(&format!("d/{name}"), text).unwrap();
+
+            let outcome = repair_indexes(&ws).unwrap();
+
+            let got = ws.read_to_string("d/index.md").unwrap();
+            assert!(
+                got.starts_with(&format!("# D\n\n# Concepts\n\n{line}\n")),
+                "{got}"
+            );
+            assert!(
+                got.contains(&format!("]({})", encode_link_path(name))),
+                "{got}"
+            );
+            assert!(
+                outcome.replay["d/index.md"]
+                    .iter()
+                    .all(|op| matches!(op, ReplayOp::ListBullet { .. })),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn repair_indexes_writes_the_bullet_index_writes() {
+        for name in AWKWARD_NAMES {
+            let by_index = awkward_ws(name, "# D\n\n# Concepts\n");
+            let concept = format!("d/{name}");
+            index(&by_index, &ctx(), &concept, "An odd one.", None, None).unwrap();
+            let by_repair = awkward_ws(name, "# D\n\n# Concepts\n");
+            by_repair.write_atomic("index.md", "# Root\n").unwrap();
+            by_repair.write_atomic("log.md", "# Log\n").unwrap();
+
+            repair_indexes(&by_repair).unwrap();
+
+            let expected = by_index.read_to_string("d/index.md").unwrap();
+            let got = by_repair.read_to_string("d/index.md").unwrap();
+            assert!(
+                got.contains(expected.lines().last().unwrap()),
+                "{name}: {got}"
+            );
+            assert!(no_broken_link(&by_repair, &got), "{name}: {got}");
+            let again = repair_indexes(&by_repair).unwrap();
+            assert!(!again.touched.contains(&"d/index.md".to_string()), "{name}");
+        }
+    }
+
+    #[test]
+    fn index_refuses_a_bullet_that_would_not_link_back() {
+        // A title ending in `\` swallows the label's closing `]`: the
+        // documented unrepresentable-label case beside `links_back`.
+        let ws = awkward_ws("plain.md", "# D\n\n# Concepts\n");
+
+        let error = index(&ws, &ctx(), "d/plain", "x", None, Some("Odd\\")).unwrap_err();
+
+        let reason = refusal(error);
+        assert!(
+            reason.contains("no markdown link to /d/plain.md can be written"),
+            "{reason}"
+        );
+        assert_eq!(
+            ws.read_to_string("d/index.md").unwrap(),
+            "# D\n\n# Concepts\n"
+        );
+    }
+
+    #[test]
+    fn replay_adds_the_working_bullet_beside_a_raw_one() {
+        // Replay cannot tell which files exist, so a raw match is never
+        // "already listed": the worst case is an old broken bullet beside
+        // a working one.
+        for name in ["a b.md", "a).md", "a#b.md", "a:b.md"] {
+            let raw = format!("# D\n\n# Concepts\n\n* [Odd]({name}) - old\n");
+            let bullet = format!("* [Odd]({}) - new", encode_link_path(name));
+            let op = ReplayOp::ListBullet {
+                target: format!("d/{name}"),
+                bullet: bullet.clone(),
+                section: None,
+                create_section: false,
+            };
+
+            let got = crate::okf::ops::replay("d/index.md", Some(&raw), &[op]).unwrap();
+
+            assert_eq!(got, format!("{raw}{bullet}\n"), "{name}");
+        }
+    }
+
+    #[test]
+    fn replay_keeps_the_staged_bullet_when_another_listing_reads_like_a_raw_one() {
+        // `d/a.md` and `d/a.md#b.md` exist; the index holds a working link to
+        // `d/a.md` whose text is `d/a.md#b.md`'s raw name.
+        let current = "# D\n\n# Concepts\n\n* [A](a.md#b.md) - a\n";
+        let bullet = "* [B](a.md%23b.md) - b";
+        let op = ReplayOp::ListBullet {
+            target: "d/a.md#b.md".to_string(),
+            bullet: bullet.to_string(),
+            section: None,
+            create_section: false,
+        };
+
+        let got = crate::okf::ops::replay("d/index.md", Some(current), &[op]).unwrap();
+
+        assert_eq!(got, format!("{current}{bullet}\n"));
+    }
+
+    #[test]
+    fn index_ignores_text_that_only_looks_like_a_raw_link() {
+        // None of these is a bullet older versions wrote, so the real
+        // listing is appended.
+        let lines = [
+            "* Old destination: ](a b.md)",
+            "* ![Odd](a b.md)",
+            "* `[Odd](a b.md)` in a code span",
+            "* see [Odd](a b.md) - prose before the link",
+            "* [Odd [x](a b.md) - unbalanced",
+            "  * [Odd](a b.md) - indented, not a bullet start",
+            "[Odd](a b.md) - not a bullet",
+        ];
+        for line in lines {
+            let existing = format!("# D\n\n# Concepts\n\n{line}\n");
+            let ws = awkward_ws("a b.md", &existing);
+
+            index(&ws, &ctx(), "d/a b.md", "x", None, None).unwrap();
+
+            let got = ws.read_to_string("d/index.md").unwrap();
+            assert!(got.contains("](a%20b.md)"), "{line}: {got}");
+        }
+    }
+
+    #[test]
+    fn index_lists_a_name_whose_raw_form_reads_as_another_working_link() {
+        // `* [A](a.md).md)` is a working link to `d/a.md`, not a raw
+        // listing of `d/a.md).md`; likewise `a.md#b.md` for `d/a.md#b.md`.
+        for (other, name) in [("a.md", "a.md).md"), ("a.md", "a.md#b.md")] {
+            let existing = format!("# D\n\n# Concepts\n\n* [A]({name}) - a\n");
+            let ws = awkward_ws(other, &existing);
+            let text = "---\ntype: Note\ntitle: B\ndescription: b\n---\n";
+            ws.write_atomic(&format!("d/{name}"), text).unwrap();
+            let encoded = encode_link_path(name);
+
+            index(&ws, &ctx(), &format!("d/{name}"), "b", None, None).unwrap();
+
+            let got = ws.read_to_string("d/index.md").unwrap();
+            assert!(got.contains(&format!("]({encoded})")), "{name}: {got}");
+            let again = repair_indexes(&ws).unwrap();
+            assert!(!again.touched.contains(&"d/index.md".to_string()), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_literal_percent_name_is_not_taken_for_an_encoded_one() {
+        // `d/a b.md` is listed as `a%20b.md`; `d/a%20b.md` is another file
+        // and needs its own bullet, `a%2520b.md`, from index, repair and replay.
+        let files = [("d/a b.md", "Space"), ("d/a%20b.md", "Percent")];
+        let make = || {
+            let ws = MemWorkspace::default();
+            ws.write_atomic("index.md", "# Root\n").unwrap();
+            ws.write_atomic("log.md", "# Log\n").unwrap();
+            ws.write_atomic("d/index.md", "# D\n\n# Concepts\n")
+                .unwrap();
+            for (path, title) in files {
+                let text = format!("---\ntype: Note\ntitle: {title}\ndescription: d\n---\n");
+                ws.write_atomic(path, &text).unwrap();
+            }
+            ws
+        };
+        let check = |ws: &MemWorkspace, how: &str| {
+            let text = ws.read_to_string("d/index.md").unwrap();
+            assert!(text.contains("](a%20b.md)"), "{how}: {text}");
+            assert!(text.contains("](a%2520b.md)"), "{how}: {text}");
+            assert_eq!(text.matches("* [").count(), 2, "{how}: {text}");
+        };
+
+        let by_index = make();
+        for (path, _) in files {
+            index(&by_index, &ctx(), path, "d", None, None).unwrap();
+        }
+        check(&by_index, "index");
+
+        let by_repair = make();
+        repair_indexes(&by_repair).unwrap();
+        check(&by_repair, "repair");
+
+        let ws = make();
+        let ops = [
+            ("d/a b.md", "* [Space](a%20b.md) - d"),
+            ("d/a%20b.md", "* [Percent](a%2520b.md) - d"),
+        ]
+        .map(|(target, bullet)| ReplayOp::ListBullet {
+            target: target.to_string(),
+            bullet: bullet.to_string(),
+            section: None,
+            create_section: false,
+        });
+        let got = crate::okf::ops::replay("d/index.md", Some("# D\n\n# Concepts\n"), &ops).unwrap();
+        ws.write_atomic("d/index.md", &got).unwrap();
+        check(&ws, "replay");
+    }
+
     #[test]
     fn index_refusals_use_okf_py_wording() {
         let ws = infra();
@@ -879,8 +2146,8 @@ mod tests {
         assert_eq!(
             nested.notes,
             [
-                "created /ops/index.md; replace its TODO lines (and the parent's listing)",
-                "created /ops/deep/index.md; replace its TODO lines (and the parent's listing)",
+                format!("created /ops/index.md{FOLDER_NOTE}"),
+                format!("created /ops/deep/index.md{FOLDER_NOTE}"),
             ]
         );
     }
@@ -1015,8 +2282,8 @@ mod tests {
                 "created /log.md",
                 "listed /a-note.md under its file name: it has no title",
                 "listed /a-note.md with a TODO summary: it has no description",
-                "listed /infra/ in /index.md with a TODO summary",
-                "listed /infra/hosts/ in /infra/index.md with a TODO summary",
+                "listed /infra/ in /index.md with a TODO summary; describe it with index on /infra/",
+                "listed /infra/hosts/ in /infra/index.md with a TODO summary; describe it with index on /infra/hosts/",
                 "listed /infra/hosts/web.md with a TODO summary: it has no description",
             ]
         );
@@ -1086,7 +2353,7 @@ mod tests {
         );
         assert_eq!(
             outcome.notes,
-            ["listed /ops/deep/ in /ops/index.md with a TODO summary"]
+            ["listed /ops/deep/ in /ops/index.md with a TODO summary; describe it with index on /ops/deep/"]
         );
     }
 
@@ -1165,13 +2432,11 @@ mod tests {
     }
 
     #[test]
-    fn repair_indexes_skips_listings_no_link_can_reach_and_settles() {
+    fn repair_indexes_percent_encodes_names_a_plain_link_cannot_hold() {
         // A link's destination stops at whitespace or `)`, and `#` starts
-        // its fragment: these names cannot be linked, so the repair notes
-        // them instead of writing a listing no later run recognises. A
-        // folder with a space still gets its index, and linkable files in
-        // it are listed relatively; under an absolute-style parent the
-        // folder's own listing would need its path, so it is skipped too.
+        // its fragment, so these names are written percent-encoded
+        // (`a%20note.md`); `resolve_link` decodes them, so the next run
+        // recognises each listing and writes nothing.
         let note = "---\ntype: Note\ntitle: N\ndescription: D.\n---\n";
         let root = "---\nokf_version: \"0.2\"\n---\n# Root\n\n* [Top](/top.md) - curated\n";
         let ws = MemWorkspace::from_files([
@@ -1189,41 +2454,32 @@ mod tests {
         let outcome = repair_indexes(&ws).unwrap();
         let again = repair_indexes(&ws).unwrap();
 
-        assert_eq!(
-            outcome.touched,
-            ["my notes/index.md", "ok/index.md", "index.md"]
-        );
-        assert_eq!(
-            ws.read_to_string("index.md").unwrap(),
-            format!("{root}\n# Sections\n\n* [Ok](/ok/) - TODO: describe this folder\n")
-        );
+        let index = ws.read_to_string("index.md").unwrap();
+        for listing in [
+            "(/my%20notes/)",
+            "(/ok/)",
+            "(a%20note.md)",
+            "(x%29y.md)",
+            "(h%231.md)",
+            "(tab%09x.md)",
+        ] {
+            assert!(index.contains(listing), "{listing} in {index}");
+        }
         assert!(ws
             .read_to_string("my notes/index.md")
             .unwrap()
             .ends_with("# Concepts\n\n* [N](a.md) - D.\n"));
-        assert_eq!(
-            sorted(
-                outcome
-                    .notes
-                    .iter()
-                    .filter(|line| line.starts_with("did not list"))
-                    .cloned()
-                    .collect()
-            ),
-            [
-                "did not list /a note.md in /index.md: no markdown link to it can be written",
-                "did not list /h#1.md in /index.md: no markdown link to it can be written",
-                "did not list /my notes/ in /index.md: no markdown link to it can be written",
-                "did not list /tab\tx.md in /index.md: no markdown link to it can be written",
-                "did not list /x)y.md in /index.md: no markdown link to it can be written",
-            ]
+        assert!(
+            !outcome
+                .notes
+                .iter()
+                .any(|line| line.starts_with("did not list")),
+            "{:?}",
+            outcome.notes
         );
-        // The second run writes nothing; it only repeats the notes.
+        // The second run recognises every listing: it writes nothing.
         assert!(again.touched.is_empty() && again.replay.is_empty());
-        assert!(again
-            .notes
-            .iter()
-            .all(|line| line.starts_with("did not list")));
+        assert!(again.notes.is_empty(), "{:?}", again.notes);
     }
 
     #[test]
@@ -1296,17 +2552,17 @@ mod tests {
     #[test]
     fn starter_files_are_a_titled_root_index_and_a_dated_log() {
         let [(index_path, index_text), (log_path, log_text)] =
-            starter_files("pg", "  Systems\n and   people. ", ctx().now);
-        let [(_, untitled), _] = starter_files("bare", " ", ctx().now);
+            starter_files("Systems", "  Systems\n and   people. ", ctx().now);
+        let [(_, untitled), _] = starter_files("Catalog", " ", ctx().now);
 
         assert_eq!((index_path, log_path), ("index.md", "log.md"));
         assert_eq!(
             index_text,
-            "---\nokf_version: \"0.2\"\n---\n\n# pg\n\nSystems and people.\n"
+            "---\nokf_version: \"0.2\"\n---\n\n# Systems\n\nSystems and people.\n"
         );
         assert_eq!(
             untitled,
-            "---\nokf_version: \"0.2\"\n---\n\n# bare\n\nTODO: say what this catalog holds.\n"
+            "---\nokf_version: \"0.2\"\n---\n\n# Catalog\n\nTODO: say what this catalog holds.\n"
         );
         assert_eq!(
             log_text,
@@ -1384,5 +2640,149 @@ mod tests {
 
         assert!(outcome.touched.is_empty());
         assert_eq!(ws.read_to_string("log.md").unwrap(), "# Log\n");
+    }
+
+    /// A root listing `learning/`, with the folder's own index.
+    fn learning(root: &str) -> MemWorkspace {
+        MemWorkspace::from_files([
+            ("index.md", root),
+            (
+                "learning/index.md",
+                "# Learning\n\nTODO: say what this folder holds.\n",
+            ),
+            ("my docs/index.md", "# My docs\n"),
+        ])
+    }
+
+    const LEARNING_ROOT: &str =
+        "# Root\n\n# Sections\n\n* [Learning](learning/) - TODO: describe this folder\n";
+
+    #[test]
+    fn index_on_a_folder_sets_its_listing_summary_and_records_the_op() {
+        for path in ["/learning/", "learning/", "/learning/index.md", "/learning"] {
+            let ws = learning(LEARNING_ROOT);
+
+            let outcome = index(&ws, &ctx(), path, " What we\n  learn. ", None, None).unwrap();
+
+            assert_eq!(
+                ws.read_to_string("index.md").unwrap(),
+                "# Root\n\n# Sections\n\n* [Learning](learning/) - What we learn.\n",
+                "{path}"
+            );
+            assert_eq!(outcome.touched, ["index.md"], "{path}");
+            assert_eq!(
+                outcome.replay["index.md"],
+                [ReplayOp::SetListingSummary {
+                    target: "learning/index.md".to_string(),
+                    summary: "What we learn.".to_string(),
+                }],
+                "{path}"
+            );
+            assert_eq!(
+                outcome.message,
+                "index.md: * [Learning](learning/) - What we learn."
+            );
+        }
+    }
+
+    #[test]
+    fn index_on_a_folder_with_that_summary_already_changes_nothing() {
+        let ws = learning("# Root\n\n* [Learning](/learning/) - Ours.\n");
+
+        let outcome = index(&ws, &ctx(), "/learning/", "Ours.", None, None).unwrap();
+
+        assert!(outcome.touched.is_empty(), "{outcome:?}");
+        assert_eq!(
+            outcome.message,
+            "index.md: /learning/ already has that summary"
+        );
+    }
+
+    #[test]
+    fn index_on_a_folder_refuses_what_it_cannot_describe() {
+        let ws = learning("# Root\n\n# Sections\n\n* [My docs](my docs/) - Mine.\n");
+
+        let section = index(&ws, &ctx(), "/learning/", "x", Some("Sections"), None);
+        let title = index(&ws, &ctx(), "/learning/", "x", None, Some("L"));
+        let root = index(&ws, &ctx(), "/", "x", None, None);
+        let unlisted = index(&ws, &ctx(), "/learning/", "x", None, None);
+        let raw = index(&ws, &ctx(), "/my docs/", "x", None, None);
+        let missing = index(&ws, &ctx(), "/nowhere/", "x", None, None);
+        let outside = index(&ws, &ctx(), "/../x/", "x", None, None);
+
+        assert!(refusal(section.unwrap_err()).contains("leave out section and title"));
+        assert!(refusal(title.unwrap_err()).contains("leave out section and title"));
+        assert!(refusal(root.unwrap_err()).starts_with("the root is listed in no index.md"));
+        assert_eq!(
+            refusal(unlisted.unwrap_err()),
+            "/index.md does not list /learning/: no bullet there starts with a link to it; \
+             repair_indexes lists it"
+        );
+        assert_eq!(
+            refusal(raw.unwrap_err()),
+            "/index.md does not list /my docs/: its listing's link does not resolve; run \
+             repair_indexes first"
+        );
+        assert!(
+            matches!(missing, Err(OkfError::NotFound { ref path }) if path == "/nowhere/index.md")
+        );
+        assert!(
+            matches!(outside, Err(OkfError::InvalidPath { .. })),
+            "{outside:?}"
+        );
+        // Nothing was written.
+        assert_eq!(
+            ws.read_to_string("index.md").unwrap(),
+            "# Root\n\n# Sections\n\n* [My docs](my docs/) - Mine.\n"
+        );
+    }
+
+    #[test]
+    fn ensure_folder_index_describes_the_innermost_new_folder_only() {
+        let ws = MemWorkspace::from_files([("index.md", "# Root\n")]);
+        let mut outcome = OpOutcome::default();
+
+        ensure_folder_index(&ws, "ops/deep", Some("  Deep\n ops. "), &mut outcome).unwrap();
+
+        assert_eq!(
+            ws.read_to_string("index.md").unwrap(),
+            "# Root\n\n# Sections\n\n* [Ops](ops/) - TODO: describe this folder\n"
+        );
+        assert_eq!(
+            ws.read_to_string("ops/index.md").unwrap(),
+            "# Ops\n\nTODO: say what this folder holds.\n\n# Sections\n\n* [Deep](deep/) - Deep ops.\n"
+        );
+        assert_eq!(
+            outcome.replay["ops/index.md"][1],
+            ReplayOp::ListBullet {
+                target: "ops/deep/index.md".to_string(),
+                bullet: "* [Deep](deep/) - Deep ops.".to_string(),
+                section: Some("Sections".to_string()),
+                create_section: true,
+            }
+        );
+        assert_eq!(
+            outcome.notes,
+            [
+                format!("created /ops/index.md{FOLDER_NOTE}"),
+                "created /ops/deep/index.md; replace its TODO line".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn check_new_folder_refuses_the_root_and_an_existing_folder() {
+        let ws = learning(LEARNING_ROOT);
+
+        let root = check_new_folder(&ws, "").unwrap_err();
+        let existing = check_new_folder(&ws, "learning").unwrap_err();
+
+        assert!(refusal(root).contains("the root is no new folder"));
+        assert_eq!(
+            refusal(existing),
+            "folder_summary describes a new folder, and /learning/ exists; leave it out, or \
+             describe /learning/ with index (path /learning/, summary)"
+        );
+        assert!(check_new_folder(&ws, "fresh").is_ok());
     }
 }

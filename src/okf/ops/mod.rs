@@ -18,12 +18,12 @@
 //! ([`OkfError::NotFound`], [`OkfError::InvalidPath`],
 //! [`OkfError::FrontmatterParse`], [`OkfError::Shape`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
@@ -47,7 +47,8 @@ pub use content::{create_concept, edit_document, replace_body, set_frontmatter, 
 pub use delete::delete_concept;
 pub use frontmatter::{question, remove_source, review, source, stamp, unquestion, OUTCOMES};
 pub use log_index::{
-    ensure_index, index, log, repair_catalog, repair_indexes, starter_files, STARTER_FILE_COUNT,
+    ensure_folder_index, ensure_index, index, log, repair_catalog, repair_indexes, starter_files,
+    STARTER_FILE_COUNT,
 };
 pub use moves::move_concept;
 pub use relink::{rewrite_links, Moved, Redirect};
@@ -83,6 +84,13 @@ pub struct OpOutcome {
     pub message: String,
     /// What `okf.py` prints to stderr, without its `okf: ` prefix.
     pub notes: Vec<String>,
+    /// Touched paths whose entry starts again on the revision published
+    /// now, as if the changeset had not edited them before: the earlier
+    /// base revision and replay are dropped. `revert` sets it, because its
+    /// text is a whole-file choice made against the published history
+    /// (issue #788). Every other op leaves it empty, so an entry keeps its
+    /// first edit's base.
+    pub rebased: BTreeSet<String>,
 }
 
 impl OpOutcome {
@@ -140,7 +148,7 @@ impl OpOutcome {
 // Python int). `Deserialize` reads the lowercase spellings, and `JsonSchema`
 // describes them in the `stamp` tool's input schema (the variants' doc comments
 // become the choices' descriptions).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 #[schemars(inline, extend("type" = "string"))]
 pub enum StampField {
@@ -258,9 +266,16 @@ pub(crate) fn save(
 /// `{ by, at }` for a stamp: the actor and the frozen "now".
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn stamp_value(ctx: &OpContext<'_>) -> Value {
+    stamp_entry(ctx.by, &format_timestamp(ctx.now))
+}
+
+/// `{ by, at }` from an actor and an already formatted timestamp: what a
+/// stamp replay writes (the values the original edit recorded).
+#[tracing::instrument(level = "trace", skip_all)]
+pub(crate) fn stamp_entry(by: &str, at: &str) -> Value {
     Value::Map(IndexMap::from([
-        ("by".to_string(), Value::Str(ctx.by.to_string())),
-        ("at".to_string(), Value::Str(format_timestamp(ctx.now))),
+        ("by".to_string(), Value::Str(by.to_string())),
+        ("at".to_string(), Value::Str(at.to_string())),
     ]))
 }
 

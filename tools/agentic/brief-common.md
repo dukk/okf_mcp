@@ -28,6 +28,7 @@ tools/agentic/gate.sh lint
 tools/agentic/gate.sh test
 tools/agentic/gate.sh test-ui              # if you touch the console or tests/ui_e2e/
 tools/agentic/gate.sh dylint               # required before every push (the lint is at deny)
+tools/agentic/gate.sh worker               # the reader's Node tests (tests/read_worker/), while iterating
 tools/agentic/gate.sh narrow --lib -- <filter>   # while iterating
 ```
 

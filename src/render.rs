@@ -20,6 +20,7 @@
 //! outline splits it ([`body_split`]).
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 use pulldown_cmark::{html, Alignment, CodeBlockKind, CowStr, Event, HeadingLevel, LinkType};
 use pulldown_cmark::{Options, Parser, Tag, TagEnd};
@@ -251,6 +252,156 @@ pub fn to_html(text: &str, page: &Page<'_>) -> String {
     out
 }
 
+/// The text of `events` as the rendered HTML would show it, with no markup
+/// and no markdown syntax: text, code and raw HTML (shown as text, as
+/// [`to_html`] shows it), with line breaks and the ends of paragraphs,
+/// headings, items and table cells as spaces, and every run of whitespace
+/// collapsed to one space.
+///
+/// # Arguments
+/// * `events` - parser events, in order.
+///
+/// # Returns
+/// The text, trimmed (empty when there is none).
+#[tracing::instrument(level = "trace", skip_all)]
+fn text_of<'e>(events: impl IntoIterator<Item = &'e Event<'e>>) -> String {
+    let mut text = String::new();
+    for event in events {
+        match event {
+            Event::Text(part) | Event::Code(part) | Event::Html(part) | Event::InlineHtml(part) => {
+                text.push_str(part);
+            }
+            Event::SoftBreak
+            | Event::HardBreak
+            | Event::End(
+                TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item | TagEnd::TableCell,
+            ) => {
+                text.push(' ');
+            }
+            // Start tags, other end tags, footnote references, task list
+            // markers and math add no text of their own. A catch-all,
+            // because pulldown-cmark's `Event` has many more variants and
+            // grows with its versions.
+            _ => {}
+        }
+    }
+    // `split_whitespace` drops every run of whitespace, so joining with one
+    // space collapses them and trims both ends.
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The plain text of the block of `body` the line at `line` belongs to,
+/// from that line on: what the rendered HTML shows there, without markdown
+/// syntax. The whole body is parsed with the options of [`to_html`], so
+/// emphasis or a link that runs past the line, and a reference link defined
+/// elsewhere, read as their text.
+///
+/// The block is the one whose source range overlaps the line's, preferring
+/// one that holds the whole line, then the innermost: a block may start
+/// after a prefix on its line (`> `, a list marker, a table row's `|`).
+/// When no block overlaps the line, or the block has no text from the line
+/// on, the line alone is read without markdown, and if that is empty too
+/// (a reference definition), the line is given as written.
+///
+/// # Arguments
+/// * `body` - a document's body (frontmatter already split off).
+/// * `line` - the byte range of one line of `body`, without its `\n`.
+///
+/// # Returns
+/// The text, trimmed; empty only for a line with no visible characters.
+///
+/// # Examples
+/// ```
+/// use okf_mcp::render::block_text;
+/// let body = "> Runs [Beta](beta.md) with **two** `keys`.\n";
+/// assert_eq!(block_text(body, 0..body.len() - 1), "Runs Beta with two keys.");
+/// ```
+#[tracing::instrument(level = "trace", skip_all)]
+pub fn block_text(body: &str, line: Range<usize>) -> String {
+    // Each event with the byte range of the source it came from.
+    let events: Vec<(Event<'_>, Range<usize>)> = Parser::new_ext(body, options())
+        .into_offset_iter()
+        .collect();
+    let holds_line = |range: &Range<usize>| range.start <= line.start && line.end <= range.end;
+    let block = events
+        .iter()
+        .filter_map(|(event, range)| match event {
+            Event::Start(
+                Tag::Paragraph
+                | Tag::Heading { .. }
+                | Tag::BlockQuote(_)
+                | Tag::Item
+                | Tag::CodeBlock(_)
+                | Tag::TableHead
+                | Tag::TableRow
+                | Tag::TableCell
+                | Tag::HtmlBlock,
+            ) if range.start < line.end && line.start < range.end => Some(range.clone()),
+            // Any other event opens no block of its own.
+            _ => None,
+        })
+        // `false` sorts before `true`: a block holding the whole line first,
+        // then the shortest (innermost).
+        .min_by_key(|range| (!holds_line(range), range.len()));
+    if let Some(block) = block {
+        // Only this block, and only what ends after the line starts. A text
+        // event that began on an earlier line (a code block's text can be
+        // one event over several lines) is clipped to start at the line,
+        // when its text is its source verbatim; text the parser rewrote
+        // (an escape, an entity) is kept whole, as the offsets would not map.
+        let clipped: Vec<Event<'_>> = events
+            .iter()
+            .filter(|(_, range)| {
+                range.start >= block.start && range.end <= block.end && range.end > line.start
+            })
+            .map(|(event, range)| match event {
+                Event::Text(part) if range.start < line.start && **part == body[range.clone()] => {
+                    Event::Text(CowStr::Borrowed(&body[line.start..range.end]))
+                }
+                // `clone` copies the event's (usually borrowed) text.
+                other => other.clone(),
+            })
+            .collect();
+        let from_line = text_of(&clipped);
+        if !from_line.is_empty() {
+            return from_line;
+        }
+    }
+    let source = &body[line];
+    let alone: Vec<Event<'_>> = Parser::new_ext(source, options()).collect();
+    let text = text_of(&alone);
+    if text.is_empty() {
+        source.split_whitespace().collect::<Vec<_>>().join(" ")
+    } else {
+        text
+    }
+}
+
+/// `text` cut to at most `most` characters (not bytes), ending in an
+/// ellipsis when it was cut.
+///
+/// # Arguments
+/// * `text` - the text.
+/// * `most` - the most characters kept, the ellipsis included (at least 1).
+///
+/// # Returns
+/// `text` itself when it fits.
+#[tracing::instrument(level = "trace", skip_all)]
+pub fn excerpt(text: &str, most: usize) -> String {
+    // `char_indices().nth(n)` is the byte offset of the n-th character, so
+    // the cut never splits a multi-byte UTF-8 character.
+    match text.char_indices().nth(most) {
+        None => text.to_string(),
+        Some(_) => {
+            let keep = text
+                .char_indices()
+                .nth(most.saturating_sub(1))
+                .map_or(text.len(), |(end, _)| end);
+            format!("{}\u{2026}", text[..keep].trim_end())
+        }
+    }
+}
+
 /// A heading's start event with the console's id and the slug.
 ///
 /// # Arguments
@@ -360,8 +511,8 @@ fn destination(link_type: LinkType, url: &str, page: &Page<'_>) -> Destination {
     if escapes_root(&resolved.path) || !resolved.path.ends_with(".md") {
         return Destination::Text;
     }
-    // The path stays literal, as `resolve_link` and the catalog's link
-    // checks read it; only the fragment is decoded (see `section_slug`).
+    // `resolve_link` has decoded the path, as the catalog's link checks read
+    // it; the fragment is decoded here (see `section_slug`).
     let fragment = url
         .split_once('#')
         .map(|(_, fragment)| section_slug(fragment));
@@ -632,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn encoded_fragments_are_decoded_once_and_paths_stay_literal() {
+    fn encoded_fragments_and_paths_are_decoded_once() {
         let files = MemWorkspace::from_files([
             ("systems/alpha.md", "# Alpha\n"),
             ("systems/beta.md", "# Beta\n\n## Caf\u{e9}\n"),
@@ -641,7 +792,7 @@ mod tests {
         ]);
         let html = to_html(
             "[Cafe](beta.md#caf%C3%A9) [Here](#Caf%C3%A9) [Upper](beta.md#CONFIG) \
-             [Encoded](a%20b.md)\n",
+             [Encoded](a%20b.md) [Literal](a%2520b.md)\n",
             &Page::new("main", "systems/alpha.md", &files),
         );
 
@@ -649,8 +800,10 @@ mod tests {
             "#/browse/main/systems/beta.md/caf%C3%A9",
             "#/browse/main/systems/alpha.md/caf%C3%A9",
             "#/browse/main/systems/beta.md/config",
-            // The file named `a%20b.md`, as the catalog's link check reads
-            // the link: `%` is encoded once, so the router decodes it back.
+            // `a%20b.md` is the file `a b.md`, as the catalog's link check
+            // reads it; the route encodes it once.
+            "#/browse/main/systems/a%20b.md",
+            // The file literally named `a%20b.md` is written `a%2520b.md`.
             "#/browse/main/systems/a%2520b.md",
         ] {
             assert!(
@@ -660,6 +813,26 @@ mod tests {
         }
         assert!(!html.contains("%25C3"), "no double encoding: {html}");
         assert!(!html.contains(BROKEN_LINK_TITLE), "{html}");
+    }
+
+    #[test]
+    fn angle_bracket_destinations_resolve_like_the_catalog_reads_them() {
+        let files = MemWorkspace::from_files([
+            ("systems/alpha.md", "# Alpha\n"),
+            ("systems/a b.md", "# A b\n"),
+        ]);
+        let html = to_html(
+            "[Spaced](<a b.md>) [Titled](<a b.md> \"t\") [Gone](<gone x.md>)\n",
+            &Page::new("main", "systems/alpha.md", &files),
+        );
+
+        assert_eq!(
+            html.matches("href=\"#/browse/main/systems/a%20b.md\"")
+                .count(),
+            2,
+            "{html}"
+        );
+        assert_eq!(html.matches(BROKEN_LINK_TITLE).count(), 1, "{html}");
     }
 
     #[test]
@@ -685,5 +858,99 @@ mod tests {
         assert_eq!(scheme("#x:y"), None);
         assert!(has_scheme(" HTTPS://example.com", &ALLOWED_SCHEMES));
         assert!(!has_scheme("ht\ttps://example.com", &ALLOWED_SCHEMES));
+    }
+
+    /// The byte range of the line of `body` that starts with `start`, without its `\n`.
+    fn line_of(body: &str, start: &str) -> std::ops::Range<usize> {
+        let from = body
+            .find(&format!("\n{start}"))
+            .map(|at| at + 1)
+            .or_else(|| body.starts_with(start).then_some(0))
+            .expect("the line is in the body");
+        let to = body[from..].find('\n').map_or(body.len(), |end| from + end);
+        from..to
+    }
+
+    #[test]
+    fn block_text_reads_the_matched_block_from_its_line_on() {
+        let body =
+            "# Title\n\nFirst line of a paragraph\nruns [Beta](beta.md) with **two** `keys`.\n";
+        assert_eq!(
+            block_text(body, line_of(body, "runs")),
+            "runs Beta with two keys."
+        );
+        // A heading is a block of its own.
+        assert_eq!(block_text(body, line_of(body, "# Title")), "Title");
+    }
+
+    #[test]
+    fn block_text_reads_blocks_that_start_after_a_prefix_on_the_line() {
+        let quote = "Intro.\n\n> marmalade on toast\n> and more\n";
+        assert_eq!(
+            block_text(quote, line_of(quote, "> marmalade")),
+            "marmalade on toast and more"
+        );
+        let nested = "- parent item\n  - child marmalade\n- sibling\n";
+        assert_eq!(
+            block_text(nested, line_of(nested, "  - child")),
+            "child marmalade"
+        );
+        let table = "| name | note |\n|---|---|\n| jam | marmalade |\n";
+        assert_eq!(block_text(table, line_of(table, "| jam")), "jam marmalade");
+        let heading = "Intro.\n\n## Marmalade **notes**\n\nText.\n";
+        assert_eq!(
+            block_text(heading, line_of(heading, "## Marmalade")),
+            "Marmalade notes"
+        );
+    }
+
+    #[test]
+    fn block_text_resolves_a_reference_link_defined_elsewhere() {
+        let body = "See [the guide][g] for the time.\n\nMore.\n\n[g]: guide.md\n";
+        assert_eq!(
+            block_text(body, line_of(body, "See")),
+            "See the guide for the time."
+        );
+    }
+
+    #[test]
+    fn block_text_reads_a_fenced_code_block_without_its_fences() {
+        let body = "Intro.\n\n```sh\nntp-time --serve\n--port 123\n```\n";
+        assert_eq!(
+            block_text(body, line_of(body, "ntp-time")),
+            "ntp-time --serve --port 123"
+        );
+    }
+
+    /// A code block's text may come as one event over several lines: the
+    /// snippet starts at the matched line, not at the event's start.
+    #[test]
+    fn block_text_starts_a_code_block_at_the_matched_line() {
+        let body = "```sh\nunrelated setup\nmarmalade --serve\n```\n";
+        let text = block_text(body, line_of(body, "marmalade"));
+        assert_eq!(text, "marmalade --serve");
+        assert!(!text.contains("unrelated setup"), "{text}");
+        // A long earlier line would otherwise push the match past the cut.
+        let long = format!("```\n{}\nmarmalade --serve\n```\n", "y".repeat(200));
+        let text = block_text(&long, line_of(&long, "marmalade"));
+        assert!(text.starts_with("marmalade --serve"), "{text}");
+        assert!(excerpt(&text, 160).contains("marmalade"));
+    }
+
+    #[test]
+    fn block_text_falls_back_to_the_line_when_no_block_overlaps_it() {
+        // A reference definition renders nothing, alone or in its body:
+        // the line is given as written rather than no snippet at all.
+        let body = "Text [x][g].\n\n[g]: marmalade.md\n";
+        assert_eq!(block_text(body, line_of(body, "[g]:")), "[g]: marmalade.md");
+    }
+
+    #[test]
+    fn excerpt_cuts_on_a_character_boundary_with_an_ellipsis() {
+        assert_eq!(excerpt("short", 160), "short");
+        let long = "\u{e9}".repeat(200);
+        let cut = excerpt(&long, 160);
+        assert_eq!(cut.chars().count(), 160);
+        assert!(cut.ends_with('\u{2026}'), "{cut}");
     }
 }

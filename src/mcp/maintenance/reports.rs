@@ -14,20 +14,8 @@ use super::{actor, evidence_paths, finding_paths, pin_path, MaintenanceResult};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct MaintenanceListRunsParams {
-    /// Required authorized catalog name; connection defaults do not apply.
-    pub catalog: String,
-    /// Exclusive last-row ID from the previous page in this catalog; omit for the first page.
-    pub after: Option<String>,
-    /// Page size (default 20, minimum 1, maximum 200).
-    #[schemars(range(min = 1, max = 200))]
-    pub limit: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct MaintenanceGetRunParams {
-    /// Required authorized catalog name; connection defaults do not apply.
+    /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
     pub catalog: String,
     /// Opaque run ID belonging to the named catalog.
     pub run_id: String,
@@ -36,7 +24,7 @@ pub struct MaintenanceGetRunParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MaintenanceListFindingsParams {
-    /// Required authorized catalog name; connection defaults do not apply.
+    /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
     pub catalog: String,
     /// Exclusive last-row ID from the previous page in this catalog; omit for the first page.
     pub after: Option<String>,
@@ -48,7 +36,7 @@ pub struct MaintenanceListFindingsParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MaintenanceGetFindingParams {
-    /// Required authorized catalog name; connection defaults do not apply.
+    /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
     pub catalog: String,
     /// Opaque finding ID belonging to the named catalog.
     pub finding_id: String,
@@ -72,7 +60,7 @@ mod dispose_params {
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
     #[serde(deny_unknown_fields)]
     pub struct MaintenanceDisposeParams {
-        /// Required authorized catalog name; connection defaults do not apply.
+        /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
         pub catalog: String,
         /// Opaque finding ID belonging to the named catalog.
         pub finding_id: String,
@@ -87,6 +75,50 @@ mod dispose_params {
 }
 
 pub use dispose_params::MaintenanceDisposeParams;
+
+// Same hook, same reason, as `dispose_params`: `order` needs an inline enum.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "constant trait plumbing: the derive's schema_with hook returns a fixed schema"
+    )
+)]
+mod list_runs_params {
+    use super::{run_order_schema, runs, JsonSchema};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct MaintenanceListRunsParams {
+        /// Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply.
+        pub catalog: String,
+        /// Exclusive last-row ID from the previous page in this catalog; omit for the first page. Continues in the chosen `order`.
+        pub after: Option<String>,
+        /// Page size (default 20, minimum 1, maximum 200).
+        #[schemars(range(min = 1, max = 200))]
+        pub limit: Option<u32>,
+        /// `asc` (default) lists oldest first; `desc` lists newest first.
+        #[serde(default)]
+        #[schemars(schema_with = "run_order_schema")]
+        pub order: Option<runs::RunOrder>,
+    }
+}
+
+pub use list_runs_params::MaintenanceListRunsParams;
+
+/// The `order` property's schema: the enum inlined (and optional, like the
+/// other `Option` fields), so the property has a direct `type`. A test keeps it in step with [`runs::RunOrder`].
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "constant trait plumbing: the derive's schema_with hook returns a fixed schema"
+    )
+)]
+fn run_order_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": ["string", "null"], "enum": ["asc", "desc", null]})
+}
 
 /// The `disposition` property's schema: the enum inlined, so the property has
 /// a direct `type` instead of a bare `$ref`. A test keeps it in step with
@@ -110,13 +142,14 @@ pub(crate) async fn maintenance_list_runs(
     ctx: &ToolContext,
     params: MaintenanceListRunsParams,
 ) -> Result<MaintenanceResult<runs::Page<runs::RunSummary>>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
-    ctx.principal().require(Access::Read, state.name())?;
+    let state = ctx.one(Some(&params.catalog)).await?;
+    ctx.require(Access::Read, &state).await?;
     let result = runs::list_runs(
         ctx.app().pool(),
         state.id(),
         params.after.as_deref(),
         params.limit.unwrap_or(20),
+        params.order.unwrap_or_default(),
     )
     .await?;
     Ok(MaintenanceResult::new(state.name(), result))
@@ -127,13 +160,12 @@ pub(crate) async fn maintenance_get_run(
     ctx: &ToolContext,
     params: MaintenanceGetRunParams,
 ) -> Result<MaintenanceResult<runs::RunReport>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     // The whole content check, before `admit`, which ignores refusals.
-    ctx.principal()
-        .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
+    ctx.require_contents(Access::Read, &state).await?;
     // Its work, findings and evidence describe the documents: a read of
     // the contents (a run list or a count is not).
-    ctx.admit(&state, AccessKind::Read)?;
+    ctx.admit(&state, AccessKind::Read).await?;
     let mut result = runs::get_run(ctx.app().pool(), state.id(), &params.run_id).await?;
     for work in &mut result.work {
         pin_path(&mut work.pin);
@@ -170,13 +202,12 @@ pub(crate) async fn maintenance_list_findings_by(
     params: MaintenanceListFindingsParams,
     disposition: Option<Disposition>,
 ) -> Result<MaintenanceResult<runs::Page<reports::FindingRecord>>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     // The whole content check, before `admit`, which ignores refusals.
-    ctx.principal()
-        .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
+    ctx.require_contents(Access::Read, &state).await?;
     // Its work, findings and evidence describe the documents: a read of
     // the contents (a run list or a count is not).
-    ctx.admit(&state, AccessKind::Read)?;
+    ctx.admit(&state, AccessKind::Read).await?;
     let mut result = reports::list_findings_with(
         ctx.app().pool(),
         state.id(),
@@ -196,13 +227,12 @@ pub(crate) async fn maintenance_get_finding(
     ctx: &ToolContext,
     params: MaintenanceGetFindingParams,
 ) -> Result<MaintenanceResult<reports::FindingRecord>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
+    let state = ctx.one(Some(&params.catalog)).await?;
     // The whole content check, before `admit`, which ignores refusals.
-    ctx.principal()
-        .require_contents(Access::Read, state.name(), ctx.app().clock().now())?;
+    ctx.require_contents(Access::Read, &state).await?;
     // Its work, findings and evidence describe the documents: a read of
     // the contents (a run list or a count is not).
-    ctx.admit(&state, AccessKind::Read)?;
+    ctx.admit(&state, AccessKind::Read).await?;
     let mut result = reports::get_finding(ctx.app().pool(), state.id(), &params.finding_id).await?;
     finding_paths(&mut result);
     Ok(MaintenanceResult::new(state.name(), result))
@@ -225,8 +255,8 @@ pub(crate) async fn maintenance_finding_counts(
     ctx: &ToolContext,
     catalog: &str,
 ) -> Result<MaintenanceResult<reports::FindingCounts>, OkfError> {
-    let state = ctx.one(Some(catalog))?;
-    ctx.principal().require(Access::Read, state.name())?;
+    let state = ctx.one(Some(catalog)).await?;
+    ctx.require(Access::Read, &state).await?;
     let counts = reports::count_findings(ctx.app().pool(), state.id()).await?;
     Ok(MaintenanceResult::new(state.name(), counts))
 }
@@ -236,8 +266,8 @@ pub(crate) async fn maintenance_dispose(
     ctx: &ToolContext,
     params: MaintenanceDisposeParams,
 ) -> Result<MaintenanceResult<reports::FindingRecord>, OkfError> {
-    let state = ctx.one(Some(&params.catalog))?;
-    ctx.principal().require(Access::Write, state.name())?;
+    let state = ctx.one(Some(&params.catalog)).await?;
+    ctx.require(Access::Write, &state).await?;
     let mut result = reports::dispose(
         ctx.app().pool(),
         state.id(),

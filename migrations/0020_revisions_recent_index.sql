@@ -1,0 +1,13 @@
+-- Recent changes (`history::recent`, the console's Recent changes page) lists
+-- one catalog's revisions newest first, ordered by (created_at, path,
+-- revision), all descending, and continues a page with the row comparison
+-- (created_at, path, revision) < (cursor's). The primary key is ordered
+-- (catalog_id, path, revision), so without this index the page would read and
+-- sort every revision of the catalog. With it, the catalog's rows sit
+-- together in exactly the page's order: a backward scan starts at the cursor
+-- and stops after one page. A test plans the query.
+--
+-- A plain CREATE INDEX, inside the migration's transaction, as 0018: it blocks
+-- writes to `revisions` while it builds, which on an existing server is the
+-- time to read the table once at startup.
+CREATE INDEX revisions_catalog_recent ON revisions (catalog_id, created_at, path, revision);

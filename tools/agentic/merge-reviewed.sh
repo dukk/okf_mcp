@@ -10,7 +10,8 @@
 # The merge is pinned to the inspected head, so a concurrent push makes it fail.
 # Every gh and git call is bounded ($AGENTIC_CALL_TIMEOUT, default 60 s); a call
 # that runs out of time is a refusal.
-# Then fetches origin so the next worktree starts from the new main.
+# Then fetches origin so the next worktree starts from the new base, and prints
+# the PR's base branch and the merge commit.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source-path=SCRIPTDIR source=lib.sh
@@ -20,10 +21,12 @@ pr=${1:?usage: merge-reviewed.sh <pr>}
 repo=$(agentic_repo) || { echo "REFUSE: could not resolve the repository"; exit 1; }
 bot=$(agentic_reviewer)
 
-info=$(agentic_gh pr view "$pr" -R "$repo" --json headRefOid,mergeStateStatus) \
+info=$(agentic_gh pr view "$pr" -R "$repo" --json headRefOid,mergeStateStatus,baseRefName) \
     || { echo "REFUSE: could not read PR $pr"; exit 1; }
 head=$(jq -r .headRefOid <<<"$info")
 state=$(jq -r .mergeStateStatus <<<"$info")
+base=$(jq -r '.baseRefName // empty' <<<"$info")
+[ -n "$base" ] || { echo "REFUSE: could not read the base branch of PR $pr"; exit 1; }
 
 counts=$(agentic_review_counts "$repo" "$pr" "$bot" "$head") \
     || { echo "REFUSE: could not read the reviews of PR $pr"; exit 1; }
@@ -68,11 +71,24 @@ agentic_gh pr merge "$pr" -R "$repo" --merge --match-head-commit "$head" \
     || { echo "REFUSE: the merge of ${head:0:7} failed: GitHub rejected it (did the head" \
         "change?) or the call timed out (check the PR before retrying)"; exit 1; }
 # The merge is done; a failure from here on only means the local view is stale.
+# Name the PR's real base (a milestone branch, not always main) and the merge
+# commit GitHub made on it; without that commit, use the base's tip after a fetch.
+merge_sha=$(agentic_gh pr view "$pr" -R "$repo" --json mergeCommit --jq '.mergeCommit.oid // empty' \
+    2>/dev/null) || merge_sha=""
 if main_checkout=$(agentic_main_checkout) \
-    && agentic_git -C "$main_checkout" fetch -q origin \
-    && main=$(agentic_git -C "$main_checkout" rev-parse --short origin/main); then
-    echo "MERGED PR $pr -> main $main"
-    echo "next: tools/agentic/remove-worktree.sh <worktree> --branch (frees its Cargo build output)"
+    && agentic_git -C "$main_checkout" fetch -q origin; then
+    if [ -z "$merge_sha" ]; then
+        merge_sha=$(agentic_git -C "$main_checkout" rev-parse "origin/$base" 2>/dev/null) \
+            || merge_sha=""
+    fi
+    fetched=1
 else
-    echo "MERGED PR $pr; warning: could not fetch origin afterwards"
+    fetched=0
 fi
+if [ -n "$merge_sha" ]; then
+    echo "MERGED PR $pr -> $base ${merge_sha:0:7}"
+else
+    echo "MERGED PR $pr -> $base; warning: could not find the merge commit"
+fi
+[ "$fetched" = 1 ] || echo "warning: could not fetch origin afterwards"
+echo "next: tools/agentic/remove-worktree.sh <worktree> --branch (frees its Cargo build output)"

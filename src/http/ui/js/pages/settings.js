@@ -17,6 +17,7 @@
 // follows fails, the table is drawn again from the last answer and marked
 // as possibly out of date, so the reason still shows and every control can
 // be tried again.
+import { latest } from '../core/latest.js';
 import { h, pill, fact, fill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
@@ -38,6 +39,9 @@ const MEANING = {
     reset_link_ttl: 'Password reset link lifetime',
     product_name: 'Product name in email, the sign-in and consent pages and this console',
     support_contact: 'Email address or https:// URL shown as "Questions? Contact ..." ("none": no line)',
+    feedback_url: 'https:// URL the console\'s "Send feedback" link opens ("none": no link)',
+    docs_url: 'https:// URL the console\'s "Documentation" link opens ("none": no link)',
+    onboarding_url: 'https:// URL a new user is sent to after setting their first password, such as a getting-started guide ("none": the console)',
     audit_retention_days: 'Days audit entries are kept before the daily prune deletes them (30 to 3650)',
     require_unlock: 'Make operator staff unlock a customer\'s catalog, with a reason and a time limit, before opening it',
     unlock_max_hours: 'Longest unlock, in hours (1 to 72)',
@@ -46,7 +50,7 @@ const MEANING = {
 // The settings that are on or off, chosen from true and false.
 const BOOLEAN_SETTINGS = new Set(['password_sign_in', 'require_unlock', 'unlock_notify_owners']);
 // The settings whose change shows in this console's own shell.
-const BRANDING = new Set(['product_name']);
+const BRANDING = new Set(['product_name', 'feedback_url', 'docs_url']);
 // GET /mail/queue's statuses, as pill kinds.
 const MAIL_STATUS_KIND = { pending: 'info', sending: 'info', retrying: 'warn', failed: 'error' };
 // The statuses a mail may be retried from (queue::retry takes Failed and
@@ -186,8 +190,8 @@ export async function render(main) {
     // the newest read draws: reads overlap (a Refresh and an action's reload)
     // and can finish out of order, and an older answer must never draw over
     // a newer one.
-    let settingsTicket = 0;
-    let queueTicket = 0;
+    const settingsReads = latest(main);
+    const queueReads = latest(main);
     const staleNote = (id, what) => h('p', { id, class: 'error small', role: 'status', hidden: true },
         `Could not read ${what} again, so what is shown may be out of date.`);
     const settingsStale = staleNote('settings-stale', 'the settings');
@@ -198,7 +202,7 @@ export async function render(main) {
         manager ? null : h('p', { class: 'muted small', id: 'settings-readonly' },
             'Changing settings or the mail queue needs an admin key that reaches every catalog.'),
         h('section', { class: 'account-section', id: 'settings-policy' }, h('h2', {}, 'Policy'),
-            h('p', { class: 'muted small' }, 'The config file\'s [auth] table gives the defaults (product_name is okf and support_contact none); a value saved here overrides it until Reset.'),
+            h('p', { class: 'muted small' }, 'The config file\'s [auth] table gives the defaults; a value saved here overrides it until Reset.'),
             settingsStale,
             settings),
         h('section', { class: 'account-section' }, h('h2', {}, 'Sign-in providers'), providers),
@@ -216,10 +220,10 @@ export async function render(main) {
     // redraws the last ones, marked stale, with the current refusals. A
     // read that a newer one has overtaken draws nothing.
     async function loadSettings() {
-        const mine = ++settingsTicket;
+        const current = settingsReads();
         let answer = null;
         try { answer = await api.get('/settings'); } catch { /* toasted */ }
-        if (!main.isConnected || mine !== settingsTicket) return;
+        if (!current()) return;
         settingsStale.hidden = answer !== null;
         if (answer === null) {
             settings.redraw(settingRows);
@@ -240,10 +244,10 @@ export async function render(main) {
 
     // Reads the queue and redraws it, as loadSettings does the settings.
     async function loadQueue() {
-        const mine = ++queueTicket;
+        const current = queueReads();
         let answer = null;
         try { answer = await api.get('/mail/queue'); } catch { /* toasted */ }
-        if (!main.isConnected || mine !== queueTicket) return;
+        if (!current()) return;
         queueStale.hidden = answer !== null;
         if (answer !== null) {
             queueRows = answer.mail;

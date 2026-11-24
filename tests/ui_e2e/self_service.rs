@@ -109,22 +109,24 @@ pub(crate) fn console_base(server: &TestServer) -> String {
 /// * `access` - her level on `main`: `Read` or `Write`.
 ///
 /// # Panics
-/// If a store call or the poll fails.
+/// If a store call fails.
 pub(crate) async fn member(server: &TestServer, access: Access) {
     server.user_with_password("alice", EMAIL, PASSWORD).await;
-    ceiling::entitle(
-        &server.db.pool,
-        &NewEntitlement {
-            user: "alice",
-            catalog: "main",
-            access,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("entitle alice to main");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            &server.db.pool,
+            &NewEntitlement {
+                user: "alice",
+                catalog: "main",
+                access,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle alice to main");
+    })
+    .await;
 }
 
 /// Creates a self-issued key of alice's called `name`, with write on
@@ -155,7 +157,6 @@ async fn alices_key(server: &TestServer, name: &str) {
     )
     .await
     .expect("create alice's key");
-    server.app.poll().await.expect("poll");
 }
 
 /// Inserts an OAuth grant of alice's, from consent signed in as her: read
@@ -166,13 +167,19 @@ async fn alices_key(server: &TestServer, name: &str) {
 /// # Returns
 /// The grant's id.
 async fn alices_grant(server: &TestServer) -> String {
+    alices_grant_for(server, "Example Client", "example-client").await
+}
+
+/// [`alices_grant`] for a client called `client_name`, with the grant's key
+/// named `grant_name` (the page's `my-grant-<name>` test id).
+async fn alices_grant_for(server: &TestServer, client_name: &str, grant_name: &str) -> String {
     let pool = &server.db.pool;
     let redirect_uris = ["https://client.example.com/callback".to_string()];
     let metadata = json!({ "redirect_uris": redirect_uris });
     let client = client_rows::insert_dcr(
         pool,
         &NewDcrClient {
-            client_name: Some("Example Client"),
+            client_name: Some(client_name),
             redirect_uris: &redirect_uris,
             metadata: &metadata,
         },
@@ -186,11 +193,13 @@ async fn alices_grant(server: &TestServer) -> String {
     let id: String = sqlx::query_scalar(
         "INSERT INTO api_keys \
              (name, access, all_catalogs, actor, created_at, kind, client_id, user_id, self_issued) \
-         SELECT 'example-client', 'read', false, 'Example Client', now(), 'oauth', $1, u.id, true \
+         SELECT $2::text, 'read', false, $3::text, now(), 'oauth', $1, u.id, true \
          FROM users u WHERE u.name = 'alice' \
          RETURNING id",
     )
     .bind(&client.client_id)
+    .bind(grant_name)
+    .bind(client_name)
     .fetch_one(pool)
     .await
     .expect("insert alice's grant");
@@ -202,11 +211,6 @@ async fn alices_grant(server: &TestServer) -> String {
     .execute(pool)
     .await
     .expect("grant main");
-    sqlx::query("UPDATE server_state SET admin_generation = admin_generation + 1")
-        .execute(pool)
-        .await
-        .expect("bump the admin generation");
-    server.app.poll().await.expect("poll");
     id
 }
 
@@ -271,19 +275,21 @@ async fn a_member_signs_in_from_the_card_and_sees_only_their_pages() {
 async fn a_members_level_follows_the_selected_catalog() {
     let server = login_server().await;
     member(&server, Access::Write).await;
-    ceiling::entitle(
-        &server.db.pool,
-        &NewEntitlement {
-            user: "alice",
-            catalog: "other",
-            access: Access::Read,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("entitle alice to other");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            &server.db.pool,
+            &NewEntitlement {
+                user: "alice",
+                catalog: "other",
+                access: Access::Read,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle alice to other");
+    })
+    .await;
     drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         // The console's own store module (the same instance the pages use).
@@ -301,19 +307,21 @@ async fn a_members_level_follows_the_selected_catalog() {
 async fn an_admin_user_signs_in_and_sees_the_full_console() {
     let server = login_server().await;
     member(&server, Access::Read).await;
-    users::set_admin(
-        &server.db.pool,
-        "alice",
-        AdminChange {
-            on: true,
-            allow_last: false,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("make alice an admin");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        users::set_admin(
+            &server.db.pool,
+            "alice",
+            AdminChange {
+                on: true,
+                allow_last: false,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("make alice an admin");
+    })
+    .await;
     drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         ui.wait_text("#whoami", "admin");
@@ -340,6 +348,8 @@ async fn a_member_creates_a_key_within_the_ceiling_and_sees_its_secret_once() {
         ui.wait_text("#my-keys-note", "0 of 20");
         ui.click("#my-key-new");
         ui.wait_visible("#my-key-form");
+        // The picker reads the ceiling a page at a time (issue #736).
+        ui.wait_visible("#my-key-form input[name=catalog][value=main]");
         // Only the ceiling's catalogs are offered.
         assert_eq!(
             ui.eval(
@@ -386,8 +396,9 @@ async fn a_member_creates_a_key_within_the_ceiling_and_sees_its_secret_once() {
     let secret = shown.lock().expect("the secret's lock").clone();
     let principal = server
         .app
-        .keys()
-        .find(&secret)
+        .find_key(&secret)
+        .await
+        .unwrap()
         .expect("the secret signs in");
     assert_eq!(principal.key_id, key.id);
 }
@@ -396,16 +407,18 @@ async fn a_member_creates_a_key_within_the_ceiling_and_sees_its_secret_once() {
 async fn the_lifetime_limit_shapes_the_expiry_choices_and_the_longest_is_the_default() {
     let server = login_server().await;
     member(&server, Access::Write).await;
-    settings::set(
-        &server.db.pool,
-        SettingKey::MaxKeyLifetime,
-        "30d",
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("limit key lifetimes to 30 days");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        settings::set(
+            &server.db.pool,
+            SettingKey::MaxKeyLifetime,
+            "30d",
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("limit key lifetimes to 30 days");
+    })
+    .await;
     // The expiry the API reports for the new key, handed out of the
     // journey's thread.
     let reported = Arc::new(Mutex::new(String::new()));
@@ -477,10 +490,12 @@ async fn a_ceiling_lowered_during_the_session_shows_on_my_keys_without_a_reload(
         // An admin lowers main to read. The page is not reloaded: My keys
         // is reached through the nav link (a hash change).
         runtime.block_on(async {
-            ceiling::entitle(&pool, &NewEntitlement { user: "alice", catalog: "main", access: Access::Read }, &AuditActor::cli(), Utc::now())
-                .await
-                .expect("lower main to read");
-            app.poll().await.expect("poll");
+            crate::support::server::applied(&app, async {
+                ceiling::entitle(&pool, &NewEntitlement { user: "alice", catalog: "main", access: Access::Read }, &AuditActor::cli(), Utc::now())
+                    .await
+                    .expect("lower main to read");
+            })
+            .await;
         });
         ui.click("a[data-nav=my-keys]");
         ui.wait_text(cell, "(capped to read)");
@@ -489,6 +504,7 @@ async fn a_ceiling_lowered_during_the_session_shows_on_my_keys_without_a_reload(
         ui.click("#drawer-close");
         // The New key form offers no more than read now.
         ui.click("#my-key-new");
+        ui.wait_visible("#my-key-form select[name=level-main]");
         assert_eq!(
             ui.eval(
                 "() => [...document.querySelectorAll('#my-key-form select[name=level-main] option')] \
@@ -500,10 +516,12 @@ async fn a_ceiling_lowered_during_the_session_shows_on_my_keys_without_a_reload(
         ui.click("#drawer-close");
         // Then main is taken away altogether.
         runtime.block_on(async {
-            ceiling::unentitle(&pool, "alice", "main", &AuditActor::cli(), Utc::now())
-                .await
-                .expect("take main away");
-            app.poll().await.expect("poll");
+            crate::support::server::applied(&app, async {
+                ceiling::unentitle(&pool, "alice", "main", &AuditActor::cli(), Utc::now())
+                    .await
+                    .expect("take main away");
+            })
+            .await;
         });
         ui.click("a[data-nav=health]");
         ui.wait_hidden("#my-keys-table");
@@ -530,15 +548,17 @@ async fn an_admin_issued_key_for_every_catalog_shows_its_level() {
         expires_at: None,
         levels: &[],
     };
-    key_rows::create(
-        &server.db.pool,
-        &new,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("an admin issues alice a key for every catalog");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        key_rows::create(
+            &server.db.pool,
+            &new,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("an admin issues alice a key for every catalog");
+    })
+    .await;
     drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         ui.open("/my-keys");
@@ -570,10 +590,12 @@ async fn a_key_the_ceiling_no_longer_allows_is_refused_and_names_the_limit() {
         ui.click("#my-key-form input[name=catalog][value=main]");
         ui.select("#my-key-form select[name=level-main]", "write");
         runtime.block_on(async {
-            ceiling::unentitle(&pool, "alice", "main", &AuditActor::cli(), Utc::now())
-                .await
-                .expect("take main away");
-            app.poll().await.expect("poll");
+            crate::support::server::applied(&app, async {
+                ceiling::unentitle(&pool, "alice", "main", &AuditActor::cli(), Utc::now())
+                    .await
+                    .expect("take main away");
+            })
+            .await;
         });
         ui.click("#my-key-form button[type=submit]");
         // The 422 (`limit: "ceiling"`) says why.
@@ -670,6 +692,48 @@ async fn the_my_keys_page_says_so_to_a_key() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_sees_when_each_grant_was_last_active() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let grant = alices_grant(&server).await;
+    // A token issued two days ago (recent, so the poll loop's idle
+    // revocation leaves the grant alone), then a newer one: the newest
+    // issue time is the grant's last activity (issue #269).
+    let older = okf_mcp::clock::format_timestamp(Utc::now() - chrono::TimeDelta::days(3));
+    let newest = okf_mcp::clock::format_timestamp(Utc::now() - chrono::TimeDelta::days(2));
+    for (byte, issued) in [(1_u8, &older), (2_u8, &newest)] {
+        sqlx::query(
+            "INSERT INTO oauth_tokens \
+             (sha256, grant_id, kind, family_id, resource, created_at, expires_at) \
+             VALUES ($1, $2, 'refresh', 'family-1', 'https://okf.example.com/mcp', \
+                     $3::timestamptz, $3::timestamptz + interval '30 days')",
+        )
+        .bind([byte; 32].as_slice())
+        .bind(&grant)
+        .bind(issued)
+        .execute(&server.db.pool)
+        .await
+        .expect("insert a token");
+    }
+    drive(console_base(&server), move |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.open("/my-grants");
+        ui.wait_text("[data-test=my-grant-example-client]", "Example Client");
+        // The page shows times in the browser's locale: ask it for the
+        // spelling it gives the newest token's.
+        let shown = ui.eval("(iso) => new Date(iso).toLocaleString()", json!(newest));
+        let shown = shown.as_str().expect("a string").to_string();
+        assert_eq!(
+            ui.wait_text("[data-test=my-grant-active-example-client]", &shown),
+            shown
+        );
+        ui.click("[data-test=my-grant-example-client]");
+        ui.wait_text("#drawer dl.facts", &format!("Last active{shown}"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_member_revokes_an_oauth_grant() {
     let server = login_server().await;
     member(&server, Access::Write).await;
@@ -684,10 +748,12 @@ async fn a_member_revokes_an_oauth_grant() {
         // Signed in with main in her ceiling, then an admin takes it away:
         // the page compares with the ceiling /me gives now.
         runtime.block_on(async {
-            ceiling::unentitle(&pool, "alice", "main", &AuditActor::cli(), Utc::now())
-                .await
-                .expect("take main away");
-            app.poll().await.expect("poll");
+            crate::support::server::applied(&app, async {
+                ceiling::unentitle(&pool, "alice", "main", &AuditActor::cli(), Utc::now())
+                    .await
+                    .expect("take main away");
+            })
+            .await;
         });
         ui.open("/my-grants");
         ui.wait_text("[data-test=my-grant-example-client]", "Example Client");
@@ -713,4 +779,215 @@ async fn a_member_revokes_an_oauth_grant() {
         .find(|record| record.id == grant)
         .expect("the grant");
     assert!(record.revoked_at.is_some());
+}
+
+/// Gives `count` catalogs (`c00001`...) to alice's personal team by SQL,
+/// each at the default `member_access` (write): a ceiling larger than one
+/// page of the console's pickers (issue #736).
+pub(crate) async fn seed_alices_catalogs(server: &TestServer, count: i64) {
+    sqlx::query(
+        "INSERT INTO catalogs (name, description, created_at, owner_team_id) \
+         SELECT 'c' || lpad(n::text, 5, '0'), '', now(), \
+                (SELECT id FROM teams WHERE name = 'alice') \
+         FROM generate_series(1, $1) AS n",
+    )
+    .bind(count)
+    .execute(&server.db.pool)
+    .await
+    .expect("seed alice's catalogs");
+}
+
+/// Issue #736: New key's picker reads the ceiling a page at a time with a
+/// Find box; a catalog ticked under one Find stays chosen under another,
+/// and the key is created with both, at their levels, and the default.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_picks_key_catalogs_across_finds() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    seed_alices_catalogs(&server, 150).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.open("/my-keys");
+        ui.wait_text("#my-keys-note", "0 of 20");
+        ui.click("#my-key-new");
+        // A page, not the whole ceiling: Load more continues it.
+        ui.wait_visible("#my-key-form input[name=catalog][value=c00001]");
+        ui.wait_visible("#my-key-ceiling-more");
+        assert!(!ui.present("#my-key-form input[name=catalog][value=main]"));
+        ui.fill("#my-key-form input[name=name]", "picked");
+        ui.fill("#my-key-ceiling-find", "c0014");
+        ui.wait_visible("#my-key-form input[name=catalog][value=c00140]");
+        ui.click("#my-key-form input[name=catalog][value=c00140]");
+        ui.select("#my-key-form select[name=level-c00140]", "write");
+        ui.fill("#my-key-ceiling-find", "ma");
+        ui.wait_visible("#my-key-form input[name=catalog][value=main]");
+        assert!(!ui.present("#my-key-form input[name=catalog][value=c00140]"));
+        ui.click("#my-key-form input[name=catalog][value=main]");
+        ui.wait_text("#my-key-chosen", "(write)");
+        ui.wait_text("#my-key-chosen", "(read)");
+        // Back under the first Find, the earlier tick is still shown.
+        ui.fill("#my-key-ceiling-find", "c0014");
+        ui.wait_visible("#my-key-form input[name=catalog][value=c00140]:checked");
+        ui.select("#my-key-default", "c00140");
+        ui.click("#my-key-form button[type=submit]");
+        ui.wait_visible("#my-key-secret");
+        ui.click("#my-key-secret-done");
+        ui.wait_text("[data-test=my-key-picked]", "picked");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let key = key_named(&server, "picked").await.expect("the key exists");
+    assert_eq!(
+        key.catalog_access,
+        [
+            ("c00140".to_string(), Access::Write),
+            ("main".to_string(), Access::Read),
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(key.default_catalog.as_deref(), Some("c00140"));
+}
+
+/// Review of PR #743: a catalog ticked at write, whose ceiling is lowered
+/// to read while another Find is shown, comes back under its own Find at
+/// read in the select and in what Create sends: the key is created at
+/// read (no 422), without retoggling the checkbox.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_ticked_catalog_lowered_meanwhile_is_created_at_its_new_level() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    seed_alices_catalogs(&server, 3).await;
+    let pool = server.db.pool.clone();
+    let app = Arc::clone(&server.app);
+    // The journey runs on a blocking thread; this handle lets it run the
+    // admin's change on the test's runtime mid-session.
+    let runtime = tokio::runtime::Handle::current();
+    let ran = drive(console_base(&server), move |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.open("/my-keys");
+        ui.wait_text("#my-keys-note", "0 of 20");
+        ui.click("#my-key-new");
+        ui.wait_visible("#my-key-form input[name=catalog][value=main]");
+        ui.fill("#my-key-form input[name=name]", "lowered");
+        ui.click("#my-key-form input[name=catalog][value=main]");
+        ui.select("#my-key-form select[name=level-main]", "write");
+        ui.wait_text("#my-key-chosen", "(write)");
+        ui.fill("#my-key-ceiling-find", "c0");
+        ui.wait_visible("#my-key-form input[name=catalog][value=c00001]");
+        // An admin lowers main to read while another Find is shown.
+        runtime.block_on(async {
+            crate::support::server::applied(&app, async {
+                ceiling::entitle(
+                    &pool,
+                    &NewEntitlement {
+                        user: "alice",
+                        catalog: "main",
+                        access: Access::Read,
+                    },
+                    &AuditActor::cli(),
+                    Utc::now(),
+                )
+                .await
+                .expect("lower main to read");
+            })
+            .await;
+        });
+        ui.fill("#my-key-ceiling-find", "ma");
+        ui.wait_visible("#my-key-form input[name=catalog][value=main]:checked");
+        assert_eq!(
+            ui.eval(
+                "() => [...document.querySelectorAll('#my-key-form select[name=level-main] option')] \
+                 .map(option => option.value)",
+                json!(null)
+            ),
+            json!(["read"])
+        );
+        ui.wait_text("#my-key-chosen", "(read)");
+        ui.click("#my-key-form button[type=submit]");
+        ui.wait_visible("#my-key-secret");
+        ui.click("#my-key-secret-done");
+        ui.wait_text("[data-test=my-key-lowered]", "lowered");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let key = key_named(&server, "lowered").await.expect("the key exists");
+    assert_eq!(
+        key.catalog_access,
+        [("main".to_string(), Access::Read)].into_iter().collect()
+    );
+}
+
+/// Issue #665: the list read after revoking the first key answers late and
+/// still lists the second key as active; the read after revoking the second
+/// answers first and lists neither. The older answer, released now, must
+/// not bring the revoked key back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_older_list_read_that_answers_late_never_redraws_the_my_keys_table() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    alices_key(&server, "laptop").await;
+    alices_key(&server, "desk").await;
+    drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.open("/my-keys");
+        ui.wait_visible("[data-test=my-key-laptop]");
+        ui.wait_visible("[data-test=my-key-desk]");
+        ui.click("[data-test=my-key-laptop]");
+        ui.hold_answer("GET", "/api/v1/me/keys", || {
+            ui.wait_visible("#my-key-revoke");
+            ui.click("#my-key-revoke");
+            ui.click("#confirm-ok");
+        });
+        ui.click("[data-test=my-key-desk]");
+        ui.wait_visible("#my-key-revoke");
+        ui.click("#my-key-revoke");
+        ui.click("#confirm-ok");
+        ui.wait_text_gone("#my-keys-table", "desk");
+        // The older answer must not replace the newer table.
+        ui.release_held();
+        assert!(
+            !ui.present("[data-test=my-key-desk]"),
+            "the older read redrew the my keys table"
+        );
+    })
+    .await;
+}
+
+/// Issue #665: the same for My grants: the older read, released late, still
+/// lists the second grant as active and must not bring it back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_older_list_read_that_answers_late_never_redraws_the_my_grants_table() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    alices_grant(&server).await;
+    alices_grant_for(&server, "Other Client", "other-client").await;
+    drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.open("/my-grants");
+        ui.wait_visible("[data-test=my-grant-example-client]");
+        ui.wait_visible("[data-test=my-grant-other-client]");
+        ui.click("[data-test=my-grant-example-client]");
+        ui.hold_answer("GET", "/api/v1/me/grants", || {
+            ui.wait_visible("#my-grant-revoke");
+            ui.click("#my-grant-revoke");
+            ui.click("#confirm-ok");
+        });
+        ui.click("[data-test=my-grant-other-client]");
+        ui.wait_visible("#my-grant-revoke");
+        ui.click("#my-grant-revoke");
+        ui.click("#confirm-ok");
+        ui.wait_text_gone("#my-grants-table", "Other Client");
+        // The older answer must not replace the newer table.
+        ui.release_held();
+        assert!(
+            !ui.present("[data-test=my-grant-other-client]"),
+            "the older read redrew the my grants table"
+        );
+    })
+    .await;
 }

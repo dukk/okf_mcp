@@ -13,7 +13,7 @@ Today a user (M11) is only a label on a credential. The console is signed in to 
 - **Team owners managing their catalogs' access.** Only admins set a catalog's member access for now. The permission check is one function, so team owners can be added later without a schema change.
 - **OIDC providers configured in the database.** Providers live in the config file.
 - **Multi-factor authentication beyond passkeys.**
-- **Self-service account deletion.**
+- **Self-service account deletion.** (Delivered later by issue #355: see "Future work" item 4.)
 - **Capping admin-issued credentials.** Keys and grants an admin issues keep their explicit grants, as today.
 
 ## Decisions
@@ -344,7 +344,7 @@ Every admin action has a CLI command, a REST route and a console control under *
 | Mail queue | `mail queue`, `mail retry ID`, `mail delete ID` | Settings page: Mail queue, with Retry and Delete |
 
 - `user set-admin --off` is refused (409) for the last admin user, unless an admin key performs it.
-- `may_set_member_access(principal, catalog)` is the single permission check. It allows admins today, and team owners later.
+- `may_set_member_access(principal, catalog)` is the single permission check for keys and the CLI. It allows admins (and provisioners); team owners, in a console session, are checked by the store under its locks (issue #352, "Future work" item 1).
 - Writes need an admin that reaches every catalog, as in M11.
 
 ### Settings
@@ -439,9 +439,11 @@ Every admin action has a CLI command, a REST route and a console control under *
 ## Future work (to file as issues)
 
 1. **Team owners manage member access and entitlements** for catalogs their team owns, through `may_set_member_access`.
+   > **Delivered (issue #352).** Owners of a shared team, in a console session only, set member access and entitle members of the owning team (at `read` or `write`) for the catalogs their team owns, from the catalog's drawer. `may_set_member_access` stays the admin and provisioner check; the owner path is `ceiling::change_member_access`, `entitle_as_owner` and `unentitle_as_owner`, which check the owner under row locks. Keys, OAuth grants and personal teams get nothing, and an unknown user and a user outside the team get one identical refusal. See `docs/operations.md`, "The ceiling and member access".
 2. **OIDC providers configured in the database**, with encrypted client secrets.
 3. **Multi-factor authentication** for password sign-in (TOTP or passkey as a second factor).
 4. **Self-service account deletion**, once credential history no longer blocks deletion (#297).
+   > **Delivered (issue #355).** #297 was closed by real deletion (milestone 14), not disabling, so the Account page's "Delete your account" deletes: `DELETE /api/v1/me` re-authenticates with the current password or a fresh passkey assertion (`POST /api/v1/me/passkeys/confirm/start`), then runs `users::delete_own`, the admin deletion (`users::delete`) with the API's refusals (the last admin user, a personal team owning a catalog, the only owner of a shared team) and, under the user's row lock, checks that the session and the proof still hold. A refusal is shown on the page; the account is never disabled instead. See `docs/operations.md`, "Deleting your own account".
 5. **Move the existing background loops onto apalis**: token, code and session cleanup, and sign-in event pruning.
 
 ## What shipped differently
@@ -475,6 +477,9 @@ changelogs (`changelog/*-m12-task-*`) give the reasons.
 - **Limits** (Decision 8): per-address and per-email limits are in memory,
   per process, as M10's are; account lockout is durable
   (`users.failed_sign_ins`, `users.locked_until`).
+  > **Corrected (issue #357, 2026-11-20).** With `[redis]` the limits are
+  > kept in Redis and shared by every replica; a failed Redis call falls back
+  > to the in-memory limiter (`src/shared/limits.rs`).
 - **Setting names** (Decision 9): `console_session_idle` and
   `console_session_absolute`, not `session_idle` and `session_absolute`,
   which would read as MCP's `session_idle_timeout`.

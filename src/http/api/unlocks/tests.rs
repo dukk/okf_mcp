@@ -10,7 +10,7 @@ use crate::store::keys::{self, Access, Grants, NewKey, NewProvisioner};
 use crate::store::users::{self, AdminChange, NewUser};
 
 /// Makes `user` an admin user (creating it if missing) with an admin key
-/// `name` reaching `grants`, polled in.
+/// `name` reaching `grants`.
 ///
 /// # Returns
 /// The key's secret.
@@ -19,7 +19,7 @@ async fn admin_user_key(test: &TestApp, user: &str, name: &str, grants: Grants<'
     if users::find(pool, user).await.is_err() {
         let new = NewUser {
             name: user,
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
         };
         users::create(pool, &new, &AuditActor::cli(), Utc::now())
             .await
@@ -48,7 +48,6 @@ async fn admin_user_key(test: &TestApp, user: &str, name: &str, grants: Grants<'
         .await
         .unwrap()
         .key;
-    test.app.poll().await.unwrap();
     key
 }
 
@@ -334,7 +333,6 @@ async fn unlocks_refuse_everyone_but_admins_and_scope_a_scoped_admin() {
     .await
     .unwrap()
     .key;
-    test.app.poll().await.unwrap();
     let (_, unlock) = send(
         &test,
         "POST",
@@ -565,18 +563,13 @@ async fn only_an_owners_session_naming_its_team_reads_the_redacted_list() {
 async fn a_key_with_no_user_cannot_unlock_for_itself_or_anyone_else() {
     let test = app().await;
     let root = every_catalog_admin(&test).await;
-    // A pre-M12 key with no user; the generation bump makes the poll
-    // reload the key cache.
-    for statement in [
-        "UPDATE api_keys SET user_id = NULL WHERE name = 'root'",
-        "UPDATE server_state SET admin_generation = admin_generation + 1",
-    ] {
-        sqlx::query(statement)
-            .execute(test.app.pool())
-            .await
-            .unwrap();
-    }
-    test.app.poll().await.unwrap();
+    // A pre-M12 key with no user. A raw update sends no change message, so
+    // the key is read again only after a catch-up (what a reconnect does).
+    sqlx::query("UPDATE api_keys SET user_id = NULL WHERE name = 'root'")
+        .execute(test.app.pool())
+        .await
+        .unwrap();
+    test.app.apply_reconnect().await;
 
     // Admin user `staff` exists, so naming it is a valid target for any
     // caller with a user.

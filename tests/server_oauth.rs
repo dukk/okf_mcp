@@ -5,10 +5,13 @@
 mod support;
 
 use chrono::{TimeDelta, Utc};
+use okf_mcp::config::OAuthConfig;
 use okf_mcp::keys::{self, ACCESS_TOKEN_PREFIX};
 use okf_mcp::store::keys::{self as key_rows, Access};
 use okf_mcp::store::oauth::tokens::{self as token_rows, NewToken, TokenKind};
-use support::oauth::{sign_in_code, start_oauth_server, CimdHost, OAuthClient, TokenAnswer};
+use support::oauth::{
+    sign_in_code, start_oauth_server, start_oauth_server_with, CimdHost, OAuthClient, TokenAnswer,
+};
 use support::server::{call, files, structured, TestServer};
 
 /// Never fetched: the consent POST's redirect is read, not followed.
@@ -201,7 +204,15 @@ async fn a_token_for_another_resource_is_refused() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn refresh_works_and_reusing_the_old_refresh_token_revokes_the_family() {
-    let server = server().await;
+    // No reuse grace window: the replay right after the rotation is a reuse.
+    let server = start_oauth_server_with(
+        vec![("main", files(&[("index.md", "# Main\n")]))],
+        OAuthConfig {
+            refresh_reuse_grace: std::time::Duration::ZERO,
+            ..OAuthConfig::default()
+        },
+    )
+    .await;
     let (client, first) = signed_in(&server, Access::Read, &["main"]).await;
 
     let second = client.refresh(&first.refresh()).await;
@@ -223,6 +234,30 @@ async fn refresh_works_and_reusing_the_old_refresh_token_revokes_the_family() {
         "the first one too"
     );
     assert_eq!(client.refresh(&second.refresh()).await.status, 400);
+}
+
+/// Issue #884: two processes of one client refresh with the same token at
+/// once. Within the default grace window both get a working pair, and the
+/// connection survives.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_racing_refresh_within_the_grace_window_keeps_the_connection() {
+    let server = server().await;
+    let (client, first) = signed_in(&server, Access::Read, &["main"]).await;
+
+    // `join!` borrows its futures' arguments, so the token gets a binding
+    // that outlives them (a temporary would be dropped too soon).
+    let shared = first.refresh();
+    let (won, lost) = tokio::join!(client.refresh(&shared), client.refresh(&shared));
+
+    assert_eq!(won.status, 200, "{}", won.body);
+    assert_eq!(lost.status, 200, "{}", lost.body);
+    for pair in [&won, &lost] {
+        assert_eq!(
+            catalogs_of(&server, &pair.access()).await,
+            vec!["main".to_string()]
+        );
+        assert_eq!(client.refresh(&pair.refresh()).await.status, 200);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -256,15 +291,17 @@ async fn a_revoked_grant_stops_its_tokens_at_the_next_poll() {
     let (client, tokens) = signed_in(&server, Access::Read, &["main"]).await;
     let grant_id = grant_of(&server, &tokens.access()).await;
 
-    key_rows::revoke_by_id(
-        &server.db.pool,
-        &grant_id,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("revoke");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        key_rows::revoke_by_id(
+            &server.db.pool,
+            &grant_id,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("revoke");
+    })
+    .await;
 
     assert!(server.client(&tokens.access(), None).await.is_err());
     assert_eq!(client.refresh(&tokens.refresh()).await.status, 400);

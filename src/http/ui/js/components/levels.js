@@ -1,6 +1,7 @@
 // Access levels as the console shows them: the pill kinds, and a key's or
 // grant's per-catalog levels.
 import { h, pill } from '../core/dom.js';
+import { catalogLabel } from '../core/labels.js';
 
 export const ACCESS_KIND = { read: 'muted', write: 'info', admin: 'warn' };
 const ORDER = ['read', 'write', 'admin'];
@@ -11,7 +12,8 @@ export function accessPill(access) {
 
 // A key's or grant's catalogs, from its `catalog_access` ({catalog: level},
 // Task 2's KeyView). A self-issued one is capped at the account's
-// `ceiling` ({catalog: level}, as GET /api/v1/session gives it): where the
+// `ceiling` ({catalog: level}, as GET /api/v1/me/keys and /me/grants give
+// it for their credentials' catalogs): where the
 // ceiling lowers a level, or no longer reaches the catalog, the cell says
 // so (the server caps the credential at its next key reload). An
 // admin-issued one keeps its levels. One granted every catalog (only an
@@ -28,6 +30,6 @@ export function levelsCell(credential, ceiling = {}) {
         let note = null;
         if (!allowed) note = h('span', { class: 'muted small' }, ' (outside your ceiling now)');
         else if (ORDER.indexOf(allowed) < ORDER.indexOf(access)) note = h('span', { class: 'muted small' }, ` (capped to ${allowed})`);
-        return h('li', { dataset: { catalog } }, h('span', { class: 'mono' }, catalog), ' ', accessPill(access), note);
+        return h('li', { dataset: { catalog } }, h('span', {}, catalogLabel(catalog)), ' ', accessPill(access), note);
     }));
 }

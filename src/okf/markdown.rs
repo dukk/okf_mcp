@@ -38,13 +38,19 @@ use indexmap::IndexMap;
 use regex::Regex;
 
 use crate::okf::paths::{dirname, join, normpath};
+use crate::okf::pystr::py_unquote;
 use crate::okf::pystr::{is_py_word, py_rstrip, py_strip};
 use crate::okf::workspace::Workspace;
 
-/// A markdown link `[text](target "title")`, not an image (`![...]`).
+/// A markdown link `[text](target "title")` or `[text](<target> "title")`,
+/// not an image (`![...]`). Group 3 is a plain destination (no whitespace, no
+/// `)`); group 4 is an angle-bracket destination (CommonMark): anything
+/// between `<` and `>` except a line break, `<`, `>` or the `\x1c-\x1f`
+/// control bytes, so it may hold spaces and `)`. The two are plain
+/// alternatives of the linear-time `regex` crate.
 static LINK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?:\A|[^!])(\[((?:[^\]\\]|\\.)*)\]\(([^)\s\x1c-\x1f]+)(?:[\s\x1c-\x1f]+"[^"]*")?\))"#,
+        r#"(?:\A|[^!])(\[((?:[^\]\\]|\\.)*)\]\((?:<([^<>\n\r\x1c-\x1f]+)>|([^)\s\x1c-\x1f]+))(?:[\s\x1c-\x1f]+"[^"]*")?\))"#,
     )
     .expect("LINK regex is valid")
 });
@@ -80,11 +86,13 @@ static SLUG_PUNCTUATION: LazyLock<Regex> =
 pub struct LinkMatch {
     /// The link text between the brackets.
     pub text: String,
-    /// The raw target between the parentheses.
+    /// The raw target between the parentheses, without the `<` `>` of an
+    /// angle-bracket destination.
     pub target: String,
     /// Byte range of the whole `[text](target)` in the line.
     pub range: std::ops::Range<usize>,
-    /// Byte range of the target within the line.
+    /// Byte range of the target within the line (inside the `<` `>` of an
+    /// angle-bracket destination, so replacing it keeps the brackets).
     pub target_range: std::ops::Range<usize>,
 }
 
@@ -113,9 +121,13 @@ pub fn find_links(text: &str) -> Vec<LinkMatch> {
     // `captures_at` searches from `pos` but still sees the text before it, so
     // `\A` matches only at the true start of `text`.
     while let Some(caps) = LINK.captures_at(text, pos) {
-        let (Some(whole), Some(label), Some(target)) = (caps.get(1), caps.get(2), caps.get(3))
-        else {
-            break; // unreachable: groups 1-3 are mandatory
+        // Exactly one of group 3 (plain) and 4 (angle-bracket) matched.
+        let (Some(whole), Some(label), Some(target)) = (
+            caps.get(1),
+            caps.get(2),
+            caps.get(3).or_else(|| caps.get(4)),
+        ) else {
+            break; // unreachable: groups 1, 2 and one of 3, 4 are mandatory
         };
         links.push(LinkMatch {
             text: label.as_str().to_string(),
@@ -468,6 +480,14 @@ pub struct ResolvedLink {
 
 /// Resolves a link target written in `source` to a bundle path.
 ///
+/// A link destination is URL-encoded (CommonMark), so the path part is
+/// percent-decoded once before it is read as a path: `a%20b.md` is the file
+/// `a b.md`, and a file literally named `a%20b.md` is written `a%2520b.md`.
+/// A `%` not followed by two hex digits stays literal. The `#fragment` is
+/// left alone here (the anchor checks decode it themselves). This is the one
+/// place links are decoded; [`encode_link_path`] is its inverse for the
+/// operations that write a destination.
+///
 /// # Arguments
 /// * `workspace` - the catalog, to tell directories from files.
 /// * `link` - the raw link target, possibly with a `#fragment`.
@@ -477,10 +497,14 @@ pub struct ResolvedLink {
 /// `None` for external links (any URI scheme) and pure `#fragment` links.
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn resolve_link(workspace: &dyn Workspace, link: &str, source: &str) -> Option<ResolvedLink> {
-    let target = link.split('#').next().unwrap_or_default();
-    if target.is_empty() || URI_SCHEME.is_match(target) {
+    let raw_target = link.split('#').next().unwrap_or_default();
+    // The scheme check reads the destination as written: `mailto%3Aa` is a
+    // path, not an address.
+    if raw_target.is_empty() || URI_SCHEME.is_match(raw_target) {
         return None;
     }
+    let decoded = py_unquote(raw_target);
+    let target = decoded.as_ref();
     let absolute = target.starts_with('/');
     let mut path = if absolute {
         target.trim_start_matches('/').to_string()
@@ -494,6 +518,62 @@ pub fn resolve_link(workspace: &dyn Workspace, link: &str, source: &str) -> Opti
         path: normpath(&path),
         absolute,
     })
+}
+
+/// Percent-encodes a bundle path for use as a markdown link destination, so
+/// that [`find_links`] still parses it and [`resolve_link`] reads it back as
+/// the same path.
+///
+/// Encodes every character that would end or change a destination: controls,
+/// every Unicode whitespace character (the link parser's `\s`, such as
+/// U+00A0), `%`, `#`, `?`, `(`, `)`, `<`, `>`, `[`, `]`, `\\`, `"`, `'` and
+/// `:` (so a name like `note:part.md` is not read as a URI scheme). A
+/// non-ASCII character is encoded as its UTF-8 bytes. Everything else,
+/// including other non-ASCII text and `/`, stays as written.
+///
+/// # Arguments
+/// * `path` - a bundle path, or a relative path such as `../a b.md`.
+///
+/// # Returns
+/// `path` itself (borrowed) when nothing needs encoding.
+///
+/// # Examples
+/// ```
+/// use okf_mcp::okf::markdown::encode_link_path;
+/// assert_eq!(encode_link_path("a b/100%.md"), "a%20b/100%25.md");
+/// assert_eq!(encode_link_path("a\u{a0}b:c.md"), "a%C2%A0b%3Ac.md");
+/// assert_eq!(encode_link_path("plain/x.md"), "plain/x.md");
+/// ```
+#[tracing::instrument(level = "trace", skip_all)]
+pub fn encode_link_path(path: &str) -> std::borrow::Cow<'_, str> {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let needs = |ch: char| {
+        ch.is_whitespace()
+            || ch.is_control()
+            || matches!(
+                ch,
+                '%' | '#' | '?' | '(' | ')' | '<' | '>' | '[' | ']' | '\\' | '"' | '\'' | ':'
+            )
+    };
+    if !path.chars().any(needs) {
+        return std::borrow::Cow::Borrowed(path);
+    }
+    let mut out = String::with_capacity(path.len() + 8);
+    for ch in path.chars() {
+        if needs(ch) {
+            // `encode_utf8` writes the char's UTF-8 bytes into a buffer; each
+            // byte becomes `%XX`.
+            let mut buf = [0u8; 4];
+            for byte in ch.encode_utf8(&mut buf).bytes() {
+                out.push('%');
+                out.push(char::from(HEX[usize::from(byte >> 4)]));
+                out.push(char::from(HEX[usize::from(byte & 15)]));
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 #[cfg(test)]
@@ -549,6 +629,65 @@ mod tests {
         let link = &find_links(line)[0];
         assert_eq!(&line[link.range.clone()], "[t](/a.md)");
         assert_eq!(&line[link.target_range.clone()], "/a.md");
+    }
+
+    #[test]
+    fn find_links_reads_angle_bracket_destinations() {
+        let line = "a [x](<a b.md>) b [y](<a b.md> \"title\") c [z](<a(1).md>) d [w](<q)r.md#h>)";
+        let links = find_links(line);
+        let targets: Vec<_> = links.iter().map(|l| l.target.as_str()).collect();
+        assert_eq!(targets, ["a b.md", "a b.md", "a(1).md", "q)r.md#h"]);
+        // The target range sits inside the brackets; the whole link spans them.
+        assert_eq!(&line[links[0].target_range.clone()], "a b.md");
+        assert_eq!(&line[links[0].range.clone()], "[x](<a b.md>)");
+        assert_eq!(&line[links[1].range.clone()], "[y](<a b.md> \"title\")");
+    }
+
+    #[test]
+    fn find_links_rejects_malformed_angle_bracket_destinations() {
+        for line in [
+            "![img](<a b.md>)",
+            "[x](<>)",
+            "[x](<a b.md)",
+            "[x](<a<b>.md>)",
+            "[x](<a\nb.md>)",
+            "[x](<a\u{1c}b.md>)",
+            "[x](<a b.md>junk)",
+        ] {
+            assert!(
+                find_links(line).iter().all(|l| l.target != "a b.md"
+                    && l.target != "a<b>.md"
+                    && l.target != "a\nb.md"
+                    && l.target != "a\u{1c}b.md"
+                    && !l.target.is_empty()),
+                "{line:?}"
+            );
+        }
+        // `[x](<a)` is still the plain destination `<a`, as before.
+        assert_eq!(find_links("[x](<a)")[0].target, "<a");
+    }
+
+    #[test]
+    fn find_links_stays_linear_on_unclosed_angle_brackets() {
+        let line = format!("[x](<{}", "a ".repeat(200_000));
+        assert!(find_links(&line).is_empty());
+    }
+
+    #[test]
+    fn an_angle_bracket_destination_resolves_like_its_plain_form() {
+        let ws = MemWorkspace::from_files([("infra/a b.md", ""), ("infra/x(1).md", "")]);
+        let resolve = |text: &str| {
+            let link = find_links(text).into_iter().next().expect("a link");
+            resolve_link(&ws, &link.target, "infra/index.md").map(|r| r.path)
+        };
+        assert_eq!(resolve("[x](<a b.md>)"), Some("infra/a b.md".into()));
+        assert_eq!(
+            resolve("[x](<a b.md> \"title\")"),
+            Some("infra/a b.md".into())
+        );
+        assert_eq!(resolve("[x](<a%20b.md>)"), Some("infra/a b.md".into()));
+        assert_eq!(resolve("[x](<x(1).md#h>)"), Some("infra/x(1).md".into()));
+        assert_eq!(resolve("[x](<https://example.com/a b>)"), None);
     }
 
     #[test]
@@ -694,6 +833,135 @@ mod tests {
     }
 
     #[test]
+    fn resolve_link_percent_decodes_the_path_not_the_fragment() {
+        let ws = MemWorkspace::from_files([
+            ("infra/a b.md", ""),
+            ("infra/100%.md", ""),
+            ("infra/a%20b.md", ""),
+            ("infra/caf\u{e9}.md", ""),
+        ]);
+        let path = |link: &str| resolve_link(&ws, link, "infra/index.md").map(|r| r.path);
+        assert_eq!(path("a%20b.md"), Some("infra/a b.md".into()));
+        assert_eq!(path("/infra/a%20b.md#x%20y"), Some("infra/a b.md".into()));
+        assert_eq!(path("caf%C3%A9.md"), Some("infra/caf\u{e9}.md".into()));
+        // A file literally named `a%20b.md` is written with its `%` encoded.
+        assert_eq!(path("a%2520b.md"), Some("infra/a%20b.md".into()));
+        // A `%` that starts no escape stays literal.
+        assert_eq!(path("100%.md"), Some("infra/100%.md".into()));
+        assert_eq!(path("100%25.md"), Some("infra/100%.md".into()));
+        // The scheme test reads the destination as written.
+        assert_eq!(path("mailto%3Aa"), Some("infra/mailto:a".into()));
+        assert_eq!(path("https://example.com/a%20b"), None);
+    }
+
+    #[test]
+    fn encode_link_path_round_trips_through_resolve_link() {
+        let names = [
+            "a b.md",
+            "100%.md",
+            "a%20b.md",
+            "x(1)#?.md",
+            "caf\u{e9} <q>.md",
+        ];
+        let owned: Vec<String> = names.iter().map(|name| format!("d/{name}")).collect();
+        let ws = MemWorkspace::from_files(owned.iter().map(|path| (path.as_str(), "")));
+        for name in names {
+            let link = encode_link_path(name);
+            assert!(!link.contains(' ') && !link.contains('#'), "{link}");
+            // The written destination must still parse as a link.
+            let text = format!("[x]({link})");
+            let found = find_links(&text);
+            assert_eq!(found.len(), 1, "{link}");
+            assert_eq!(found[0].target, link.as_ref());
+            let back = resolve_link(&ws, &link, "d/index.md").map(|r| r.path);
+            assert_eq!(back, Some(format!("d/{name}")), "{link}");
+        }
+        assert!(matches!(
+            encode_link_path("plain/x.md"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
+    /// Property: for any concept file name the server's own path check
+    /// accepts, the destination `encode_link_path` writes parses as exactly
+    /// one link, in both the plain and the angle-bracket form, and
+    /// `resolve_link` reads it back to the same file.
+    #[hegel::test(test_cases = 200, derandomize = true)]
+    fn an_encoded_concept_name_round_trips_through_find_links_and_resolve_link(
+        tc: hegel::TestCase,
+    ) {
+        use hegel::generators;
+        // Pieces that broke (or could break) a destination: Unicode
+        // whitespace, controls, reserved punctuation, `%` (also as a fake
+        // escape), and a URI-scheme lookalike.
+        let specials = vec![
+            " ",
+            "\t",
+            "\u{a0}",
+            "\u{2003}",
+            "\u{3000}",
+            "\u{85}",
+            "\u{2028}",
+            "\n",
+            "\r",
+            "\u{1c}",
+            "\u{1f}",
+            "\u{7f}",
+            "\0",
+            "%",
+            "%20",
+            "%2",
+            "%zz",
+            ":",
+            "http:",
+            "<",
+            ">",
+            "(",
+            ")",
+            "[",
+            "]",
+            "\\",
+            "\"",
+            "'",
+            "#",
+            "?",
+            "&",
+            "+",
+            "..",
+            ".",
+            "\u{e9}",
+            "\u{1f600}",
+            "\u{202e}",
+        ];
+        let count = tc.draw(generators::integers::<usize>().max_value(8));
+        let mut name = String::new();
+        for _ in 0..count {
+            if tc.draw(generators::booleans()) {
+                name.push_str(tc.draw(generators::sampled_from(&specials)));
+            } else {
+                name.push_str(&tc.draw(generators::text().max_size(4)));
+            }
+        }
+        name.push_str(".md");
+        // A file name is one path segment, and the name must be one the
+        // write tools accept (`rules::check_path`) in a plain folder.
+        tc.assume(!name.contains('/'));
+        let path = format!("d/{name}");
+        tc.assume(crate::okf::rules::check_path(&path).is_ok_and(|checked| checked == path));
+
+        let ws = MemWorkspace::from_files([(path.as_str(), "")]);
+        let encoded = encode_link_path(&name);
+        for destination in [encoded.to_string(), format!("<{encoded}>")] {
+            let text = format!("[x]({destination})");
+            let found = find_links(&text);
+            assert_eq!(found.len(), 1, "{text:?}");
+            assert_eq!(found[0].target, encoded.as_ref(), "{text:?}");
+            let back = resolve_link(&ws, &found[0].target, "d/index.md").map(|r| r.path);
+            assert_eq!(back, Some(path.clone()), "{text:?}");
+        }
+    }
+
+    #[test]
     fn slugify_follows_python_word_characters() {
         // `²` is a Python word char (category No); a combining mark is not.
         assert_eq!(slugify("a²b"), "a²b");
@@ -832,5 +1100,16 @@ mod tests {
         let slug = slugify(&text);
         assert!(!slug.contains(' '));
         assert!(!slug.chars().any(|c| c.is_ascii_uppercase()));
+    }
+
+    /// The mobile reader relies on this (src/http/read/js/route.js,
+    /// `fromBrowse`): a heading slug has no '.', so it never ends in `.md`
+    /// and cannot be mistaken for the last segment of a document's path.
+    #[hegel::test]
+    fn slugify_output_has_no_dot(tc: hegel::TestCase) {
+        use hegel::generators;
+        let text: String = tc.draw(generators::text());
+        assert!(!slugify(&text).contains('.'));
+        assert!(!slugify(&format!("{text}.md")).contains('.'));
     }
 }

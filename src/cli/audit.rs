@@ -13,6 +13,7 @@ use std::borrow::Cow;
 use sqlx::PgPool;
 
 use super::{comma_list, tab_row, AuditArgs, AuditCommand};
+use crate::cache::labels::{LabelLookup, DEFAULT_LABEL_CACHE_ENTRIES};
 use crate::store::audit::{self, ActorView, AuditRecord, FilterText, TargetView, Viewer};
 
 /// Runs `okf-mcp audit ...`.
@@ -31,10 +32,16 @@ use crate::store::audit::{self, ActorView, AuditRecord, FilterText, TargetView, 
 /// or a database error.
 #[tracing::instrument(level = "debug", skip_all)]
 pub(super) async fn audit(pool: &PgPool, command: &AuditCommand) -> anyhow::Result<String> {
+    // One command, one read: the lookup lives for this call only.
+    let labels = LabelLookup::new(
+        pool.clone(),
+        DEFAULT_LABEL_CACHE_ENTRIES,
+        std::time::Duration::from_secs(60),
+    );
     Ok(match command {
         AuditCommand::List(args) => {
             let query = audit::parse_filters(&filter_text(args))?;
-            audit::list(pool, &Viewer::Admin, &query)
+            audit::list(pool, &Viewer::Admin, &query, &labels)
                 .await?
                 .iter()
                 .map(|record| format_record(record) + "\n")
@@ -42,7 +49,7 @@ pub(super) async fn audit(pool: &PgPool, command: &AuditCommand) -> anyhow::Resu
         }
         AuditCommand::Export(args) => {
             let query = audit::parse_filters(&filter_text(args))?;
-            audit::export_lines(pool, &Viewer::Admin, &query).await?
+            audit::export_lines(pool, &Viewer::Admin, &query, &labels).await?
         }
     })
 }
@@ -90,7 +97,7 @@ fn format_record(record: &AuditRecord) -> String {
         .map(|team| escaped(team).into_owned())
         .collect();
     tab_row(&[
-        &record.id.to_string(),
+        &record.cursor.to_string(),
         &record.at,
         &record.action,
         &escaped(&format_actor(&record.actor)),
@@ -235,7 +242,7 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "alice",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             Utc::now(),
@@ -403,9 +410,12 @@ mod tests {
             kind: kind.into(),
             name: name.map(Into::into),
             person: person.map(Into::into),
+            person_label: None,
+            target_label: None,
         };
         let known = |person: Option<&str>, credential: Option<&str>| ActorView::Known {
             person: person.map(Into::into),
+            person_label: None,
             credential: credential.map(Into::into),
             label: "api key".into(),
             operator: false,

@@ -22,15 +22,17 @@ use crate::mcp::maintenance::reports::{
 };
 use crate::mcp::maintenance::MaintenanceResult;
 use crate::store::maintenance::reports::{FindingCounts, FindingRecord};
-use crate::store::maintenance::runs::{Page, RunReport, RunSummary};
+use crate::store::maintenance::runs::{Page, RunOrder, RunReport, RunSummary};
 
-/// `?after=&limit=` for runs.
+/// `?after=&limit=&order=` for runs.
 #[derive(Debug, Deserialize)]
 struct RunsQuery {
     /// The last run id of the previous page.
     after: Option<String>,
     /// Page size, 1..=200 (default 20).
     limit: Option<u32>,
+    /// `asc` (default, oldest first) or `desc` (newest first); another value is a 400.
+    order: Option<RunOrder>,
 }
 
 /// `?after=&limit=&disposition=` for findings.
@@ -85,7 +87,7 @@ pub(crate) fn routes() -> Router<Arc<App>> {
         .route("/catalogs/{catalog}/maintenance/counts", get(counts))
 }
 
-/// `GET .../maintenance/runs`: one page of runs, oldest first.
+/// `GET .../maintenance/runs`: one page of runs, oldest first unless `order=desc`.
 ///
 /// # Errors
 /// As `maintenance_list_runs`: 404 unreached catalog or unknown cursor, 409 bad limit.
@@ -102,6 +104,7 @@ async fn list_runs(
         catalog,
         after: query.after,
         limit: query.limit,
+        order: query.order,
     };
     Ok(Json(tools::maintenance_list_runs(&ctx, params).await?))
 }
@@ -229,7 +232,12 @@ mod tests {
     /// # Returns
     /// The run id and the finding id.
     async fn seed(test: &TestApp) -> (String, String) {
-        let state = test.app.catalog("main").expect("main is loaded");
+        let state = test
+            .app
+            .catalog("main")
+            .await
+            .unwrap()
+            .expect("main is loaded");
         let pool = test.app.pool();
         let now = test.app.clock().now();
         let reporter = Actor {
@@ -417,6 +425,11 @@ mod tests {
         assert_eq!(get(format!("{BASE}/findings?disposition=bogus")).await, 400);
         assert_eq!(get(format!("{BASE}/findings/missing")).await, 404);
         assert_eq!(get(format!("{BASE}/runs/missing")).await, 404);
+        assert_eq!(get(format!("{BASE}/runs?order=bogus")).await, 400);
+        assert_eq!(
+            get(format!("{BASE}/runs?order=desc&after=missing")).await,
+            404
+        );
         assert_eq!(get(format!("{BASE}/findings?after=missing")).await, 404);
         // Out-of-range page sizes are the tool's `Refused`.
         assert_eq!(get(format!("{BASE}/runs?limit=0")).await, 409);
@@ -459,7 +472,6 @@ mod tests {
         .await
         .expect("create a reporter key")
         .key;
-        test.app.poll().await.expect("poll the reporter in");
         let (status, body) = send(
             &test,
             "POST",
@@ -503,6 +515,19 @@ mod tests {
         .await;
         assert_eq!(runs["items"][0]["id"], run.as_str());
         assert_eq!(runs["items"][0]["state"], "completed");
+        // Either order lists the one run; `order` is opt-in and `asc` is the default.
+        for order in ["asc", "desc"] {
+            let (status, listed) = send(
+                &test,
+                "GET",
+                &format!("{BASE}/runs?order={order}"),
+                Some(&keys.read),
+                None,
+            )
+            .await;
+            assert_eq!(status.as_u16(), 200, "{order}: {listed}");
+            assert_eq!(listed, runs, "{order}");
+        }
         let (status, report) = send(
             &test,
             "GET",

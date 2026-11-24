@@ -32,11 +32,14 @@ export const store = {
     whoami: null,
     csrf: null,
     // GET /api/v1/session's answer while signed in with an account, else
-    // null: {user, email, admin, csrf, ceiling: {catalog: level},
-    // expires_at}. Memory only, like `csrf`, which stays the token api.js
+    // null: {user, email, admin, csrf, expires_at}. It holds no ceiling
+    // (issue #736): a member's levels come from whoami's `levels`. Memory only, like `csrf`, which stays the token api.js
     // sends: the cookie carries the session across reloads, and boot reads
     // both again.
     session: null,
+    // GET /api/v1/labels' answer ({users, teams, catalogs}: slug -> label),
+    // read by core/labels.js. Memory only; null until the first read.
+    labels: null,
     get key() { return read(KEY); },
     set key(value) { write(KEY, value); },
     get catalog() { return read(CATALOG); },
@@ -45,15 +48,20 @@ export const store = {
     set theme(value) { write(THEME, value); },
     // Whether the signed-in identity has at least `level` here.
     can(level) {
-        return !!this.whoami && LEVELS.indexOf(this.levelHere()) >= LEVELS.indexOf(level);
+        return this.canOn(level, this.catalog);
     },
-    // The level on the selected catalog. A member signed in with an
-    // account has the ceiling's level, which differs per catalog (null on a
-    // catalog outside it, which `can` refuses); a key, or an admin user,
-    // has its one level.
-    levelHere() {
+    // Whether the signed-in identity has at least `level` on `catalog`.
+    canOn(level, catalog) {
+        return !!this.whoami && LEVELS.indexOf(this.levelOn(catalog)) >= LEVELS.indexOf(level);
+    },
+    // The level on `catalog`. A member signed in with an account has the
+    // ceiling's level, which differs per catalog: GET /whoami gives it for
+    // each catalog it lists (`levels`, read page by page with the catalogs),
+    // null on a catalog outside it, which `canOn` refuses. A key, or an
+    // admin user, has its one level.
+    levelOn(catalog) {
         const session = this.session;
-        if (session && !session.admin) return session.ceiling[this.catalog] ?? null;
+        if (session && !session.admin) return this.whoami?.levels?.[catalog] ?? null;
         return this.whoami?.access ?? null;
     },
 };

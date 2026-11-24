@@ -1,6 +1,7 @@
 //! Browsing under `/api/v1` (web console design, "API": Browse): a catalog's
 //! tree, a concept with its body rendered to safe HTML, its links, its
-//! history, one revision with its diff, and the non-concept documents.
+//! history, one revision with its diff, the non-concept documents, and the
+//! catalog's recent changes (every document's revisions, newest first).
 //!
 //! An axum wildcard (`{*path}`) must be the last segment of a route, so the
 //! per-concept routes put their kind before the path
@@ -17,15 +18,17 @@ use serde::{Deserialize, Serialize};
 use crate::app::App;
 use crate::auth::Principal;
 use crate::catalog::Loaded;
+use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::api::context;
 use crate::http::requester::Requester;
 use crate::http::AppError;
+use crate::labels::directory::Wanted;
 use crate::mcp::blocking;
 use crate::mcp::changesets::unified_diff;
 use crate::mcp::documents::{
-    get_concept, read_document, Concept, Document, GetConceptParams, InboundLink, OutboundLink,
-    ReadDocumentParams,
+    get_concept, read_document, text_field, Concept, Document, GetConceptParams, InboundLink,
+    OutboundLink, ReadDocumentParams,
 };
 use crate::mcp::history::{history, History, HistoryParams};
 use crate::okf::outline::Outline;
@@ -33,7 +36,7 @@ use crate::okf::pystr::universal_newlines;
 use crate::okf::snapshot::DocKind;
 use crate::render::{to_html, Page};
 use crate::store::audit::AccessKind;
-use crate::store::history::content_at;
+use crate::store::history::{content_at, recent, RecentCursor};
 use crate::store::keys::Access;
 
 /// This area's routes.
@@ -55,6 +58,7 @@ pub(crate) fn routes() -> Router<Arc<App>> {
             get(revision),
         )
         .route("/catalogs/{catalog}/documents/{*path}", get(document))
+        .route("/catalogs/{catalog}/recent-changes", get(recent_changes))
 }
 
 /// One document in a catalog's tree.
@@ -66,6 +70,8 @@ pub(crate) struct TreeDocument {
     pub kind: &'static str,
     /// Its title, if it has one.
     pub title: Option<String>,
+    /// Its frontmatter `description`, when that is a string.
+    pub description: Option<String>,
 }
 
 /// `GET /catalogs/{catalog}/tree`.
@@ -149,6 +155,91 @@ struct LimitQuery {
     limit: Option<u32>,
 }
 
+/// The page size of `recent-changes` when `limit` is left out.
+const RECENT_DEFAULT: u32 = 50;
+
+/// `?limit=&after=` on the recent-changes route.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct RecentQuery {
+    /// The page size, 1..=200 (default 50); outside it is a 409.
+    limit: Option<u32>,
+    /// The previous page's `next_after`; an unknown or malformed one is a 404.
+    after: Option<String>,
+}
+
+/// One revision in `GET /catalogs/{catalog}/recent-changes`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct RecentChange {
+    /// `/`-prefixed path; a deleted document's too.
+    pub path: String,
+    /// The document's title as the catalog has it now; `None` for a
+    /// deletion, a document gone since, or one without a title.
+    pub title: Option<String>,
+    /// Its frontmatter `description` now, when that is a string; `None` as
+    /// for `title`.
+    pub description: Option<String>,
+    /// The path's revision number, 1 for the first.
+    pub revision: i32,
+    /// `create`, `update`, `delete` or `import`.
+    pub op: String,
+    /// Who published it.
+    pub actor: String,
+    /// The actor's display label, when the directory knows one.
+    pub actor_label: Option<String>,
+    /// The publish message (`import` for an import).
+    pub message: String,
+    /// When, as the `history` tool writes times.
+    pub at: String,
+}
+
+/// `GET /catalogs/{catalog}/recent-changes`: one page, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct RecentChanges {
+    /// The catalog.
+    pub catalog: String,
+    /// Its label.
+    pub catalog_label: String,
+    /// The page's revisions, newest first; ties by path, then revision,
+    /// both descending.
+    pub changes: Vec<RecentChange>,
+    /// `after` for the next page; `None` on the last.
+    pub next_after: Option<String>,
+}
+
+/// A recent-changes cursor as the API writes it: `<revision>:<path>`, the
+/// path as stored. The revision comes first because it holds no `:`.
+///
+/// # Arguments
+/// * `cursor` - the last row of a page.
+#[tracing::instrument(level = "trace", skip_all)]
+fn cursor_text(cursor: &RecentCursor) -> String {
+    format!("{}:{}", cursor.revision, cursor.path)
+}
+
+/// Reads a cursor [`cursor_text`] wrote.
+///
+/// # Arguments
+/// * `text` - the `after` parameter.
+///
+/// # Errors
+/// [`OkfError::NotFound`] for text that is not a cursor: like a cursor
+/// naming no revision, it continues nothing.
+#[tracing::instrument(level = "trace", skip_all)]
+fn parse_cursor(text: &str) -> Result<RecentCursor, OkfError> {
+    // `split_once` splits at the first `:`; a path may hold more.
+    text.split_once(':')
+        .and_then(|(revision, path)| {
+            let revision = revision.parse::<i32>().ok()?;
+            (!path.is_empty() && revision > 0).then(|| RecentCursor {
+                path: path.to_string(),
+                revision,
+            })
+        })
+        .ok_or_else(|| OkfError::NotFound {
+            path: format!("recent changes after {text}"),
+        })
+}
+
 /// The tree's name for a document kind, or `None` for a file the console
 /// cannot open: `read_document` serves only the root `AGENTS.md` among the
 /// machinery files.
@@ -179,10 +270,10 @@ async fn tree(
     Path(catalog): Path<String>,
 ) -> Result<Json<Tree>, AppError> {
     let ctx = context(&app, principal, requester);
-    let state = ctx.one(Some(&catalog))?;
+    let state = ctx.one(Some(&catalog)).await?;
     // The tree lists the catalog's documents: a read of its contents.
-    ctx.admit(&state, AccessKind::Read)?;
-    let loaded = state.current();
+    ctx.admit(&state, AccessKind::Read).await?;
+    let loaded = ctx.snapshot(&state);
     let documents = loaded
         .snapshot()
         .docs()
@@ -193,6 +284,7 @@ async fn tree(
                 path: format!("/{}", doc.path()),
                 kind: kind_name(doc.kind(), doc.path())?,
                 title: doc.title().map(str::to_string),
+                description: text_field(doc, "description"),
             })
         })
         .collect();
@@ -230,7 +322,8 @@ async fn concept(
         },
     )
     .await?;
-    let loaded = ctx.one(Some(&concept.catalog))?.current();
+    let state = ctx.one(Some(&concept.catalog)).await?;
+    let loaded = ctx.snapshot(&state);
     // Rendering is CPU work proportional to the body: off the async threads.
     // `move` hands `concept` and `loaded` (an `Arc`) to the blocking thread.
     Ok(Json(blocking(move || with_html(concept, &loaded)).await))
@@ -348,7 +441,10 @@ async fn revision(
 ) -> Result<Json<RevisionView>, AppError> {
     // This reads the store directly, so it checks access itself, the unlock
     // included (before the principal moves into the context).
-    principal.require_contents(Access::Read, &catalog, app.clock().now())?;
+    let row = principal
+        .reached_row(app.directory(), Access::Read, &catalog)
+        .await?;
+    principal.require_contents(Access::Read, &row, app.clock().now())?;
     let ctx = context(&app, principal, requester);
     // `history` resolves the path as the History tab spelled it (`.md`
     // optional) and answers 404 for a path that never existed.
@@ -361,7 +457,7 @@ async fn revision(
         },
     )
     .await?;
-    let state = ctx.one(Some(&found.catalog))?;
+    let state = ctx.one(Some(&found.catalog)).await?;
     let stored = found.path.trim_start_matches('/');
     let current = content_at(app.pool(), state.id(), stored, revision)
         .await?
@@ -414,7 +510,8 @@ async fn document(
         },
     )
     .await?;
-    let loaded = ctx.one(Some(&document.catalog))?.current();
+    let state = ctx.one(Some(&document.catalog)).await?;
+    let loaded = ctx.snapshot(&state);
     let view = blocking(move || {
         // A block, so the borrow of `document` ends before it moves below.
         let body_html = {
@@ -433,6 +530,81 @@ async fn document(
     })
     .await;
     Ok(Json(view))
+}
+
+/// `GET /catalogs/{catalog}/recent-changes?limit=&after=`: the revisions
+/// published in the catalog, every document's, newest first (published
+/// history only: no open changeset shows). Read-only.
+///
+/// # Errors
+/// As the revision route: 404 for a catalog the credential does not reach
+/// or that does not exist, 403 for one it may not read now (suspended,
+/// locked); then 409 for a `limit` outside 1..=200 and 404 for an unknown
+/// or malformed `after`.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn recent_changes(
+    State(app): State<Arc<App>>,
+    Extension(principal): Extension<Arc<Principal>>,
+    requester: Requester,
+    Path(catalog): Path<String>,
+    Query(query): Query<RecentQuery>,
+) -> Result<Json<RecentChanges>, AppError> {
+    // This reads the store directly, so it checks access as the revision
+    // route does: the unlock first (before the principal moves into the
+    // context), then the catalog's selection and its admission, which also
+    // binds the read to the incarnation admitted.
+    let row = principal
+        .reached_row(app.directory(), Access::Read, &catalog)
+        .await?;
+    principal.require_contents(Access::Read, &row, app.clock().now())?;
+    let ctx = context(&app, principal, requester);
+    let state = ctx.one(Some(&catalog)).await?;
+    ctx.admit(&state, AccessKind::Read).await?;
+    // The parameters are checked only once the catalog is admitted, so a
+    // refusal never depends on them.
+    // `transpose` turns Option<Result<..>> into Result<Option<..>> for `?`.
+    let after = query.after.as_deref().map(parse_cursor).transpose()?;
+    let limit = query.limit.unwrap_or(RECENT_DEFAULT);
+    let page = recent(app.pool(), state.id(), after.as_ref(), limit).await?;
+    let mut wanted = Wanted::default();
+    for row in &page.rows {
+        wanted.user(&row.actor);
+    }
+    let labels = ctx.labels_for(&wanted).await?;
+    // Titles and descriptions come from the published snapshot, read now:
+    // the history rows hold no content.
+    let loaded = ctx.snapshot(&state);
+    let snapshot = loaded.snapshot();
+    let changes = page
+        .rows
+        .into_iter()
+        .map(|row| {
+            // A deletion names no document, even if one was created again
+            // at the path since.
+            let doc = if row.op == "delete" {
+                None
+            } else {
+                snapshot.get(&row.path)
+            };
+            RecentChange {
+                path: format!("/{}", row.path),
+                title: doc.and_then(|doc| doc.title().map(str::to_string)),
+                description: doc.and_then(|doc| text_field(doc, "description")),
+                revision: row.revision,
+                op: row.op,
+                actor_label: labels.actor(&row.actor).map(str::to_string),
+                actor: row.actor,
+                message: row.message,
+                at: format_timestamp(row.created_at),
+            }
+        })
+        .collect();
+    Ok(Json(RecentChanges {
+        catalog: state.name().to_string(),
+        catalog_label: ctx.catalog_label(state.name()).await?,
+        changes,
+        next_after: page.next.as_ref().map(cursor_text),
+    }))
 }
 
 #[cfg(test)]
@@ -482,6 +654,7 @@ mod tests {
             "/api/v1/catalogs/main/history/systems/alpha.md",
             "/api/v1/catalogs/main/revisions/1/systems/alpha.md",
             "/api/v1/catalogs/main/documents/systems/index.md",
+            "/api/v1/catalogs/main/recent-changes",
         ]
         .into_iter()
         .map(|uri| Row {
@@ -516,12 +689,58 @@ mod tests {
         assert_eq!(tree["catalog"], "main");
         assert_eq!(
             entry(&tree, "/systems/alpha.md"),
-            &json!({"path": "/systems/alpha.md", "kind": "concept", "title": "Alpha"})
+            &json!({"path": "/systems/alpha.md", "kind": "concept", "title": "Alpha", "description": null})
         );
         assert_eq!(entry(&tree, "/systems/index.md")["kind"], "index");
         assert_eq!(entry(&tree, "/log.md")["kind"], "log");
         assert_eq!(entry(&tree, "/AGENTS.md")["kind"], "machinery");
         assert_eq!(tree["documents"].as_array().map(Vec::len), Some(MAIN.len()));
+    }
+
+    #[tokio::test]
+    async fn the_tree_gives_each_document_its_description() {
+        let test = app_with(
+            &[
+                (
+                    "main",
+                    &[
+                        ("index.md", "---\ntitle: Main\ndescription: Everything we keep.\n---\n# Main\n"),
+                        ("systems/alpha.md", "---\ntype: system\ntitle: Alpha\ndescription: Runs the jobs.\n---\n# Alpha\n"),
+                        ("systems/beta.md", "---\ntype: system\ntitle: Beta\n---\n# Beta\n"),
+                        ("systems/gamma.md", "---\ntitle: Gamma\ndescription: [not, a, string]\n---\n# Gamma\n"),
+                    ],
+                ),
+                ("other", &[("index.md", "# Other\n")]),
+            ],
+            Config::default(),
+        )
+        .await;
+        let keys = keys(&test).await;
+
+        let (status, tree) = send(
+            &test,
+            "GET",
+            "/api/v1/catalogs/main/tree",
+            Some(&keys.read),
+            None,
+        )
+        .await;
+
+        assert_eq!(status.as_u16(), 200, "{tree}");
+        assert_eq!(
+            entry(&tree, "/index.md")["description"],
+            "Everything we keep."
+        );
+        assert_eq!(
+            entry(&tree, "/systems/alpha.md")["description"],
+            "Runs the jobs."
+        );
+        // No description, or one that is not a string: null.
+        assert_eq!(entry(&tree, "/systems/beta.md")["description"], Value::Null);
+        assert_eq!(
+            entry(&tree, "/systems/gamma.md")["description"],
+            Value::Null
+        );
     }
 
     #[tokio::test]
@@ -810,18 +1029,21 @@ mod tests {
             .send(&test, "GET", "/api/v1/catalogs/main/export", Payload::Empty)
             .await
             .parts();
-        crate::store::users::set_admin(
-            test.app.pool(),
-            user,
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("make the user an admin");
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::users::set_admin(
+                test.app.pool(),
+                user,
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("make the user an admin");
+        })
+        .await;
         let mut admin = Browser::session_for(&test, user).await;
         let (as_admin, answer) = admin.send(&test, "GET", uri, Payload::Empty).await.parts();
 
@@ -859,6 +1081,7 @@ mod tests {
             "/api/v1/catalogs/main/links/systems/alpha.md",
             "/api/v1/catalogs/main/history/systems/alpha.md",
             "/api/v1/catalogs/main/documents/systems/index.md",
+            "/api/v1/catalogs/main/recent-changes",
             "/api/v1/catalogs/main/health",
             "/api/v1/catalogs/main/reports/lint",
             "/api/v1/catalogs/main/reports/sprawl",
@@ -907,6 +1130,455 @@ mod tests {
                 .await
                 .parts();
             assert_eq!(active.as_u16(), 200, "{elsewhere} still answers: {body}");
+        }
+    }
+
+    /// Imports `entries` into `catalog` as `actor`, replacing it, and applies its change messages.
+    async fn publish(
+        test: &crate::mcp::testing::TestApp,
+        catalog: &str,
+        entries: &[(&str, &str)],
+        actor: &str,
+    ) {
+        let options = ImportOptions {
+            replace: true,
+            scope: ImportScope::Everything,
+            expect_generation: None,
+            expect_catalog_id: None,
+            actor,
+            audit: &AuditActor::cli(),
+            now: Utc::now(),
+        };
+        crate::invalidate::testing::applied(&test.app, async {
+            import(test.app.pool(), catalog, files(entries), &options)
+                .await
+                .expect("import");
+        })
+        .await;
+    }
+
+    /// `(path, revision, op, actor)` of each change in a recent-changes page.
+    fn summary(page: &Value) -> Vec<(String, i64, String, String)> {
+        page["changes"]
+            .as_array()
+            .expect("changes")
+            .iter()
+            .map(|change| {
+                (
+                    change["path"].as_str().expect("path").to_string(),
+                    change["revision"].as_i64().expect("revision"),
+                    change["op"].as_str().expect("op").to_string(),
+                    change["actor"].as_str().expect("actor").to_string(),
+                )
+            })
+            .collect()
+    }
+
+    /// Opens a changeset on `main` as `key`, writes `text` at `path` in it,
+    /// and publishes it with `message`, or leaves it open (a draft) when
+    /// `message` is `None`.
+    async fn stage(
+        test: &crate::mcp::testing::TestApp,
+        key: &str,
+        (path, text): (&str, &str),
+        message: Option<&str>,
+    ) {
+        use crate::mcp::changesets::{open_changeset, publish, OpenParams, PublishParams};
+        use crate::mcp::testing::{pending_entry, PendingEdit};
+        let ctx = crate::mcp::testing::context(
+            test,
+            crate::mcp::testing::cached_principal(test, key).await,
+            None,
+        );
+        let opened = open_changeset(
+            &ctx,
+            OpenParams {
+                catalog: Some("main".to_string()),
+            },
+        )
+        .await
+        .expect("open a changeset");
+        let edit = PendingEdit {
+            path,
+            text: Some(text),
+            at: Utc::now(),
+        };
+        pending_entry(test, &opened.changeset, &edit).await;
+        if let Some(message) = message {
+            publish(
+                &ctx,
+                PublishParams {
+                    message: message.to_string(),
+                    changeset: opened.changeset,
+                },
+            )
+            .await
+            .expect("publish");
+        }
+    }
+
+    /// `main` after three rounds: the fixture's import, an import by
+    /// `editor` that changes alpha and drops beta, and a publish by `writer`
+    /// that creates gamma; then a draft left open, and an import into
+    /// `other` by `intruder`.
+    async fn three_rounds(
+        test: &crate::mcp::testing::TestApp,
+        keys: &crate::http::api::testing::Keys,
+    ) {
+        let edited = edited_main();
+        let kept: Vec<(&str, &str)> = edited
+            .iter()
+            .filter(|(path, _)| *path != "systems/beta.md")
+            .map(|(path, text)| (*path, text.as_str()))
+            .collect();
+        publish(test, "main", &kept, "editor").await;
+        let gamma = "---\ntype: system\ntitle: Gamma\n---\n# Gamma\n\nNew.\n";
+        stage(
+            test,
+            &keys.write,
+            ("systems/gamma.md", gamma),
+            Some("add gamma"),
+        )
+        .await;
+        let draft = "---\ntype: system\ntitle: Draft\n---\n# Draft\n\nNot yet.\n";
+        stage(test, &keys.write, ("systems/draft.md", draft), None).await;
+        publish(
+            test,
+            "other",
+            &[("index.md", "# Other, changed\n")],
+            "intruder",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn recent_changes_list_one_catalogs_published_revisions_newest_first() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        three_rounds(&test, &keys).await;
+
+        let (status, page) = send(
+            &test,
+            "GET",
+            "/api/v1/catalogs/main/recent-changes",
+            Some(&keys.read),
+            None,
+        )
+        .await;
+        // The deleted document's revision opens through the revision route.
+        let (deleted, removal) = send(
+            &test,
+            "GET",
+            "/api/v1/catalogs/main/revisions/2/systems/beta.md",
+            Some(&keys.read),
+            None,
+        )
+        .await;
+
+        assert_eq!(status.as_u16(), 200, "{page}");
+        assert_eq!(page["catalog"], "main");
+        assert!(page["catalog_label"].is_string(), "{page}");
+        assert_eq!(page.get("next_after"), Some(&Value::Null));
+        let changes = summary(&page);
+        let own = |path: &str, revision, op: &str, actor: &str| {
+            (
+                path.to_string(),
+                revision,
+                op.to_string(),
+                actor.to_string(),
+            )
+        };
+        // The publish first; then the editor's import, whose two rows share
+        // a time and so come by path, descending; then the first import.
+        assert_eq!(
+            changes[..3],
+            [
+                own("/systems/gamma.md", 1, "create", "writer"),
+                own("/systems/beta.md", 2, "delete", "editor"),
+                own("/systems/alpha.md", 2, "import", "editor"),
+            ],
+            "{page}"
+        );
+        // Then the fixture: creating the catalog wrote `index.md` and
+        // `log.md`, and its import wrote every file of MAIN.
+        assert_eq!(
+            changes.len(),
+            3 + 2 + MAIN.len(),
+            "no draft, nothing of `other`: {page}"
+        );
+        assert!(
+            changes[3..]
+                .iter()
+                .all(|(_, _, op, _)| op == "import" || op == "create"),
+            "{page}"
+        );
+        assert!(
+            changes[3..]
+                .iter()
+                .any(|(path, _, _, _)| path == "/systems/alpha.md"),
+            "alpha's first revision is listed too: {page}"
+        );
+        assert!(!changes
+            .iter()
+            .any(|(path, _, _, _)| path == "/systems/draft.md"));
+        assert!(!changes.iter().any(|(_, _, _, actor)| actor == "intruder"));
+        let first = &page["changes"][0];
+        assert_eq!(first["message"], "add gamma");
+        assert!(
+            first["at"].as_str().is_some_and(|at| at.ends_with('Z')),
+            "{first}"
+        );
+        assert!(first.get("actor_label").is_some(), "{first}");
+        assert_eq!(page["changes"][1]["message"], "import");
+        assert_eq!(deleted.as_u16(), 200, "{removal}");
+        assert_eq!(removal["op"], "delete");
+        assert_eq!(removal.get("text"), Some(&Value::Null));
+    }
+
+    /// Each change names its document as the catalog has it now: the title
+    /// and description of the current file, and null for a deletion or a
+    /// document that is gone since.
+    #[tokio::test]
+    async fn recent_changes_carry_titles_and_descriptions_from_the_snapshot() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        let alpha = "---\ntype: system\ntitle: Alpha\ndescription: Runs the jobs.\n---\n# Alpha\n";
+        let entries: Vec<(&str, &str)> = MAIN
+            .iter()
+            .filter(|(path, _)| *path != "systems/beta.md")
+            .map(|(path, text)| {
+                if *path == "systems/alpha.md" {
+                    (*path, alpha)
+                } else {
+                    (*path, *text)
+                }
+            })
+            .collect();
+        publish(&test, "main", &entries, "editor").await;
+
+        let (status, page) = send(
+            &test,
+            "GET",
+            "/api/v1/catalogs/main/recent-changes",
+            Some(&keys.read),
+            None,
+        )
+        .await;
+
+        assert_eq!(status.as_u16(), 200, "{page}");
+        let change = |path: &str, revision: i64| -> Value {
+            page["changes"]
+                .as_array()
+                .expect("changes")
+                .iter()
+                .find(|change| change["path"] == path && change["revision"] == revision)
+                .cloned()
+                .unwrap_or_else(|| panic!("{path} revision {revision} in {page}"))
+        };
+        let edited = change("/systems/alpha.md", 2);
+        assert_eq!(edited["title"], "Alpha");
+        assert_eq!(edited["description"], "Runs the jobs.");
+        // An older revision of a file that still exists names it as it is now.
+        assert_eq!(
+            change("/systems/alpha.md", 1)["description"],
+            "Runs the jobs."
+        );
+        // The deletion, and the earlier revision of the deleted file: null.
+        for revision in [1, 2] {
+            let gone = change("/systems/beta.md", revision);
+            assert_eq!(gone["title"], Value::Null, "{gone}");
+            assert_eq!(gone["description"], Value::Null, "{gone}");
+        }
+        // A file with no title: null, not its path.
+        assert_eq!(change("/log.md", 1)["title"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn recent_changes_page_by_cursor_without_repeats_or_gaps() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        three_rounds(&test, &keys).await;
+        let get = |uri: String| {
+            let test = &test;
+            let key = keys.read.clone();
+            async move { send(test, "GET", &uri, Some(&key), None).await }
+        };
+        let (_, whole) = get("/api/v1/catalogs/main/recent-changes?limit=200".into()).await;
+
+        // Pages of two, each continued from the one before: the fixture's
+        // import wrote every row at one time, so most pages split a tie.
+        let mut paged = Vec::new();
+        let mut uri = "/api/v1/catalogs/main/recent-changes?limit=2".to_string();
+        let mut pages = 0;
+        loop {
+            let (status, page) = get(uri.clone()).await;
+            assert_eq!(status.as_u16(), 200, "{uri}: {page}");
+            pages += 1;
+            assert!(pages < 20, "paging never ends");
+            paged.extend(summary(&page));
+            match page["next_after"].as_str() {
+                Some(after) => {
+                    let after = url_escape(after);
+                    uri = format!("/api/v1/catalogs/main/recent-changes?limit=2&after={after}");
+                }
+                None => break,
+            }
+        }
+
+        assert_eq!(paged, summary(&whole));
+        assert_eq!(pages, paged.len().div_ceil(2));
+    }
+
+    /// Percent-encodes everything but unreserved characters, for a query value.
+    fn url_escape(text: &str) -> String {
+        text.bytes()
+            .map(|byte| match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                    char::from(byte).to_string()
+                }
+                _ => format!("%{byte:02X}"),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn recent_changes_refuse_a_bad_page_size_or_cursor() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        let base = "/api/v1/catalogs/main/recent-changes";
+        let mut answers = Vec::new();
+        for query in [
+            "limit=0",
+            "limit=201",
+            "limit=200",
+            "limit=many",
+            "after=nonsense",
+            "after=0%3Aindex.md",
+            "after=9%3Aindex.md",
+            "after=1%3Aindex.md",
+        ] {
+            let (status, body) = send(
+                &test,
+                "GET",
+                &format!("{base}?{query}"),
+                Some(&keys.read),
+                None,
+            )
+            .await;
+            answers.push((
+                query,
+                status.as_u16(),
+                body["error"].as_str().map(str::to_string),
+            ));
+        }
+
+        let statuses: Vec<(&str, u16)> = answers
+            .iter()
+            .map(|(query, status, _)| (*query, *status))
+            .collect();
+        assert_eq!(
+            statuses,
+            [
+                ("limit=0", 409),
+                ("limit=201", 409),
+                ("limit=200", 200),
+                ("limit=many", 400),
+                ("after=nonsense", 404),
+                ("after=0%3Aindex.md", 404),
+                ("after=9%3Aindex.md", 404),
+                ("after=1%3Aindex.md", 200),
+            ],
+            "{answers:?}"
+        );
+        assert_eq!(answers[0].2.as_deref(), Some("Refused"));
+        assert_eq!(answers[4].2.as_deref(), Some("NotFound"));
+    }
+
+    /// A route's status and `error`.
+    type Answer = (u16, Option<String>);
+
+    /// The recent-changes route refuses exactly as the history and revision
+    /// routes do: without a credential, for a catalog the key does not
+    /// reach, for one that does not exist, for a suspended one and for a
+    /// locked one, with the same status and error.
+    #[tokio::test]
+    async fn recent_changes_refuse_exactly_as_history_and_revisions_do() {
+        use crate::mcp::testing::{require_unlock, staff_root, suspend_catalogs};
+        let test = app().await;
+        let keys = keys(&test).await;
+        let staff = staff_root(&test).await;
+        let routes = |catalog: &str| {
+            [
+                format!("/api/v1/catalogs/{catalog}/recent-changes"),
+                format!("/api/v1/catalogs/{catalog}/history/index.md"),
+                format!("/api/v1/catalogs/{catalog}/revisions/1/index.md"),
+            ]
+        };
+        let answer = |key: Option<String>, uri: String| {
+            let test = &test;
+            async move {
+                let (status, body) = send(test, "GET", &uri, key.as_deref(), None).await;
+                (status.as_u16(), body["error"].as_str().map(str::to_string))
+            }
+        };
+        let mut cases: Vec<(&str, Vec<Answer>)> = Vec::new();
+        for (case, key, catalog) in [
+            ("no credential", None, "main"),
+            ("unreached", Some(keys.stranger.clone()), "main"),
+            ("no such catalog", Some(keys.read.clone()), "nope"),
+            ("reached", Some(keys.read.clone()), "main"),
+        ] {
+            let mut got = Vec::new();
+            for uri in routes(catalog) {
+                got.push(answer(key.clone(), uri).await);
+            }
+            cases.push((case, got));
+        }
+        suspend_catalogs(&test, &["main"]).await;
+        let mut got = Vec::new();
+        for uri in routes("main") {
+            got.push(answer(Some(keys.read.clone()), uri).await);
+        }
+        cases.push(("suspended", got));
+        // `staff` reaches every catalog as an admin, and `require_unlock`
+        // makes it ask for an unlock first; `other` is not suspended.
+        crate::store::users::set_admin(
+            test.app.pool(),
+            "staff",
+            AdminChange {
+                on: true,
+                allow_last: false,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("make staff an admin");
+        require_unlock(&test).await;
+        let mut got = Vec::new();
+        for uri in routes("other") {
+            got.push(answer(Some(staff.clone()), uri).await);
+        }
+        cases.push(("locked", got));
+
+        let expected: [(&str, (u16, Option<&str>)); 6] = [
+            ("no credential", (401, None::<&str>)),
+            ("unreached", (404, Some("CatalogNotSelected"))),
+            ("no such catalog", (404, Some("CatalogNotSelected"))),
+            ("reached", (200, None)),
+            ("suspended", (403, Some("Suspended"))),
+            ("locked", (403, Some("UnlockRequired"))),
+        ];
+        for ((case, got), (name, (status, error))) in cases.iter().zip(expected) {
+            assert_eq!(*case, name);
+            assert!(
+                got.iter().all(|answer| *answer == got[0]),
+                "{case}: recent-changes, history and revision answered {got:?}"
+            );
+            assert_eq!(got[0].0, status, "{case}: {got:?}");
+            if let Some(error) = error {
+                assert_eq!(got[0].1.as_deref(), Some(error), "{case}: {got:?}");
+            }
         }
     }
 }

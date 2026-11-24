@@ -12,6 +12,7 @@ pub mod limits;
 pub mod oidc;
 pub(crate) mod pages;
 pub mod passkeys;
+mod read;
 pub mod requester;
 pub mod sessions;
 pub mod signin;
@@ -44,6 +45,7 @@ use crate::error::OkfError;
 use crate::http::sessions::bind_session;
 use crate::mcp::OkfServer;
 use crate::oauth;
+use crate::telemetry::metrics::RedisOp;
 use crate::telemetry::subscriber::split_event;
 
 /// How long a request on any route but `/mcp` may take; for an import, how
@@ -193,16 +195,27 @@ impl IntoResponse for AppError {
 struct Health {
     /// `"ok"` or `"unreachable"`.
     database: &'static str,
-    /// How many catalogs are loaded (no names: the route needs no key).
-    catalogs: usize,
+    /// How many catalogs this replica holds in its catalog cache now (no
+    /// names: the route needs no key). Catalogs load on first use, so this
+    /// is not how many exist.
+    cached_catalogs: u64,
     /// The last clock check (design "Time"); `null` without a `time_server`
     /// or before the first check. It never changes the status.
     clock: Option<ClockStatus>,
+    /// `"ok"` or `"unavailable"`; `null` without `[redis]`. It never changes
+    /// the status, and it never names the Redis URL or host.
+    redis: Option<&'static str>,
+    /// `"shared"` or `"degraded"`; `null` without `[redis]`. `"degraded"`
+    /// means the last shared rate-limit call failed (usually the Redis user's
+    /// ACL, issue #832), so each replica counts its own buckets. It never
+    /// changes the status.
+    rate_limits: Option<&'static str>,
 }
 
 /// `GET /healthz`: 200 while the database answers within
-/// [`HEALTH_TIMEOUT`], else 503, with the last clock check, which never
-/// changes the status.
+/// [`HEALTH_TIMEOUT`], else 503, with the last clock check and the Redis
+/// state, neither of which changes the status: a Redis outage must not mark
+/// every replica unready.
 ///
 /// # Arguments
 /// * `app` - the shared state (axum's `State` extractor hands it over).
@@ -215,11 +228,22 @@ async fn healthz(State(app): State<Arc<App>>) -> Response {
     // `timeout` gives `Err` if the deadline passes first (waiting for a pool
     // connection included), else the query's own `Result`; only `Ok(Ok(_))`
     // means the database answered in time.
-    let reachable = matches!(tokio::time::timeout(HEALTH_TIMEOUT, probe).await, Ok(Ok(_)));
+    let database = async { matches!(tokio::time::timeout(HEALTH_TIMEOUT, probe).await, Ok(Ok(_))) };
+    // Both probes run at once, so the route's deadline is still one
+    // `HEALTH_TIMEOUT`, not two.
+    let (reachable, redis) = tokio::join!(database, redis_health(&app));
     let health = Health {
         database: if reachable { "ok" } else { "unreachable" },
-        catalogs: app.catalogs().len(),
+        cached_catalogs: app.catalog_cache().cached(),
         clock: app.clock_status(),
+        redis,
+        rate_limits: app.redis().map(|shared| {
+            if shared.limits_degraded() {
+                "degraded"
+            } else {
+                "shared"
+            }
+        }),
     };
     let status = if reachable {
         StatusCode::OK
@@ -229,9 +253,58 @@ async fn healthz(State(app): State<Arc<App>>) -> Response {
     (status, Json(health)).into_response()
 }
 
-/// `GET /ui/brand.json`: the product name and support contact
-/// (`{"product_name": ..., "support_contact": ... or null}`), for the console
-/// shell before anyone signs in. Public: the sign-in page shows both anyway.
+/// Probes the shared Redis with `PING` under [`HEALTH_TIMEOUT`].
+///
+/// # Arguments
+/// * `app` - the shared state.
+///
+/// # Returns
+/// `None` without `[redis]`, else `"ok"` or `"unavailable"`. A failed probe is
+/// counted through [`crate::shared::Redis::failed`] (its text stays local); a
+/// late one is counted without a driver error.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn redis_health(app: &App) -> Option<&'static str> {
+    let redis = app.redis()?;
+    let mut connection = redis.connection();
+    // The `Cmd` is bound to a name because `query_async` borrows it.
+    let command = redis::cmd("PING");
+    let ping = command.query_async::<String>(&mut connection);
+    match tokio::time::timeout(HEALTH_TIMEOUT, ping).await {
+        Ok(Ok(_)) => Some("ok"),
+        Ok(Err(error)) => {
+            // `failed` counts the error and logs it locally; the returned
+            // `Busy` is not needed here.
+            let _ = redis.failed(RedisOp::Get, &error);
+            Some("unavailable")
+        }
+        Err(_) => {
+            redis.count(RedisOp::Get);
+            Some("unavailable")
+        }
+    }
+}
+
+/// `GET /ui/brand.json`'s body: the branding settings, flattened into the
+/// top level, and the feedback form.
+#[derive(Debug, serde::Serialize)]
+struct ConsoleBrand {
+    /// `product_name`, `support_contact`, `feedback_url` and `docs_url`.
+    // `flatten`: the brand's fields sit beside `feedback_form`, not under
+    // a `brand` key.
+    #[serde(flatten)]
+    brand: crate::store::settings::Brand,
+    /// The in-console feedback form, `null` without `[feedback]`.
+    feedback_form: Option<api::feedback::FeedbackForm>,
+}
+
+/// `GET /ui/brand.json`: the product name, support contact, feedback URL and
+/// documentation URL (`{"product_name": ..., "support_contact": ... or null,
+/// "feedback_url": ... or null, "docs_url": ... or null}`), plus
+/// `feedback_form` (`{"disclosure", "max_message_chars", "kinds"}`, or
+/// `null` without a `[feedback]` table), for the console shell before
+/// anyone signs in. Public: the sign-in page shows the first two anyway,
+/// the URLs are links the operator wants people to open, and the form
+/// holds no secret (the Forminit key never leaves the server).
 /// `no-cache`, so a changed setting shows on the next load.
 ///
 /// # Arguments
@@ -241,9 +314,13 @@ async fn healthz(State(app): State<Arc<App>>) -> Response {
 /// The branding settings as JSON.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn brand(State(app): State<Arc<App>>) -> Response {
+    let body = ConsoleBrand {
+        brand: app.settings().brand(),
+        feedback_form: api::feedback::form(&app),
+    };
     (
         [(axum::http::header::CACHE_CONTROL, "no-cache")],
-        Json(app.settings().brand()),
+        Json(body),
     )
         .into_response()
 }
@@ -274,7 +351,7 @@ fn mcp_service(
     // The same switch for the later POSTs of a session (`tools/list`, ...):
     // rmcp reads it from the session config, not from the HTTP config.
     sessions.session_config.sse_retry = None;
-    let config = StreamableHttpServerConfig::default()
+    let mut config = StreamableHttpServerConfig::default()
         .with_allowed_hosts(app.config().allowed_hosts.iter().cloned())
         // No SSE priming event on the `initialize` reply. For protocol
         // versions before 2026-07-28 rmcp streams every POST reply and, when
@@ -286,6 +363,13 @@ fn mcp_service(
         // A child token: cancelling `shutdown` cancels it too, and rmcp
         // cancelling its own copy never reaches `shutdown`.
         .with_cancellation_token(shutdown.child_token());
+    // With `[redis]`, rmcp persists each session's `initialize` so another
+    // replica can restore it (spec Decision 9). The same value holds the
+    // bindings `bind_session` checks; `Arc<RedisSessions>` coerces to the
+    // trait object `Arc<dyn SessionStore>` here.
+    if let Some(store) = app.sessions().store() {
+        config.session_store = Some(store);
+    }
     let app = Arc::clone(app);
     // The factory runs once per session; `move` gives the closure its own
     // `Arc` (like a Python closure capturing `app`, but by explicit transfer).
@@ -336,11 +420,9 @@ pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
     // The OAuth routes exist only with OAuth on; without it `/oauth/*` and
     // `/.well-known/*` stay 404, as before M10. They take no bearer token.
     let open = if app.oauth().is_some() {
-        Router::new()
-            .merge(health)
-            .merge(oauth::routes().layer(timeout_layer()))
+        Router::new().merge(oauth::routes().layer(timeout_layer()))
     } else {
-        Router::new().merge(health)
+        Router::new()
     };
     // The passkey routes exist only with passkeys on (a domain
     // `public_url`); otherwise `/auth/passkey/*` stays 404.
@@ -362,6 +444,7 @@ pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
         get(brand).layer(middleware::map_response(ui::security_headers)),
     );
     open.merge(ui::routes())
+        .merge(read::routes())
         .merge(brand)
         .merge(signin::routes(&app))
         // The API applies `require_principal` (a bearer credential or a
@@ -370,6 +453,27 @@ pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
         // routes (`keyed`) take only a bearer credential.
         .nest("/api/v1", api::routes(&app))
         .merge(keyed)
+        // Every route but `/healthz` (merged after it, so a probe never
+        // waits on the database) starts by checking the settings when they
+        // are older than `credential_ttl` (M18 spec Decision 9), so what
+        // its handlers read through `App::settings` is never older. The
+        // check has its own bound (`SETTINGS_CHECK_TIMEOUT`), since it runs
+        // before the routes' timeouts.
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&app),
+            check_settings,
+        ))
+        .merge(health)
+        // Every route's own writes reach this replica's caches before it
+        // answers (read-your-writes on the writing replica, M18 Task 8): the
+        // API, the archive routes, the console's sign-in and account forms,
+        // the OAuth pages and MCP. In process only; a write made on a task
+        // the handler spawned is not collected, and the change feed
+        // delivers it a moment later.
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&app),
+            api::apply_own_writes,
+        ))
         // One `info` line per response (status, latency) in a span naming the
         // method and the matched route. The span records no headers, so a
         // bearer key never reaches the log; no query, so neither does an
@@ -391,6 +495,34 @@ pub fn router(app: Arc<App>, shutdown: &CancellationToken) -> Router {
         )
         // Hands `app` to every handler that asks for `State<Arc<App>>`.
         .with_state(app)
+}
+
+/// Checks the settings before the request goes on ([`App::fresh_settings`]):
+/// a cheap read while they are younger than `credential_ttl`, one
+/// `admin_generation` read (shared by the requests that arrive together)
+/// once they are older.
+///
+/// # Arguments
+/// * `app` - the shared state.
+/// * `request` - the request, after routing.
+/// * `next` - the rest of the stack.
+///
+/// # Returns
+/// The route's response.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "middleware around every request: a span here would parent every handler's; fresh_settings has its own"
+    )
+)]
+async fn check_settings(
+    State(app): State<Arc<App>>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    app.fresh_settings().await;
+    next.run(request).await
 }
 
 /// The request span `TraceLayer` opened, for code deeper in the stack that
@@ -501,10 +633,26 @@ fn record_response<B>(response: &Response<B>, latency: Duration, span: &tracing:
     if status.is_server_error() {
         span.record("otel.status_code", "error");
     }
+    // A health probe's completion line is routine noise: it drops to DEBUG
+    // (the span and its status stay exported at their own filter).
+    let level = if response.extensions().get::<RoutineProbe>().is_some() {
+        Level::DEBUG
+    } else {
+        Level::INFO
+    };
     DefaultOnResponse::new()
-        .level(Level::INFO)
+        .level(level)
         .on_response(response, latency, span);
 }
+
+/// The route health probes poll; its completion line is logged at DEBUG.
+const HEALTH_ROUTE: &str = "/healthz";
+
+/// A response extension (a typed per-response map) that `request_telemetry`
+/// sets on a health probe's response so [`record_response`], which sees the
+/// response but not the request, can log its completion line at DEBUG.
+#[derive(Debug, Clone, Copy)]
+struct RoutineProbe;
 
 /// axum middleware inside `TraceLayer`: stores the request span in the
 /// request's extensions ([`RequestSpan`]) for the auth layers, and measures
@@ -546,33 +694,60 @@ async fn request_telemetry(
     // this future) still balances the counter.
     let _in_flight = app.metrics().http_in_flight(method, &route);
     let started = std::time::Instant::now();
-    let response = next.run(request).await;
+    let mut response = next.run(request).await;
     app.metrics().http_request(
         method,
         &route,
         response.status().as_u16(),
         started.elapsed(),
     );
+    if route == HEALTH_ROUTE {
+        response.extensions_mut().insert(RoutineProbe);
+    }
     response
 }
 
 /// How long a stopping server waits for its background access writes.
 const ACCESS_SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Serves until `shutdown` is cancelled, running the poll loop, the clock
-/// check and (unless `[mail] worker = false`) the mail worker beside it.
+/// What `serve_with` starts beside the HTTP server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServeOptions {
+    /// Whether to run the background workers (mail and housekeeping) and
+    /// the housekeeping ticker. Always
+    /// `true` in production: every replica runs them (issue #458). Test
+    /// servers that only enqueue set it to `false`.
+    pub worker: bool,
+}
+
+impl ServeOptions {
+    /// A server that starts no worker, for tests that only enqueue mail.
+    pub const NO_WORKER: Self = Self { worker: false };
+}
+
+impl Default for ServeOptions {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "a constant value, called once at start-up"
+        )
+    )]
+    fn default() -> Self {
+        Self { worker: true }
+    }
+}
+
+/// Serves until `shutdown` is cancelled, with every worker: [`serve_with`]
+/// and the default [`ServeOptions`].
 ///
 /// # Arguments
 /// * `app` - the shared state.
 /// * `listener` - a bound socket.
-/// * `shutdown` - cancelled to stop: it ends the MCP sessions, the poll loop,
-///   the clock check, the mail worker and the listener, and `serve` returns
-///   once open connections close, the mail worker has stopped and the
-///   access counts in flight are written.
+/// * `shutdown` - cancelled to stop.
 ///
 /// # Errors
-/// The listener's I/O error, after the loops and the sessions are
-/// stopped (`shutdown` is cancelled on every return).
+/// As [`serve_with`].
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
     allow(
@@ -585,16 +760,158 @@ pub async fn serve(
     listener: TcpListener,
     shutdown: CancellationToken,
 ) -> std::io::Result<()> {
+    serve_with(app, listener, shutdown, ServeOptions::default()).await
+}
+
+/// Waits for a worker (mail or housekeeping) and enforces the shutdown
+/// grace: once `shutdown` is cancelled the worker has `grace` to finish the
+/// job in hand; past that it is aborted and an error is logged (another
+/// replica takes the job after the orphan timeout). It returns when the
+/// worker has finished or been aborted, and runs beside the server's own
+/// draining, so a slow request or message never lengthens the grace.
+///
+/// # Arguments
+/// * `worker` - the worker's task.
+/// * `shutdown` - the server's stop signal; the grace starts when it is cancelled.
+/// * `grace` - how long the worker may take after the signal.
+/// * `queue` - the worker's queue (`send_mail`, `housekeeping`), for the
+///   log lines.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn supervise_worker(
+    mut worker: tokio::task::JoinHandle<()>,
+    shutdown: CancellationToken,
+    grace: std::time::Duration,
+    queue: &'static str,
+) {
+    // `&mut worker` polls the handle without consuming it, so it can still
+    // be aborted afterwards.
+    let finished = tokio::select! {
+        result = &mut worker => Some(result),
+        () = shutdown.cancelled() => None,
+    };
+    let result = match finished {
+        Some(result) => result,
+        None => match tokio::time::timeout(grace, &mut worker).await {
+            Ok(result) => result,
+            Err(_) => {
+                worker.abort();
+                tracing::error!(
+                    queue,
+                    grace_secs = grace.as_secs_f64(),
+                    "a worker did not finish within worker_shutdown_grace; \
+                     its job in hand is retried by another replica"
+                );
+                return;
+            }
+        },
+    };
+    if let Err(error) = result {
+        split_event!(
+            error,
+            { queue, },
+            { %error, },
+            "a worker panicked"
+        );
+    }
+}
+
+/// Serves until `shutdown` is cancelled, running the change-feed listener,
+/// the announcement subscribers, the clock check and (unless `options.worker` is off) the mail worker, the
+/// housekeeping worker and the housekeeping ticker beside it.
+///
+/// # Arguments
+/// * `app` - the shared state.
+/// * `listener` - a bound socket.
+/// * `shutdown` - cancelled to stop: it ends the MCP sessions, the listener,
+///   the subscribers, the clock check, the workers, the ticker and the listener, and `serve`
+///   returns once open connections close, each worker has finished the job
+///   in hand (at most `worker_shutdown_grace`) and the access counts in
+///   flight are written.
+/// * `options` - what to start beside the server.
+///
+/// # Errors
+/// The listener's I/O error, after the loops and the sessions are
+/// stopped (`shutdown` is cancelled on every return).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "long-lived server loop: its span would stay open until shutdown and be exported only then"
+    )
+)]
+pub async fn serve_with(
+    app: Arc<App>,
+    listener: TcpListener,
+    shutdown: CancellationToken,
+    options: ServeOptions,
+) -> std::io::Result<()> {
+    for warning in app.config().deprecation_warnings() {
+        tracing::warn!("{warning}");
+    }
     let router = router(Arc::clone(&app), &shutdown);
-    let poller = tokio::spawn(Arc::clone(&app).poll_until(shutdown.clone()));
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    // Marks the credential caches and the catalog directory stale on every
+    // announcement from a milestone 16 replica; ends at once without
+    // `[redis]`.
+    let announcements = tokio::spawn(crate::shared::announce::listen(
+        Arc::clone(&app),
+        shutdown.clone(),
+    ));
+    // Refreshes a catalog's snapshot on every catalog generation
+    // announcement (issue #659); ends at once without `[redis]`.
+    let catalog_announcements = tokio::spawn(crate::shared::announce::listen_catalogs(
+        Arc::clone(&app),
+        shutdown.clone(),
+    ));
+    // Applies the Postgres change feed (milestone 18) to this replica's caches.
+    let invalidations = tokio::spawn(crate::invalidate::listen(
+        Arc::clone(&app),
+        shutdown.clone(),
+    ));
     let clock_checker = tokio::spawn(Arc::clone(&app).check_clock_until(shutdown.clone()));
-    // The mail worker (Task 6), unless this process only enqueues.
+    // The workers' one pool, shared by every worker this process runs.
     // `bool::then` runs the closure only for `true`, giving an `Option`.
-    let mail_worker = app
-        .config()
-        .mail
+    let worker_pool = options
         .worker
-        .then(|| crate::mail::queue::spawn_worker(Arc::clone(&app), shutdown.clone()));
+        .then(|| crate::mail::queue::WorkerPool::new(app.pool()));
+    // Each worker runs under a supervisor that enforces
+    // `worker_shutdown_grace` from the moment `shutdown` is cancelled,
+    // concurrently with the HTTP drain and the other joins below.
+    let grace = app.config().worker_shutdown_grace;
+    let supervisors = worker_pool.as_ref().map(|pool| {
+        [
+            tokio::spawn(supervise_worker(
+                crate::mail::queue::spawn_worker(Arc::clone(&app), pool, shutdown.clone()),
+                shutdown.clone(),
+                grace,
+                crate::mail::queue::QUEUE,
+            )),
+            tokio::spawn(supervise_worker(
+                crate::housekeeping::spawn_worker(Arc::clone(&app), pool, shutdown.clone()),
+                shutdown.clone(),
+                grace,
+                crate::housekeeping::QUEUE,
+            )),
+        ]
+    });
+    // Schedules each housekeeping slot (once per cluster: the other
+    // replicas' pushes of a slot are ignored) and reads the cluster stats
+    // into this replica's gauges, once a minute; with the workers only.
+    let ticker = options.worker.then(|| {
+        tokio::spawn(crate::housekeeping::tick_until(
+            Arc::clone(&app),
+            shutdown.clone(),
+        ))
+    });
+    // The feedback worker (issue #674): only with `[feedback]` and its
+    // `worker` switch on, so one replica forwards.
+    let feedback_worker = app
+        .config()
+        .feedback
+        .as_ref()
+        .is_some_and(|feedback| feedback.worker)
+        .then(|| crate::mail::feedback::spawn_worker(Arc::clone(&app), shutdown.clone()))
+        .flatten();
     let stop = shutdown.clone();
     // `async move { ... }` is a future that resolves once the token is
     // cancelled; axum then stops accepting and waits for open connections.
@@ -610,12 +927,28 @@ pub async fn serve(
     // rmcp's sessions) before returning; cancelling twice is harmless.
     shutdown.cancel();
     // The loops return once `shutdown` is cancelled; a panic in one is logged.
-    if let Err(error) = poller.await {
+    if let Err(error) = announcements.await {
         split_event!(
             error,
             {},
             { %error, },
-            "the poll loop panicked"
+            "the announcement subscriber panicked"
+        );
+    }
+    if let Err(error) = catalog_announcements.await {
+        split_event!(
+            error,
+            {},
+            { %error, },
+            "the catalog announcement subscriber panicked"
+        );
+    }
+    if let Err(error) = invalidations.await {
+        split_event!(
+            error,
+            {},
+            { %error, },
+            "the change feed listener panicked"
         );
     }
     if let Err(error) = clock_checker.await {
@@ -626,14 +959,40 @@ pub async fn serve(
             "the clock check panicked"
         );
     }
-    // It finishes the mail in hand first.
-    if let Some(mail_worker) = mail_worker {
-        if let Err(error) = mail_worker.await {
+    if let Some(ticker) = ticker {
+        if let Err(error) = ticker.await {
             split_event!(
                 error,
                 {},
                 { %error, },
-                "the mail worker panicked"
+                "the housekeeping ticker panicked"
+            );
+        }
+    }
+    // The supervisors started their clocks when `shutdown` was cancelled,
+    // so the grace did not wait for the drains above. Each ends once its
+    // worker has finished or been aborted; after both, nothing uses the pool.
+    // `into_iter().flatten()`: the `Option`'s array, or nothing.
+    for supervisor in supervisors.into_iter().flatten() {
+        if let Err(error) = supervisor.await {
+            split_event!(
+                error,
+                {},
+                { %error, },
+                "a worker supervisor panicked"
+            );
+        }
+    }
+    if let Some(worker_pool) = &worker_pool {
+        worker_pool.close().await;
+    }
+    if let Some(feedback_worker) = feedback_worker {
+        if let Err(error) = feedback_worker.await {
+            split_event!(
+                error,
+                {},
+                { %error, },
+                "the feedback worker panicked"
             );
         }
     }
@@ -756,7 +1115,7 @@ mod tests {
             .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NEW)
             .finish();
         // `set_default` installs it for this thread until the guard drops.
-        let guard = tracing::subscriber::set_default(subscriber);
+        let guard = crate::test_tracing::set_default(subscriber);
         // tracing caches whether each log callsite is enabled. Tests on
         // other threads, with no subscriber, can cache "disabled" for the
         // callsites these requests use while this one starts. So run the
@@ -813,7 +1172,7 @@ mod tests {
 
     use crate::config::Config;
     use crate::error::LinkSource;
-    use crate::mcp::testing::app_with;
+    use crate::mcp::testing::{app_with, app_with_redis};
 
     /// A response's body as JSON.
     async fn json_body(response: Response) -> serde_json::Value {
@@ -827,7 +1186,9 @@ mod tests {
     fn suspended_is_403() {
         let suspended = AppError(OkfError::Suspended {
             catalog: "shared".to_string(),
+            catalog_label: "shared".to_string(),
             team: "family".to_string(),
+            team_label: "family".to_string(),
             notice: None,
         });
         assert_eq!(suspended.status(), StatusCode::FORBIDDEN);
@@ -852,7 +1213,7 @@ mod tests {
             catalog: "nope".to_string(),
         });
         let forbidden = AppError::from(OkfError::Forbidden {
-            reason: "import needs admin".to_string(),
+            reason: "import needs write".to_string(),
         });
         let refused = AppError(OkfError::Refused {
             reason: "not empty".to_string(),
@@ -1020,6 +1381,47 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
+    /// Every request checks settings older than `credential_ttl` before its
+    /// handler reads them (M18 spec Decision 9): with no listener and no
+    /// poll, a setting written through the store reaches an anonymous page
+    /// once the loaded settings are older than the TTL.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_checks_settings_older_than_the_credential_ttl() {
+        use crate::store::audit::AuditActor;
+        use crate::store::settings::{self, SettingKey};
+        let test = crate::mcp::testing::app_with(
+            &[],
+            Config {
+                credential_ttl: Duration::from_millis(100),
+                ..Config::default()
+            },
+        )
+        .await;
+        let product_name = || async {
+            let response = router(Arc::clone(&test.app), &CancellationToken::new())
+                .oneshot(Request::get("/ui/brand.json").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            json_body(response).await["product_name"].clone()
+        };
+        let before = product_name().await;
+
+        settings::set(
+            test.app.pool(),
+            SettingKey::ProductName,
+            "Acme Notes",
+            &AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let after = product_name().await;
+
+        assert_eq!(before, "okf");
+        assert_eq!(after, "Acme Notes");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn brand_json_is_public_and_follows_the_settings() {
         use crate::store::audit::AuditActor;
@@ -1053,7 +1455,37 @@ mod tests {
         )
         .await
         .unwrap();
-        test.app.poll().await.unwrap();
+        crate::invalidate::testing::applied(&test.app, async {
+            settings::set(
+                test.app.pool(),
+                SettingKey::FeedbackUrl,
+                "https://example.com/feedback",
+                &AuditActor::cli(),
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+            settings::set(
+                test.app.pool(),
+                SettingKey::DocsUrl,
+                "https://docs.example.com",
+                &AuditActor::cli(),
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+            // Not in the brand: only the setup redirect reads it.
+            settings::set(
+                test.app.pool(),
+                SettingKey::OnboardingUrl,
+                "https://docs.example.com/start/",
+                &AuditActor::cli(),
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+        })
+        .await;
         let (_, _, after) = get_brand().await;
 
         assert_eq!(status, StatusCode::OK);
@@ -1064,12 +1496,62 @@ mod tests {
         );
         assert_eq!(
             before,
-            serde_json::json!({"product_name": "okf", "support_contact": null})
+            serde_json::json!({
+                "product_name": "okf",
+                "support_contact": null,
+                "feedback_url": null,
+                "docs_url": null,
+                "feedback_form": null
+            })
         );
         assert_eq!(
             after,
-            serde_json::json!({"product_name": "Acme Notes", "support_contact": "help@example.com"})
+            serde_json::json!({
+                "product_name": "Acme Notes",
+                "support_contact": "help@example.com",
+                "feedback_url": "https://example.com/feedback",
+                "docs_url": "https://docs.example.com",
+                "feedback_form": null
+            })
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn brand_json_offers_the_feedback_form_only_with_feedback_configured() {
+        use crate::config::{AuthConfig, FeedbackConfig};
+        let config = Config {
+            auth: AuthConfig {
+                product_name: "Acme Notes".to_string(),
+                ..AuthConfig::default()
+            },
+            feedback: Some(FeedbackConfig::for_form("form-placeholder_1")),
+            ..Config::default()
+        };
+        let test = app_with(&[("pg", &[])], config).await;
+
+        let response = router(Arc::clone(&test.app), &CancellationToken::new())
+            .oneshot(Request::get("/ui/brand.json").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let body = json_body(response).await;
+
+        assert_eq!(
+            body["feedback_form"],
+            serde_json::json!({
+                "disclosure": "The feedback goes to Acme Notes's team through a third-party \
+                               form service (Forminit). What is sent: your message, the kind \
+                               and rating you choose, your user name, the server version and \
+                               the feedback's id. Leave out anything you don't want to share.",
+                "max_message_chars": 4000,
+                "kinds": ["bug", "confusing", "missing", "praise", "other"]
+            })
+        );
+        // Nothing about the form's delivery: no form id, no endpoint, no
+        // key's variable name.
+        let text = body.to_string();
+        for secret in ["form-placeholder_1", "forminit.com", "FORMINIT"] {
+            assert!(!text.contains(secret), "{text}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1117,8 +1599,95 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             json_body(response).await,
-            serde_json::json!({"database": "unreachable", "catalogs": 1, "clock": null})
+            serde_json::json!({"database": "unreachable", "cached_catalogs": 0, "clock": null, "redis": null, "rate_limits": null})
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn healthz_without_redis_reports_null_and_keeps_its_status() {
+        let test = app_with(&[("pg", &[])], Config::default()).await;
+        let router = router(Arc::clone(&test.app), &CancellationToken::new());
+        let request = Request::get("/healthz")
+            .body(Body::empty())
+            .expect("request");
+        let response = router.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        // The key is present and null (lessons.md: check the key itself).
+        assert_eq!(
+            json_body(response).await.get("redis"),
+            Some(&serde_json::Value::Null)
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn healthz_reports_redis_without_changing_its_status() {
+        let (test, redis) = app_with_redis(Config::default()).await;
+        healthz_follows_redis(test, redis).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn healthz_reports_a_degraded_rate_limiter_without_changing_its_status() {
+        let (test, _redis) = app_with_redis(Config::default()).await;
+        let router = router(Arc::clone(&test.app), &CancellationToken::new());
+        let get = || {
+            Request::get("/healthz")
+                .body(Body::empty())
+                .expect("request")
+        };
+        let shared = json_body(router.clone().oneshot(get()).await.unwrap()).await;
+        assert_eq!(shared["rate_limits"], "shared");
+
+        test.app.redis().expect("redis").set_limits_degraded(true);
+        let response = router.oneshot(get()).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let degraded = json_body(response).await;
+        assert_eq!(degraded["rate_limits"], "degraded");
+        assert_eq!(degraded["redis"], "ok", "Redis itself answers");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn healthz_reports_a_redis_cluster_without_changing_its_status() {
+        let cluster = crate::db::redis_support::TestRedis::start_cluster().await;
+        let (test, redis) = crate::mcp::testing::app_on_redis(Config::default(), cluster).await;
+        healthz_follows_redis(test, redis).await;
+    }
+
+    /// `/healthz` says `"ok"` while Redis is up and `"unavailable"` (still
+    /// 200) once it is stopped.
+    async fn healthz_follows_redis(
+        test: crate::mcp::testing::TestApp,
+        redis: crate::db::redis_support::TestRedis,
+    ) {
+        let router = router(Arc::clone(&test.app), &CancellationToken::new());
+        let get = || {
+            Request::get("/healthz")
+                .body(Body::empty())
+                .expect("request")
+        };
+        let wait = Duration::from_secs(30);
+        let up = tokio::time::timeout(wait, router.clone().oneshot(get()))
+            .await
+            .expect("healthz answers while Redis is up")
+            .unwrap();
+        let up = json_body(up).await;
+        assert_eq!(up["redis"], "ok");
+        // The body never carries the Redis address.
+        assert!(!up.to_string().contains("redis://"), "{up}");
+        if redis.stop().await.is_none() {
+            eprintln!("shared TEST_REDIS_URL: the outage half of this test is skipped");
+            return;
+        }
+        let response = tokio::time::timeout(wait, router.oneshot(get()))
+            .await
+            .expect("healthz answers while Redis is down")
+            .unwrap();
+        // A Redis outage never makes the replica unready: the database decides.
+        assert_eq!(response.status(), StatusCode::OK);
+        let down = json_body(response).await;
+        assert_eq!(down["redis"], "unavailable");
+        assert!(!down.to_string().contains("redis://"), "{down}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1224,11 +1793,15 @@ mod tests {
             .connect_with(db.pool.connect_options().as_ref().clone())
             .await
             .unwrap();
+        // The deprecated `mail.worker = false` is ignored: the worker runs.
         let config = Config {
             database_max_connections: 1,
+            mail: crate::config::MailConfig {
+                worker: Some(false),
+                ..crate::config::MailConfig::default()
+            },
             ..Config::default()
         };
-        // The default `[mail]`: the log provider, with a worker.
         let app = App::load(one, config, Arc::new(crate::clock::SystemClock))
             .await
             .unwrap();
@@ -1242,12 +1815,14 @@ mod tests {
             "alice@example.com",
             &crate::mail::Template::Test,
             chrono::Utc::now(),
+            &crate::store::settings::Brand::default(),
         )
         .await
         .unwrap();
         let mut status = String::new();
         for _ in 0..200 {
-            status = sqlx::query_scalar("SELECT status FROM apalis.jobs")
+            status = sqlx::query_scalar("SELECT status FROM apalis.jobs WHERE job_type = $1")
+                .bind(crate::mail::queue::QUEUE)
                 .fetch_one(&db.pool)
                 .await
                 .unwrap();
@@ -1256,15 +1831,27 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        // The worker's connections, by name: its LISTEN among them.
-        let (worker_connections, listening): (i64, i64) = sqlx::query_as(
-            "SELECT count(*), count(*) FILTER (WHERE query ILIKE 'LISTEN%') \
-             FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1",
-        )
-        .bind(crate::mail::queue::WORKER_APPLICATION_NAME)
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
+        // The worker's connections, by name: its LISTEN among them. A single
+        // `pg_stat_activity` snapshot raced the worker's connection setup under
+        // load (issue #751), so poll until the LISTEN shows, under a timeout.
+        let snapshot = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let (connections, listening): (i64, i64) = sqlx::query_as(
+                    "SELECT count(*), count(*) FILTER (WHERE query ILIKE 'LISTEN%') \
+                     FROM pg_stat_activity \
+                     WHERE datname = current_database() AND application_name = $1",
+                )
+                .bind(crate::mail::queue::WORKER_APPLICATION_NAME)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+                if listening >= 1 {
+                    return (connections, listening);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await;
         let health = reqwest::Client::new()
             .get(&healthz)
             .timeout(std::time::Duration::from_secs(10))
@@ -1275,6 +1862,8 @@ mod tests {
         let stopped = tokio::time::timeout(std::time::Duration::from_secs(20), served).await;
 
         assert_eq!(status, "Done", "the worker serve started sent it");
+        let (worker_connections, listening) = snapshot
+            .expect("the worker's LISTEN connection never appeared in pg_stat_activity in 30 s");
         assert_eq!(
             listening, 1,
             "the worker listens ({worker_connections} connections)"
@@ -1290,6 +1879,69 @@ mod tests {
         assert!(
             matches!(stopped, Ok(Ok(Ok(())))),
             "serve returns once the worker stops: {stopped:?}"
+        );
+    }
+
+    /// The grace runs from the cancellation, and a worker that ignores it is
+    /// aborted while the rest of shutdown (here: nothing awaited) goes on.
+    #[tokio::test]
+    async fn a_stuck_mail_worker_is_aborted_at_the_grace_deadline() {
+        let worker = tokio::spawn(std::future::pending::<()>());
+        let watch = worker.abort_handle();
+        let shutdown = CancellationToken::new();
+        let supervisor = tokio::spawn(supervise_worker(
+            worker,
+            shutdown.clone(),
+            std::time::Duration::from_millis(200),
+            "send_mail",
+        ));
+        // Before the signal the clock has not started, however long it takes.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(!watch.is_finished() && !supervisor.is_finished());
+
+        shutdown.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(30), supervisor)
+            .await
+            .expect("the supervisor ends at the grace deadline")
+            .unwrap();
+
+        // `abort` takes effect at the task's next poll; give it a moment.
+        for _ in 0..100 {
+            if watch.is_finished() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(watch.is_finished(), "the stuck worker was aborted");
+    }
+
+    #[tokio::test]
+    async fn a_mail_worker_that_finishes_within_the_grace_is_not_aborted() {
+        let shutdown = CancellationToken::new();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&done);
+        let stop = shutdown.clone();
+        let worker = tokio::spawn(async move {
+            stop.cancelled().await;
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let supervisor = tokio::spawn(supervise_worker(
+            worker,
+            shutdown.clone(),
+            std::time::Duration::from_secs(20),
+            "send_mail",
+        ));
+
+        shutdown.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(30), supervisor)
+            .await
+            .expect("the supervisor ends once the worker does")
+            .unwrap();
+
+        assert!(
+            done.load(std::sync::atomic::Ordering::SeqCst),
+            "the mail in hand finished"
         );
     }
 }

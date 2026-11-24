@@ -180,11 +180,13 @@ async fn verify_full_refuses_a_server_another_ca_signed() {
 /// A customized start (copied files, a command) that times out leaves no
 /// container behind: Docker created it and copied the files before the
 /// timeout fired, so without the cleanup it would leak.
+///
+/// The start's own failure only has to be a timeout of some stage: a loaded
+/// Docker can run a zero-length budget out during the pull, create or copy
+/// before the wait stage is reached (issue #481). What the test proves is the
+/// second assertion.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_timed_out_tls_start_leaves_no_container() {
-    use testcontainers_modules::testcontainers::core::error::WaitContainerError;
-    use testcontainers_modules::testcontainers::TestcontainersError;
-
     let ca = new_ca("okf-mcp timeout CA");
     let (certificate, key) = server_certificate(&ca);
     let label = pg::unique_start_label();
@@ -192,11 +194,38 @@ async fn a_timed_out_tls_start_leaves_no_container() {
 
     let started = pg::start_labelled(request, &label).await;
 
-    assert!(matches!(
-        started,
-        Err(TestcontainersError::WaitContainer(
-            WaitContainerError::StartupTimeout
-        ))
-    ));
+    // `.err()` keeps the error and drops the container, which has no `Debug`.
+    let error = started.err();
+    assert!(
+        error.as_ref().is_some_and(pg::is_timeout_class),
+        "the start did not fail with a timeout-class error: {error:?}"
+    );
     assert!(pg::labelled_containers(&label).await.unwrap().is_empty());
+}
+
+/// The zero-timeout test's predicate takes the timeouts a loaded start can
+/// end in and refuses everything else, so it cannot turn into "any error".
+#[test]
+fn only_timeout_class_errors_pass_the_zero_timeout_check() {
+    use testcontainers_modules::testcontainers::core::error::WaitContainerError;
+    use testcontainers_modules::testcontainers::TestcontainersError;
+
+    let timed_out = |message: &str| TestcontainersError::other(message.to_string());
+
+    assert!(pg::is_timeout_class(&TestcontainersError::WaitContainer(
+        WaitContainerError::StartupTimeout
+    )));
+    assert!(pg::is_timeout_class(&TestcontainersError::Io(
+        std::io::ErrorKind::TimedOut.into()
+    )));
+    assert!(pg::is_timeout_class(&timed_out(
+        "request timed out; removing its container also failed: gone"
+    )));
+    assert!(!pg::is_timeout_class(&TestcontainersError::Io(
+        std::io::ErrorKind::NotFound.into()
+    )));
+    assert!(!pg::is_timeout_class(&TestcontainersError::WaitContainer(
+        WaitContainerError::Unhealthy
+    )));
+    assert!(!pg::is_timeout_class(&timed_out("no such image")));
 }

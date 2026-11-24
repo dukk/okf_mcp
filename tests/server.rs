@@ -6,9 +6,8 @@ mod support;
 
 use okf_mcp::config::Config;
 use okf_mcp::store::keys::{self, Access};
+use support::mcp_raw::{first_event_data, notify_on, open_session, stream_on, INITIALIZE};
 use support::server::{call, files, structured, Client, TestServer};
-
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}"#;
 
 /// POSTs an `initialize` to `/mcp`, with a bearer key and a `Host`, if given.
 async fn post_initialize(
@@ -28,15 +27,6 @@ async fn post_initialize(
         request = request.header("host", host);
     }
     request.send().await.unwrap().status()
-}
-
-/// The first SSE event's `data` field of a response body, if any.
-fn first_event_data(body: &str) -> &str {
-    body.split("\n\n")
-        .next()
-        .and_then(|event| event.lines().find_map(|line| line.strip_prefix("data:")))
-        .unwrap_or("")
-        .trim()
 }
 
 /// The connection's selection, as `list_catalogs` reports it.
@@ -62,7 +52,7 @@ async fn healthz_answers_without_a_key() {
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(
         body,
-        serde_json::json!({"database": "ok", "catalogs": 1, "clock": null})
+        serde_json::json!({"database": "ok", "cached_catalogs": 0, "clock": null, "redis": null, "rate_limits": null})
     );
 }
 
@@ -118,15 +108,17 @@ async fn a_revoked_key_stops_working_after_a_poll() {
     let client = server.client(&key, None).await.unwrap();
     structured(&call(&client, "list_catalogs", serde_json::json!({})).await);
 
-    keys::revoke(
-        &server.db.pool,
-        "reader",
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    crate::support::server::applied(&server.app, async {
+        keys::revoke(
+            &server.db.pool,
+            "reader",
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
 
     let arguments = serde_json::json!({}).as_object().unwrap().clone();
     // Bounded: if the client retried a 401 instead of failing, the test
@@ -323,7 +315,7 @@ async fn export_gives_a_reachable_catalog_as_a_tarball() {
     assert_eq!(response.headers()["content-type"], "application/gzip");
     assert_eq!(
         response.headers()["content-disposition"],
-        "attachment; filename=\"pg.tar.gz\""
+        "attachment; filename=\"untitled-catalog-pg.tar.gz\""
     );
     let bytes = response.bytes().await.unwrap();
     let exported = okf_mcp::archive::read_tarball(&bytes[..], 1 << 20).unwrap();
@@ -333,9 +325,12 @@ async fn export_gives_a_reachable_catalog_as_a_tarball() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn import_needs_admin_refuses_a_full_catalog_without_replace_and_is_read_at_once() {
+async fn import_needs_write_refuses_a_full_catalog_without_replace_and_is_read_at_once() {
     let server = TestServer::start(two_catalogs(), Config::default()).await;
     let reader = server.key("reader", Access::Read, &[], None).await;
+    // Import needs `write` on the catalog (issue #260), within the grants.
+    let writer = server.key("writer", Access::Write, &["work"], None).await;
+    let stranger = server.key("stranger", Access::Write, &["pg"], None).await;
     let admin = server.key("admin", Access::Admin, &[], Some("work")).await;
     let tarball = get_export(&server, "pg", &admin)
         .await
@@ -347,13 +342,16 @@ async fn import_needs_admin_refuses_a_full_catalog_without_replace_and_is_read_a
     let as_reader = post_import(&server, "work", &reader, "", tarball.clone())
         .await
         .status();
+    let elsewhere = post_import(&server, "work", &stranger, "", tarball.clone())
+        .await
+        .status();
     let unknown = post_import(&server, "nope", &admin, "", tarball.clone())
         .await
         .status();
-    let first = post_import(&server, "work", &admin, "", tarball.clone()).await;
+    let first = post_import(&server, "work", &writer, "", tarball.clone()).await;
     let first_status = first.status();
     let report: serde_json::Value = first.json().await.unwrap();
-    let again = post_import(&server, "work", &admin, "", tarball.clone()).await;
+    let again = post_import(&server, "work", &writer, "", tarball.clone()).await;
     let again_status = again.status();
     let conflict: serde_json::Value = again.json().await.unwrap();
     let replaced: serde_json::Value =
@@ -370,8 +368,9 @@ async fn import_needs_admin_refuses_a_full_catalog_without_replace_and_is_read_a
     let concept = call(&client, "get_concept", serde_json::json!({"path": "a"})).await;
 
     assert_eq!(as_reader, 403);
+    assert_eq!(elsewhere, 404, "a writer outside its grants");
     assert_eq!(unknown, 404);
-    assert_eq!(first_status, 200);
+    assert_eq!(first_status, 200, "a writer imports");
     assert_eq!(report["added"], serde_json::json!(["a.md", "index.md"]));
     assert_eq!(again_status, 409);
     assert!(conflict["message"]
@@ -401,74 +400,12 @@ async fn an_import_larger_than_max_import_bytes_is_refused() {
     assert_eq!(status, 413);
 }
 
-const INITIALIZED: &str = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
-
-/// Opens an MCP session with `key`.
-///
-/// # Returns
-/// The `Mcp-Session-Id` the server issued.
-async fn open_session(server: &TestServer, key: &str) -> String {
-    let response = reqwest::Client::new()
-        .post(server.mcp_url())
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .bearer_auth(key)
-        .body(INITIALIZE)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    response
-        .headers()
-        .get("mcp-session-id")
-        .expect("a session id")
-        .to_str()
-        .unwrap()
-        .to_string()
-}
-
-/// Posts `notifications/initialized` on `session` with `key`.
-///
-/// # Returns
-/// The status: 202 when rmcp accepts it.
-async fn notify_on(server: &TestServer, key: &str, session: &str) -> reqwest::StatusCode {
-    reqwest::Client::new()
-        .post(server.mcp_url())
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .header("mcp-session-id", session)
-        .header("mcp-protocol-version", "2025-11-25")
-        .bearer_auth(key)
-        .body(INITIALIZED)
-        .send()
-        .await
-        .unwrap()
-        .status()
-}
-
-/// Opens `session`'s event stream (`GET /mcp`) with `key`.
-///
-/// # Returns
-/// The status (the body, a stream, is never read).
-async fn stream_on(server: &TestServer, key: &str, session: &str) -> reqwest::StatusCode {
-    reqwest::Client::new()
-        .get(server.mcp_url())
-        .header("accept", "text/event-stream")
-        .header("mcp-session-id", session)
-        .header("mcp-protocol-version", "2025-11-25")
-        .bearer_auth(key)
-        .send()
-        .await
-        .unwrap()
-        .status()
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn a_legacy_session_request_reply_has_no_empty_priming_event() {
     let server = TestServer::start(pg(), Config::default()).await;
     let key = server.key("reader", Access::Read, &[], None).await;
-    let session = open_session(&server, &key).await;
-    assert_eq!(notify_on(&server, &key, &session).await, 202);
+    let session = open_session(&server.mcp_url(), &key).await;
+    assert_eq!(notify_on(&server.mcp_url(), &key, &session).await, 202);
 
     let response = reqwest::Client::new()
         .post(server.mcp_url())
@@ -495,19 +432,57 @@ async fn a_session_answers_only_the_key_that_opened_it() {
     let server = TestServer::start(pg(), Config::default()).await;
     let owner = server.key("owner", Access::Read, &[], Some("pg")).await;
     let intruder = server.key("intruder", Access::Read, &[], Some("pg")).await;
-    let session = open_session(&server, &owner).await;
+    let session = open_session(&server.mcp_url(), &owner).await;
 
-    let foreign_post = notify_on(&server, &intruder, &session).await;
-    let foreign_stream = stream_on(&server, &intruder, &session).await;
-    let unknown = notify_on(&server, &owner, "not-a-session").await;
-    let own = notify_on(&server, &owner, &session).await;
+    let foreign_post = notify_on(&server.mcp_url(), &intruder, &session).await;
+    let foreign_stream = stream_on(&server.mcp_url(), &intruder, &session).await;
+    let unknown = notify_on(&server.mcp_url(), &owner, "not-a-session").await;
+    let own = notify_on(&server.mcp_url(), &owner, &session).await;
     // The owner's stream is admitted, so the refusal above is the binding's,
     // not a refusal of every `GET` that names a session.
-    let own_stream = stream_on(&server, &owner, &session).await;
+    let own_stream = stream_on(&server.mcp_url(), &owner, &session).await;
 
     assert_eq!(foreign_post, 404);
     assert_eq!(foreign_stream, 404);
     assert_eq!(unknown, 404);
     assert_eq!(own, 202);
     assert_eq!(own_stream, 200);
+}
+
+/// Issue #666: `whoami` over a real session names the key's user with their
+/// label, the actor, the reach and the server's clock, and no key id or name.
+#[tokio::test(flavor = "multi_thread")]
+async fn whoami_names_the_user_the_reach_and_the_clock() {
+    let server = TestServer::start(two_catalogs(), Config::default()).await;
+    server.set_user_label("tester", "Test Person").await;
+    let key = server
+        .key("whoami-key", Access::Write, &["pg"], Some("pg"))
+        .await;
+    let client = server.client(&key, None).await.unwrap();
+
+    let before = chrono::Utc::now();
+    let result = call(&client, "whoami", serde_json::json!({})).await;
+    let me = structured(&result);
+
+    assert_eq!(me["user"], "tester");
+    assert_eq!(me["user_label"], "Test Person");
+    assert_eq!(me["actor"], "whoami-key");
+    assert_eq!(me["credential"], "api_key");
+    assert_eq!(me["client_name"], serde_json::Value::Null);
+    assert_eq!(me["access"], "write");
+    assert_eq!(me["all_catalogs"], false);
+    assert_eq!(
+        me["catalogs"],
+        serde_json::json!([{"name": "pg", "level": "write"}])
+    );
+    assert_eq!(me["default_catalog"], "pg");
+    let now = chrono::DateTime::parse_from_rfc3339(me["now"].as_str().unwrap()).unwrap();
+    assert!(
+        (now.with_timezone(&chrono::Utc) - before)
+            .num_seconds()
+            .abs()
+            < 60
+    );
+    let text = me.to_string();
+    assert!(!text.contains(&key), "the secret must not appear");
 }

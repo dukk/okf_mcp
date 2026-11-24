@@ -30,6 +30,7 @@ use crate::http::limits::ip_key;
 use crate::http::pages::{self, escape, safe_return_to};
 use crate::http::ui::CONTENT_SECURITY_POLICY;
 use crate::http::{timeout_layer, AppError};
+use crate::labels::user_label;
 use crate::mail::queue as mail_queue;
 use crate::mail::{self, Template, RESET_PATH, SETUP_PATH};
 use crate::store::email_tokens::{self, Purpose};
@@ -365,6 +366,7 @@ async fn sign_in_post(
         .sign_in_limits()
         .sign_in_per_ip
         .try_take(&ip_key(ip), Instant::now())
+        .await
     {
         app.metrics().rate_limited(Limiter::SignInPerIp);
         let mut view = sign_in_view(&app, return_to);
@@ -650,7 +652,15 @@ pub(crate) async fn notify_method_added(
         method: method.to_string(),
     };
     let mut savepoint = conn.begin().await?;
-    match mail_queue::enqueue_in(&mut savepoint, to, &template, app.clock().now()).await {
+    match mail_queue::enqueue_in(
+        &mut savepoint,
+        to,
+        &template,
+        app.clock().now(),
+        &app.config().auth.default_brand(),
+    )
+    .await
+    {
         Ok(()) => savepoint.commit().await?,
         Err(error) => {
             savepoint.rollback().await?;
@@ -727,7 +737,7 @@ async fn forgot_post(
     let now = Instant::now();
     let limits = app.sign_in_limits();
     let ip = client_ip(&parts, &app.config().auth);
-    if !limits.forgot_per_ip.try_take(&ip_key(ip), now) {
+    if !limits.forgot_per_ip.try_take(&ip_key(ip), now).await {
         app.metrics().rate_limited(Limiter::ForgotPerIp);
         return message_page(
             StatusCode::TOO_MANY_REQUESTS,
@@ -746,7 +756,7 @@ async fn forgot_post(
         // map holds short keys. Past the per-email limit the answer is the
         // same, so it never says whether the address is known. The work
         // runs after the answer for the same reason: its duration would.
-        if limits.forgot_per_email.try_take(&email, now) {
+        if limits.forgot_per_email.try_take(&email, now).await {
             let app = Arc::clone(&app);
             tokio::spawn(async move {
                 if let Err(error) = send_reset(&app, &email).await {
@@ -792,7 +802,14 @@ async fn send_reset(app: &App, email: &str) -> Result<(), OkfError> {
     };
     let link = mail::link(public_url, RESET_PATH, &issued.token);
     let template = Template::Reset { link };
-    mail_queue::enqueue(app.pool(), &issued.to, &template, app.clock().now()).await?;
+    mail_queue::enqueue(
+        app.pool(),
+        &issued.to,
+        &template,
+        app.clock().now(),
+        &app.config().auth.default_brand(),
+    )
+    .await?;
     tracing::info!(user = %issued.user.id, "password reset link queued");
     Ok(())
 }
@@ -910,7 +927,7 @@ async fn setup_page(State(app): State<Arc<App>>, Query(query): Query<TokenQuery>
         Ok(user) => setup_response(
             StatusCode::OK,
             &SetupView {
-                user: &user.name,
+                user: &user_label(&user.display_name, user.email.as_deref()),
                 token: &query.token,
                 return_to: &return_to,
                 error: None,
@@ -933,8 +950,52 @@ struct NewPasswordForm {
     return_to: Option<String>,
 }
 
-/// `POST /account/setup`: sets the password and signs in. The link is used
-/// only once the password passes, so a weak one can be retried.
+/// Where a successful first password setup sends the browser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterSetup<'a> {
+    /// The `onboarding_url` setting: an `https://` URL, usually on another
+    /// origin, so it is reached by a link on a welcome page, never a 303
+    /// (the setup form's `form-action 'self'` would block the redirect).
+    Guide(&'a str),
+    /// A same-origin path from `safe_return_to`, reached by a 303.
+    Return(&'a str),
+}
+
+/// Where a successful first password setup sends the browser: an OAuth
+/// authorization it was continuing (`/oauth/authorize?...`) always resumes;
+/// otherwise the `onboarding_url` setting (a getting-started guide) when one
+/// is set, else the console path it would have gone to anyway. The
+/// onboarding URL is the operator's own setting, checked as `https://` when
+/// stored, so `safe_return_to` stays limited to this origin's paths.
+///
+/// # Arguments
+/// * `return_to` - the form's destination, already through `safe_return_to`.
+/// * `onboarding_url` - the effective `onboarding_url` setting.
+///
+/// # Returns
+/// The destination, and so how to reach it.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: chooses one of its arguments, no I/O"
+    )
+)]
+fn after_setup<'a>(return_to: &'a str, onboarding_url: Option<&'a str>) -> AfterSetup<'a> {
+    match onboarding_url {
+        Some(url) if !return_to.starts_with(OAUTH_CONTINUATION) => AfterSetup::Guide(url),
+        _ => AfterSetup::Return(return_to),
+    }
+}
+
+/// The start of a `return_to` that continues an OAuth authorization (the
+/// one non-console destination `safe_return_to` keeps).
+const OAUTH_CONTINUATION: &str = "/oauth/authorize?";
+
+/// `POST /account/setup`: sets the password and signs in, then sends the
+/// browser where [`after_setup`] says: a 303 to a same-origin path, or a
+/// welcome page that links to the onboarding guide. The link is used only once the
+/// password passes, so a weak one can be retried.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn setup_post(
     State(app): State<Arc<App>>,
@@ -966,7 +1027,7 @@ async fn setup_post(
     };
     if let Err(problem) = check_new_password(&form.password, &form.confirm) {
         let view = SetupView {
-            user: &user.name,
+            user: &user_label(&user.display_name, user.email.as_deref()),
             token: &form.token,
             return_to: &return_to,
             error: Some(&problem),
@@ -984,8 +1045,49 @@ async fn setup_post(
     // `unwrap_or_default`: a setup link always starts a session; an empty
     // header map would only mean no cookie to send.
     let cookie = used.cookie.unwrap_or_default();
-    (cookie, Redirect::to(&return_to)).into_response()
+    let settings = app.settings();
+    match after_setup(&return_to, settings.onboarding_url.as_deref()) {
+        AfterSetup::Guide(url) => (cookie, welcome_page(url, &brand)).into_response(),
+        AfterSetup::Return(path) => (cookie, Redirect::to(path)).into_response(),
+    }
 }
+
+/// The answer to a setup that goes on to the onboarding guide: a welcome
+/// page the person clicks through, under the console CSP. It has no timer,
+/// no `<meta http-equiv="refresh">` and no form: a timed refresh would fail
+/// WCAG 2.2.1, and a link click is not a form submission, so the setup
+/// form's `form-action 'self'` cannot block it.
+///
+/// # Arguments
+/// * `url` - the `onboarding_url` setting.
+/// * `brand` - the product name and support contact.
+///
+/// # Returns
+/// A 200 page.
+#[tracing::instrument(level = "debug", skip_all)]
+fn welcome_page(url: &str, brand: &Brand) -> Response {
+    // `role="button"` makes Pico style the link as its primary button, so
+    // no inline style (the CSP forbids it) and no new CSS is needed.
+    let body = format!(
+        r#"        <h1 id="setup-welcome">Your account is ready</h1>
+        <p>Thanks for joining {product}. You're signed in.</p>
+        <p><a id="setup-guide" role="button" href="{url}">Open the quick start guide</a></p>
+        <p class="muted">or go to <a id="setup-console" href="{console}">your console</a></p>"#,
+        product = escape(&brand.product_name),
+        url = escape(url),
+        console = CONSOLE_PATH,
+    );
+    pages::page(
+        StatusCode::OK,
+        "Your account is ready",
+        &body,
+        CONTENT_SECURITY_POLICY,
+        brand,
+    )
+}
+
+/// The console, which the welcome page links to as the other way on.
+const CONSOLE_PATH: &str = "/ui/";
 
 /// Uses an emailed link and stores the new password it was for, in one
 /// transaction, so the link is used only if the password change commits:
@@ -1549,6 +1651,44 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn with_redis_two_replicas_share_one_per_address_budget() {
+        tokio::time::timeout(std::time::Duration::from_secs(180), async {
+            let (first, second, _redis) =
+                crate::mcp::testing::replica_pair(&[], crate::http::api::testing::login_config())
+                    .await;
+            let mut browser = Browser::default();
+            let form = || {
+                Payload::Form(vec![
+                    ("email", "nobody@example.com".to_string()),
+                    ("password", "whatever-password".to_string()),
+                ])
+            };
+            // 30 attempts from one address, alternating between replicas.
+            for attempt in 0..30 {
+                let app = if attempt % 2 == 0 {
+                    &first.app
+                } else {
+                    &second
+                };
+                let reply = browser.send_to(app, "POST", "/signin", form()).await;
+                assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "attempt {attempt}");
+            }
+
+            let on_first = browser.send_to(&first.app, "POST", "/signin", form()).await;
+            let on_second = browser.send_to(&second, "POST", "/signin", form()).await;
+
+            assert_eq!(on_first.status, StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(
+                on_second.status,
+                StatusCode::TOO_MANY_REQUESTS,
+                "the budget is one across replicas, not one each"
+            );
+        })
+        .await
+        .expect("the shared sign-in limit test within 180 s");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn the_thirty_first_attempt_from_one_address_is_429() {
         let test = login_app().await;
         let mut browser = Browser::default();
@@ -1604,16 +1744,18 @@ mod tests {
     async fn turning_password_sign_in_off_hides_the_form_and_refuses_the_post() {
         let test = login_app().await;
         user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
-        settings::set(
-            test.app.pool(),
-            SettingKey::PasswordSignIn,
-            "false",
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("turn passwords off");
-        test.app.poll().await.expect("poll");
+        crate::invalidate::testing::applied(&test.app, async {
+            settings::set(
+                test.app.pool(),
+                SettingKey::PasswordSignIn,
+                "false",
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("turn passwords off");
+        })
+        .await;
         let mut browser = Browser::default();
 
         let page = browser.send(&test, "GET", "/signin", Payload::Empty).await;
@@ -1747,6 +1889,268 @@ mod tests {
         );
     }
 
+    /// The getting-started guide the onboarding tests configure.
+    const ONBOARDING: &str = "https://docs.example.com/start/first-15-minutes/";
+
+    /// [`login_app`] with `[auth] onboarding_url` set to [`ONBOARDING`].
+    async fn onboarding_app() -> TestApp {
+        let mut config = crate::http::api::testing::login_config();
+        config.auth.onboarding_url = Some(ONBOARDING.to_string());
+        app_with(&[("main", MAIN)], config).await
+    }
+
+    /// The `Location` of a setup answered with a 303, and nothing else: a
+    /// setup that goes to this origin's own path must redirect, not show a page.
+    fn redirect_target(reply: &Reply) -> String {
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.text());
+        reply.location().to_string()
+    }
+
+    /// The welcome page a setup with an onboarding guide answers with: a 200
+    /// with no `Location`, no refresh and no form, whose `#setup-guide` link is
+    /// the (unescaped) guide URL and whose `#setup-console` link is the console.
+    fn welcome_guide(reply: &Reply) -> String {
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+        assert_eq!(reply.location(), "", "a page, not a redirect");
+        let page = reply.text();
+        assert!(!page.contains("http-equiv"), "no refresh: {page}");
+        assert!(!page.contains("<form"), "no form: {page}");
+        assert!(page.contains("id=\"setup-welcome\""), "{page}");
+        assert!(page.contains("Your account is ready"), "{page}");
+        assert!(
+            page.contains("id=\"setup-console\" href=\"/ui/\""),
+            "{page}"
+        );
+        let marker = "id=\"setup-guide\" role=\"button\" href=\"";
+        let start = page.find(marker).expect("the guide link") + marker.len();
+        let end = start + page[start..].find('"').expect("closing quote");
+        page[start..end]
+            .replace("&quot;", "\"")
+            .replace("&amp;", "&")
+    }
+
+    /// A fresh setup link for `user_id`.
+    async fn setup_token(test: &TestApp, user_id: &str) -> String {
+        email_tokens::issue(
+            test.app.pool(),
+            user_id,
+            Purpose::Setup,
+            Duration::from_secs(3600),
+            Utc::now(),
+        )
+        .await
+        .expect("issue a setup token")
+    }
+
+    /// The setup form for `token`, with `password` twice and, if given,
+    /// `return_to`.
+    fn setup_form(token: &str, password: &str, return_to: Option<&str>) -> Payload {
+        let mut fields = vec![
+            ("token", token.to_string()),
+            ("password", password.to_string()),
+            ("confirm", password.to_string()),
+        ];
+        if let Some(return_to) = return_to {
+            fields.push(("return_to", return_to.to_string()));
+        }
+        Payload::Form(fields)
+    }
+
+    #[test]
+    fn after_setup_prefers_the_guide_but_keeps_an_oauth_continuation() {
+        let oauth = "/oauth/authorize?client_id=x&state=y";
+
+        let guide = AfterSetup::Guide(ONBOARDING);
+        assert_eq!(after_setup("/ui/", Some(ONBOARDING)), guide);
+        assert_eq!(after_setup("/ui/#/keys", Some(ONBOARDING)), guide);
+        assert_eq!(
+            after_setup(oauth, Some(ONBOARDING)),
+            AfterSetup::Return(oauth)
+        );
+        assert_eq!(after_setup("/ui/", None), AfterSetup::Return("/ui/"));
+        assert_eq!(after_setup(oauth, None), AfterSetup::Return(oauth));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_first_setup_welcomes_the_person_before_the_onboarding_guide_and_still_signs_in() {
+        let test = onboarding_app().await;
+        let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
+        let token = setup_token(&test, &alice.id).await;
+        let mut browser = Browser::default();
+
+        let done = browser
+            .send(
+                &test,
+                "POST",
+                "/account/setup",
+                setup_form(&token, PASSWORD, None),
+            )
+            .await;
+        let session = browser
+            .send(&test, "GET", "/api/v1/session", Payload::Empty)
+            .await;
+
+        // A welcome page, not a 303: the browser would block a redirect to
+        // another origin after the form's POST (`form-action 'self'`).
+        assert_eq!(welcome_guide(&done), ONBOARDING);
+        assert!(done.text().contains("Thanks for joining"));
+        assert!(done.set_cookie(COOKIE).is_some(), "{:?}", done.headers);
+        assert_eq!(session.status, StatusCode::OK);
+        assert_eq!(session.json()["user"], "alice");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_welcome_page_escapes_the_product_name_and_the_guide_url() {
+        let mut config = crate::http::api::testing::login_config();
+        config.auth.product_name = "<script>alert(1)</script> & Co".to_string();
+        config.auth.onboarding_url = Some("https://docs.example.com/s?a=1&b=\"2\"".to_string());
+        let test = app_with(&[("main", MAIN)], config).await;
+        let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
+        let token = setup_token(&test, &alice.id).await;
+
+        let done = Browser::default()
+            .send(
+                &test,
+                "POST",
+                "/account/setup",
+                setup_form(&token, PASSWORD, None),
+            )
+            .await;
+
+        let page = done.text();
+        assert!(
+            page.contains("Thanks for joining &lt;script&gt;alert(1)&lt;/script&gt; &amp; Co."),
+            "{page}"
+        );
+        assert!(!page.contains("<script>alert(1)"), "{page}");
+        assert_eq!(
+            welcome_guide(&done),
+            "https://docs.example.com/s?a=1&b=\"2\""
+        );
+        assert!(page.contains("a=1&amp;b=&quot;2&quot;"), "{page}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_setup_continuing_an_oauth_authorization_skips_the_guide() {
+        let test = onboarding_app().await;
+        let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
+        let token = setup_token(&test, &alice.id).await;
+        let authorize = "/oauth/authorize?client_id=x&state=y";
+
+        let done = Browser::default()
+            .send(
+                &test,
+                "POST",
+                "/account/setup",
+                setup_form(&token, PASSWORD, Some(authorize)),
+            )
+            .await;
+
+        assert_eq!(done.status, StatusCode::SEE_OTHER);
+        assert_eq!(done.location(), authorize);
+        assert!(done.set_cookie(COOKIE).is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hostile_return_to_on_setup_still_never_leaves_for_it() {
+        let test = onboarding_app().await;
+        let plain = login_app().await;
+        for (app, guide) in [(&test, true), (&plain, false)] {
+            let hostile_values = ["https://evil.example/", "//evil.example", "/\\evil.example"];
+            for (n, hostile) in hostile_values.into_iter().enumerate() {
+                let name = format!("alice{n}");
+                let email = format!("alice{n}@example.com");
+                let user = user_with_password(app, &name, &email, None).await;
+                let token = setup_token(app, &user.id).await;
+                let done = Browser::default()
+                    .send(
+                        app,
+                        "POST",
+                        "/account/setup",
+                        setup_form(&token, PASSWORD, Some(hostile)),
+                    )
+                    .await;
+                if guide {
+                    assert_eq!(welcome_guide(&done), ONBOARDING, "{hostile}");
+                } else {
+                    assert_eq!(redirect_target(&done), "/ui/", "{hostile}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_setup_does_not_redirect_to_the_guide() {
+        let test = onboarding_app().await;
+        let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
+        let token = setup_token(&test, &alice.id).await;
+
+        let weak = Browser::default()
+            .send(
+                &test,
+                "POST",
+                "/account/setup",
+                setup_form(&token, "short", None),
+            )
+            .await;
+        let unknown = Browser::default()
+            .send(
+                &test,
+                "POST",
+                "/account/setup",
+                setup_form("not-a-token", PASSWORD, None),
+            )
+            .await;
+
+        assert_eq!(weak.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(unknown.status, StatusCode::GONE);
+        for reply in [&weak, &unknown] {
+            assert_eq!(reply.location(), "");
+            assert_eq!(reply.set_cookie(COOKIE), None);
+            assert!(!reply.text().contains(ONBOARDING));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sign_in_and_reset_ignore_the_onboarding_guide() {
+        let test = onboarding_app().await;
+        let alice = user_with_password(&test, "alice", "alice@example.com", Some(PASSWORD)).await;
+        let reset = email_tokens::issue(
+            test.app.pool(),
+            &alice.id,
+            Purpose::Reset,
+            Duration::from_secs(3600),
+            Utc::now(),
+        )
+        .await
+        .expect("issue a reset token");
+
+        let signed_in = post_sign_in(
+            &mut Browser::default(),
+            &test,
+            "alice@example.com",
+            PASSWORD,
+        )
+        .await;
+        let changed = Browser::default()
+            .send(
+                &test,
+                "POST",
+                "/account/reset",
+                Payload::Form(vec![
+                    ("token", reset),
+                    ("password", "amber-quarry-signal-77".to_string()),
+                    ("confirm", "amber-quarry-signal-77".to_string()),
+                ]),
+            )
+            .await;
+
+        assert_eq!(signed_in.status, StatusCode::SEE_OTHER);
+        assert_eq!(signed_in.location(), "/ui/");
+        assert_eq!(changed.status, StatusCode::SEE_OTHER);
+        assert_eq!(changed.location(), "/signin?notice=reset");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_setup_link_sets_a_password_and_signs_in_once() {
         let test = login_app().await;
@@ -1811,6 +2215,55 @@ mod tests {
         ));
     }
 
+    /// The setup page's HTML for a user `alice` with `display_name` set.
+    async fn setup_page_for(display_name: &str) -> String {
+        let test = login_app().await;
+        let alice = user_with_password(&test, "alice", "alice@example.com", None).await;
+        sqlx::query("UPDATE users SET display_name = $1 WHERE name = 'alice'")
+            .bind(display_name)
+            .execute(test.app.pool())
+            .await
+            .expect("display name");
+        let token = email_tokens::issue(
+            test.app.pool(),
+            &alice.id,
+            Purpose::Setup,
+            Duration::from_secs(3600),
+            Utc::now(),
+        )
+        .await
+        .expect("issue a setup token");
+        let page = Browser::default()
+            .send(
+                &test,
+                "GET",
+                &format!("/account/setup?token={token}"),
+                Payload::Empty,
+            )
+            .await;
+        assert_eq!(page.status, StatusCode::OK);
+        page.text().to_string()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_setup_page_welcomes_the_display_name_and_escapes_it() {
+        let named = setup_page_for("Alice Example").await;
+        let hostile = setup_page_for("<b>x</b>").await;
+        let unset = setup_page_for("").await;
+
+        assert!(
+            named.contains("Welcome, <strong>Alice Example</strong>"),
+            "{named}"
+        );
+        assert!(
+            hostile.contains("Welcome, <strong>&lt;b&gt;x&lt;/b&gt;</strong>"),
+            "{hostile}"
+        );
+        assert!(!hostile.contains("<b>x</b>"), "{hostile}");
+        // No display name: the email's local part, never a slug as a name.
+        assert!(unset.contains("Welcome, <strong>alice</strong>"), "{unset}");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_weak_or_mismatched_password_keeps_the_setup_link_usable() {
         let test = login_app().await;
@@ -1824,6 +2277,10 @@ mod tests {
         )
         .await
         .expect("issue a setup token");
+        sqlx::query("UPDATE users SET display_name = 'Alice Example' WHERE name = 'alice'")
+            .execute(test.app.pool())
+            .await
+            .expect("display name");
         let post = |password: &str, confirm: &str| {
             Payload::Form(vec![
                 ("token", token.clone()),
@@ -1847,6 +2304,14 @@ mod tests {
         assert_eq!(short.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(mismatch.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(mismatch.text().contains("do not match"));
+        // The page drawn again after a refusal welcomes the label too.
+        assert!(
+            mismatch
+                .text()
+                .contains("Welcome, <strong>Alice Example</strong>"),
+            "{}",
+            mismatch.text()
+        );
         assert!(
             !mismatch.text().contains(PASSWORD),
             "never echoes a password"
@@ -2793,15 +3258,17 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn every_sign_in_page_names_the_product_and_shows_the_contact() {
         let test = login_app().await;
-        for (key, value) in [
-            (SettingKey::ProductName, "Acme Notes"),
-            (SettingKey::SupportContact, "https://example.com/help"),
-        ] {
-            settings::set(test.app.pool(), key, value, &AuditActor::cli(), Utc::now())
-                .await
-                .unwrap();
-        }
-        test.app.poll().await.unwrap();
+        crate::invalidate::testing::applied(&test.app, async {
+            for (key, value) in [
+                (SettingKey::ProductName, "Acme Notes"),
+                (SettingKey::SupportContact, "https://example.com/help"),
+            ] {
+                settings::set(test.app.pool(), key, value, &AuditActor::cli(), Utc::now())
+                    .await
+                    .unwrap();
+            }
+        })
+        .await;
 
         // The sign-in and forgot pages, a link page (an unknown link's
         // message page) and a refused form post's message page.

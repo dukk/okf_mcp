@@ -33,13 +33,13 @@ use indexmap::IndexMap;
 use crate::error::OkfError;
 use crate::okf::doc::Doc;
 use crate::okf::markdown::{
-    atx_heading, body_split, footnote_defs, footnote_refs, headings, Heading,
+    atx_heading, body_split, encode_link_path, footnote_defs, footnote_refs, headings, Heading,
 };
-use crate::okf::ops::log_index::collapse_whitespace;
+use crate::okf::ops::log_index::{check_new_folder, collapse_whitespace};
 use crate::okf::ops::relink::{rewrite_links, Moved, Redirect};
 use crate::okf::ops::replay::{insert_index_bullet_text, ReplayOp};
 use crate::okf::ops::{
-    blank_type, ensure_index, load_concept, refused, stamp_value, LoadedConcept, OpContext,
+    blank_type, ensure_folder_index, load_concept, refused, stamp_value, LoadedConcept, OpContext,
     OpOutcome,
 };
 use crate::okf::paths::{basename, dirname, join, new_concept_path};
@@ -73,6 +73,10 @@ pub struct Split<'a> {
     /// Parent source ids to copy (`sources`); empty to copy the ones the
     /// section's footnotes cite, else all of them.
     pub sources: &'a [String],
+    /// The summary of the new concept's new folder in its parent's index,
+    /// instead of the TODO placeholder (issue #668); refused when that
+    /// folder exists or is the root.
+    pub folder_summary: Option<&'a str>,
 }
 
 /// The note `okf.py` prints without `--description`.
@@ -108,6 +112,7 @@ struct Header<'a> {
 ///   [`resolve_concept`](crate::okf::paths::resolve_concept),
 ///   [`OkfError::Refused`] without frontmatter, [`OkfError::FrontmatterParse`].
 ///   For `to`, as [`new_concept_path`].
+/// - [`OkfError::Refused`] for a `folder_summary` whose folder exists.
 /// - [`OkfError::Refused`] with `okf.py`'s words: no such heading (listing
 ///   the headings), several matches (listing their slugs), a section with
 ///   no content, an unknown `--source` id, or generated frontmatter that
@@ -132,6 +137,9 @@ pub fn split_concept(
         path: parent, data, ..
     } = load_concept(workspace, split.concept)?;
     let (new, note) = new_concept_path(workspace, split.to)?;
+    if split.folder_summary.is_some() {
+        check_new_folder(workspace, dirname(&new))?;
+    }
     let mut outcome = OpOutcome::default();
     outcome
         .notes
@@ -215,8 +223,10 @@ pub fn split_concept(
         description: &description,
         status: py_truthy_str(data.get("status")),
     };
-    let intro =
-        format!("Split out of [{parent_title}](/{parent}); see it for the surrounding context.");
+    let intro = format!(
+        "Split out of [{parent_title}](/{}); see it for the surrounding context.",
+        encode_link_path(&parent)
+    );
     let foot = carried_footnotes(&defs, &used_moved, &body);
     let frontmatter = frontmatter_lines(&header, ctx, &chosen);
     let mut lines: Vec<&str> = frontmatter.iter().map(String::as_str).collect();
@@ -236,7 +246,7 @@ pub fn split_concept(
 
     // The parent: the heading stays, its content becomes the stub.
     let escaped = title.replace('[', "\\[").replace(']', "\\]");
-    let link = format!("[{escaped}](/{new})");
+    let link = format!("[{escaped}](/{})", encode_link_path(&new));
     let mut stub = match (split.stub.filter(|stub| !stub.is_empty()), given) {
         (Some(stub), _) => stub.to_string(),
         (None, Some(_)) => format!("{link}: {description}"),
@@ -270,7 +280,7 @@ pub fn split_concept(
     outcome.touch(&new);
 
     let folder = dirname(&new);
-    ensure_index(workspace, folder, &mut outcome)?;
+    ensure_folder_index(workspace, folder, split.folder_summary, &mut outcome)?;
     let redirect = Redirect {
         from: parent.clone(),
         to: new.clone(),
@@ -290,7 +300,7 @@ pub fn split_concept(
     // without checking the index lists it already (plan Decision 15).
     let bullet = format!(
         "* [{title}]({}) - {}",
-        basename(&new),
+        encode_link_path(basename(&new)),
         collapse_whitespace(&description)
     );
     let listed = insert_index_bullet_text(&workspace.read_text(&index_path)?, &bullet, None, false)
@@ -688,6 +698,7 @@ mod tests {
             description: None,
             stub: None,
             sources: &[],
+            folder_summary: None,
         }
     }
 
@@ -801,8 +812,8 @@ mod tests {
                  don't back",
                 "note: no description given; write a real one in the new concept and its \
                  index listing",
-                "created /splits/deeper/index.md; replace its TODO lines (and the parent's \
-                 listing)",
+                "created /splits/deeper/index.md; replace its TODO line, and describe the \
+                 folder with folder_summary, or with index on the folder's path (ending in /)",
             ]
         );
         assert_eq!(
@@ -1083,5 +1094,44 @@ mod tests {
                 "{path}"
             );
         }
+    }
+
+    #[test]
+    fn a_split_into_a_new_folder_describes_it_with_folder_summary() {
+        let workspace = MemWorkspace::from_files(FILES);
+        let args = Split {
+            folder_summary: Some("  Deeper\n things. "),
+            ..split("last-bit", "/splits/deeper/last.md")
+        };
+
+        let outcome = split_concept(&workspace, &ctx(), &args).unwrap();
+
+        assert!(
+            text(&workspace, "splits/index.md")
+                .ends_with("# Sections\n\n* [Deeper](deeper/) - Deeper things.\n"),
+            "{}",
+            text(&workspace, "splits/index.md")
+        );
+        assert!(outcome
+            .notes
+            .contains(&"created /splits/deeper/index.md; replace its TODO line".to_string()));
+    }
+
+    #[test]
+    fn a_split_refuses_a_folder_summary_for_an_existing_folder_before_writing() {
+        let workspace = MemWorkspace::from_files(FILES);
+        let args = Split {
+            folder_summary: Some("x"),
+            ..split("last-bit", "/splits/last.md")
+        };
+
+        let error = split_concept(&workspace, &ctx(), &args).unwrap_err();
+
+        assert!(
+            matches!(&error, OkfError::Refused { reason } if reason.contains("/splits/ exists")),
+            "{error:?}"
+        );
+        assert_eq!(text(&workspace, "splits/parent.md"), PARENT);
+        assert!(!workspace.is_file("splits/last.md"));
     }
 }

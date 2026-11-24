@@ -13,7 +13,7 @@ to be stated in the surrounding sentence.
 
 Everything here goes through the okf-mcp tools (`mcp__okf-mcp__*`), on
 the catalog the session names (a SessionStart hook names it; otherwise use
-the connection's write target from `list_catalogs`). The server is the
+the connection's write target from `list_catalogs`). Say the catalog's `label` to people; pass its id (`name`) as `catalog`. The server is the
 source of truth. Never read or write a git checkout of the catalog, or run
 its tooling: it is a frozen snapshot.
 

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>__PRODUCT__ Reader</title>
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#191919" media="(prefers-color-scheme: dark)">
+    <script src="/read/js/theme.js"></script>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="__PRODUCT__">
+    <link rel="manifest" href="/read/manifest.webmanifest">
+    <link rel="icon" href="/read/icons/icon-192.png" type="image/png">
+    <link rel="apple-touch-icon" href="/read/icons/apple-touch-icon.png">
+    <link rel="stylesheet" href="/ui/vendor/pico.min.css">
+    <link rel="stylesheet" href="/read/read.css">
+    <script src="/read/js/names.js"></script>
+    <script type="module" src="/read/js/main.js"></script>
+</head>
+<body>
+    <header class="top" id="top">
+        <a href="#/c" id="bar-catalog" class="catalog">
+            <span class="mark" id="bar-mark" aria-hidden="true">R</span>
+            <span class="label" id="bar-label">Reader</span>
+            <svg class="icon icon-sm" aria-hidden="true" focusable="false"><use href="/read/icons.svg#i-down"/></svg>
+        </a>
+        <span class="spacer"></span>
+        <a href="#/c" id="bar-search" class="iconbtn" aria-label="Search">
+            <svg class="icon" aria-hidden="true" focusable="false"><use href="/read/icons.svg#i-search"/></svg>
+        </a>
+    </header>
+    <p id="offline-banner" class="banner" role="status" hidden></p>
+    <main id="reader" class="reader" hidden></main>
+    <nav class="tabs" aria-label="Reader">
+        <a id="tab-home" href="#/"><svg class="icon" aria-hidden="true" focusable="false"><use href="/read/icons.svg#i-home"/></svg><span>Home</span></a>
+        <a id="tab-browse" href="#/c"><svg class="icon" aria-hidden="true" focusable="false"><use href="/read/icons.svg#i-folder"/></svg><span>Browse</span></a>
+        <a id="tab-search" href="#/c"><svg class="icon" aria-hidden="true" focusable="false"><use href="/read/icons.svg#i-search"/></svg><span>Search</span></a>
+        <a id="tab-me" href="#/me"><svg class="icon" aria-hidden="true" focusable="false"><use href="/read/icons.svg#i-user"/></svg><span>Account</span></a>
+    </nav>
+    <noscript>The reader needs JavaScript.</noscript>
+</body>
+</html>

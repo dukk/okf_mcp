@@ -16,7 +16,7 @@ use bytesize::ByteSize;
 use lettre::message::Mailbox;
 use serde::{Deserialize, Deserializer};
 
-use crate::store::catalogs;
+use crate::store::{catalogs, settings};
 
 use crate::error::OkfError;
 use crate::telemetry::config::TelemetryConfig;
@@ -32,11 +32,13 @@ pub const DEFAULT_LISTEN: SocketAddr =
 /// wrong behind an ingress, where the config must name the public host.
 pub const DEFAULT_ALLOWED_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
-/// How often the server looks for changes made outside it.
-pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(10);
-
 /// How long an MCP session may sit idle before it is closed.
 pub const DEFAULT_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+
+/// The default for `worker_shutdown_grace`: how long `serve` waits for the
+/// mail worker to finish the mail in hand once it is told to stop. It is the
+/// longest a provider may take to answer a send (30 s for Postmark and SES).
+pub const DEFAULT_WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 
 /// The default `get_concept` outline threshold: bodies over 20,000 characters.
 pub const DEFAULT_CONCEPT_OUTLINE_CHARS: usize = 20_000;
@@ -44,14 +46,53 @@ pub const DEFAULT_CONCEPT_OUTLINE_CHARS: usize = 20_000;
 /// The default database pool size.
 pub const DEFAULT_DATABASE_MAX_CONNECTIONS: u32 = 16;
 
-/// The default number of changeset overlays kept in memory.
-pub const DEFAULT_OVERLAY_CACHE_SIZE: usize = 64;
+/// The default `overlay_cache_bytes`: 256 MiB of estimated overlay memory.
+pub const DEFAULT_OVERLAY_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
-/// The default lifetime of an OAuth access token.
-pub const DEFAULT_ACCESS_TOKEN_TTL: Duration = Duration::from_secs(60 * 60);
+/// The default `catalog_cache_bytes`: 1 GiB of estimated snapshot memory.
+pub const DEFAULT_CATALOG_CACHE_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// The default `catalog_directory_entries`: catalog rows kept by name.
+pub const DEFAULT_CATALOG_DIRECTORY_ENTRIES: u64 = 100_000;
+
+/// The default `search_fanout_max`: the most catalogs `GET /api/v1/search`
+/// searches when the request names none (M18 spec Decision 8).
+pub const DEFAULT_SEARCH_FANOUT_MAX: u32 = 25;
+
+/// The default `catalog_ttl`: how long a cached catalog row is served.
+pub const DEFAULT_CATALOG_TTL: Duration = Duration::from_secs(10);
+
+/// The default `credential_cache_entries`: keys and OAuth grants kept, by
+/// hash and by id.
+pub const DEFAULT_CREDENTIAL_CACHE_ENTRIES: u64 = 100_000;
+
+/// The default `user_cache_entries`: users kept, by id.
+pub const DEFAULT_USER_CACHE_ENTRIES: u64 = 100_000;
+
+/// The default `credential_ttl`: how long a cached credential or user is
+/// served before it is read again.
+pub const DEFAULT_CREDENTIAL_TTL: Duration = Duration::from_secs(10);
+
+/// The default lifetime of an OAuth access token. Access tokens stay
+/// revocable at once (the access-token cache and its revocation counter),
+/// so a long one costs little; each refresh is a chance for a client's
+/// processes to race (`oauth.refresh_reuse_grace`).
+pub const DEFAULT_ACCESS_TOKEN_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// The default lifetime of an OAuth refresh token (restarted by each rotation).
 pub const DEFAULT_REFRESH_TOKEN_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// The default window in which a used refresh token rotates again instead of
+/// revoking its family.
+pub const DEFAULT_REFRESH_REUSE_GRACE: Duration = Duration::from_secs(60);
+
+/// The longest `oauth.refresh_reuse_grace` may be: past this, a copied
+/// refresh token used soon after the real one would go unnoticed for too long.
+pub const MAX_REFRESH_REUSE_GRACE: Duration = Duration::from_secs(10 * 60);
+
+/// The default idle period after which housekeeping revokes an OAuth grant
+/// that holds no live token.
+pub const DEFAULT_IDLE_GRANT_REVOKE_AFTER: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 /// The default cap on a sign-in code's `--expires`.
 pub const DEFAULT_CODE_MAX_EXPIRY: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -85,6 +126,17 @@ pub struct OAuthConfig {
     /// each rotation issues a new one, so the lifetime slides.
     #[serde(with = "humantime_serde")]
     pub refresh_token_ttl: Duration,
+    /// How long after its first use a refresh token presented again rotates
+    /// again instead of revoking its family (`"60s"`; `"0s"` turns it off).
+    /// Processes of one client that share a credential refresh at once;
+    /// only one can win, and the rest would otherwise sign it out.
+    #[serde(with = "humantime_serde")]
+    pub refresh_reuse_grace: Duration,
+    /// How long an OAuth grant may go without a token being issued for it
+    /// before housekeeping revokes it (`"30d"`). A grant that still holds
+    /// a live token is never revoked, whatever this says.
+    #[serde(with = "humantime_serde")]
+    pub idle_grant_revoke_after: Duration,
     /// The longest `okf-mcp oauth code create --expires` accepts (`"7d"`).
     #[serde(with = "humantime_serde")]
     pub code_max_expiry: Duration,
@@ -107,6 +159,8 @@ impl Default for OAuthConfig {
         Self {
             access_token_ttl: DEFAULT_ACCESS_TOKEN_TTL,
             refresh_token_ttl: DEFAULT_REFRESH_TOKEN_TTL,
+            refresh_reuse_grace: DEFAULT_REFRESH_REUSE_GRACE,
+            idle_grant_revoke_after: DEFAULT_IDLE_GRANT_REVOKE_AFTER,
             code_max_expiry: DEFAULT_CODE_MAX_EXPIRY,
             dcr_enabled: true,
             cimd_allow_private: false,
@@ -114,9 +168,10 @@ impl Default for OAuthConfig {
     }
 }
 
-/// The `[auth]` section: the defaults for the console's sign-in policy.
-/// The policy keys can be overridden at run time by `server_settings`
-/// (`store::settings`); `trusted_proxy_header` is config-only.
+/// The `[auth]` section: the defaults for the console's sign-in policy and
+/// branding. The policy and branding keys can be overridden at run time by
+/// `server_settings` (`store::settings`); `trusted_proxy_header` and `oidc`
+/// are config-only.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct AuthConfig {
@@ -145,7 +200,36 @@ pub struct AuthConfig {
     pub trusted_proxy_header: Option<String>,
     /// The OIDC providers (`[[auth.oidc]]`); none by default.
     pub oidc: Vec<OidcProviderConfig>,
+    /// The default product name people see in mail, on the server's pages,
+    /// in the console and in passkey prompts
+    /// ([`settings::DEFAULT_PRODUCT_NAME`] when unset).
+    pub product_name: String,
+    /// The default support contact (an email address or `https://` URL);
+    /// `None` shows no contact line.
+    pub support_contact: Option<String>,
+    /// The default `https://` URL of the console's "Send feedback" link;
+    /// `None` shows no link.
+    pub feedback_url: Option<String>,
+    /// The default `https://` URL of the console's "Documentation" link;
+    /// `None` shows no link.
+    pub docs_url: Option<String>,
+    /// The default `https://` URL a first password setup redirects to (a
+    /// getting-started guide); `None` goes to the console.
+    pub onboarding_url: Option<String>,
+    /// The name the MCP server reports in `initialize` (`serverInfo.name`;
+    /// [`DEFAULT_MCP_SERVER_NAME`] when unset). Config-only: it is an
+    /// identifier, not display text (`serverInfo.title` is the product
+    /// name). 1 to [`MAX_MCP_SERVER_NAME_CHARS`] of ASCII letters, digits,
+    /// `-`, `_` and `.`.
+    pub mcp_server_name: String,
 }
+
+/// The MCP server's reported name with no `[auth] mcp_server_name`: this
+/// crate's name, read at compile time.
+pub const DEFAULT_MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
+
+/// The longest `[auth] mcp_server_name`, in characters.
+pub const MAX_MCP_SERVER_NAME_CHARS: usize = 64;
 
 /// One `[[auth.oidc]]` provider (spec "OIDC"). The client secret is read
 /// from the environment variable `client_secret_env` at start-up, never
@@ -219,6 +303,12 @@ impl Default for AuthConfig {
             reset_link_ttl: DEFAULT_RESET_LINK_TTL,
             trusted_proxy_header: None,
             oidc: Vec::new(),
+            product_name: settings::DEFAULT_PRODUCT_NAME.to_string(),
+            support_contact: None,
+            feedback_url: None,
+            docs_url: None,
+            onboarding_url: None,
+            mcp_server_name: DEFAULT_MCP_SERVER_NAME.to_string(),
         }
     }
 }
@@ -231,8 +321,9 @@ impl AuthConfig {
     ///
     /// # Errors
     /// A zero or out-of-range duration, `max_keys_per_user` above
-    /// [`MAX_KEYS_PER_USER_LIMIT`], or a `trusted_proxy_header` that is not
-    /// an HTTP header name.
+    /// [`MAX_KEYS_PER_USER_LIMIT`], a `trusted_proxy_header` that is not
+    /// an HTTP header name, a malformed `mcp_server_name`, or a branding
+    /// default the matching setting would refuse.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -269,7 +360,41 @@ impl AuthConfig {
                 ));
             }
         }
-        Ok(())
+        let name = &self.mcp_server_name;
+        let well_formed = name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        if name.is_empty() || name.len() > MAX_MCP_SERVER_NAME_CHARS || !well_formed {
+            return Err(format!(
+                "auth.mcp_server_name takes 1 to {MAX_MCP_SERVER_NAME_CHARS} ASCII letters, \
+                 digits, '-', '_' and '.', not {name:?}"
+            ));
+        }
+        // The same checks `okf-mcp settings set` applies, so a default the
+        // file gives is one the Settings page could have stored.
+        settings::check_branding_defaults(self).map_err(|problem| format!("auth.{problem}"))
+    }
+
+    /// The branding this file gives: what people see where no setting
+    /// overrides it. The product name is trimmed, as a stored one is.
+    ///
+    /// # Returns
+    /// The default product name, support contact, feedback URL and
+    /// documentation URL.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
+    pub fn default_brand(&self) -> settings::Brand {
+        settings::Brand {
+            product_name: self.product_name.trim().to_string(),
+            support_contact: self.support_contact.clone(),
+            feedback_url: self.feedback_url.clone(),
+            docs_url: self.docs_url.clone(),
+        }
     }
 }
 
@@ -448,11 +573,13 @@ pub struct MailConfig {
     pub provider: MailProvider,
     /// The From address (`"okf <okf@example.com>"`).
     pub from: String,
-    /// Whether `serve` runs a mail worker. Off for a replica that should only
-    /// enqueue, and in the test servers (Decision 19). The worker uses a pool
-    /// of its own, up to 4 connections (one of them held by LISTEN), beside
-    /// `database_max_connections`.
-    pub worker: bool,
+    /// Deprecated and ignored: every `serve` runs the mail worker, so a
+    /// Deployment of several replicas needs no per-pod mail setting (issue
+    /// #458). The key still parses, so a configuration that has it keeps
+    /// starting; [`Config::deprecation_warnings`] names it. The worker's
+    /// pool is shared with the housekeeping worker: up to 3 connections
+    /// beside `database_max_connections`.
+    pub worker: Option<bool>,
     /// The SMTP relay, for `provider = "smtp"`.
     pub smtp: Option<SmtpConfig>,
     /// Postmark, for `provider = "postmark"`.
@@ -473,7 +600,7 @@ impl Default for MailConfig {
         Self {
             provider: MailProvider::Log,
             from: DEFAULT_MAIL_FROM.to_string(),
-            worker: true,
+            worker: None,
             smtp: None,
             postmark: None,
             ses: None,
@@ -564,6 +691,296 @@ impl MailConfig {
     }
 }
 
+/// The default `[feedback] max_per_hour`: submissions one credential may
+/// make in any hour.
+pub const DEFAULT_FEEDBACK_MAX_PER_HOUR: u32 = 10;
+
+/// The most `[feedback] max_per_hour` may be set to.
+pub const MAX_FEEDBACK_MAX_PER_HOUR: u32 = 1000;
+
+/// The default `[feedback] retention`: how long forwarded feedback is kept.
+pub const DEFAULT_FEEDBACK_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// The shortest `[feedback] retention`: one day, longer than the hour the
+/// rate limit counts back over, so pruning never hides a recent submission.
+pub const MIN_FEEDBACK_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The longest `[feedback] retention`: ten years.
+pub const MAX_FEEDBACK_RETENTION: Duration = Duration::from_secs(10 * 366 * 24 * 60 * 60);
+
+/// The longest Forminit form id accepted, in bytes.
+pub const MAX_FORMINIT_FORM_ID_BYTES: usize = 64;
+
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "serde default for a config key, read before the subscriber exists"
+    )
+)]
+fn default_feedback_max_per_hour() -> u32 {
+    DEFAULT_FEEDBACK_MAX_PER_HOUR
+}
+
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "serde default for a config key, read before the subscriber exists"
+    )
+)]
+fn default_feedback_retention() -> Duration {
+    DEFAULT_FEEDBACK_RETENTION
+}
+
+/// Is `name` usable as an environment variable's name: one or more ASCII
+/// letters, digits and `_`?
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "config check run once at start-up, like `Config::validate`"
+    )
+)]
+fn is_env_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+/// The `[feedback]` table (issue #674). Absent: `send_feedback` is not
+/// offered and nothing is sent anywhere. Present: the tool queues each
+/// submission and a worker forwards it to the operator's Forminit form,
+/// `https://forminit.com/f/<forminit_form_id>`.
+// `deny_unknown_fields`: a misspelt key (or an `api_key = ...` that would put
+// the key in the file) is a parse error instead of being ignored.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeedbackConfig {
+    /// The Forminit form's id: the last segment of its endpoint URL. Not a
+    /// secret. 1 to 64 ASCII letters, digits, `-` and `_`, so it can only
+    /// ever name a path segment under `https://forminit.com/f/`.
+    pub forminit_form_id: String,
+    /// The environment variable holding the form's API key (sent as
+    /// `X-API-KEY`), if any. Without a key Forminit accepts one submission
+    /// per 5 seconds per address; with one, 5 per second.
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    /// Whether `serve` runs the feedback worker (default `true`). With
+    /// several replicas, set it on exactly one, as `[mail] worker`.
+    #[serde(default = "default_true")]
+    pub worker: bool,
+    /// Submissions one credential may make in any hour (default 10).
+    #[serde(default = "default_feedback_max_per_hour")]
+    pub max_per_hour: u32,
+    /// How long forwarded (`sent`) feedback is kept before housekeeping
+    /// deletes it (default `"30d"`, at least `"1d"`).
+    #[serde(default = "default_feedback_retention", with = "humantime_serde")]
+    pub retention: Duration,
+    /// Test only: the origin the form's URL is built on instead of
+    /// `https://forminit.com` (a mock server). Not readable from TOML, and
+    /// not compiled outside tests.
+    #[cfg(test)]
+    #[serde(skip)]
+    pub base_url_for_tests: Option<String>,
+}
+
+impl FeedbackConfig {
+    /// A `[feedback]` table for `form_id` with every other key at its
+    /// default.
+    ///
+    /// # Arguments
+    /// * `form_id` - the Forminit form id.
+    ///
+    /// # Returns
+    /// The table.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "runs before the subscriber exists (configuration, builder or start-up), so a span would be recorded nowhere"
+        )
+    )]
+    #[must_use]
+    pub fn for_form(form_id: &str) -> Self {
+        Self {
+            forminit_form_id: form_id.to_string(),
+            api_key_env: None,
+            worker: true,
+            max_per_hour: DEFAULT_FEEDBACK_MAX_PER_HOUR,
+            retention: DEFAULT_FEEDBACK_RETENTION,
+            #[cfg(test)]
+            base_url_for_tests: None,
+        }
+    }
+
+    /// Checks what serde cannot.
+    ///
+    /// # Returns
+    /// `Ok(())` when the table is usable.
+    ///
+    /// # Errors
+    /// A message naming the bad key: a `forminit_form_id` that is empty,
+    /// over 64 bytes or holds a character outside `[A-Za-z0-9_-]` (so it can
+    /// never change the URL's host or path); an `api_key_env` that is not a
+    /// variable name; a `max_per_hour` of 0 or over 1000; a `retention`
+    /// under a day or over ten years.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "config check run once at start-up, like `Config::validate`"
+        )
+    )]
+    pub fn validate(&self) -> Result<(), String> {
+        if !is_forminit_form_id(&self.forminit_form_id) {
+            return Err(format!(
+                "feedback.forminit_form_id must be 1 to {MAX_FORMINIT_FORM_ID_BYTES} of A-Z, a-z, 0-9, - and _"
+            ));
+        }
+        if self
+            .api_key_env
+            .as_deref()
+            .is_some_and(|name| !is_env_name(name))
+        {
+            return Err(
+                "feedback.api_key_env must name an environment variable (letters, digits and _)"
+                    .to_string(),
+            );
+        }
+        if self.max_per_hour == 0 || self.max_per_hour > MAX_FEEDBACK_MAX_PER_HOUR {
+            return Err(format!(
+                "feedback.max_per_hour must be 1 to {MAX_FEEDBACK_MAX_PER_HOUR}"
+            ));
+        }
+        if self.retention < MIN_FEEDBACK_RETENTION || self.retention > MAX_FEEDBACK_RETENTION {
+            return Err(
+                "feedback.retention must be at least 1 day and at most 10 years".to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Is `id` a usable Forminit form id: 1 to [`MAX_FORMINIT_FORM_ID_BYTES`]
+/// ASCII letters, digits, `-` and `_`? Nothing else can appear, so the id
+/// is one path segment and can never add a `/`, `?`, `#`, `@` or `..`.
+///
+/// # Arguments
+/// * `id` - the configured id.
+///
+/// # Returns
+/// Whether it is acceptable.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "config check run once at start-up, like `Config::validate`"
+    )
+)]
+#[must_use]
+pub fn is_forminit_form_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_FORMINIT_FORM_ID_BYTES
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+/// The longest `[redis] key_prefix` accepted, in bytes.
+const MAX_REDIS_KEY_PREFIX_BYTES: usize = 64;
+
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "serde default for a config key, read before the subscriber exists"
+    )
+)]
+fn default_key_prefix() -> String {
+    "okf:".to_string()
+}
+
+/// Which Redis client `[redis]` uses (spec Decision 20).
+// `rename_all = "lowercase"` makes the TOML spelling `"standalone"` or
+// `"cluster"`; anything else is a parse error (Python: an Enum lookup).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RedisMode {
+    /// One Redis or Valkey primary (`ConnectionManager`).
+    #[default]
+    Standalone,
+    /// A cluster, including ElastiCache Serverless (`ClusterClient`).
+    Cluster,
+}
+
+/// The `[redis]` table (spec Decision 1). Absent: every short-lived state stays
+/// in memory and one replica is required. Present: `serve` keeps it in Redis.
+// `deny_unknown_fields` makes a misspelt key (or a `url = ...` that would put a
+// password in the file) a parse error instead of being ignored silently.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedisConfig {
+    /// The environment variable holding the Redis URL (`redis://` or
+    /// `rediss://`; it may carry a password, so it never goes in the file).
+    pub url_env: String,
+    /// Prepended to every key and channel, so one Redis can serve several
+    /// deployments. Default `"okf:"`.
+    #[serde(default = "default_key_prefix")]
+    pub key_prefix: String,
+    /// `"standalone"` (default) or `"cluster"` (ElastiCache Serverless and
+    /// other clusters). Every key and channel carries one hash tag in both
+    /// modes (spec Decision 20).
+    #[serde(default)]
+    pub mode: RedisMode,
+}
+
+impl RedisConfig {
+    /// Checks the variable name and the key prefix.
+    ///
+    /// # Returns
+    /// `Ok(())` when both are usable.
+    ///
+    /// # Errors
+    /// A message naming the bad key: `url_env` that is empty or has a
+    /// character outside `[A-Za-z0-9_]`; `key_prefix` that is empty, over 64
+    /// bytes, or holds whitespace, a control character or a brace (the prefix
+    /// goes inside the hash tag `{<prefix>}`).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "config check run once at start-up, like `Config::validate`"
+        )
+    )]
+    pub fn validate(&self) -> Result<(), String> {
+        if self.url_env.is_empty()
+            || !self
+                .url_env
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err(
+                "redis.url_env must name an environment variable (letters, digits and _)"
+                    .to_string(),
+            );
+        }
+        let prefix = &self.key_prefix;
+        if prefix.is_empty()
+            || prefix.len() > MAX_REDIS_KEY_PREFIX_BYTES
+            || prefix
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control() || c == '{' || c == '}')
+        {
+            return Err(format!(
+                "redis.key_prefix must be 1 to {MAX_REDIS_KEY_PREFIX_BYTES} bytes with no whitespace, control characters or braces"
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Settings read from the configuration file.
 // `#[serde(default)]` fills every missing key from `Default::default()`.
 // serde ignores keys the struct does not name unless told otherwise
@@ -587,16 +1004,27 @@ pub struct Config {
     /// The catalog a key with no default of its own reads and writes (design
     /// "Catalog selection", step 4).
     pub default_catalog: Option<String>,
-    /// How often to look for imports, catalog and key changes made by the
-    /// subcommands (`"10s"`).
+    /// Deprecated and ignored (milestone 18, spec Decision 18): the server no
+    /// longer polls. Changes reach every replica through the change feed,
+    /// with `catalog_ttl` and `credential_ttl` as the backstop. The key
+    /// still parses (`"10s"`), so a configuration that has it keeps
+    /// starting; [`Config::deprecation_warnings`] names it.
     // `with = "humantime_serde"` parses the field through that module's
     // functions instead of `Duration`'s own serde impl (which wants
-    // `{secs, nanos}`).
+    // `{secs, nanos}`); it reads `Option<Duration>` too, a missing key
+    // being `None`.
     #[serde(with = "humantime_serde")]
-    pub poll_interval: Duration,
+    pub poll_interval: Option<Duration>,
     /// How long an MCP session may be idle before it is closed (`"2h"`).
     #[serde(with = "humantime_serde")]
     pub session_idle_timeout: Duration,
+    /// How long `serve` waits, once told to stop, for the mail worker to
+    /// finish the mail in hand (`"30s"`). Match the pod's
+    /// `terminationGracePeriodSeconds` to it, plus a few seconds. Past it
+    /// `serve` logs and returns, and apalis hands the unfinished job to
+    /// another replica after the orphan timeout.
+    #[serde(with = "humantime_serde")]
+    pub worker_shutdown_grace: Duration,
     /// The NTP server the clock check measures against (`host`, `host:port`
     /// or an address); none means no check (design "Time").
     pub time_server: Option<String>,
@@ -609,12 +1037,49 @@ pub struct Config {
     /// The most database connections one process opens (every command,
     /// `serve` included). A write holds one for its transaction, and a read
     /// that builds an overlay holds one to read the changeset's entries.
-    /// `serve`'s mail worker does not count against it: it opens up to
-    /// `mail::queue::WORKER_POOL_SIZE` (4) connections of its own.
+    /// `serve`'s workers do not count against it: they share one pool of up
+    /// to `mail::queue::WORKER_POOL_SIZE` (3) connections of their own.
     pub database_max_connections: u32,
-    /// The most changeset overlays kept in memory; past it, the least
-    /// recently used one is dropped (and rebuilt if read again).
-    pub overlay_cache_size: usize,
+    /// The most memory the changeset overlays held in this process may take,
+    /// estimated as a catalog snapshot's is, over the overlay's own files
+    /// (`"256MiB"`, or a number of bytes). Past it, the least recently used
+    /// is dropped (and rebuilt if read again); an overlay larger than the
+    /// whole budget is served but not kept.
+    pub overlay_cache_bytes: ByteSize,
+    /// Deprecated and ignored: use `overlay_cache_bytes`. Still read so an
+    /// old configuration starts (`deprecation_warnings` names it).
+    pub overlay_cache_size: Option<usize>,
+    /// The most memory the catalog snapshots held in this process may take,
+    /// as estimated from their stored size (`"1GiB"`, or a number of bytes).
+    /// Catalogs load on first use; past the budget, the least recently used
+    /// is dropped and loaded again when next read. A catalog larger than the
+    /// whole budget is still served, but not kept.
+    pub catalog_cache_bytes: ByteSize,
+    /// The most catalog rows the catalog directory keeps, by name (`100000`).
+    /// A row is a few hundred bytes, so this bounds the directory at tens of
+    /// megabytes however many catalogs exist.
+    pub catalog_directory_entries: u64,
+    /// How long the directory serves a catalog row before it reads it again
+    /// (`"10s"`). Invalidations drop a row sooner; this is the backstop for
+    /// one that is lost.
+    #[serde(with = "humantime_serde")]
+    pub catalog_ttl: Duration,
+    /// The most keys and OAuth grants the credential cache keeps (`100000`
+    /// each, by hash and by id). Only live credentials that were used are
+    /// kept; an unknown one is never cached.
+    pub credential_cache_entries: u64,
+    /// The most users the user cache keeps, by id (`100000`): each one's
+    /// admin flag, ceiling, teams, entitlements and live unlocks.
+    pub user_cache_entries: u64,
+    /// How long a cached credential or user is served before it is read
+    /// again (`"10s"`). Invalidations drop one sooner; this is the backstop
+    /// for one that is lost, and the bound on a revocation's reach then.
+    #[serde(with = "humantime_serde")]
+    pub credential_ttl: Duration,
+    /// The most catalogs `GET /api/v1/search` searches when the request
+    /// names none (`25`, from 1 to 999): a key that reaches more must name
+    /// them, so one request cannot search every catalog in the system.
+    pub search_fanout_max: u32,
     /// The externally visible origin (`"https://okf.example.com"`). Setting
     /// it turns OAuth on: it is the issuer, and `<public_url>/mcp` is the
     /// resource tokens are issued for. Its host must be in `allowed_hosts`.
@@ -627,6 +1092,12 @@ pub struct Config {
     pub mail: MailConfig,
     /// Logs, traces and metrics (`[telemetry]`).
     pub telemetry: TelemetryConfig,
+    /// Shared state for several `serve` replicas (`[redis]`); `None` keeps
+    /// everything in memory.
+    pub redis: Option<RedisConfig>,
+    /// The `send_feedback` tool's destination (`[feedback]`); `None` turns
+    /// the tool off.
+    pub feedback: Option<FeedbackConfig>,
 }
 
 impl Default for Config {
@@ -645,18 +1116,29 @@ impl Default for Config {
             // `&str` into an owned `String`) without copying it a second time.
             allowed_hosts: Vec::from(DEFAULT_ALLOWED_HOSTS.map(String::from)),
             default_catalog: None,
-            poll_interval: DEFAULT_POLL_INTERVAL,
+            poll_interval: None,
             session_idle_timeout: DEFAULT_SESSION_IDLE_TIMEOUT,
+            worker_shutdown_grace: DEFAULT_WORKER_SHUTDOWN_GRACE,
             time_server: None,
             maintenance_review_intervals: BTreeMap::new(),
             concept_outline_chars: DEFAULT_CONCEPT_OUTLINE_CHARS,
             database_max_connections: DEFAULT_DATABASE_MAX_CONNECTIONS,
-            overlay_cache_size: DEFAULT_OVERLAY_CACHE_SIZE,
+            overlay_cache_bytes: ByteSize::b(DEFAULT_OVERLAY_CACHE_BYTES),
+            overlay_cache_size: None,
+            catalog_cache_bytes: ByteSize::b(DEFAULT_CATALOG_CACHE_BYTES),
+            catalog_directory_entries: DEFAULT_CATALOG_DIRECTORY_ENTRIES,
+            catalog_ttl: DEFAULT_CATALOG_TTL,
+            credential_cache_entries: DEFAULT_CREDENTIAL_CACHE_ENTRIES,
+            user_cache_entries: DEFAULT_USER_CACHE_ENTRIES,
+            credential_ttl: DEFAULT_CREDENTIAL_TTL,
+            search_fanout_max: DEFAULT_SEARCH_FANOUT_MAX,
             public_url: None,
             oauth: OAuthConfig::default(),
             auth: AuthConfig::default(),
             mail: MailConfig::default(),
             telemetry: TelemetryConfig::default(),
+            redis: None,
+            feedback: None,
         }
     }
 }
@@ -721,24 +1203,52 @@ impl Config {
         toml::from_str(text)
     }
 
+    /// Settings that are read but no longer do anything. `Config::load` runs
+    /// before the log subscriber exists, so it cannot log them; `serve` calls
+    /// this once the subscriber is up and logs each message as a warning.
+    ///
+    /// # Returns
+    /// One message per deprecated setting present in the file (empty when
+    /// there is none).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "pure check over the parsed settings, called once at start-up"
+        )
+    )]
+    pub fn deprecation_warnings(&self) -> Vec<&'static str> {
+        let mut warnings = Vec::new();
+        if self.mail.worker.is_some() {
+            warnings.push("mail.worker is deprecated and ignored: every serve runs the worker");
+        }
+        if self.poll_interval.is_some() {
+            warnings.push("poll_interval is deprecated and ignored");
+        }
+        if self.overlay_cache_size.is_some() {
+            warnings.push("overlay_cache_size is deprecated and ignored; set overlay_cache_bytes");
+        }
+        warnings
+    }
+
     /// Checks the values serde cannot: ones that would break the server.
     ///
     /// # Returns
     /// `Ok(())`, or the problem in words.
     ///
     /// # Errors
-    /// A zero `poll_interval` (tokio's interval panics on zero) or
-    /// `session_idle_timeout`, an empty `allowed_hosts` (which rmcp reads as
+    /// A zero `session_idle_timeout`, an empty `allowed_hosts` (which rmcp reads as
     /// "accept any `Host`"), or a blank entry in it (which no `Host` matches,
     /// so every request would get 403 with no hint why), or a blank
     /// `time_server` or one with surrounding whitespace (which the lookup
     /// would fail on every check, seen only as a `warn`), or a zero
-    /// `database_max_connections` or `overlay_cache_size`, a zero OAuth
+    /// `database_max_connections` or `overlay_cache_bytes`, a zero OAuth
     /// lifetime, an `[auth]` value out of range (see `AuthConfig`), a
     /// `[mail]` section that cannot send (see `MailConfig`), or a
     /// `public_url` that is not an `https` origin (`http` on
     /// a loopback host only) whose host `allowed_hosts` admits, or an
-    /// `[[auth.oidc]]` provider that cannot work (see `validate_oidc`).
+    /// `[[auth.oidc]]` provider that cannot work (see `validate_oidc`), or a
+    /// `[feedback]` table that cannot work (see `FeedbackConfig::validate`).
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -747,17 +1257,42 @@ impl Config {
         )
     )]
     pub fn validate(&self) -> Result<(), String> {
-        if self.poll_interval.is_zero() {
-            return Err("poll_interval must be more than zero".to_string());
-        }
         if self.session_idle_timeout.is_zero() {
             return Err("session_idle_timeout must be more than zero".to_string());
+        }
+        if self.worker_shutdown_grace.is_zero() {
+            return Err("worker_shutdown_grace must be more than zero".to_string());
         }
         if self.database_max_connections == 0 {
             return Err("database_max_connections must be more than zero".to_string());
         }
-        if self.overlay_cache_size == 0 {
-            return Err("overlay_cache_size must be more than zero".to_string());
+        if self.overlay_cache_bytes.as_u64() == 0 {
+            return Err("overlay_cache_bytes must be more than zero".to_string());
+        }
+        if self.catalog_cache_bytes.as_u64() == 0 {
+            return Err("catalog_cache_bytes must be more than zero".to_string());
+        }
+        if self.catalog_directory_entries == 0 {
+            return Err("catalog_directory_entries must be more than zero".to_string());
+        }
+        if self.catalog_ttl.is_zero() {
+            return Err("catalog_ttl must be more than zero".to_string());
+        }
+        if self.credential_cache_entries == 0 {
+            return Err("credential_cache_entries must be more than zero".to_string());
+        }
+        if self.user_cache_entries == 0 {
+            return Err("user_cache_entries must be more than zero".to_string());
+        }
+        if self.credential_ttl.is_zero() {
+            return Err("credential_ttl must be more than zero".to_string());
+        }
+        // The cap is checked with one listing page of `search_fanout_max + 1`
+        // rows, and a page holds at most `MAX_PAGE` (1000).
+        if self.search_fanout_max == 0
+            || self.search_fanout_max >= crate::cache::directory::MAX_PAGE
+        {
+            return Err("search_fanout_max must be from 1 to 999".to_string());
         }
         if self.allowed_hosts.is_empty() {
             return Err(
@@ -800,13 +1335,26 @@ impl Config {
         for (name, value) in [
             ("oauth.access_token_ttl", self.oauth.access_token_ttl),
             ("oauth.refresh_token_ttl", self.oauth.refresh_token_ttl),
+            (
+                "oauth.idle_grant_revoke_after",
+                self.oauth.idle_grant_revoke_after,
+            ),
             ("oauth.code_max_expiry", self.oauth.code_max_expiry),
         ] {
             check_auth_duration(name, value)?;
         }
+        if self.oauth.refresh_reuse_grace > MAX_REFRESH_REUSE_GRACE {
+            return Err("oauth.refresh_reuse_grace must be at most 10 minutes".to_string());
+        }
         self.auth.validate()?;
         self.mail.validate()?;
         self.telemetry.validate()?;
+        if let Some(redis) = &self.redis {
+            redis.validate()?;
+        }
+        if let Some(feedback) = &self.feedback {
+            feedback.validate()?;
+        }
         self.validate_metrics_listen()?;
         self.validate_oidc()?;
         self.validate_public_url()
@@ -1047,6 +1595,63 @@ fn is_loopback(host: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn redis_is_off_by_default_and_parses_with_defaults() {
+        assert_eq!(Config::default().redis, None);
+        let config = Config::from_toml("[redis]\nurl_env = \"OKF_REDIS_URL\"\n").unwrap();
+        let redis = config.redis.clone().expect("a [redis] table");
+        assert_eq!(redis.url_env, "OKF_REDIS_URL");
+        assert_eq!(redis.key_prefix, "okf:");
+        assert_eq!(redis.mode, RedisMode::Standalone);
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn redis_mode_parses_cluster_and_refuses_anything_else() {
+        let config = Config::from_toml("[redis]\nurl_env = \"X\"\nmode = \"cluster\"\n").unwrap();
+        assert_eq!(config.redis.expect("a table").mode, RedisMode::Cluster);
+        let config =
+            Config::from_toml("[redis]\nurl_env = \"X\"\nmode = \"standalone\"\n").unwrap();
+        assert_eq!(config.redis.expect("a table").mode, RedisMode::Standalone);
+        assert!(Config::from_toml("[redis]\nurl_env = \"X\"\nmode = \"sentinel\"\n").is_err());
+    }
+
+    #[test]
+    fn redis_rejects_unknown_keys_and_bad_values() {
+        assert!(Config::from_toml("[redis]\nurl_env = \"X\"\nurl = \"redis://h\"\n").is_err());
+        let long_prefix = format!(
+            "[redis]\nurl_env = \"X\"\nkey_prefix = \"{}\"\n",
+            "a".repeat(65)
+        );
+        for (toml, needle) in [
+            ("[redis]\nurl_env = \"\"\n".to_string(), "redis.url_env"),
+            (
+                "[redis]\nurl_env = \"HAS SPACE\"\n".to_string(),
+                "redis.url_env",
+            ),
+            (
+                "[redis]\nurl_env = \"X\"\nkey_prefix = \"\"\n".to_string(),
+                "redis.key_prefix",
+            ),
+            (
+                "[redis]\nurl_env = \"X\"\nkey_prefix = \"a b\"\n".to_string(),
+                "redis.key_prefix",
+            ),
+            (
+                "[redis]\nurl_env = \"X\"\nkey_prefix = \"a{b\"\n".to_string(),
+                "redis.key_prefix",
+            ),
+            (
+                "[redis]\nurl_env = \"X\"\nkey_prefix = \"a}\"\n".to_string(),
+                "redis.key_prefix",
+            ),
+            (long_prefix, "redis.key_prefix"),
+        ] {
+            let message = Config::from_toml(&toml).unwrap().validate().unwrap_err();
+            assert!(message.contains(needle), "{toml}: {message}");
+        }
+    }
     use super::*;
 
     #[test]
@@ -1074,14 +1679,22 @@ mod tests {
         assert_eq!(config.listen.to_string(), "0.0.0.0:8080");
         assert_eq!(config.allowed_hosts, ["localhost", "127.0.0.1", "::1"]);
         assert_eq!(config.default_catalog, None);
-        assert_eq!(config.poll_interval, Duration::from_secs(10));
+        assert_eq!(config.poll_interval, None);
         assert_eq!(
             config.session_idle_timeout,
             Duration::from_secs(2 * 60 * 60)
         );
         assert_eq!(config.concept_outline_chars, 20_000);
         assert_eq!(config.database_max_connections, 16);
-        assert_eq!(config.overlay_cache_size, 64);
+        assert_eq!(config.overlay_cache_bytes.as_u64(), 256 * 1024 * 1024);
+        assert_eq!(config.overlay_cache_size, None);
+        assert_eq!(config.catalog_cache_bytes.as_u64(), 1024 * 1024 * 1024);
+        assert_eq!(config.catalog_directory_entries, 100_000);
+        assert_eq!(config.catalog_ttl, Duration::from_secs(10));
+        assert_eq!(config.credential_cache_entries, 100_000);
+        assert_eq!(config.user_cache_entries, 100_000);
+        assert_eq!(config.credential_ttl, Duration::from_secs(10));
+        assert_eq!(config.search_fanout_max, 25);
     }
 
     #[test]
@@ -1095,7 +1708,7 @@ mod tests {
                     time_server = \"ntp.example\"\n\
                     concept_outline_chars = 500\n\
                     database_max_connections = 32\n\
-                    overlay_cache_size = 8\n\
+                    overlay_cache_bytes = \"8MiB\"\n\
                     a_later_key = true\n";
 
         let config = Config::from_toml(text).unwrap();
@@ -1104,12 +1717,12 @@ mod tests {
         assert_eq!(config.listen.to_string(), "127.0.0.1:9000");
         assert_eq!(config.allowed_hosts, ["okf-mcp.example"]);
         assert_eq!(config.default_catalog.as_deref(), Some("pg"));
-        assert_eq!(config.poll_interval, Duration::from_secs(90));
+        assert_eq!(config.poll_interval, Some(Duration::from_secs(90)));
         assert_eq!(config.session_idle_timeout, Duration::from_secs(30 * 60));
         assert_eq!(config.time_server.as_deref(), Some("ntp.example"));
         assert_eq!(config.concept_outline_chars, 500);
         assert_eq!(config.database_max_connections, 32);
-        assert_eq!(config.overlay_cache_size, 8);
+        assert_eq!(config.overlay_cache_bytes.as_u64(), 8 * 1024 * 1024);
     }
 
     #[test]
@@ -1142,7 +1755,7 @@ mod tests {
     fn a_bad_value_names_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("okf.toml");
-        std::fs::write(&path, "poll_interval = \"soon\"\n").unwrap();
+        std::fs::write(&path, "session_idle_timeout = \"soon\"\n").unwrap();
 
         let error = Config::load(Some(&path)).unwrap_err();
 
@@ -1154,11 +1767,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("okf.toml");
         for (text, needle) in [
-            ("poll_interval = \"0s\"\n", "poll_interval"),
             ("session_idle_timeout = \"0s\"\n", "session_idle_timeout"),
             ("allowed_hosts = []\n", "allowed_hosts"),
             ("database_max_connections = 0\n", "database_max_connections"),
-            ("overlay_cache_size = 0\n", "overlay_cache_size"),
+            ("overlay_cache_bytes = 0\n", "overlay_cache_bytes"),
+            ("catalog_cache_bytes = 0\n", "catalog_cache_bytes"),
+            (
+                "catalog_directory_entries = 0\n",
+                "catalog_directory_entries",
+            ),
+            ("catalog_ttl = \"0s\"\n", "catalog_ttl"),
+            ("credential_cache_entries = 0\n", "credential_cache_entries"),
+            ("user_cache_entries = 0\n", "user_cache_entries"),
+            ("credential_ttl = \"0s\"\n", "credential_ttl"),
+            ("search_fanout_max = 0\n", "search_fanout_max"),
+            (
+                "search_fanout_max = 1000\n",
+                "search_fanout_max must be from 1 to 999",
+            ),
             (
                 "allowed_hosts = [\"\"]\n",
                 "allowed_hosts has a blank entry",
@@ -1233,9 +1859,17 @@ mod tests {
         let config = Config::default();
 
         assert_eq!(config.public_url, None);
-        assert_eq!(config.oauth.access_token_ttl, Duration::from_secs(60 * 60));
+        assert_eq!(
+            config.oauth.access_token_ttl,
+            Duration::from_secs(24 * 60 * 60)
+        );
         assert_eq!(
             config.oauth.refresh_token_ttl,
+            Duration::from_secs(30 * 24 * 60 * 60)
+        );
+        assert_eq!(config.oauth.refresh_reuse_grace, Duration::from_secs(60));
+        assert_eq!(
+            config.oauth.idle_grant_revoke_after,
             Duration::from_secs(30 * 24 * 60 * 60)
         );
         assert_eq!(
@@ -1254,6 +1888,8 @@ mod tests {
                     [oauth]\n\
                     access_token_ttl = \"15m\"\n\
                     refresh_token_ttl = \"7d\"\n\
+                    refresh_reuse_grace = \"5s\"\n\
+                    idle_grant_revoke_after = \"60d\"\n\
                     code_max_expiry = \"2d\"\n\
                     dcr_enabled = false\n\
                     cimd_allow_private = true\n";
@@ -1268,6 +1904,11 @@ mod tests {
         assert_eq!(
             config.oauth.refresh_token_ttl,
             Duration::from_secs(7 * 24 * 60 * 60)
+        );
+        assert_eq!(config.oauth.refresh_reuse_grace, Duration::from_secs(5));
+        assert_eq!(
+            config.oauth.idle_grant_revoke_after,
+            Duration::from_secs(60 * 24 * 60 * 60)
         );
         assert_eq!(
             config.oauth.code_max_expiry,
@@ -1335,10 +1976,11 @@ mod tests {
     #[test]
     fn oauth_lifetimes_must_be_positive() {
         // Each closure is a plain `fn` pointer (it captures nothing), so the
-        // three share one type and fit in one array.
-        let changes: [fn(&mut OAuthConfig); 3] = [
+        // four share one type and fit in one array.
+        let changes: [fn(&mut OAuthConfig); 4] = [
             |oauth| oauth.access_token_ttl = Duration::ZERO,
             |oauth| oauth.refresh_token_ttl = Duration::ZERO,
+            |oauth| oauth.idle_grant_revoke_after = Duration::ZERO,
             |oauth| oauth.code_max_expiry = Duration::ZERO,
         ];
         for change in changes {
@@ -1349,6 +1991,22 @@ mod tests {
 
             assert!(error.contains("more than zero"), "{error}");
         }
+    }
+
+    /// Issue #884: zero turns the reuse grace window off; past ten minutes
+    /// a copied refresh token would go unnoticed too long.
+    #[test]
+    fn the_refresh_reuse_grace_may_be_zero_and_at_most_ten_minutes() {
+        let with = |grace: Duration| {
+            let mut config = Config::default();
+            config.oauth.refresh_reuse_grace = grace;
+            config.validate()
+        };
+
+        assert_eq!(with(Duration::ZERO), Ok(()));
+        assert_eq!(with(MAX_REFRESH_REUSE_GRACE), Ok(()));
+        let error = with(MAX_REFRESH_REUSE_GRACE + Duration::from_secs(1)).expect_err("refused");
+        assert!(error.contains("oauth.refresh_reuse_grace"), "{error}");
     }
 
     #[test]
@@ -1441,14 +2099,149 @@ mod tests {
     }
 
     #[test]
+    fn the_branding_defaults_read_from_the_auth_table() {
+        let text = "[auth]\n\
+                    product_name = \" Acme Notes \"\n\
+                    support_contact = \"help@example.com\"\n\
+                    feedback_url = \"https://example.com/feedback\"\n\
+                    docs_url = \"https://docs.example.com\"\n\
+                    onboarding_url = \"https://docs.example.com/start/\"\n";
+
+        let config = Config::from_toml(text).unwrap();
+
+        assert_eq!(config.validate(), Ok(()));
+        assert_eq!(
+            config.auth.default_brand(),
+            settings::Brand {
+                product_name: "Acme Notes".to_string(),
+                support_contact: Some("help@example.com".to_string()),
+                feedback_url: Some("https://example.com/feedback".to_string()),
+                docs_url: Some("https://docs.example.com".to_string()),
+            }
+        );
+        // Not part of the brand: only the setup redirect reads it.
+        assert_eq!(
+            config.auth.onboarding_url.as_deref(),
+            Some("https://docs.example.com/start/")
+        );
+        assert_eq!(
+            Config::from_toml("").unwrap().auth.default_brand(),
+            settings::Brand::default()
+        );
+    }
+
+    #[test]
+    fn the_mcp_server_name_reads_from_the_auth_table_and_is_checked() {
+        assert_eq!(
+            Config::from_toml("").unwrap().auth.mcp_server_name,
+            "okf_mcp"
+        );
+        let named = Config::from_toml("[auth]\nmcp_server_name = \"acme-notes.v1\"\n").unwrap();
+        assert_eq!(named.validate(), Ok(()));
+        assert_eq!(named.auth.mcp_server_name, "acme-notes.v1");
+        let longest = format!("[auth]\nmcp_server_name = \"{}\"\n", "a".repeat(64));
+        assert_eq!(Config::from_toml(&longest).unwrap().validate(), Ok(()));
+
+        let too_long = format!("[auth]\nmcp_server_name = \"{}\"\n", "a".repeat(65));
+        for text in [
+            "[auth]\nmcp_server_name = \"\"\n",
+            "[auth]\nmcp_server_name = \"Acme Notes\"\n",
+            "[auth]\nmcp_server_name = \"acm\u{e9}\"\n",
+            too_long.as_str(),
+        ] {
+            let problem = Config::from_toml(text).unwrap().validate().unwrap_err();
+            assert!(
+                problem.starts_with("auth.mcp_server_name"),
+                "{text}: {problem}"
+            );
+        }
+    }
+
+    #[test]
+    fn branding_defaults_the_settings_would_refuse_are_refused() {
+        let refused = [
+            "[auth]\nproduct_name = \"\"\n",
+            "[auth]\nproduct_name = \"Acme\\u0007\"\n",
+            "[auth]\nsupport_contact = \"http://example.com\"\n",
+            "[auth]\nfeedback_url = \"help@example.com\"\n",
+            "[auth]\ndocs_url = \"http://docs.example.com\"\n",
+            "[auth]\nonboarding_url = \"/ui/\"\n",
+        ];
+
+        for text in refused {
+            let problem = Config::from_toml(text).unwrap().validate().unwrap_err();
+            assert!(problem.starts_with("auth."), "{text}: {problem}");
+        }
+    }
+
+    #[test]
     fn mail_defaults_to_the_log_provider_with_a_worker() {
         let mail = Config::from_toml("").unwrap().mail;
 
         assert_eq!(mail, MailConfig::default());
         assert_eq!(mail.provider, MailProvider::Log);
         assert_eq!(mail.from, "okf <okf@localhost>");
-        assert!(mail.worker);
+        assert_eq!(mail.worker, None);
+        assert!(Config::default().deprecation_warnings().is_empty());
         assert!(Config::default().validate().is_ok());
+    }
+
+    #[test]
+    fn mail_worker_false_parses_with_a_warning_and_is_ignored() {
+        let config = Config::from_toml("[mail]\nworker = false\n").unwrap();
+
+        assert_eq!(config.mail.worker, Some(false));
+        assert!(
+            config.validate().is_ok(),
+            "an old configuration still starts"
+        );
+        assert_eq!(
+            config.deprecation_warnings(),
+            ["mail.worker is deprecated and ignored: every serve runs the worker"]
+        );
+    }
+
+    #[test]
+    fn poll_interval_parses_with_a_warning_and_is_ignored() {
+        // A zero interval too: nothing runs on it any more.
+        for text in ["poll_interval = \"10s\"\n", "poll_interval = \"0s\"\n"] {
+            let config = Config::from_toml(text).unwrap();
+
+            assert!(
+                config.validate().is_ok(),
+                "an old configuration still starts"
+            );
+            assert_eq!(
+                config.deprecation_warnings(),
+                ["poll_interval is deprecated and ignored"]
+            );
+        }
+    }
+
+    #[test]
+    fn overlay_cache_size_parses_with_a_warning_and_is_ignored() {
+        let config = Config::from_toml("overlay_cache_size = 0\n").unwrap();
+
+        assert!(config.validate().is_ok(), "an old configuration starts");
+        assert_eq!(
+            config.deprecation_warnings(),
+            ["overlay_cache_size is deprecated and ignored; set overlay_cache_bytes"]
+        );
+    }
+
+    #[test]
+    fn worker_shutdown_grace_defaults_reads_and_must_be_positive() {
+        assert_eq!(
+            Config::default().worker_shutdown_grace,
+            Duration::from_secs(30)
+        );
+        let config = Config::from_toml("worker_shutdown_grace = \"45s\"\n").unwrap();
+        assert_eq!(config.worker_shutdown_grace, Duration::from_secs(45));
+        let error = Config::from_toml("worker_shutdown_grace = \"0s\"\n")
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(error.contains("worker_shutdown_grace"), "{error}");
     }
 
     #[test]
@@ -1472,7 +2265,7 @@ mod tests {
 
         assert_eq!(config.mail.provider, MailProvider::Smtp);
         assert_eq!(config.mail.from, "okf <okf@example.com>");
-        assert!(!config.mail.worker);
+        assert_eq!(config.mail.worker, Some(false));
         assert_eq!(
             config.mail.smtp,
             Some(SmtpConfig {
@@ -1628,5 +2421,121 @@ client_secret_env = "OKF_OIDC_EXAMPLE_SECRET"
             Config::from_toml(&text).is_err(),
             "secrets come from the environment only"
         );
+    }
+
+    #[test]
+    fn feedback_is_off_by_default_and_parses_with_defaults() {
+        let off = Config::from_toml("").unwrap();
+        let on = Config::from_toml(
+            "[feedback]\nforminit_form_id = \"form-placeholder_1\"\n\
+             api_key_env = \"OKF_MCP_FORMINIT_API_KEY\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(off.feedback, None);
+        let feedback = on.feedback.clone().expect("the table");
+        assert_eq!(feedback.forminit_form_id, "form-placeholder_1");
+        assert_eq!(
+            feedback.api_key_env.as_deref(),
+            Some("OKF_MCP_FORMINIT_API_KEY")
+        );
+        assert!(feedback.worker);
+        assert_eq!(feedback.max_per_hour, 10);
+        assert_eq!(feedback.retention, Duration::from_secs(30 * 24 * 60 * 60));
+        assert_eq!(on.validate(), Ok(()));
+    }
+
+    #[test]
+    fn feedback_parses_every_key() {
+        let config = Config::from_toml(
+            "[feedback]\nforminit_form_id = \"abc\"\nworker = false\n\
+             max_per_hour = 25\nretention = \"7d\"\n",
+        )
+        .unwrap();
+
+        let feedback = config.feedback.expect("the table");
+        assert!(!feedback.worker);
+        assert_eq!(feedback.max_per_hour, 25);
+        assert_eq!(feedback.retention, Duration::from_secs(7 * 24 * 60 * 60));
+        assert_eq!(feedback.api_key_env, None);
+    }
+
+    #[test]
+    fn a_form_id_that_could_change_the_url_is_refused() {
+        let long = "a".repeat(65);
+        for id in [
+            "",
+            "a/b",
+            "../x",
+            "a?b=1",
+            "a#b",
+            "a@evil.example",
+            "a b",
+            "a.b",
+            "a%2Fb",
+            &long,
+        ] {
+            let config = Config {
+                feedback: Some(FeedbackConfig::for_form(id)),
+                ..Config::default()
+            };
+            let refused = config.validate().unwrap_err();
+            assert!(
+                refused.contains("feedback.forminit_form_id"),
+                "{id:?}: {refused}"
+            );
+        }
+        for id in ["a", "Abc-123_x", &"z".repeat(64)] {
+            assert!(is_forminit_form_id(id), "{id:?}");
+        }
+    }
+
+    #[test]
+    fn feedback_rejects_unknown_keys_and_bad_values() {
+        // A key in the file, or a misspelling, is a parse error.
+        for text in [
+            "[feedback]\nforminit_form_id = \"a\"\napi_key = \"zq-secret\"\n",
+            "[feedback]\nforminit_form_id = \"a\"\nmax_per_hr = 3\n",
+            "[feedback]\napi_key_env = \"X\"\n",
+        ] {
+            assert!(Config::from_toml(text).is_err(), "{text}");
+        }
+        for (change, key) in [
+            (
+                (|feedback: &mut FeedbackConfig| {
+                    feedback.api_key_env = Some("HAS SPACE".to_string())
+                }) as fn(&mut FeedbackConfig),
+                "feedback.api_key_env",
+            ),
+            (
+                |feedback| feedback.api_key_env = Some(String::new()),
+                "feedback.api_key_env",
+            ),
+            (
+                |feedback| feedback.max_per_hour = 0,
+                "feedback.max_per_hour",
+            ),
+            (
+                |feedback| feedback.max_per_hour = 1001,
+                "feedback.max_per_hour",
+            ),
+            (
+                |feedback| feedback.retention = Duration::from_secs(60 * 60),
+                "feedback.retention",
+            ),
+            (
+                |feedback| feedback.retention = Duration::from_secs(11 * 366 * 24 * 60 * 60),
+                "feedback.retention",
+            ),
+        ] {
+            let mut feedback = FeedbackConfig::for_form("a");
+            change(&mut feedback);
+            let config = Config {
+                feedback: Some(feedback),
+                ..Config::default()
+            };
+            let refused = config.validate().unwrap_err();
+            assert!(refused.contains(key), "{refused}");
+        }
     }
 }

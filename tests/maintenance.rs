@@ -99,7 +99,14 @@ async fn maintenance_http_lease_uses_credential_identity() {
     assert!(lease["pin"]["path"].as_str().unwrap().starts_with('/'));
     let renewed = call(&client, "maintenance_renew", renew_args(lease, "renew")).await;
     assert_eq!(structured(&renewed)["catalog"], "pg");
-    let id = server.app.keys().find(&key).unwrap().key_id.clone();
+    let id = server
+        .app
+        .find_key(&key)
+        .await
+        .unwrap()
+        .unwrap()
+        .key_id
+        .clone();
     let stored: String =
         sqlx::query_scalar("SELECT credential_id FROM maintenance_runs WHERE id=$1")
             .bind(claimed["run_id"].as_str().unwrap())
@@ -107,17 +114,19 @@ async fn maintenance_http_lease_uses_credential_identity() {
             .await
             .unwrap();
     assert_eq!(stored, id);
-    keys::set_maintenance_report_target(
-        &server.db.pool,
-        &id,
-        None,
-        false,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    crate::support::server::applied(&server.app, async {
+        keys::set_maintenance_report_target(
+            &server.db.pool,
+            &id,
+            None,
+            false,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     for (tool, args) in [
         ("maintenance_renew", renew_args(lease, "renew")),
         ("maintenance_submit", submit_args(lease, "submit")),
@@ -135,26 +144,30 @@ async fn maintenance_http_lease_uses_credential_identity() {
             "Forbidden"
         );
     }
-    keys::set_maintenance_report_target(
-        &server.db.pool,
-        &id,
-        None,
-        true,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
-    keys::revoke(
-        &server.db.pool,
-        &id,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        server.app.clock().now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    crate::support::server::applied(&server.app, async {
+        keys::set_maintenance_report_target(
+            &server.db.pool,
+            &id,
+            None,
+            true,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
+    crate::support::server::applied(&server.app, async {
+        keys::revoke(
+            &server.db.pool,
+            &id,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            server.app.clock().now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     for (tool, args) in [
         ("maintenance_renew", renew_args(lease, "renew")),
         ("maintenance_submit", submit_args(lease, "submit")),
@@ -170,7 +183,16 @@ async fn maintenance_http_lease_uses_credential_identity() {
         .is_err());
     }
     let replacement = server.reporter_key("same-name", &["pg"]).await;
-    assert_ne!(server.app.keys().find(&replacement).unwrap().key_id, id);
+    assert_ne!(
+        server
+            .app
+            .find_key(&replacement)
+            .await
+            .unwrap()
+            .unwrap()
+            .key_id,
+        id
+    );
     let replacement = server.client(&replacement, None).await.unwrap();
     let foreign = error(
         &call(
@@ -538,8 +560,8 @@ async fn maintenance_http_tool_schemas_are_exact() {
     let tools = client.list_all_tools().await.unwrap();
     assert_eq!(
         tools.len(),
-        42,
-        "31 existing tools plus 10 maintenance tools"
+        44,
+        "33 existing tools plus 10 maintenance tools"
     );
     for name in [
         "list_catalogs",
@@ -607,7 +629,10 @@ async fn maintenance_http_tool_schemas_are_exact() {
             "maintenance_close",
             vec!["catalog", "run_id", "state", "rationale", "idempotency_key"],
         ),
-        ("maintenance_list_runs", vec!["catalog", "after", "limit"]),
+        (
+            "maintenance_list_runs",
+            vec!["catalog", "after", "limit", "order"],
+        ),
         ("maintenance_get_run", vec!["catalog", "run_id"]),
         (
             "maintenance_list_findings",
@@ -672,7 +697,7 @@ async fn maintenance_http_tool_schemas_are_exact() {
         let mut expected_required = fields
             .iter()
             .copied()
-            .filter(|field| !["batch_size", "after", "limit"].contains(field))
+            .filter(|field| !["batch_size", "after", "limit", "order"].contains(field))
             .collect::<Vec<_>>();
         expected_required.sort();
         let mut required_sorted = required;
@@ -704,18 +729,27 @@ async fn maintenance_http_reauthorizes_successful_replays_and_allows_plain_reads
     let lease = &claimed["leases"][0];
     let args = submit_args(lease, "submitted");
     let receipt = structured(&call(&client, "maintenance_submit", args.clone()).await).clone();
-    let id = server.app.keys().find(&key).unwrap().key_id.clone();
-    keys::set_maintenance_report_target(
-        &server.db.pool,
-        &id,
-        None,
-        false,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    let id = server
+        .app
+        .find_key(&key)
+        .await
+        .unwrap()
+        .unwrap()
+        .key_id
+        .clone();
+    crate::support::server::applied(&server.app, async {
+        keys::set_maintenance_report_target(
+            &server.db.pool,
+            &id,
+            None,
+            false,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     assert_eq!(
         error(&call(&client, "maintenance_submit", args.clone()).await)["error"],
         "Forbidden"
@@ -775,17 +809,19 @@ async fn maintenance_http_reauthorizes_successful_replays_and_allows_plain_reads
     .unwrap();
     assert!(!stored_paths.is_empty());
     assert!(stored_paths.iter().all(|path| !path.starts_with('/')));
-    keys::set_maintenance_report_target(
-        &server.db.pool,
-        &id,
-        None,
-        true,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    crate::support::server::applied(&server.app, async {
+        keys::set_maintenance_report_target(
+            &server.db.pool,
+            &id,
+            None,
+            true,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     assert_eq!(
         receipt,
         structured(&call(&client, "maintenance_submit", args).await).clone()
@@ -798,31 +834,42 @@ async fn maintenance_close_requires_reporting_for_own_run_even_with_write() {
     let key = server
         .key("writer-owner", Access::Write, &["pg"], None)
         .await;
-    let id = server.app.keys().find(&key).unwrap().key_id.clone();
-    keys::set_maintenance_report_target(
-        &server.db.pool,
-        &id,
-        None,
-        true,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    let id = server
+        .app
+        .find_key(&key)
+        .await
+        .unwrap()
+        .unwrap()
+        .key_id
+        .clone();
+    crate::support::server::applied(&server.app, async {
+        keys::set_maintenance_report_target(
+            &server.db.pool,
+            &id,
+            None,
+            true,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     let client = server.client(&key, None).await.unwrap();
     let run = claim(&client, "claim", 1).await;
-    keys::set_maintenance_report_target(
-        &server.db.pool,
-        &id,
-        None,
-        false,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
+    crate::support::server::applied(&server.app, async {
+        keys::set_maintenance_report_target(
+            &server.db.pool,
+            &id,
+            None,
+            false,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
     assert_eq!(error(&call(&client,"maintenance_close",json!({"catalog":"pg","run_id":run["run_id"],"state":"cancelled","rationale":"Own run needs reporting.","idempotency_key":"close"})).await)["error"],"Forbidden");
 }
 
@@ -834,7 +881,14 @@ async fn maintenance_close_owner_replay_is_stable_after_access_upgrade() {
     let run = claim(&client, "claim", 1).await;
     let args = json!({"catalog":"pg","run_id":run["run_id"],"state":"cancelled","rationale":"Owner cancellation.","idempotency_key":"close"});
     let closed = structured(&call(&client, "maintenance_close", args.clone()).await).clone();
-    let id = server.app.keys().find(&key).unwrap().key_id.clone();
+    let id = server
+        .app
+        .find_key(&key)
+        .await
+        .unwrap()
+        .unwrap()
+        .key_id
+        .clone();
     sqlx::query("UPDATE api_keys SET access='write' WHERE id=$1")
         .bind(&id)
         .execute(&server.db.pool)
@@ -850,18 +904,23 @@ async fn maintenance_close_owner_replay_is_stable_after_access_upgrade() {
     )
     .await
     .unwrap();
-    keys::set_maintenance_report_target(
-        &server.db.pool,
-        &id,
-        None,
-        true,
-        &okf_mcp::store::audit::AuditActor::cli(),
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-    server.app.poll().await.unwrap();
-    assert_eq!(server.app.keys().find(&key).unwrap().access, Access::Write);
+    crate::support::server::applied(&server.app, async {
+        keys::set_maintenance_report_target(
+            &server.db.pool,
+            &id,
+            None,
+            true,
+            &okf_mcp::store::audit::AuditActor::cli(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    })
+    .await;
+    assert_eq!(
+        server.app.find_key(&key).await.unwrap().unwrap().access,
+        Access::Write
+    );
     assert_eq!(
         closed,
         structured(&call(&client, "maintenance_close", args).await).clone()
@@ -894,6 +953,55 @@ async fn maintenance_http_pages_default_to_twenty_and_are_catalog_scoped() {
     )
     .await;
     assert_eq!(structured(&all)["items"].as_array().unwrap().len(), 23);
+    // `order` is opt-in: `desc` is the exact reverse, and `asc` is the default.
+    let ids = |result: &rmcp::model::CallToolResult| -> Vec<Value> {
+        structured(result)["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|run| run["id"].clone())
+            .collect()
+    };
+    let newest = call(
+        &client,
+        "maintenance_list_runs",
+        json!({"catalog":"pg","limit":200,"order":"desc"}),
+    )
+    .await;
+    let mut reversed = ids(&all);
+    reversed.reverse();
+    assert_eq!(ids(&newest), reversed);
+    let asc = call(
+        &client,
+        "maintenance_list_runs",
+        json!({"catalog":"pg","limit":200,"order":"asc"}),
+    )
+    .await;
+    assert_eq!(ids(&asc), ids(&all));
+    // A cursor continues in the chosen order: the page after the newest run.
+    let second = call(
+        &client,
+        "maintenance_list_runs",
+        json!({"catalog":"pg","limit":1,"order":"desc"}),
+    )
+    .await;
+    assert_eq!(ids(&second), reversed[..1]);
+    let next = structured(&second)["next_after"].clone();
+    let after = call(
+        &client,
+        "maintenance_list_runs",
+        json!({"catalog":"pg","limit":200,"order":"desc","after":next}),
+    )
+    .await;
+    assert_eq!(ids(&after), reversed[1..]);
+    error(
+        &call(
+            &client,
+            "maintenance_list_runs",
+            json!({"catalog":"pg","order":"sideways"}),
+        )
+        .await,
+    );
     assert_eq!(
         error(
             &call(

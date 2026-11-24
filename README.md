@@ -33,6 +33,13 @@ provisioner keys, a stored audit log readable by team owners, and
 unlock-before-access for operator staff (`docs/operations.md`, "Users and
 teams"; design:
 `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
+Milestone 18 bounded the server's memory: catalog snapshots, catalog rows,
+keys, users, labels and overlays live in caches with a byte or entry budget
+(`docs/operations.md`, "Caches and change propagation"), replicas learn of
+changes through a Postgres change feed instead of polling, listings are
+paged, and start-up no longer grows with the number of catalogs (measured
+with a million catalogs and a million users in
+`changelog/2026-11-19T14-34-24Z-m18-milestone.md`).
 
 Deployed (every route but `/healthz` needs a bearer key) from the image `ghcr.io/hypotheosis/okf-mcp`, with its database
 backed up continuously and a restore drill done.
@@ -42,8 +49,8 @@ on it: `lint`, the links report, `oldest`, `sprawl` and the secret scan, plus
 ranked `search`. (Their JSON matches `okf.py`'s, compared as parsed values, which
 the parity tests check.) Catalogs live in Postgres: every file
 is a row holding its exact bytes and execute bit, with an append-only revision
-history, and each catalog's snapshot is built from its rows and swapped when
-the catalog changes. The `okf-mcp` command line administers catalogs and API
+history, and each catalog's snapshot is built from its rows on first use, kept within
+a memory budget (`catalog_cache_bytes`) and swapped when the catalog changes. The `okf-mcp` command line administers catalogs and API
 keys and imports and exports catalogs, and `okf-mcp serve` serves the catalogs
 over MCP streamable HTTP with bearer-key auth: every read tool, the export and
 import routes and `/healthz`, and the write tools: each connection's edits
@@ -62,6 +69,16 @@ environment variable, TLS to Postgres, a complete Kubernetes example with
 CloudNativePG and an ingress, the first catalog and keys, `/healthz` and the
 clock check, upgrades, backup and restore, and troubleshooting. The sections
 below cover local use.
+
+`okf-mcp serve` runs as one replica by default, because its short-lived state
+(MCP sessions, OAuth consent pages and codes, sign-ins in progress) lives in
+the process's memory. With a `[redis]` table that state moves to Redis or
+Valkey, and several replicas can run behind one Service; changes to keys, users, teams, settings
+and catalogs reach every replica through Postgres change messages, and the
+OAuth access-token cache learns of a revocation on every replica at once. Set
+`mode = "cluster"` for a cluster such as ElastiCache Serverless (which needs a
+`rediss://` URL). Without `[redis]` nothing changes. `docs/operations.md`
+("Redis") covers the `[redis]` settings, the caveats and what happens when Redis is down.
 
 ## Command line
 
@@ -92,10 +109,13 @@ manage OAuth sign-in codes and the grants they become (see
 Every key, grant and sign-in code belongs to a user (`--user`, required on
 create) and every catalog to a team (`--owner`); creating a user also
 creates its personal team of the same name. Ownership grants no access.
-`okf-mcp user create|list|delete`, `team create|list|add-member|set-role|remove-member|delete|suspend|unsuspend`,
+`okf-mcp user create|update|list|delete`, `team create|update|list|add-member|set-role|remove-member|delete|suspend|unsuspend`,
 `catalog set-owner`, `key assign` and `oauth code assign` manage them, and
 `okf-mcp unassigned` lists what predates users and teams and has neither
-(`docs/operations.md`, "Users and teams").
+(`docs/operations.md`, "Users and teams"). Each also has a display name that
+people see instead of the id (`user update`, `team update` and
+`catalog update --display-name`; `docs/operations.md`, "Display names and
+labels"). Ids never change.
 `okf-mcp user set-admin|set-email|invite|entitle|unentitle|sessions|revoke-sessions|sign-ins`,
 `catalog set-member-access`, `settings list|set|reset` and
 `mail test|queue|retry|delete` manage sign-in, the ceiling, policy and mail
@@ -173,8 +193,8 @@ that human review. Exit 0 never establishes factual freshness.
 ## Running the server
 
 `okf-mcp serve` (also what `okf-mcp` with no subcommand runs) applies the
-migrations, loads every catalog's snapshot, starts the poll loop and serves
-HTTP until SIGINT or SIGTERM:
+migrations, starts the change-feed listener and the background workers, and
+serves HTTP until SIGINT or SIGTERM:
 
     export DATABASE_URL=postgres://okf@localhost/okf   # never logged
     okf-mcp serve --config okf-mcp.toml --listen 127.0.0.1:8080
@@ -187,13 +207,13 @@ ignored, so one file serves every version:
 listen = "0.0.0.0:8080"            # the default
 allowed_hosts = ["okf-mcp.example"] # /mcp Host names (default: loopback)
 default_catalog = "pg"             # for a key with no default of its own
-poll_interval = "10s"              # how often to look for CLI changes
 session_idle_timeout = "2h"        # an idle MCP session is closed after this; also
                                    # when an untouched changeset counts as idle
 max_import_bytes = "64MiB"         # uncompressed total of an import
 concept_outline_chars = 20000      # get_concept outlines a longer body
 database_max_connections = 16      # database pool size, per process
-overlay_cache_size = 64            # open changesets' views kept in memory
+catalog_cache_bytes = "1GiB"         # catalog snapshots kept in memory
+overlay_cache_bytes = "256MiB"       # open changesets' views kept in memory
 maintenance_review_intervals = { pg = "30d" } # per-catalog; default 30d, minimum 1d
 time_server = "time.example.com"   # NTP server for the clock check (default: none)
 ```
@@ -202,15 +222,16 @@ time_server = "time.example.com"   # NTP server for the clock check (default: no
 policy and OIDC providers) and `[mail]` are described, with every other key,
 in `docs/operations.md`, section 3.
 
-A zero `poll_interval` or `session_idle_timeout`, an empty `allowed_hosts`
+A zero `session_idle_timeout`, an empty `allowed_hosts`
 or a blank entry in it, or a blank or padded `time_server`, is refused at
 load. Behind an ingress,
 `allowed_hosts` must name the public hostname (rmcp's DNS-rebinding check
 answers any other `Host` on `/mcp` with 403).
 
 Create a catalog, fill it and make a key with the subcommands; the server
-notices each change within `poll_interval`, without a restart (a revoked key
-stops working at the next poll too):
+notices each change within a fraction of a second, without a restart (each
+command sends a Postgres change message; a lost one is covered by
+`catalog_ttl` and `credential_ttl`, 10 seconds by default):
 
     okf-mcp user create alice
     okf-mcp catalog create pg --description "pgrace's catalog" --owner alice
@@ -255,7 +276,8 @@ An `mcp.json` entry (Claude Code expands the `${...}` variables):
 ```
 
 `X-OKF-Catalogs` (or `?catalogs=pg,work` on the URL) names the connection's
-catalogs: the whole list is the read set and the first is the default write
+catalogs by id (the `name` that `list_catalogs` returns beside the display
+`label`; never the label): the whole list is the read set and the first is the default write
 target. The list is also the session's boundary: `list_catalogs` offers only
 those catalogs, and a tool's `catalog` (or `search`'s `catalogs`) argument or
 a changeset handle can narrow it but never reach a catalog it leaves out,
@@ -265,8 +287,12 @@ they form one list, the `X-OKF-Catalogs` names first. A header takes
 precedence over `?catalogs=`.
 
 Without a list, a tool's argument is used, else the key's default catalog,
-then the server's `default_catalog`, and `list_catalogs` offers every catalog
-the key reaches. Every step is limited to the key's grants: a list never
+then the server's `default_catalog`, else the only catalog the key reaches when
+it is granted exactly one (a key granted every catalog, `key create --all`, has
+no such fallback), and `list_catalogs` offers every catalog the key reaches.
+With none of these, a call without `catalog` is refused and `list_catalogs`
+shows an empty selection, so an ordinary OAuth connection to a key with one
+catalog needs no `?catalogs=`. Every step is limited to the key's grants: a list never
 grants anything, and a catalog the key cannot reach (or that does not exist)
 is an error naming it, never silently dropped or replaced by a default.
 
@@ -314,7 +340,7 @@ a `LintFailed` error and `a.md` in `lint`'s result, on purpose.
 | `sprawl` | How large each concept is and how it is organized, worst first, or one concept with `path` |
 | `links_report` | Broken and missing links, orphans and unlinked mentions of other concepts (`mentions`, default true) |
 | `lint` | The catalog's findings (errors and warnings) on the published catalog, or with `changeset` on that changeset's drafts applied to it |
-| `pending_changes` | The changeset `changeset` names: each changed path, its base and current revision, whether it is stale or replayable, and a unified diff |
+| `pending_changes` | The changeset `changeset` names: each changed path, its base and current revision, whether it is stale or replayable, and a unified diff (of the replayed text for a stale replayable entry, or the reason its replay would fail) |
 | `list_changesets` | The open changesets the key may use, empty ones included: its own, or with an `admin` key every key's in the catalogs it reaches. Each row has the handle, catalog, key name and immutable id, actor, creation and last-change times, `/`-prefixed paths, and `idle` (no change within `session_idle_timeout`) |
 
 `get_concept`, `read_document` and `history` without `catalog` answer from
@@ -331,10 +357,10 @@ only).
 
 | Route | Key | Does |
 |---|---|---|
-| `GET /healthz` | none | `{"database": "ok", "catalogs": N, "clock": ...}`: 200, or 503 when the database does not answer within 2 s; `clock` is the last clock check (`docs/operations.md`, "Health and time") |
+| `GET /healthz` | none | `{"database": "ok", "catalogs": N, "clock": ..., "redis": ...}`: 200, or 503 when the database does not answer within 2 s; `clock` is the last clock check (`docs/operations.md`, "Health and time"); `redis` is `"ok"`, `"unavailable"` or `null` without `[redis]`, and never changes the status |
 | `POST/GET/DELETE /mcp` | any | MCP streamable HTTP |
-| `GET /catalogs/{name}/export` | `read` on the catalog | The catalog as `application/gzip`, `Content-Disposition: attachment; filename="<name>.tar.gz"` |
-| `POST /catalogs/{name}/import[?replace=true&only_machinery=true&expect_generation=N]` | `admin` on the catalog | Imports the uploaded `.tar.gz` and answers with the import report |
+| `GET /catalogs/{name}/export` | `read` on the catalog | The catalog as `application/gzip`, `Content-Disposition: attachment; filename="<stem>-<name>.tar.gz"` (the stem is the sanitised label, see `docs/operations.md`, "Display names and labels"; `<name>.tar.gz` when it is empty) |
+| `POST /catalogs/{name}/import[?replace=true&only_machinery=true&expect_generation=N]` | `write` on the catalog | Imports the uploaded `.tar.gz` and answers with the import report |
 | `GET /` | none | Redirects (303) to the web console, `/ui/` |
 | `GET /ui/*` | none | The web console's static files ("Web console" below) |
 | `/api/v1/*` | a key, or a console session (each endpoint checks its level) | The console's JSON API (`docs/operations.md`, "Web console") |
@@ -398,9 +424,11 @@ blocked), so sign out on a shared machine; an account session is an
 The Health page shows lint, sprawl, link, staleness and open-question counts,
 with each report one click away.
 
-Catalogs can be created, described, deleted, imported and exported from the
-console's Administer group, with no archive piped through a shell on the
-server.
+Catalogs can be created, described and deleted from the console's
+Administer group. Import & export, in the main navigation, exports any
+catalog you can read and imports into any you can write, with no archive
+piped through a shell on the server.
+A suspended catalog's import is open to admins only, and the page says so.
 
 Maintenance findings can be triaged (accepted, dismissed, needs input,
 reopened) and runs inspected from the browser.
@@ -428,13 +456,19 @@ own keys, grants, sign-in methods and sessions; admins also get Settings
 
 Browse shows a catalog's tree, each concept rendered (raw HTML in a concept
 is shown as text, never run), its links, history and revision diffs, and
-Search searches every catalog the key reaches.
+Search searches the catalogs the key reaches (at most `search_fanout_max` at once: a key that reaches more is shown a chooser in the console). Recent changes
+(`/ui/#/recent`) lists the revisions published in the selected catalog,
+every document's, newest first, and opens each one's diff.
 
 Changesets an agent left open can be inspected (their pending diff) and
 discarded at `/ui/#/changesets`.
 
 The routes, the security headers and the API reference are in
 [`docs/operations.md`](docs/operations.md#web-console).
+
+On a phone, the [mobile reader](docs/reference/reader.md) at `/read/` is an
+installable, read-only app for reading a catalog, offline included. It signs
+in with the same account.
 
 ## Writing
 
@@ -500,10 +534,19 @@ Bookkeeping (`write`):
 files, or one whose indexes were never written. Operators can repair every
 such catalog at once with `okf-mcp catalog repair-indexes --missing-only`
 (`--dry-run` first), which publishes directly and adds a line recording the
-repair to each catalog's `log.md`; no existing index text is changed. It only adds: existing
-headings, prose, listings and summaries stay as they are, a target an index
-already links is not listed again, and a second run changes nothing. A
-path no markdown link can reach (a space, `)` or `#` in it, or a label that cannot be written, such as a folder named `a]`) is not listed;
+repair to each catalog's `log.md`. Existing headings, prose, listings and
+summaries stay as they are, a target an index already links is not listed
+again, and a second run changes nothing. The one change to existing text is
+an old raw (unencoded) concept or folder listing written before
+percent-encoding, such as `* [A](a b.md) - x` or
+`* [My docs](my docs/) - x`, whose link never resolves: its destination is
+encoded in place (`* [A](a%20b.md) - x`, label and summary kept), or the
+bullet is removed when a working listing sits beside it, and `notes` quotes
+each one. A listing written with an angle-bracket destination, `* [A](<a b.md>) - x`, already
+resolves and is left alone (the link parser reads `[x](<a b.md>)` and
+`[x](<a b.md> "title")` like any other link, and rewrites keep the brackets). A bullet whose link resolves to an existing document, or whose
+name holds a `%XX` escape, is never touched. A
+path no markdown link can reach (a label that cannot be written, such as a folder named `a]`) is not listed;
 `notes` names it instead. A
 listing takes the concept's `title` (else its first `# ` heading, else its
 file name) and `description`; whatever is missing becomes a `TODO`
@@ -518,7 +561,7 @@ Restructuring (`write`):
 |---|---|
 | `move_concept` | Moves or renames a concept (`old`, `new`): its folder listing moves with it, and every link to it is rewritten, keeping each link's style and anchor |
 | `split_concept` | Carves a `section` out of a concept (`path`) into a new one (`to`): the parent keeps a stub linking to it, links to the section follow it, and it is listed in its folder (`type`, `title`, `description`, `stub`, `sources`) |
-| `delete_concept` | Deletes a concept and its listing; refused with `StillLinked`, listing each link, while any other document links to it |
+| `delete_concept` | Deletes a concept and its listing, turning its links in `log.md` into plain text; refused with `StillLinked`, listing each link, while any other document links to it |
 
 Changesets:
 
@@ -595,9 +638,11 @@ key's actor.
 - `src/catalog.rs` - `CatalogState`: a catalog's snapshot, loaded from its
   rows and rebuilt and swapped when its generation moves; lint with revision
   times.
-- `src/auth.rs` - the key cache and the bearer middleware; `src/selection.rs` -
+- `src/auth.rs` - the bearer middleware and the `Principal`, assembled from
+  the credential caches (`src/cache/`, the bounded caches of milestone 18); `src/selection.rs` -
   which catalogs a call acts on; `src/app.rs` - the
-  shared state and the poll loop (which also prunes empty changesets).
+  shared state and the change-feed handling (`src/invalidate.rs`); `src/housekeeping.rs` -
+  the once-per-cluster pruning jobs.
 - `src/overlay.rs` - a changeset's view (the published files with its entries
   applied), cached per changeset; `src/write.rs` - the one path every write
   tool takes into its changeset.
@@ -643,6 +688,8 @@ key's actor.
 - `Dockerfile`, `.github/workflows/image.yml` - the container image, built and
   pushed to GHCR on a `v*` tag.
 - `docs/operations.md` - the operator guide.
+- `docs/reference/` - the [tool reference](docs/reference/tools.md) and the
+  [mobile reader](docs/reference/reader.md).
 - `docs/superpowers/` - the design and the per-milestone plans.
 - `skills/` - Claude Code skills for daily catalog maintenance
   ([`skills/README.md`](skills/README.md)).
@@ -692,6 +739,7 @@ The report structs derive `serde::Serialize`; their JSON has the keys of
         cargo test --release --test smoke -- --ignored --nocapture   # timings
     UPDATE_GOLDEN=1 cargo test --test parity -- --ignored regenerate_goldens
     just test-ui                                 # the web console's browser journeys
+    just test-worker                             # the mobile reader's worker and page modules (Node)
 
 The database tests need Docker. Each test gets a throwaway database of its
 own, dropped when it is done, on the server `TEST_PG_URL` names (a
@@ -727,6 +775,14 @@ The browser journeys (`tests/ui_e2e`, run by `just test-ui` and by plain
 too, and find Chromium through `RUSTWRIGHT_CHROMIUM`, `CHROME`, `CHROMIUM`,
 the Playwright cache or `PATH`; without one, each journey prints a skip line
 and passes.
+
+The reader's Node tests (`tests/read_worker`, run by `just test-worker` and
+first in `just test`) load `src/http/read/sw.js` into a `node:vm` context
+with an in-memory Cache Storage and a fetch the test answers, and test the
+page modules in `src/http/read/js/` that need no DOM against the same fakes.
+They run under Node's built-in test runner (Node 18.19+ or 20.6+, no npm
+packages). Without `node` on `PATH`, or with an older one, the recipe prints
+a skip line and passes.
 
 Before a push, also run `cargo fmt --check`,
 `cargo clippy --all-targets -- -D warnings` and

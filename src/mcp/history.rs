@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
+use crate::labels::directory::Wanted;
 use crate::mcp::context::ToolContext;
 use crate::mcp::{reply, OkfServer};
 use crate::okf::paths::{escapes_root, normpath};
@@ -30,7 +31,7 @@ const MAX_LIMIT: u32 = 200;
 pub struct HistoryParams {
     /// The document: `/infra/time-server.md`, `infra/time-server`, `/log.md`.
     pub path: String,
-    /// The catalog (default: the first selected catalog with any revision of it).
+    /// The catalog id (the `name` from `list_catalogs`; default: the first selected catalog with any revision of it; when `list_catalogs` shows an empty selection, pass `catalog`).
     pub catalog: Option<String>,
     /// At most this many revisions (default 20, at most 200; 0 counts as 1).
     pub limit: Option<u32>,
@@ -45,6 +46,8 @@ pub struct Revision {
     pub op: String,
     /// Who made it.
     pub actor: String,
+    /// The actor's label, when the actor is a user; null for a key or OAuth actor.
+    pub actor_label: Option<String>,
     /// The publish message (`import` for an import).
     pub message: String,
     /// When (`2026-11-02T21:00:00Z`).
@@ -54,8 +57,10 @@ pub struct Revision {
 /// `history`'s result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct History {
-    /// The catalog it came from.
+    /// The catalog it came from (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// `/`-prefixed path.
     pub path: String,
     /// Newest first.
@@ -117,11 +122,11 @@ fn revision_limit(requested: Option<u32>) -> i64 {
 pub(crate) async fn history(ctx: &ToolContext, params: HistoryParams) -> Result<History, OkfError> {
     let limit = revision_limit(params.limit);
     let paths = candidates(&params.path);
-    for state in ctx.read_set(params.catalog.as_deref())? {
+    for state in ctx.read_set(params.catalog.as_deref()).await? {
         // Admitted right before its revisions are read, so a catalog after
         // the one that answers is never recorded (plan Decision 23). A
         // `Busy` here leaves the catalogs already read recorded: they were.
-        ctx.admit(&state, AccessKind::Read)?;
+        ctx.admit(&state, AccessKind::Read).await?;
         for path in &paths {
             // `.await` suspends this call until Postgres answers, freeing the
             // thread for other requests meanwhile.
@@ -131,9 +136,15 @@ pub(crate) async fn history(ctx: &ToolContext, params: HistoryParams) -> Result<
             }
             // `into_iter` consumes `rows`, so each row's strings move into
             // the result instead of being copied.
+            let mut wanted = Wanted::default();
+            for row in &rows {
+                wanted.user(&row.actor);
+            }
+            let labels = ctx.labels_for(&wanted).await?;
             let revisions = rows
                 .into_iter()
                 .map(|row| Revision {
+                    actor_label: labels.actor(&row.actor).map(str::to_string),
                     revision: row.revision,
                     op: row.op,
                     actor: row.actor,
@@ -143,6 +154,7 @@ pub(crate) async fn history(ctx: &ToolContext, params: HistoryParams) -> Result<
                 .collect();
             return Ok(History {
                 catalog: state.name().to_string(),
+                catalog_label: ctx.catalog_label(state.name()).await?,
                 path: format!("/{path}"),
                 revisions,
             });

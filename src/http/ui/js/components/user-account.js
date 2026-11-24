@@ -21,6 +21,7 @@ import { count } from '../core/format.js';
 import { guard, once } from '../core/pending.js';
 import { confirmDialog } from './confirm.js';
 import { picker } from './picker.js';
+import { catalogLabel } from '../core/labels.js';
 import { sessionTable, signInTable } from './activity.js';
 
 const LEVELS = ['read', 'write'];
@@ -32,7 +33,7 @@ const NEEDS_EVERY_CATALOG = 'Changing how a user signs in needs an admin key tha
 export async function loadAccount(name) {
     const base = `/users/${enc(name)}`;
     const [{ sessions }, { sign_ins: signIns }, { catalogs }] = await Promise.all([
-        api.get(`${base}/sessions`), api.get(`${base}/sign-ins`), api.get('/catalogs')]);
+        api.get(`${base}/sessions`), api.get(`${base}/sign-ins`), api.pages('/catalogs', 'catalogs')]);
     return { sessions, signIns, catalogs: catalogs.map(row => row.name) };
 }
 
@@ -61,8 +62,8 @@ export function accountSections({ detail, account, manager, refusal, changed }) 
         refusal ? h('p', { id: 'user-refusal', class: 'error small', role: 'alert' }, refusal) : null,
         manager ? null : h('p', { id: 'user-account-readonly', class: 'muted small' }, NEEDS_EVERY_CATALOG),
         signInSection(user, tools),
-        entitlementSection(user.name, entitlements, account.catalogs, tools),
-        sessionSection(user.name, account.sessions, tools),
+        entitlementSection(user, entitlements, account.catalogs, tools),
+        sessionSection(user, account.sessions, tools),
         h('section', { id: 'user-sign-ins' },
             h('h3', {}, 'Recent sign-ins'),
             signInTable({ id: 'user-sign-in-table', signIns: account.signIns })),
@@ -78,19 +79,19 @@ function signInSection(user, { act, pending, manager }) {
     const clear = user.email ? guard(h('button', {
         type: 'button', id: 'user-email-clear', class: 'text-btn',
         onclick: () => act('email', () => api.put(`${base}/email`, { email: null }),
-            () => `Cleared ${user.name}'s email.`),
+            () => `Cleared ${user.label}'s email.`),
     }, 'Clear'), pending('email'), manager) : null;
     const form = h('form', { id: 'user-email-form', class: 'inline-form' }, email, save, clear);
     form.addEventListener('submit', event => {
         event.preventDefault();
         const next = email.value.trim();
         act('email', () => api.put(`${base}/email`, { email: next || null }),
-            answer => answer.email ? `${answer.name}'s email is now ${answer.email}.` : `Cleared ${answer.name}'s email.`);
+            answer => answer.email ? `${user.label}'s email is now ${answer.email}.` : `Cleared ${user.label}'s email.`);
     });
     const admin = guard(h('input', { type: 'checkbox', role: 'switch', id: 'user-admin-toggle', checked: user.is_admin }),
         pending('admin'), manager);
     admin.addEventListener('change', () => act('admin', () => api.put(`${base}/admin`, { admin: admin.checked }),
-        answer => (answer.admin ? `${answer.name} is now an admin.` : `${answer.name} is no longer an admin.`)));
+        answer => (answer.admin ? `${user.label} is now an admin.` : `${user.label} is no longer an admin.`)));
     const invite = guard(h('button', {
         type: 'button', id: 'user-invite', class: 'secondary',
         onclick: () => act('invite', () => api.post(`${base}/invite`), answer => `Queued a setup email to ${answer.email}.`),
@@ -107,11 +108,13 @@ function signInSection(user, { act, pending, manager }) {
             'Set an email first: the setup link is sent there.'));
 }
 
-function entitlementSection(name, entitlements, catalogs, { act, pending, manager }) {
+// `user` is the drawer's user (GET /users/{name}'s `user`), whose `label`
+// every message names it by.
+function entitlementSection({ name, label }, entitlements, catalogs, { act, pending, manager }) {
     const base = `/users/${enc(name)}/entitlements`;
     const done = answer => {
         const levels = answer.entitlements.map(entry => `${entry.access} on ${entry.catalog}`);
-        return `${answer.name} now has ${levels.length ? levels.join(', ') : 'no entitlements'}.`;
+        return `${label} now has ${levels.length ? levels.join(', ') : 'no entitlements'}.`;
     };
     const rows = entitlements.map(entry => {
         // A level change and a removal of one catalog share its key.
@@ -131,7 +134,7 @@ function entitlementSection(name, entitlements, catalogs, { act, pending, manage
     });
     const held = new Set(entitlements.map(entry => entry.catalog));
     const addable = catalogs.filter(catalog => !held.has(catalog));
-    const catalog = picker({ name: 'catalog', required: true, 'aria-label': 'Catalog to entitle', disabled: !manager }, addable);
+    const catalog = picker({ name: 'catalog', required: true, 'aria-label': 'Catalog to entitle', disabled: !manager }, addable, null, catalogLabel);
     const level = h('select', { name: 'access', 'aria-label': 'Access', disabled: !manager },
         LEVELS.map(value => h('option', { value }, value)));
     const submit = guard(h('button', { type: 'submit' }, 'Entitle'), pending('entitle'), manager);
@@ -150,19 +153,19 @@ function entitlementSection(name, entitlements, catalogs, { act, pending, manage
         addable.length ? form : null);
 }
 
-function sessionSection(name, sessions, { act, run, pending, manager }) {
+function sessionSection({ name, label }, sessions, { act, run, pending, manager }) {
     const base = `/users/${enc(name)}/sessions`;
     const revokeAll = sessions.length ? guard(h('button', {
         type: 'button', id: 'user-sessions-revoke-all', class: 'secondary',
         onclick: async () => {
             const ok = await confirmDialog({
-                title: `Sign ${name} out everywhere?`,
+                title: `Sign ${label} out everywhere?`,
                 message: `Ends ${count(sessions.length, 'console session')}. Keys and OAuth grants keep working.`,
                 action: 'Sign out everywhere',
             });
             if (ok) {
                 await act('sessions', () => api.del(base),
-                    answer => `Signed ${answer.name} out of ${count(answer.revoked, 'console session')}.`);
+                    answer => `Signed ${label} out of ${count(answer.revoked, 'console session')}.`);
             }
         },
     }, 'Sign out everywhere'), pending('sessions'), manager) : null;
@@ -173,7 +176,7 @@ function sessionSection(name, sessions, { act, run, pending, manager }) {
             scope: pending('session'),
             // sessionTable keys this write itself (`<scope>:<id_prefix>`).
             revoke: row => run(() => api.del(`${base}/${enc(row.id_prefix)}`),
-                () => `Signed ${name} out of that session.`),
+                () => `Signed ${label} out of that session.`),
         }),
         revokeAll);
 }

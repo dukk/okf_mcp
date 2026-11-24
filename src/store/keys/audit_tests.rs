@@ -37,6 +37,7 @@ async fn credential_audit_changes_noops_refusals_and_scopes() {
             &db.pool,
             &catalogs::NewCatalog {
                 name,
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -177,9 +178,15 @@ async fn a_pre_m14_key_that_only_ever_is_a_target_is_forgotten_with_its_user() {
     revoke_by_id(&db.pool, "alice-legacy", &AuditActor::cli(), Utc::now())
         .await
         .unwrap();
-    users::delete(&db.pool, "alice", false, &AuditActor::cli(), Utc::now())
-        .await
-        .unwrap();
+    users::delete(
+        &db.pool,
+        "alice",
+        users::DeleteOptions::default(),
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
     let stored: String = sqlx::query_scalar("SELECT string_agg(row_to_json(e)::text || coalesce(row_to_json(tc)::text, '') || coalesce(row_to_json(tp)::text, ''), '') FROM audit_entries e LEFT JOIN audit_credentials tc ON tc.id = e.target_credential_ref LEFT JOIN audit_people tp ON tp.id = e.target_person_id")
         .fetch_one(&db.pool).await.unwrap();
     let credentials: String = sqlx::query_scalar(
@@ -285,26 +292,101 @@ enum SnapshotChange {
     Grants,
 }
 
+/// How long [`blocked_in_lock_people`] waits. Shorter than the 10 s outer
+/// deadlines of its callers, so its diagnostic fires before they cancel it.
+const LOCK_PEOPLE_WAIT: Duration = Duration::from_secs(5);
+
+/// Waits up to `limit` until a backend waits in `lock_people` for a row lock
+/// on `table` that `holder_pid` holds.
+///
+/// `lock_people` takes its users' rows `FOR KEY SHARE`, so the wait is for a
+/// row lock on `users` (see [`crate::test_locks::wait_row_lock_waiter`]); the
+/// holder is the only session that holds one. It reads `pg_locks`, not the
+/// text of the waiter's query, which `pg_stat_activity` can show stale
+/// (issue #639).
+///
+/// # Errors
+/// A message naming what was waited for, when `limit` passes first.
+async fn lock_people_wait(
+    pool: &PgPool,
+    holder_pid: i32,
+    table: &str,
+    limit: Duration,
+) -> Result<(), String> {
+    crate::test_locks::wait_row_lock_waiter(pool, holder_pid, table, limit)
+        .await
+        .map(|_| ())
+        .ok_or_else(|| {
+            format!(
+                "no backend waited in lock_people for a {table} row held by backend {holder_pid}"
+            )
+        })
+}
+
 /// Returns once a backend waits in `lock_people` on `holder_pid`'s lock.
 /// Seeing it blocked there proves the credential snapshot has been read; no
-/// scheduling sleep decides when a competing change may run. Callers bound
-/// this with `tokio::time::timeout`.
+/// scheduling sleep decides when a competing change may run.
+///
+/// # Errors
+/// Never; the result keeps the callers' `?` unchanged.
+///
+/// # Panics
+/// When no such wait appears within [`LOCK_PEOPLE_WAIT`]; the message names
+/// what it waited for.
 async fn blocked_in_lock_people(pool: &PgPool, holder_pid: i32) -> Result<(), OkfError> {
-    loop {
-        let waiting: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity \
-             WHERE datname = current_database() AND wait_event_type = 'Lock' \
-               AND $1 = ANY(pg_blocking_pids(pid)) \
-               AND query = 'SELECT is_admin FROM users WHERE id = $1 FOR KEY SHARE')",
-        )
-        .bind(holder_pid)
-        .fetch_one(pool)
-        .await?;
-        if waiting {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    lock_people_wait(pool, holder_pid, "users", LOCK_PEOPLE_WAIT)
+        .await
+        .unwrap_or_else(|message| panic!("{message}"));
+    Ok(())
+}
+
+/// The wait is matched by the table of the row lock: a revoke queued in
+/// `lock_people` behind a held user row is found on `users`, and a wait on
+/// another table reports the diagnostic instead of matching.
+#[tokio::test(flavor = "multi_thread")]
+async fn lock_people_wait_matches_users_and_names_a_missing_wait() {
+    let db = test_db().await;
+    let alice = seed_user(&db.pool, "alice", None).await;
+    let actor = AuditActor::system("waiting-credential-change");
+    let created = create_with_id(
+        &db.pool,
+        &key("lock-people-wait", Grants::All),
+        &actor,
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let mut waiting_actor = AuditActor::system("waiting-credential-change");
+    waiting_actor.user_id = Some(alice.id.clone());
+    let mut holder = db.pool.begin().await.unwrap();
+    let holder_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(&alice.id)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let pool = db.pool.clone();
+    let id = created.id.clone();
+    let revoking =
+        tokio::spawn(async move { revoke_by_id(&pool, &id, &waiting_actor, Utc::now()).await });
+    let found = lock_people_wait(&db.pool, holder_pid, "users", Duration::from_secs(10)).await;
+    let missing = lock_people_wait(&db.pool, holder_pid, "teams", Duration::from_millis(300)).await;
+    holder.rollback().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), revoking)
+        .await
+        .expect("the revoke must finish once the holder is released")
+        .unwrap()
+        .unwrap();
+    assert_eq!(found, Ok(()));
+    assert_eq!(
+        missing,
+        Err(format!(
+            "no backend waited in lock_people for a teams row held by backend {holder_pid}"
+        ))
+    );
 }
 
 /// Pauses a revoke after its snapshot, commits a competing change using an
@@ -319,6 +401,7 @@ async fn assert_snapshot_mismatch_refuses_revoke(change: SnapshotChange) {
             &db.pool,
             &catalogs::NewCatalog {
                 name,
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -555,6 +638,7 @@ async fn grant_and_ungrant_by_id_name_an_oauth_grant_as_a_grant() {
             &db.pool,
             &catalogs::NewCatalog {
                 name,
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },

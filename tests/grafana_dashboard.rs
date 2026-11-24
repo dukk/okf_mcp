@@ -17,8 +17,9 @@ use serde_json::Value;
 const DASHBOARD: &str = include_str!("../examples/grafana/okf-mcp.json");
 
 /// PromQL words that can stand where a metric name could: grouping and
-/// matching keywords. (Function names are skipped by being followed by `(`.)
-const KEYWORDS: [&str; 8] = [
+/// matching keywords and the set operators. (Function names are skipped by
+/// being followed by `(`.)
+const KEYWORDS: [&str; 11] = [
     "by",
     "without",
     "on",
@@ -27,6 +28,9 @@ const KEYWORDS: [&str; 8] = [
     "group_right",
     "bool",
     "offset",
+    "and",
+    "or",
+    "unless",
 ];
 
 /// Every `expr` in the dashboard, panels and nested rows alike.
@@ -51,7 +55,8 @@ fn expressions(node: &Value, found: &mut Vec<String>) {
 fn metric_names(expression: &str) -> Vec<String> {
     let strings = Regex::new(r#""[^"]*""#).expect("pattern");
     let braces = Regex::new(r"\{[^}]*\}").expect("pattern");
-    let grouping = Regex::new(r"\b(?:by|without)\s*\([^)]*\)").expect("pattern");
+    let grouping = Regex::new(r"\b(?:by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)")
+        .expect("pattern");
     let ranges = Regex::new(r"\[[^\]]*\]").expect("pattern");
     let identifier = Regex::new(r"[A-Za-z_:][A-Za-z0-9_:]*(\s*\()?").expect("pattern");
 
@@ -100,22 +105,122 @@ fn every_metric_in_the_dashboard_is_one_the_server_exports() {
             used.insert(family.to_string());
         }
     }
-    // The dashboard covers the areas the issue lists, not one family.
-    for expected in [
-        "http_server_request_duration_seconds",
-        "okf_mcp_tool_duration_seconds",
-        "okf_publish_duration_seconds",
-        "okf_poll_duration_seconds",
-        "okf_auth_attempts_total",
-        "okf_mail_jobs_total",
-        "okf_telemetry_export_failures_total",
-        "okf_clock_offset_seconds",
-    ] {
+    // The dashboard shows every family the server exports, so a new
+    // instrument fails this test until it has a panel.
+    let missing: Vec<_> = Metrics::ALL_FAMILIES
+        .iter()
+        .filter(|family| !used.contains(**family))
+        .collect();
+    assert!(missing.is_empty(), "not on the dashboard: {missing:?}");
+}
+
+/// Every panel in the dashboard, rows' nested panels included.
+fn panels(dashboard: &Value) -> Vec<&Value> {
+    let top = dashboard["panels"].as_array().expect("panels");
+    top.iter()
+        .chain(
+            top.iter()
+                .filter_map(|panel| panel["panels"].as_array())
+                .flatten(),
+        )
+        .collect()
+}
+
+/// The histogram families a panel reads through raw `_bucket` series (not
+/// through `histogram_quantile`, which reduces them to a line).
+fn bucket_families(panel: &Value) -> BTreeSet<String> {
+    let mut found = Vec::new();
+    expressions(&panel["targets"], &mut found);
+    found
+        .iter()
+        .filter(|expression| !expression.contains("histogram_quantile"))
+        .flat_map(|expression| metric_names(expression))
+        .filter_map(|name| name.strip_suffix("_bucket").map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn every_histogram_has_a_heatmap_of_its_buckets() {
+    let dashboard: Value = serde_json::from_str(DASHBOARD).expect("the dashboard is JSON");
+    let all = panels(&dashboard);
+
+    // A raw bucket query belongs only in a heatmap that reads Prometheus's
+    // buckets as they are (`format: heatmap`, no re-bucketing).
+    for panel in &all {
+        if bucket_families(panel).is_empty() {
+            continue;
+        }
+        assert_eq!(panel["type"], "heatmap", "{}", panel["title"]);
+        assert_eq!(panel["options"]["calculate"], false, "{}", panel["title"]);
+        for target in panel["targets"].as_array().expect("targets") {
+            assert_eq!(target["format"], "heatmap", "{}", panel["title"]);
+        }
+    }
+
+    // Every histogram the server exports (a family the dashboard reads
+    // `_bucket` series of anywhere) has a heatmap.
+    let mut histograms = Vec::new();
+    expressions(&dashboard, &mut histograms);
+    let histograms: BTreeSet<String> = histograms
+        .iter()
+        .flat_map(|expression| metric_names(expression))
+        .filter_map(|name| name.strip_suffix("_bucket").map(str::to_string))
+        .collect();
+    let in_heatmaps: BTreeSet<String> = all
+        .iter()
+        .flat_map(|panel| bucket_families(panel))
+        .collect();
+    assert_eq!(histograms, in_heatmaps);
+    assert_eq!(in_heatmaps.len(), 8, "{in_heatmaps:?}");
+
+    // And each one also has a quantile view beside its heatmap.
+    let mut quantile_expressions = Vec::new();
+    expressions(&dashboard, &mut quantile_expressions);
+    let with_quantiles: BTreeSet<String> = quantile_expressions
+        .iter()
+        .filter(|expression| expression.contains("histogram_quantile"))
+        .flat_map(|expression| metric_names(expression))
+        .filter_map(|name| name.strip_suffix("_bucket").map(str::to_string))
+        .collect();
+    assert_eq!(with_quantiles, in_heatmaps);
+}
+
+/// Whether a selector picks only failures: an `outcome="error"` or a 5xx
+/// status matcher. Such series exist only once a failure has happened.
+fn selects_failures(expression: &str) -> bool {
+    expression.contains(r#"outcome="error""#)
+        || expression.contains(r#"http_response_status_code=~"5..""#)
+}
+
+#[test]
+fn every_error_ratio_reads_zero_when_nothing_failed() {
+    // A failure series has no samples until the first failure, so a bare
+    // `failures / total` is empty ("No data") on a healthy server. The
+    // numerator must fall back to `0 * total` over the same labels, which
+    // keeps "no traffic" (an empty denominator) as "No data".
+    let dashboard: Value = serde_json::from_str(DASHBOARD).expect("the dashboard is JSON");
+    let mut found = Vec::new();
+    expressions(&dashboard, &mut found);
+    let ratios: Vec<_> = found
+        .iter()
+        .filter(|expression| selects_failures(expression) && expression.contains(" / "))
+        .collect();
+    assert!(ratios.len() >= 2, "found {ratios:?}");
+    for ratio in ratios {
+        let (numerator, _) = ratio.split_once(") / ").expect("a parenthesised numerator");
         assert!(
-            used.contains(expected),
-            "{expected} is not on the dashboard"
+            numerator.contains(" or on(") && numerator.contains("(0 * "),
+            "`{ratio}` is empty, not 0, when nothing has failed"
         );
     }
+}
+
+#[test]
+fn the_extractor_skips_set_operators() {
+    let names = metric_names(
+        r#"(sum by (tool) (rate(a_total{outcome="error"}[5m])) or on(tool) (0 * sum by (tool) (rate(a_total[5m])))) / sum by (tool) (rate(a_total[5m]))"#,
+    );
+    assert_eq!(names, ["a_total", "a_total", "a_total"]);
 }
 
 /// Every selector of a metric in `expression`, matchers included
@@ -154,11 +259,11 @@ fn every_selector_is_scoped_by_the_job_variable() {
 
 #[test]
 fn the_extractor_reads_labelled_selectors_with_variables() {
-    let expression = r#"sum by (le) (rate(okf_poll_duration_seconds_bucket{job=~"$job",outcome="error"}[$__rate_interval])) / okf_clock_offset_seconds{job=~"$job"}"#;
+    let expression = r#"sum by (le) (rate(okf_invalidations_lag_seconds_bucket{job=~"$job",outcome="error"}[$__rate_interval])) / okf_clock_offset_seconds{job=~"$job"}"#;
     assert_eq!(
         metric_names(expression),
         [
-            "okf_poll_duration_seconds_bucket",
+            "okf_invalidations_lag_seconds_bucket",
             "okf_clock_offset_seconds"
         ]
     );

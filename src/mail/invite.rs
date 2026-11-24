@@ -9,6 +9,7 @@ use sqlx::PgPool;
 
 use crate::config::Config;
 use crate::error::OkfError;
+use crate::labels::user_label;
 use crate::mail::{link, queue, Template, SETUP_PATH};
 use crate::store::audit::RowLock;
 use crate::store::audit::{self, Action, AuditActor};
@@ -79,9 +80,17 @@ pub async fn send_setup(
     let template = Template::Setup {
         // The one link builder, so the path matches the setup page.
         link: link(public_url, SETUP_PATH, &issued.token),
-        user: issued.user.name.clone(),
+        // The label, never the slug: the template field keeps its name.
+        user: user_label(&issued.user.display_name, issued.user.email.as_deref()),
     };
-    queue::enqueue_in(&mut tx, &issued.to, &template, now).await?;
+    queue::enqueue_in(
+        &mut tx,
+        &issued.to,
+        &template,
+        now,
+        &config.auth.default_brand(),
+    )
+    .await?;
     let entry = users::user_entry(Action::UserInvited, &issued.user.id, json!({}));
     audit::record(&mut tx, actor, &entry, now).await?;
     tx.commit().await?;
@@ -173,6 +182,69 @@ mod tests {
             1,
             "a new link replaces the old"
         );
+    }
+
+    /// The text and HTML bodies of the one queued mail.
+    async fn stored_bodies(pool: &sqlx::PgPool) -> (String, String) {
+        sqlx::query_as(
+            "SELECT convert_from(job, 'UTF8')::jsonb -> 'mail' ->> 'text', \
+                    convert_from(job, 'UTF8')::jsonb -> 'mail' ->> 'html' \
+             FROM apalis.jobs",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("the queued mail")
+    }
+
+    /// Queues a setup mail for `TEST_USER` with `display_name` and returns
+    /// its (text, html) bodies.
+    async fn setup_bodies_for(display_name: &str) -> (String, String) {
+        let db = test_db().await;
+        set_email(&db.pool, TEST_USER, "tester@example.com").await;
+        sqlx::query("UPDATE users SET display_name = $1 WHERE name = $2")
+            .bind(display_name)
+            .bind(TEST_USER)
+            .execute(&db.pool)
+            .await
+            .expect("display name");
+        send_setup(
+            &db.pool,
+            &with_public_url(),
+            TEST_USER,
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("queued");
+        stored_bodies(&db.pool).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_setup_email_greets_the_display_name() {
+        let (text, html) = setup_bodies_for("Alice Example").await;
+
+        assert!(text.starts_with("Hello Alice Example,"), "{text}");
+        assert!(html.contains("Hello Alice Example,"), "{html}");
+        assert!(!text.contains(TEST_USER), "the slug is not shown: {text}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_setup_email_falls_back_to_the_email_local_part_never_the_slug() {
+        let (text, _) = setup_bodies_for("").await;
+
+        assert!(text.starts_with("Hello tester,"), "{text}");
+        assert!(!text.contains(TEST_USER), "{text}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hostile_display_name_is_escaped_in_the_setup_emails_html() {
+        let (_, html) = setup_bodies_for("<b>x</b> & \"y\"").await;
+
+        assert!(
+            html.contains("Hello &lt;b&gt;x&lt;/b&gt; &amp; &quot;y&quot;,"),
+            "{html}"
+        );
+        assert!(!html.contains("<b>x</b>"), "{html}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

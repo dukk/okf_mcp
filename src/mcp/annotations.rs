@@ -13,6 +13,7 @@ use crate::mcp::OkfServer;
 
 /// Tools that only read: never change a catalog, a changeset or a run.
 pub(crate) const READS: &[&str] = &[
+    "cited_by",
     "get_concept",
     "history",
     "links_report",
@@ -30,6 +31,7 @@ pub(crate) const READS: &[&str] = &[
     "read_document",
     "search",
     "sprawl",
+    "whoami",
 ];
 
 /// Tools whose effect stays unpublished (a changeset entry, a maintenance
@@ -62,14 +64,19 @@ pub(crate) const STAGED: &[&str] = &[
 pub(crate) const DESTRUCTIVE: &[&str] =
     &["delete_concept", "discard", "maintenance_close", "publish"];
 
-/// The hints a tool's class implies (`open_world` is always false: every
-/// tool acts only on this server's catalogs).
+/// Tools that reach a service outside this server (open-world): they change
+/// no catalog, but what they send cannot be called back.
+pub(crate) const EXTERNAL: &[&str] = &["send_feedback"];
+
+/// The hints a tool's class implies (`open_world` is true only for
+/// [`EXTERNAL`]: every other tool acts only on this server's catalogs).
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Hints {
     read_only: bool,
     destructive: bool,
     idempotent: bool,
+    open_world: bool,
 }
 
 /// The hints for `name`'s class, or `None` for an unclassified tool.
@@ -81,18 +88,28 @@ fn expected(name: &str) -> Option<Hints> {
             read_only: true,
             destructive: false,
             idempotent: true,
+            open_world: false,
         })
     } else if STAGED.contains(&name) {
         Some(Hints {
             read_only: false,
             destructive: false,
             idempotent: false,
+            open_world: false,
         })
     } else if DESTRUCTIVE.contains(&name) {
         Some(Hints {
             read_only: false,
             destructive: true,
             idempotent: false,
+            open_world: false,
+        })
+    } else if EXTERNAL.contains(&name) {
+        Some(Hints {
+            read_only: false,
+            destructive: false,
+            idempotent: false,
+            open_world: true,
         })
     } else {
         None
@@ -118,7 +135,12 @@ fn every_tool_is_classified_exactly_once() {
         .collect();
     let mut classified = BTreeSet::new();
 
-    for name in READS.iter().chain(STAGED).chain(DESTRUCTIVE) {
+    for name in READS
+        .iter()
+        .chain(STAGED)
+        .chain(DESTRUCTIVE)
+        .chain(EXTERNAL)
+    {
         // `insert` returns false for a value already in the set.
         assert!(
             classified.insert((*name).to_string()),
@@ -130,7 +152,7 @@ fn every_tool_is_classified_exactly_once() {
         registered, classified,
         "the registered tools and the classified tools differ"
     );
-    assert_eq!(registered.len(), 42);
+    assert_eq!(registered.len(), 45);
 }
 
 #[test]
@@ -164,7 +186,11 @@ fn every_tool_has_a_title_and_all_four_hints() {
             Some(hints.idempotent),
             "{name}"
         );
-        assert_eq!(annotations.open_world_hint, Some(false), "{name}");
+        assert_eq!(
+            annotations.open_world_hint,
+            Some(hints.open_world),
+            "{name}"
+        );
     }
 }
 

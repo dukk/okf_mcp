@@ -1,0 +1,13 @@
+## Added
+- `folder_summary` on `create_concept` (with `index_summary`), `move_concept` and `split_concept` (issue #668): the summary of the new folder's listing in its parent's `index.md`, written in place of `TODO: describe this folder`. The listing stays a replayable `ListBullet`, so two changesets that each create a top-level folder both publish. When the call creates several folders, it describes the innermost one (the concept's own folder); the others get the TODO. It is refused for a folder that exists or the root, before anything is written.
+- `index` with a folder `path` (`/infra/`, `/infra/index.md`, or `/infra` when there is no concept `/infra.md`) sets the summary of that folder's listing in its parent's `index.md`, recorded as the new replay op `set_listing_summary`. Publish redoes it on newer text: it replaces the text after the first ` - ` past the bullet's leading link and keeps the label and link as they read then. A bullet no longer there at publish is refused with a clear error, never dropped or applied to another line. `section` and `title` are refused for a folder.
+
+## Changed
+- `ensure_index`'s note for a folder it lists with the TODO no longer says to edit the parent's listing: "created /x/index.md; replace its TODO line, and describe the folder with folder_summary, or with index on the folder's path (ending in /)" (with `folder_summary`: "replace its TODO line"). `repair_indexes`' note for a folder it lists with a TODO adds "describe it with index on /x/".
+- `tests/parity.rs` translates `okf.py`'s "; replace its TODO lines (and the parent's listing)" into the new wording, and `tests/golden/ops.json` carries it.
+
+## Notes
+- Only a bullet whose first link opens it (`* [Label](x/) ...`) counts as the folder's listing, so a link to the folder in another bullet's summary is never edited. A raw (unencoded) folder bullet that versions before #453 wrote, such as `[My docs](my docs/)`, is not matched either: `index` refuses it and points at `repair_indexes`, and replay refuses rather than guess, because it cannot tell which files exist (as for `RewriteRawListing`).
+- A free edit of the parent `index.md` after `index` on a folder still clears the entry's replay, so the entry is stale-checked at publish as before.
+- The summary goes through what `index` applies to a summary: whitespace (newlines included) collapses to single spaces, and the written index passes the write path's secret scan. `index` has no length limit on a summary, so neither does this.
+- `okf.py`'s `ensure_index` has no summary; with no `folder_summary` the TODO default is unchanged.

@@ -8,6 +8,8 @@
 //! piece of text goes through `escape`. There is no template engine; the
 //! document shell and the response headers come from `crate::http::pages`.
 
+use std::collections::BTreeMap;
+
 use axum::http::StatusCode;
 use axum::response::Response;
 
@@ -263,14 +265,51 @@ pub fn summary_page(
     )
 }
 
+/// How a signed-in consent page's offer was found (issue #736): the page
+/// shows one page of the ceiling at a time, found by a name prefix, and
+/// carries over the catalogs ticked before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Browse<'a> {
+    /// The prefix the page's catalogs start with; empty for none.
+    pub prefix: &'a str,
+    /// Whether another page of the ceiling follows ("Next catalogs").
+    pub more: bool,
+    /// Whether the offer is the user's whole ceiling: only then may a
+    /// lone catalog start preselected, and an empty offer say the user
+    /// has nothing to share.
+    pub whole: bool,
+    /// The catalogs carried over ticked, at the level chosen; `None` for
+    /// none.
+    pub chosen: Option<&'a BTreeMap<String, Access>>,
+}
+
+impl Browse<'_> {
+    /// An offer that is the whole ceiling, with nothing ticked.
+    pub const WHOLE: Browse<'static> = Browse {
+        prefix: "",
+        more: false,
+        whole: true,
+        chosen: None,
+    };
+}
+
 /// What the signed-in consent page shows beyond [`PageView`].
 // `Debug` by hand: the consent nonce never reaches a log.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct UserPage<'a> {
-    /// The signed-in user's name.
-    pub user: &'a str,
-    /// The ceiling it offers: the catalogs and levels the user may grant.
+    /// The signed-in user's label (never its slug).
+    pub user_label: &'a str,
+    /// What it offers: the catalogs and levels the user may grant, one page
+    /// of the ceiling and the catalogs carried over ticked (issue #736),
+    /// never the whole ceiling.
     pub ceiling: &'a Ceiling,
+    /// How the offer was found: its prefix, whether more follow, whether
+    /// it is the whole ceiling, and what stays ticked.
+    pub browse: Browse<'a>,
+    /// `(slug, shown text)` for each catalog of the ceiling, in order, every
+    /// text distinct (`Labels::catalog_choices`). The slug stays in ids,
+    /// names and values; only the text is shown to the person.
+    pub catalog_labels: &'a [(String, String)],
     /// The page's consent nonce (the hidden `summary` input).
     pub nonce: &'a str,
     /// The "Use a sign-in code instead" link (same-origin, unescaped).
@@ -288,8 +327,9 @@ impl std::fmt::Debug for UserPage<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("UserPage")
-            .field("user", &self.user)
+            .field("user_label", &self.user_label)
             .field("ceiling", &self.ceiling)
+            .field("browse", &self.browse)
             .field("nonce", &"<redacted>")
             .field("code_href", &self.code_href)
             .finish()
@@ -300,6 +340,17 @@ impl std::fmt::Debug for UserPage<'_> {
 /// ceiling catalog (only the levels the ceiling allows), a default catalog
 /// select, Approve and Deny, and the sign-in code link. With an empty
 /// ceiling there is nothing to approve: Deny and the link only.
+///
+/// The catalog controls and the default select sit in a native `<details>`
+/// disclosure labelled "Advanced Options" (issue #718), so the page stays
+/// script-free. With several catalogs offered it starts open and nothing is
+/// preselected. With exactly one it starts closed and that catalog is
+/// preselected: ticked, at its ceiling's level (write only when the ceiling
+/// allows write), and as the default. A closed disclosure's controls still
+/// submit, and the preselection is only the form's starting state: the
+/// approval is checked exactly as any other choice is. When `error` is set
+/// (a refused choice shown again) it starts open, so the controls the
+/// message is about are in view.
 ///
 /// # Arguments
 /// * `view` - the request.
@@ -314,7 +365,8 @@ pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option
         r#"        <p class="muted"><a href="{}" id="consent-use-code">Use a sign-in code instead</a></p>"#,
         escape(user.code_href)
     );
-    if user.ceiling.is_empty() {
+    let browse = user.browse;
+    if user.ceiling.is_empty() && browse.whole {
         return format!(
             r#"        <h1>Allow access?</h1>
 {client}
@@ -330,56 +382,160 @@ pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option
             hidden = hidden_fields(view),
         );
     }
+    // The sole offered catalog, when there is exactly one: it starts
+    // preselected. Several catalogs keep the old defaults (nothing ticked,
+    // read, no default), since guessing among them would be a choice the
+    // person did not make.
+    // Only when the offer is the whole ceiling: one catalog found by a
+    // prefix is not the only one the person could mean.
+    let sole = match (user.ceiling.len(), browse.whole) {
+        (1, true) => user.ceiling.keys().next().map(String::as_str),
+        _ => None,
+    };
+    // A catalog carried over ticked, and its chosen level.
+    let carried = |catalog: &str| {
+        browse
+            .chosen
+            .and_then(|chosen| chosen.get(catalog))
+            .copied()
+    };
     // Catalog names are `[a-z0-9-]+` (a schema CHECK), so they are safe in
-    // ids and names; they are escaped anyway, as everything is.
+    // ids and names; they are escaped anyway, as everything is. The label
+    // is free text, so it is escaped as visible text and as an attribute
+    // value (`escape` covers both).
     let rows: String = user
-        .ceiling
+        .catalog_labels
         .iter()
-        .map(|(catalog, &allowed)| {
+        // `filter_map` skips a slug the ceiling no longer holds (never, as
+        // the caller builds both from one ceiling).
+        .filter_map(|(catalog, shown)| user.ceiling.get(catalog).map(|&allowed| (catalog, shown, allowed)))
+        .map(|(catalog, shown, allowed)| {
             let name = escape(catalog);
-            let write = if allowed >= Access::Write {
-                r#"
-                        <option value="write">write</option>"#
+            let label = escape(shown);
+            let kept = carried(catalog);
+            let preselected = sole == Some(catalog.as_str());
+            let checked = if preselected || kept.is_some() {
+                " checked"
+            } else {
+                ""
+            };
+            // Write is offered only within the ceiling, and preselected only
+            // where it is offered (or was chosen); a read-only catalog
+            // starts at read, its only option.
+            let write_chosen = kept.map_or(preselected, |level| level >= Access::Write);
+            let write = match (allowed >= Access::Write, write_chosen) {
+                (true, true) => {
+                    r#"
+                            <option value="write" selected>write</option>"#
+                }
+                (true, false) => {
+                    r#"
+                            <option value="write">write</option>"#
+                }
+                (false, _) => "",
+            };
+            format!(
+                r#"                    <div class="consent-catalog">
+                        <label><input type="checkbox" name="grant.{name}" value="on" id="consent-catalog-{name}"{checked}> {label}</label>
+                        <select name="level.{name}" id="consent-level-{name}" aria-label="Access to {label}">
+                            <option value="read">read</option>{write}
+                        </select>
+                    </div>
+"#
+            )
+        })
+        .collect();
+    // Found by a prefix and nothing matched: say so where the rows go.
+    let rows = if rows.is_empty() {
+        format!(
+            r#"                    <p class="muted" id="consent-none-found">No catalog of yours starts with <strong>{}</strong>.</p>
+"#,
+            escape(browse.prefix)
+        )
+    } else {
+        rows
+    };
+    // The finder: a prefix and Find, which keep the ticked catalogs, and
+    // Next catalogs when the ceiling has more after this page. Plain
+    // submit buttons, so the page stays script-free.
+    let more = if browse.more {
+        r#"
+                <button type="submit" name="action" value="more" id="consent-more" class="secondary" formnovalidate>Next catalogs</button>"#
+    } else {
+        ""
+    };
+    let finder = format!(
+        r#"                <div class="consent-find">
+                    <label>Find catalogs whose name starts with
+                        <input type="search" name="find" id="consent-find" value="{prefix}" autocomplete="off">
+                    </label>
+                    <button type="submit" name="action" value="find" id="consent-find-go" class="secondary" formnovalidate>Find</button>{more}
+                    <p class="muted small">Catalogs you tick stay chosen when you find others.</p>
+                </div>
+"#,
+        prefix = escape(browse.prefix),
+    );
+    let defaults: String = user
+        .catalog_labels
+        .iter()
+        .map(|(catalog, shown)| {
+            let name = escape(catalog);
+            let label = escape(shown);
+            let selected = if sole == Some(catalog.as_str()) {
+                " selected"
             } else {
                 ""
             };
             format!(
-                r#"                <div class="consent-catalog">
-                    <label><input type="checkbox" name="grant.{name}" value="on" id="consent-catalog-{name}"> {name}</label>
-                    <select name="level.{name}" id="consent-level-{name}" aria-label="Access to {name}">
-                        <option value="read">read</option>{write}
-                    </select>
-                </div>
+                r#"                        <option value="{name}"{selected}>{label}</option>
 "#
             )
         })
         .collect();
-    let defaults: String = user
-        .ceiling
-        .keys()
-        .map(|catalog| {
-            let name = escape(catalog);
-            format!(
-                r#"                    <option value="{name}">{name}</option>
-"#
-            )
+    // Open with several catalogs to choose among, or to show what a refusal
+    // is about; closed for the one-catalog default.
+    let open = if sole.is_none() || error.is_some() {
+        " open"
+    } else {
+        ""
+    };
+    // With the controls closed, say in plain view what Approve grants as
+    // the page starts, so consent never rests on hidden settings.
+    let preset = sole
+        .and_then(|catalog| {
+            let allowed = user.ceiling.get(catalog)?;
+            let shown = user
+                .catalog_labels
+                .iter()
+                .find(|(slug, _)| slug == catalog)
+                .map_or(catalog, |(_, shown)| shown.as_str());
+            Some(format!(
+                r#"        <p class="muted" id="consent-preset">Unless you change it under Advanced Options, Approve grants <strong>{level}</strong> access to <strong>{label}</strong> and makes it the default catalog.</p>
+"#,
+                // The level the row preselects, from the same rule.
+                level = if *allowed >= Access::Write { "write" } else { "read" },
+                label = escape(shown),
+            ))
         })
-        .collect();
+        .unwrap_or_default();
     format!(
         r#"        <h1>Allow access?</h1>
 {client}
         <p class="muted">Signed in as <strong id="consent-user">{user}</strong>. Choose what <strong>{name}</strong> may use. You can grant up to your own access.</p>
-{error}        <form method="post" action="/oauth/authorize" id="consent-user-form">
+{preset}{error}        <form method="post" action="/oauth/authorize" id="consent-user-form">
             {hidden}
             <input type="hidden" name="summary" value="{nonce}">
-            <fieldset id="consent-catalogs">
-                <legend>Catalogs</legend>
-{rows}            </fieldset>
-            <label>Default catalog
-                <select name="default_catalog" id="consent-default">
-                    <option value="">None</option>
-{defaults}                </select>
-            </label>
+            <details id="consent-advanced"{open}>
+                <summary id="consent-advanced-toggle">Advanced Options</summary>
+{finder}                <fieldset id="consent-catalogs">
+                    <legend>Catalogs</legend>
+{rows}                </fieldset>
+                <label>Default catalog
+                    <select name="default_catalog" id="consent-default">
+                        <option value="">None</option>
+{defaults}                    </select>
+                </label>
+            </details>
             <div class="consent-actions">
                 <button type="submit" name="action" value="consent" id="consent-approve">Approve</button>
                 <button type="submit" name="action" value="deny" id="consent-deny" class="secondary" formnovalidate>Deny</button>
@@ -387,7 +543,7 @@ pub(crate) fn user_page_html(view: &PageView, user: &UserPage<'_>, error: Option
         </form>
 {link}"#,
         client = client_block(view),
-        user = escape(user.user),
+        user = escape(user.user_label),
         name = escape(&view.client_name),
         error = error_line(error),
         hidden = hidden_fields(view),
@@ -457,8 +613,7 @@ pub fn error_page(status: StatusCode, message: &str, brand: &Brand) -> Response 
     page(status, "Cannot connect", &error_page_html(message), brand)
 }
 
-/// The forwarding page's HTML: a zero-delay refresh to `target` and a link
-/// to it for a browser that does not follow refreshes.
+/// The forwarding page's HTML ([`pages::forward_body`]).
 ///
 /// # Arguments
 /// * `target` - the client's redirect URI with the answer added.
@@ -467,15 +622,7 @@ pub fn error_page(status: StatusCode, message: &str, brand: &Brand) -> Response 
 /// The page body (no form).
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn forward_page_html(target: &str) -> String {
-    // A `<meta>` in the body is still processed: the HTML parser applies a
-    // refresh wherever the element appears. The URL is unquoted after
-    // `url=`; it starts with its scheme, so it never begins with a quote.
-    format!(
-        r#"        <meta http-equiv="refresh" content="0;url={target}">
-        <h1>Returning to your client</h1>
-        <p class="muted">If nothing happens, <a id="consent-forward" href="{target}">continue</a>.</p>"#,
-        target = escape(target)
-    )
+    pages::forward_body("Returning to your client", "consent-forward", target)
 }
 
 /// The answer to a consent form's Approve or Deny: a page that sends the
@@ -543,10 +690,12 @@ mod tests {
     fn debug_never_prints_the_user_pages_nonce() {
         let ceiling = Ceiling::new();
         let user = UserPage {
-            user: "alice",
+            user_label: "alice",
+            catalog_labels: &[],
             ceiling: &ceiling,
             nonce: "consent-nonce-that-must-not-leak",
             code_href: "/oauth/authorize?a=1&signin=code",
+            browse: Browse::WHOLE,
         };
 
         let printed = format!("{user:?}");
@@ -691,11 +840,17 @@ mod tests {
     #[test]
     fn the_user_page_offers_each_catalog_at_most_at_its_ceiling() {
         let ceiling = ceiling();
+        let labels = [
+            ("main".to_string(), "Main <b>book</b>".to_string()),
+            ("other".to_string(), "Other".to_string()),
+        ];
         let user = UserPage {
-            user: "<alice>",
+            user_label: "<alice>",
+            catalog_labels: &labels,
             ceiling: &ceiling,
             nonce: "n1",
             code_href: "/oauth/authorize?a=1&signin=code",
+            browse: Browse::WHOLE,
         };
 
         let html = user_page_html(&view(), &user, Some("bad <choice>"));
@@ -703,6 +858,12 @@ mod tests {
         assert!(html.contains(r#"<strong id="consent-user">&lt;alice&gt;</strong>"#));
         assert!(html.contains(r#"name="grant.main""#));
         assert!(html.contains(r#"name="grant.other""#));
+        // The visible text is the escaped label; ids, names and values keep
+        // the slug.
+        assert!(html.contains(r#"id="consent-catalog-main"> Main &lt;b&gt;book&lt;/b&gt;</label>"#));
+        assert!(html.contains(r#"aria-label="Access to Main &lt;b&gt;book&lt;/b&gt;""#));
+        assert!(html.contains(r#"<option value="main">Main &lt;b&gt;book&lt;/b&gt;</option>"#));
+        assert!(!html.contains("<b>book"), "{html}");
         // `main` offers write, `other` only read.
         let other = &html[html.find(r#"name="level.other""#).expect("other's select")..];
         let other = &other[..other.find("</select>").expect("its end")];
@@ -717,14 +878,174 @@ mod tests {
         assert!(!document.contains("style="));
     }
 
+    /// A signed-in page offering `ceiling`, labelled by slug, with `error`.
+    fn user_html(ceiling: &Ceiling, error: Option<&str>) -> String {
+        let labels: Vec<(String, String)> = ceiling
+            .keys()
+            .map(|slug| (slug.clone(), format!("{slug} <i>x</i>")))
+            .collect();
+        let user = UserPage {
+            user_label: "alice",
+            catalog_labels: &labels,
+            ceiling,
+            nonce: "n1",
+            code_href: "/oauth/authorize?a=1&signin=code",
+            browse: Browse::WHOLE,
+        };
+        user_page_html(&view(), &user, error)
+    }
+
+    /// The text from `start` up to the next `end` in `html`.
+    fn between<'h>(html: &'h str, start: &str, end: &str) -> &'h str {
+        let from = &html[html.find(start).expect(start)..];
+        &from[..from.find(end).expect(end)]
+    }
+
+    /// The catalog controls and the default select sit inside the
+    /// "Advanced Options" disclosure; the error line, Approve, Deny and the
+    /// code link sit outside it.
+    fn assert_advanced_options_hold_only_the_choices(html: &str) {
+        let advanced = between(html, r#"<details id="consent-advanced""#, "</details>");
+        assert!(
+            advanced
+                .contains(r#"<summary id="consent-advanced-toggle">Advanced Options</summary>"#),
+            "{html}"
+        );
+        assert!(advanced.contains(r#"id="consent-catalogs""#), "{html}");
+        assert!(advanced.contains(r#"name="default_catalog""#), "{html}");
+        for outside in [
+            r#"id="consent-approve""#,
+            r#"id="consent-deny""#,
+            r#"id="consent-use-code""#,
+            r#"id="consent-error""#,
+            r#"id="consent-client""#,
+            r#"name="summary""#,
+        ] {
+            assert!(!advanced.contains(outside), "{outside} is outside: {html}");
+        }
+        // Nothing in it is disabled: a closed disclosure still submits.
+        assert!(!advanced.contains("disabled"), "{html}");
+    }
+
+    #[test]
+    fn several_catalogs_open_advanced_options_with_nothing_preselected() {
+        let html = user_html(&ceiling(), None);
+
+        assert_advanced_options_hold_only_the_choices(&html);
+        assert!(
+            html.contains(r#"<details id="consent-advanced" open>"#),
+            "{html}"
+        );
+        assert!(!html.contains(" checked>"), "nothing is ticked: {html}");
+        assert!(
+            !html.contains(" selected>"),
+            "read and None stay first: {html}"
+        );
+        assert!(!html.contains(r#"id="consent-preset""#), "{html}");
+    }
+
+    #[test]
+    fn one_write_catalog_starts_closed_ticked_at_write_and_as_the_default() {
+        let ceiling: Ceiling = [("main".to_string(), Access::Write)].into_iter().collect();
+
+        let html = user_html(&ceiling, None);
+
+        assert_advanced_options_hold_only_the_choices(&html);
+        assert!(
+            html.contains(r#"<details id="consent-advanced">"#),
+            "{html}"
+        );
+        assert!(!html.contains(" open"), "{html}");
+        assert!(
+            html.contains(r#"name="grant.main" value="on" id="consent-catalog-main" checked>"#),
+            "{html}"
+        );
+        let level = between(&html, r#"name="level.main""#, "</select>");
+        assert!(
+            level.contains(r#"<option value="write" selected>write</option>"#),
+            "{level}"
+        );
+        let default = between(&html, r#"name="default_catalog""#, "</select>");
+        assert!(
+            default.contains(r#"<option value="main" selected>main &lt;i&gt;x&lt;/i&gt;</option>"#),
+            "{default}"
+        );
+        assert!(
+            default.contains(r#"<option value="">None</option>"#),
+            "{default}"
+        );
+        // What Approve grants is said outside the closed disclosure, escaped.
+        assert!(
+            html.contains(
+                "Approve grants <strong>write</strong> access to <strong>main &lt;i&gt;x&lt;/i&gt;</strong> and makes it the default catalog."
+            ),
+            "{html}"
+        );
+        assert!(!html.contains("<i>x</i>"), "labels are escaped: {html}");
+    }
+
+    #[test]
+    fn one_read_only_catalog_starts_closed_ticked_at_read_with_no_write() {
+        let ceiling: Ceiling = [("main".to_string(), Access::Read)].into_iter().collect();
+
+        let html = user_html(&ceiling, None);
+
+        assert_advanced_options_hold_only_the_choices(&html);
+        assert!(
+            html.contains(r#"<details id="consent-advanced">"#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"id="consent-catalog-main" checked>"#),
+            "{html}"
+        );
+        let level = between(&html, r#"name="level.main""#, "</select>");
+        assert!(!level.contains("write"), "write is not offered: {level}");
+        assert!(
+            level.contains(r#"<option value="read">read</option>"#),
+            "{level}"
+        );
+        let default = between(&html, r#"name="default_catalog""#, "</select>");
+        assert!(
+            default.contains(r#"<option value="main" selected>"#),
+            "{default}"
+        );
+        assert!(
+            html.contains("Approve grants <strong>read</strong> access to"),
+            "{html}"
+        );
+        assert!(!html.contains("<strong>write</strong>"), "{html}");
+    }
+
+    #[test]
+    fn a_refused_choice_shows_one_catalogs_page_with_advanced_options_open() {
+        let ceiling: Ceiling = [("main".to_string(), Access::Write)].into_iter().collect();
+
+        let html = user_html(&ceiling, Some("Choose at least one catalog, or Deny."));
+
+        assert_advanced_options_hold_only_the_choices(&html);
+        assert!(
+            html.contains(r#"<details id="consent-advanced" open>"#),
+            "{html}"
+        );
+        assert!(html.contains(r#"id="consent-error""#), "{html}");
+        // The form starts from the same defaults again.
+        assert!(
+            html.contains(r#"id="consent-catalog-main" checked>"#),
+            "{html}"
+        );
+    }
+
     #[test]
     fn an_empty_ceiling_offers_only_deny_and_the_code_link() {
         let empty = Ceiling::new();
         let user = UserPage {
-            user: "alice",
+            user_label: "alice",
+            catalog_labels: &[],
             ceiling: &empty,
             nonce: "n1",
             code_href: "/oauth/authorize?a=1&signin=code",
+            browse: Browse::WHOLE,
         };
 
         let html = user_page_html(&view(), &user, None);
@@ -734,6 +1055,9 @@ mod tests {
         assert!(html.contains(r#"id="consent-use-code""#));
         assert!(!html.contains(r#"id="consent-approve""#));
         assert!(!html.contains(r#"name="summary""#), "nothing to approve");
+        assert!(!html.contains("Advanced Options"), "nothing to choose");
+        assert!(!html.contains("<details"), "{html}");
+        assert!(!html.contains(r#"id="consent-preset""#), "{html}");
     }
 
     #[test]

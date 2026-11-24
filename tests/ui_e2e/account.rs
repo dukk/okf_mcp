@@ -6,15 +6,17 @@
 //! one's), unlinking an identity, the ceiling as `/me` gives it now and
 //! recent sign-ins, linking an identity through a mock OIDC provider (and a
 //! link the server refuses), a credential that fails verification at
-//! finish, and what a key sees.
+//! finish, and what a key sees. M17 Task 10a adds the display name (edit,
+//! refusal, the Account ID line) and the "Teams you own" editor.
 
 use std::time::Duration;
 
 use chrono::Utc;
 use okf_mcp::config::AuthConfig;
+use okf_mcp::labels::DisplayName;
 use okf_mcp::store::keys::Access;
 use okf_mcp::store::passwords::{self, SignInOutcome};
-use okf_mcp::store::{ceiling, identities, passkeys, user_sessions, users};
+use okf_mcp::store::{ceiling, identities, passkeys, teams, user_sessions, users};
 use serde_json::json;
 use webauthn_authenticator_rs::prelude::WebauthnAuthenticator as _;
 use webauthn_authenticator_rs::softpasskey::SoftPasskey;
@@ -110,6 +112,38 @@ async fn oidc_server(idp_server: &MockIdp) -> TestServer {
     .await
 }
 
+/// Waits until the Account page has drawn every section (its view carries
+/// `data-loaded=true`, set once all six reads have settled).
+///
+/// # Arguments
+/// * `ui` - the browser the journey drives.
+///
+/// # Panics
+/// When the page is not fully drawn within the harness's wait.
+fn wait_loaded(ui: &Ui) {
+    ui.wait_visible("#main .view[data-loaded=true]");
+}
+
+/// Opens the Account page and waits until it has drawn every section.
+///
+/// The six sections load in any order and each one moves the controls below
+/// it, so a control that is visible is not yet in its final place: a click
+/// on it can land on an element a later section redraws (`Detached`), or
+/// miss a section that has not answered within the wait on a loaded machine
+/// (issues #373, #440, #500). A journey that must see the page before it is
+/// loaded (a held read), or on which it never loads (a key's session is
+/// refused the page), opens it with `ui.open` instead.
+///
+/// # Arguments
+/// * `ui` - the browser the journey drives.
+///
+/// # Panics
+/// When the page is not fully drawn within the harness's wait.
+fn open_account(ui: &Ui) {
+    ui.open("/account");
+    wait_loaded(ui);
+}
+
 /// The `data-test` of the Sign out button on the session row whose text
 /// contains `agent`, in `#session-table`.
 fn revoke_button_of(ui: &Ui, agent: &str) -> String {
@@ -130,7 +164,7 @@ async fn a_member_changes_their_password_and_signs_in_with_the_new_one() {
     member(&server, Access::Write).await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.wait_visible("#password-form");
         ui.fill("#password-form input[name=current]", PASSWORD);
         ui.fill("#password-form input[name=password]", NEW_PASSWORD);
@@ -163,7 +197,7 @@ async fn a_wrong_current_password_is_refused_and_keeps_the_session() {
     member(&server, Access::Write).await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.fill(
             "#password-form input[name=current]",
             "not the password at all",
@@ -199,7 +233,7 @@ async fn mismatched_new_passwords_are_caught_before_sending() {
     member(&server, Access::Write).await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.fill("#password-form input[name=current]", PASSWORD);
         ui.fill("#password-form input[name=password]", NEW_PASSWORD);
         ui.fill(
@@ -231,7 +265,7 @@ async fn a_member_adds_a_passkey_with_the_browser_and_other_sessions_end() {
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         let _authenticator = ui.virtual_authenticator();
-        ui.open("/account");
+        open_account(ui);
         ui.wait_text("#session-table", "phone browser");
         ui.wait_text("#passkey-list", "No passkeys yet");
         ui.fill("#passkey-name", "laptop");
@@ -263,7 +297,7 @@ async fn a_member_renames_and_removes_a_passkey_and_a_cancelled_add_adds_none() 
     alices_passkey(&server.db.pool, &id, "laptop").await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.wait_visible("[data-test=passkey-laptop]");
         // Rename: a write signed in by session, so it also proves the
         // console sends the CSRF header.
@@ -321,7 +355,7 @@ async fn the_last_sign_in_method_stays_and_the_page_says_why() {
                 .await
                 .expect("drop alice's password");
         });
-        ui.open("/account");
+        open_account(ui);
         ui.click("[data-test=passkey-remove-laptop]");
         ui.click("#confirm-ok");
         // The 409's reason.
@@ -347,7 +381,7 @@ async fn a_member_signs_out_other_sessions_one_at_a_time() {
     }
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.wait_text("#session-table", "phone browser");
         ui.wait_text("#session-table", "this browser");
         let phone = revoke_button_of(ui, "phone browser");
@@ -380,7 +414,7 @@ async fn signing_this_browser_out_from_the_account_page_ends_its_session() {
     another_session(pool, &id, "phone browser").await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.wait_text("#session-table", "phone browser");
         let here = revoke_button_of(ui, "this browser");
         ui.click(&format!("[data-test={here}]"));
@@ -420,7 +454,7 @@ async fn a_member_unlinks_an_identity_and_sees_their_ceiling_and_sign_ins() {
     let journey_pool = pool.clone();
     let ran = drive(console_base(&server), move |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.wait_text("[data-test=ceiling-main]", "main");
         ui.wait_text("#ceiling-table", "write");
         assert!(!ui.text("#ceiling-table").contains("other"));
@@ -433,19 +467,21 @@ async fn a_member_unlinks_an_identity_and_sees_their_ceiling_and_sign_ins() {
         // An admin entitles alice to `other` mid-session: the page shows
         // the ceiling /me gives now, not the one she signed in with.
         runtime.block_on(async {
-            ceiling::entitle(
-                &journey_pool,
-                &NewEntitlement {
-                    user: "alice",
-                    catalog: "other",
-                    access: Access::Read,
-                },
-                &AuditActor::cli(),
-                Utc::now(),
-            )
-            .await
-            .expect("entitle alice to other");
-            app.poll().await.expect("poll");
+            crate::support::server::applied(&app, async {
+                ceiling::entitle(
+                    &journey_pool,
+                    &NewEntitlement {
+                        user: "alice",
+                        catalog: "other",
+                        access: Access::Read,
+                    },
+                    &AuditActor::cli(),
+                    Utc::now(),
+                )
+                .await
+                .expect("entitle alice to other");
+            })
+            .await;
         });
         ui.click("a[data-nav=my-keys]");
         ui.wait_visible("#my-keys-table");
@@ -468,7 +504,7 @@ async fn a_bad_credential_at_finish_shows_the_reason_and_keeps_the_session() {
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
         let _authenticator = ui.virtual_authenticator();
-        ui.open("/account");
+        open_account(ui);
         ui.wait_text("#passkey-list", "No passkeys yet");
         // The page's own fetch, wrapped: the finish request's client data
         // claims a sign-in (`webauthn.get`), so the server cannot verify it.
@@ -504,6 +540,37 @@ async fn a_bad_credential_at_finish_shows_the_reason_and_keeps_the_session() {
     assert!(stored.is_empty());
 }
 
+/// The Account page's loaded marker comes only after the slowest section
+/// has drawn (issue #373): a journey that waits for it never clicks a
+/// control that is about to move.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_account_page_marks_itself_loaded_after_its_slowest_section() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let id = alices_id(&server.db.pool).await;
+    another_session(&server.db.pool, &id, "phone browser").await;
+    drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        // The session list is held back; every other section draws.
+        ui.hold_next("GET", "/me/sessions");
+        ui.open("/account");
+        ui.wait_text("#passkey-list", "No passkeys yet");
+        ui.wait_visible("#sign-in-table");
+        ui.wait_text("#identity-list", "No linked accounts");
+        assert!(
+            !ui.present("#main .view[data-loaded=true]"),
+            "the page is not loaded while the session list is still unread"
+        );
+        assert!(!ui.present("#session-table"));
+        ui.release_held();
+        wait_loaded(ui);
+        // The marker came with the list.
+        assert!(ui.present("#session-table"));
+        ui.wait_text("#session-table", "phone browser");
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_member_links_an_identity_and_keeps_their_other_sessions() {
     let provider = idp::start().await;
@@ -515,13 +582,23 @@ async fn a_member_links_an_identity_and_keeps_their_other_sessions() {
     another_session(pool, &id, "phone browser").await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        // Every section has drawn before anything is clicked: each one moves
+        // the controls below it, and the phone's row proves the second
+        // session existed when the page first read the list (issue #373).
+        open_account(ui);
+        ui.wait_text("#session-table", "phone browser");
         ui.wait_text("[data-test=identity-link-example]", "Link Example ID");
         ui.click("#identity-keep-sessions");
+        // The link's request reads the box when it is sent: a click that
+        // did not tick it would end the phone's session, and the journey
+        // would only notice at the end, as a missing row.
+        ui.wait_checked("#identity-keep-sessions");
         ui.click("[data-test=identity-link-example]");
         // Off to the provider, which signs in at once and sends the browser
         // to the callback, which links and comes back to the Account page.
         ui.wait_text("[data-test=identity-example]", "alice@id.example.com");
+        // The new page: wait for all of it, then the list it drew.
+        wait_loaded(ui);
         assert_eq!(
             ui.eval("() => location.pathname + location.hash", json!(null)),
             json!("/ui/#/account")
@@ -559,7 +636,7 @@ async fn a_refused_link_shows_the_reason_and_stays_on_the_page() {
     let id = alices_id(&server.db.pool).await;
     let ran = drive(console_base(&server), |ui| {
         ui.sign_in_password(EMAIL, PASSWORD);
-        ui.open("/account");
+        open_account(ui);
         ui.click("[data-test=identity-link-example]");
         ui.wait_text("#toasts", "discovery for example failed");
         assert_eq!(
@@ -600,4 +677,408 @@ async fn my_grants_and_account_say_so_to_a_key() {
         assert!(!ui.page.is_visible("#password-form").expect("visible"));
     })
     .await;
+}
+
+/// alice's `#account-display-name` value.
+const DISPLAY_NAME_VALUE: &str = "() => document.querySelector('#account-display-name').value";
+
+/// The value of the input `selector`.
+fn input_value(ui: &Ui, selector: &str) -> serde_json::Value {
+    ui.eval(
+        "(selector) => document.querySelector(selector).value",
+        json!(selector),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_edits_their_display_name_and_an_over_long_one_is_refused() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let pool = &server.db.pool;
+    crate::support::server::applied(&server.app, async {
+        users::set_display_name(
+            pool,
+            "alice",
+            &DisplayName::parse("Alice Example").expect("a display name"),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("name alice");
+    })
+    .await;
+    let too_long = "x".repeat(81);
+    let ran = drive(console_base(&server), move |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.wait_text("#whoami", "Alice Example - write");
+        open_account(ui);
+        ui.wait_visible("#account-display-name");
+        assert_eq!(ui.eval(DISPLAY_NAME_VALUE, json!(null)), "Alice Example");
+        // The slug stays visible as an id, apart from the name.
+        assert_eq!(
+            ui.wait_text("#account-id", "Account ID: alice").trim(),
+            "Account ID: alice"
+        );
+        ui.fill("#account-display-name", "Alice B");
+        ui.click("#account-display-name-save");
+        ui.wait_text("#toasts", "Display name saved");
+        ui.wait_text("#whoami", "Alice B - write");
+        ui.page
+            .reload(rustwright::GotoOptions::default())
+            .expect("reload");
+        ui.wait_text("#whoami", "Alice B - write");
+        ui.wait_visible("#account-display-name");
+        assert_eq!(ui.eval(DISPLAY_NAME_VALUE, json!(null)), "Alice B");
+        ui.fill("#account-display-name", &too_long);
+        ui.click("#account-display-name-save");
+        ui.wait_text("#toasts", "longer than 80 characters");
+        ui.wait_text("#whoami", "Alice B - write");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let stored = users::find(pool, "alice").await.expect("alice");
+    assert_eq!(
+        stored.display_name, "Alice B",
+        "the refused name was not stored"
+    );
+}
+
+/// A non-admin `bob` who owns the shared team `acme` ("Acme", with a
+/// catalog so he reaches one) and a plain member `carol` of it. Both sign
+/// in with [`PASSWORD`] and `<name>@example.com`.
+pub(crate) async fn acme_with_owner_and_member(server: &TestServer) {
+    let pool = &server.db.pool;
+    server
+        .user_with_password("bob", "bob@example.com", PASSWORD)
+        .await;
+    server
+        .user_with_password("carol", "carol@example.com", PASSWORD)
+        .await;
+    let acme = teams::NewTeam {
+        name: "acme",
+        display_name: &DisplayName::parse("Acme").expect("a display name"),
+        owner: "bob",
+    };
+    teams::create(pool, &acme, &AuditActor::cli(), Utc::now())
+        .await
+        .expect("create acme");
+    teams::set_member(
+        pool,
+        &teams::Membership {
+            team: "acme",
+            user: "carol",
+            role: teams::Role::Member,
+        },
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("add carol");
+    crate::support::server::applied(&server.app, async {
+        okf_mcp::store::catalogs::create(
+            pool,
+            &okf_mcp::store::catalogs::NewCatalog {
+                name: "acme-notes",
+                display_name: &DisplayName::default(),
+                description: "",
+                owner_team: "acme",
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("create acme's catalog");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_non_admin_team_owner_renames_their_team_from_account() {
+    let server = login_server().await;
+    acme_with_owner_and_member(&server).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password("bob@example.com", PASSWORD);
+        open_account(ui);
+        ui.wait_visible("#account-team-acme");
+        assert_eq!(input_value(ui, "#account-team-acme"), "Acme");
+        ui.fill("#account-team-acme", "Acme Ltd");
+        ui.click("#account-team-acme-save");
+        ui.wait_text("#toasts", "Team name saved");
+        ui.page
+            .reload(rustwright::GotoOptions::default())
+            .expect("reload");
+        ui.wait_visible("#account-team-acme");
+        assert_eq!(input_value(ui, "#account-team-acme"), "Acme Ltd");
+        // The personal team is named after bob: listed, with no editor.
+        let personal = ui.wait_text("[data-test=owned-team-bob]", "Named after you");
+        assert!(personal.contains("Named after you"));
+        assert!(!ui.page.is_visible("#account-team-bob").expect("visible"));
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let team = teams::find(&server.db.pool, "acme").await.expect("acme");
+    assert_eq!(team.display_name, "Acme Ltd");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_who_is_not_an_owner_sees_the_team_but_no_editor() {
+    let server = login_server().await;
+    acme_with_owner_and_member(&server).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password("carol@example.com", PASSWORD);
+        open_account(ui);
+        // The team is listed in Profile by its label.
+        ui.wait_text("#account-facts", "Acme");
+        ui.wait_text("[data-test=owned-team-carol]", "Named after you");
+        assert!(!ui.page.is_visible("#account-team-acme").expect("visible"));
+        assert!(!ui.text("#account-owned-list").contains("Acme"));
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let team = teams::find(&server.db.pool, "acme").await.expect("acme");
+    assert_eq!(team.display_name, "Acme", "nothing was sent");
+}
+
+/// The ceiling table's rows, in order.
+fn ceiling_rows(ui: &Ui) -> Vec<String> {
+    serde_json::from_value(ui.eval(
+        "() => [...document.querySelectorAll('#ceiling-table [data-test^=ceiling-]')] \
+         .map(cell => cell.dataset.test.slice('ceiling-'.length))",
+        json!(null),
+    ))
+    .expect("names")
+}
+
+/// Issue #736: the Account page shows the ceiling a page at a time with
+/// Load more and a Find box. Its committed cursor survives an overtaken
+/// and a failed read (lessons.md): a Find answered late is dropped, a newer
+/// one that fails keeps the rows drawn and their Load more, marked
+/// possibly out of date, and Load more then appends the next page once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_ceiling_is_paged_with_a_find_box() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    crate::self_service::seed_alices_catalogs(&server, 150).await;
+    drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        open_account(ui);
+        ui.wait_visible("[data-test=ceiling-c00001]");
+        ui.wait_visible("#ceiling-more");
+        assert_eq!(ceiling_rows(ui).len(), 100, "one page");
+        // A Find answered late, overtaken by a newer one that fails.
+        ui.hold_answer("GET", "prefix=c001", || ui.fill("#ceiling-find", "c001"));
+        ui.fail_next("GET", "prefix=c0012", 503, "try again");
+        ui.fill("#ceiling-find", "c0012");
+        ui.wait_visible("#ceiling-stale");
+        ui.release_held();
+        let rows = ceiling_rows(ui);
+        assert_eq!(rows.len(), 100, "the committed page stays: {rows:?}");
+        assert_eq!(rows[0], "c00001");
+        ui.wait_visible("#ceiling-more");
+        ui.click("#ceiling-more");
+        ui.wait_visible("[data-test=ceiling-main]");
+        let rows = ceiling_rows(ui);
+        let unique: std::collections::BTreeSet<&String> = rows.iter().collect();
+        assert_eq!(rows.len(), 151, "appended once: {rows:?}");
+        assert_eq!(unique.len(), 151);
+        assert!(!ui.page.is_visible("#ceiling-more").expect("visible"));
+        // A Find that answers narrows the list.
+        ui.fill("#ceiling-find", "c0012");
+        ui.wait_text_gone("#ceiling-table", "c00001");
+        assert_eq!(ceiling_rows(ui).len(), 10);
+        ui.fill("#ceiling-find", "zz");
+        ui.wait_text("#ceiling-table", "No catalog of yours starts with zz");
+    })
+    .await;
+}
+
+/// How many users called `alice` exist.
+async fn alices(pool: &sqlx::PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM users WHERE name = 'alice'")
+        .fetch_one(pool)
+        .await
+        .expect("count alice")
+}
+
+/// Whether the element `selector` names is disabled.
+fn disabled(ui: &Ui, selector: &str) -> bool {
+    ui.eval(
+        "(selector) => document.querySelector(selector)?.disabled === true",
+        json!(selector),
+    ) == json!(true)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_deletes_their_account_with_their_password_and_is_signed_out() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        open_account(ui);
+        ui.wait_visible("#account-delete-password");
+        ui.fill("#account-delete-password", PASSWORD);
+        // The deletion is held, so the page is seen while it runs.
+        ui.hold_next("DELETE", "/api/v1/me");
+        ui.click("#account-delete");
+        ui.wait_visible("#confirm-typed");
+        ui.fill("#confirm-typed", "alice");
+        ui.click("#confirm-ok");
+        // While it runs the button is disabled, so a second click sends
+        // nothing.
+        ui.wait_visible("#account-delete");
+        assert!(disabled(ui, "#account-delete"), "disabled while it runs");
+        assert!(ui.click_twice("#account-delete"), "still disabled");
+        ui.release_held();
+        assert_eq!(ui.held_matches(), 1, "one deletion was sent");
+        ui.wait_visible("#login");
+        ui.wait_visible("#login-error");
+        ui.wait_text("#login-error", "Your account was deleted");
+        // The session cookie went with the account.
+        assert_eq!(ui.eval(SESSION_STATUS, json!(null)), json!(401));
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert_eq!(alices(&server.db.pool).await, 0, "the account is gone");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refused_deletion_shows_the_reason_and_keeps_the_page() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let pool = server.db.pool.clone();
+    // alice's personal team owns `main`: the deletion rules refuse.
+    sqlx::query(
+        "UPDATE catalogs SET owner_team_id = (SELECT id FROM teams WHERE name = 'alice') \
+         WHERE name = 'main'",
+    )
+    .execute(&pool)
+    .await
+    .expect("give alice's team main");
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        open_account(ui);
+        ui.wait_visible("#account-delete-password");
+        ui.fill("#account-delete-password", PASSWORD);
+        ui.click("#account-delete");
+        ui.wait_visible("#confirm-typed");
+        ui.fill("#confirm-typed", "alice");
+        ui.click("#confirm-ok");
+        // The 409's reason, on the page (not only a toast), and the page and
+        // its controls stay.
+        ui.wait_visible("#account-delete-reason");
+        ui.wait_text("#account-delete-reason", "owns catalog(s) \"main\"");
+        ui.wait_visible("#account-delete");
+        assert!(!disabled(ui, "#account-delete"), "usable again");
+        assert!(!ui.page.is_visible("#login").expect("visible"));
+        assert_eq!(ui.eval(SESSION_STATUS, json!(null)), json!(200));
+        // A wrong password replaces the reason with its own.
+        ui.fill("#account-delete-password", "not the password at all");
+        ui.click("#account-delete");
+        ui.wait_visible("#confirm-typed");
+        ui.fill("#confirm-typed", "alice");
+        ui.click("#confirm-ok");
+        ui.wait_text("#account-delete-reason", "the password is incorrect");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert_eq!(alices(&pool).await, 1, "the account stays");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_confirms_with_a_passkey_and_deletes_their_account() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        let _authenticator = ui.virtual_authenticator();
+        open_account(ui);
+        ui.wait_text("#passkey-list", "No passkeys yet");
+        ui.fill("#passkey-name", "laptop");
+        ui.click("#passkey-add");
+        ui.wait_visible("[data-test=passkey-laptop]");
+        // The passkey just added confirms the deletion.
+        ui.wait_visible("#account-delete-passkey");
+        ui.click("#account-delete-passkey");
+        ui.wait_visible("#confirm-typed");
+        ui.fill("#confirm-typed", "alice");
+        ui.click("#confirm-ok");
+        ui.wait_visible("#login");
+        ui.wait_text("#login-error", "Your account was deleted");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert_eq!(alices(&server.db.pool).await, 0, "the account is gone");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_deletion_control_shows_before_the_account_read_answers() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let id = alices_id(&server.db.pool).await;
+    alices_passkey(&server.db.pool, &id, "laptop").await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        // The account read is held; the passkey list answers first.
+        ui.hold_next("GET", "/api/v1/me");
+        ui.open("/account");
+        ui.wait_visible("[data-test=passkey-laptop]");
+        assert!(
+            !ui.present("#account-delete-passkey"),
+            "no passkey control before the account id is known"
+        );
+        assert!(!ui.present("#account-delete"), "no password control either");
+        ui.wait_visible("#account-delete-loading");
+        // Once it answers, both controls are drawn, and the confirmation
+        // still wants the account id typed.
+        ui.release_held();
+        ui.wait_visible("#account-delete-passkey");
+        ui.wait_visible("#account-delete");
+        ui.click("#account-delete-passkey");
+        ui.wait_visible("#confirm-typed");
+        assert!(disabled(ui, "#confirm-ok"), "the id must be typed first");
+        ui.click("#confirm-cancel");
+        ui.wait_hidden("#confirm-typed");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert_eq!(alices(&server.db.pool).await, 1, "nothing was deleted");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_account_read_draws_no_deletion_control() {
+    let server = login_server().await;
+    member(&server, Access::Write).await;
+    let id = alices_id(&server.db.pool).await;
+    alices_passkey(&server.db.pool, &id, "laptop").await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.fail_next("GET", "/api/v1/me", 503, "the account could not be read");
+        ui.open("/account");
+        ui.wait_visible("[data-test=passkey-laptop]");
+        assert!(
+            !ui.present("#account-delete-passkey"),
+            "no passkey control without the account id"
+        );
+        assert!(!ui.present("#account-delete"));
+        ui.wait_visible("#account-delete-loading");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert_eq!(alices(&server.db.pool).await, 1, "nothing was deleted");
 }

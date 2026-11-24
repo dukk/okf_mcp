@@ -6,21 +6,26 @@
 use std::sync::Arc;
 
 use crate::http::AppError;
-use crate::telemetry::subscriber::split_event;
-use axum::extract::{MatchedPath, Request};
+use axum::extract::{MatchedPath, Request, State};
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::Router;
+use serde::Deserialize;
 
 use crate::app::App;
-use crate::auth::{Principal, Reach};
+use crate::auth::{CredentialKind, Principal, Reach};
+use crate::cache::directory::{page_size, Page};
 use crate::error::OkfError;
 use crate::http::console_session::require_principal;
 use crate::http::requester::Requester;
 use crate::mcp::context::ToolContext;
+use crate::store::audit::{
+    standard_method, AdmittedActor, ProvisionerEvent, ProvisionerUse, RefusalReason,
+};
+use crate::store::catalogs::CatalogRow;
 use crate::store::keys::Access;
 
 #[cfg(test)]
@@ -29,13 +34,23 @@ mod audit;
 mod browse;
 mod catalogs;
 mod changesets;
+pub(crate) mod feedback;
 mod health;
 mod identity;
 mod keys;
+mod labels;
+#[cfg(test)]
+mod labels_tests;
+#[cfg(test)]
+mod listing_tests;
 mod mail;
 mod maintenance;
+#[cfg(test)]
+mod malformed_name_tests;
 mod me;
 mod oauth;
+#[cfg(test)]
+mod owner_access_tests;
 mod people;
 #[cfg(test)]
 mod provisioner_tests;
@@ -66,6 +81,7 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
     Router::new()
         .merge(identity::routes())
         .merge(keys::routes())
+        .merge(labels::routes())
         .merge(health::routes())
         .merge(browse::routes())
         .merge(search::routes())
@@ -77,6 +93,7 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
         .merge(settings::routes())
         .merge(mail::routes())
         .merge(me::routes())
+        .merge(feedback::routes())
         .merge(audit::routes())
         .merge(unlocks::routes())
         .merge(crate::http::passkeys::api_routes())
@@ -85,7 +102,10 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
         .merge(crate::http::oidc::api_routes())
         // `route_layer` covers the routes merged above and runs only when one
         // matched, so an unknown API path stays 404 rather than 401.
-        .route_layer(middleware::from_fn(provisioner_gate))
+        .route_layer(middleware::from_fn_with_state(
+            Arc::clone(app),
+            provisioner_gate,
+        ))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(app),
             require_principal,
@@ -97,6 +117,38 @@ pub(crate) fn routes(app: &Arc<App>) -> Router<Arc<App>> {
         // A plain `layer` wraps everything above, `require_principal` and
         // the fallback included, so the 401 and the 404 get these headers too.
         .layer(middleware::map_response(api_headers))
+}
+
+/// Runs the handler, collecting the invalidations its writes queued, and
+/// applies them to this replica's directory and credential caches before the response
+/// goes out ([`App::apply_own_writes`]): in-process cache drops only, so
+/// nothing after the commit waits on I/O.
+///
+/// # Arguments
+/// * `app` - the application.
+/// * `request` - the request.
+/// * `next` - the handler.
+///
+/// # Returns
+/// The handler's response, unchanged.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "wraps every HTTP request, an unmatched path included, which must make no span"
+    )
+)]
+pub(crate) async fn apply_own_writes(
+    axum::extract::State(app): axum::extract::State<Arc<App>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let (response, written) = crate::invalidate::capturing(next.run(request)).await;
+    // Most requests write nothing: then nothing runs (and no span opens).
+    if !written.is_empty() {
+        app.apply_own_writes(&written).await;
+    }
+    response
 }
 
 /// Adds the headers every API response carries: never cached (keys and
@@ -172,9 +224,42 @@ pub(crate) fn require_every_catalog(principal: &Principal) -> Result<(), OkfErro
     require_admin(principal)?;
     match &principal.reach {
         Reach::All => Ok(()),
-        Reach::Catalogs(_) => Err(OkfError::Forbidden {
+        // A ceiling is never admin, so `require_admin` refused it already.
+        Reach::Catalogs(_) | Reach::Ceiling => Err(OkfError::Forbidden {
             reason: "this needs an admin key that reaches every catalog".to_string(),
         }),
+    }
+}
+
+/// Decides whether the store must check the caller as an owner, for the
+/// controls an admin or an owner of a catalog's team may use (issue #352).
+///
+/// Only a console session may be an owner: an owner's keys and OAuth
+/// grants are often handed to AI clients with narrower purposes, so they
+/// keep the admin-only refusal (as the maintenance switch, the audit viewer
+/// and the unlock list do). A failed read is not a refusal: it is passed on.
+///
+/// # Arguments
+/// * `principal` - the caller.
+/// * `admin` - the result of the admin check the route already has.
+///
+/// # Returns
+/// `None` when the admin check passed; `Some(users.id)` for a console
+/// session that failed it, which the store checks under its locks.
+///
+/// # Errors
+/// The admin refusal for a key or an OAuth grant; a database or busy error
+/// as it came.
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) fn owner_session(
+    principal: &Principal,
+    admin: Result<(), OkfError>,
+) -> Result<Option<&str>, OkfError> {
+    match (admin, &principal.kind) {
+        (Ok(()), _) => Ok(None),
+        (Err(error @ (OkfError::Database { .. } | OkfError::Busy { .. })), _) => Err(error),
+        (Err(_), CredentialKind::Session { user_id }) => Ok(Some(user_id.as_str())),
+        (Err(refusal), CredentialKind::ApiKey | CredentialKind::OAuth { .. }) => Err(refusal),
     }
 }
 
@@ -188,15 +273,18 @@ pub(crate) const PROVISIONER_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v1/users"),
     ("PUT", "/api/v1/users/{name}/email"),
     ("POST", "/api/v1/users/{name}/invite"),
+    ("PATCH", "/api/v1/users/{name}"),
     ("DELETE", "/api/v1/users/{name}"),
     ("GET", "/api/v1/teams"),
     ("GET", "/api/v1/teams/{name}"),
     ("POST", "/api/v1/teams"),
     ("PUT", "/api/v1/teams/{name}/members/{user}"),
     ("DELETE", "/api/v1/teams/{name}/members/{user}"),
+    ("PATCH", "/api/v1/teams/{name}"),
     ("DELETE", "/api/v1/teams/{name}"),
     ("PUT", "/api/v1/teams/{name}/suspension"),
     ("POST", "/api/v1/catalogs"),
+    ("PATCH", "/api/v1/catalogs/{catalog}"),
     ("DELETE", "/api/v1/catalogs/{catalog}"),
     ("PUT", "/api/v1/catalogs/{catalog}/member-access"),
     ("GET", "/api/v1/audit"),
@@ -223,31 +311,112 @@ pub(crate) fn provisioner_may(method: &Method, template: &str) -> bool {
         .any(|(allowed, route)| method.as_str() == *allowed && template == *route)
 }
 
+/// What a provisioner refusal records about a request, fixed when it is let
+/// in: the key as actor, the normalized method and the matched route
+/// template (never the literal path, query or body).
+#[derive(Debug, Clone)]
+pub(crate) struct AdmittedRefusal {
+    actor: AdmittedActor,
+    method: &'static str,
+    route: Option<String>,
+}
+
+impl AdmittedRefusal {
+    /// The refusal context of `request`, made by `principal`, now.
+    ///
+    /// # Arguments
+    /// * `app` - the application (its clock).
+    /// * `principal` - the provisioner.
+    /// * `request` - the request, after routing (so `MatchedPath` is set)
+    ///   and after its client address was taken.
+    ///
+    /// # Returns
+    /// The context; its route is `None` when no route matched.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) fn of(app: &App, principal: &Principal, request: &Request) -> Self {
+        Self {
+            actor: principal.admitted_actor(
+                &Requester::of_extensions(request.extensions()),
+                app.clock().now(),
+            ),
+            method: standard_method(request.method().as_str()),
+            // `MatchedPath` holds the full template, `/api/v1` prefix included.
+            route: request
+                .extensions()
+                .get::<MatchedPath>()
+                .map(|path| path.as_str().to_string()),
+        }
+    }
+
+    /// Records the refusal as a `provisioner.refused` entry in the
+    /// background ([`App::note_provisioner_use`]); nothing when no route
+    /// matched.
+    ///
+    /// # Arguments
+    /// * `app` - the application.
+    /// * `reason` - the stable refusal code.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) fn note(self, app: &App, reason: RefusalReason) {
+        let Some(route) = self.route else {
+            return;
+        };
+        app.note_provisioner_use(ProvisionerUse {
+            actor: self.actor,
+            event: ProvisionerEvent::Refused {
+                method: self.method,
+                route,
+                reason,
+            },
+        });
+    }
+}
+
 /// axum middleware, inside `require_principal`: refuses a provisioner on
-/// every route that is not in [`PROVISIONER_ROUTES`].
+/// every route that is not in [`PROVISIONER_ROUTES`], and records every
+/// refusal of a provisioner, this one or a handler's, as a
+/// `provisioner.refused` entry ([`AdmittedRefusal`]). A refusal is a 403.
+/// `require_key` records its own refusals of a provisioner (MCP and the
+/// archive routes) the same way.
+///
+/// # Arguments
+/// * `app` - the application, which records the refusal in the background.
+/// * `request` - the request.
+/// * `next` - the route.
 ///
 /// # Returns
 /// The route's response, or 403.
 #[tracing::instrument(level = "debug", skip_all)]
-async fn provisioner_gate(request: Request, next: Next) -> Response {
-    let provisioner = request
+async fn provisioner_gate(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
+    let Some(principal) = request
         .extensions()
         .get::<Arc<Principal>>()
-        .is_some_and(|principal| principal.provisioner);
-    // `MatchedPath` holds the template with the `/api/v1` prefix (verified facts).
-    let allowed = {
-        request
-            .extensions()
-            .get::<MatchedPath>()
-            .is_some_and(|path| provisioner_may(request.method(), path.as_str()))
+        .filter(|principal| principal.provisioner)
+        .cloned()
+    else {
+        return next.run(request).await;
     };
-    if provisioner && !allowed {
-        return AppError(OkfError::Forbidden {
+    // The actor as admission saw it, before the handler can change anything.
+    let refusal = AdmittedRefusal::of(&app, &principal, &request);
+    let allowed = refusal
+        .route
+        .as_deref()
+        .is_some_and(|template| provisioner_may(request.method(), template));
+    let (response, reason) = if allowed {
+        let response = next.run(request).await;
+        let reason =
+            (response.status() == StatusCode::FORBIDDEN).then_some(RefusalReason::Forbidden);
+        (response, reason)
+    } else {
+        let refused = AppError(OkfError::Forbidden {
             reason: "a provisioner key may not call this route".to_string(),
         })
         .into_response();
+        (refused, Some(RefusalReason::RouteNotAllowed))
+    };
+    if let Some(reason) = reason {
+        refusal.note(&app, reason);
     }
-    next.run(request).await
+    response
 }
 
 /// Refuses all but a provisioner or an admin that reaches every catalog:
@@ -288,21 +457,36 @@ pub(crate) fn require_reader(principal: &Principal) -> Result<(), OkfError> {
     require_admin(principal)
 }
 
-/// Polls after an administrative change, so the key cache and the catalog
-/// list reflect it for the next request. The change has committed, so a
-/// failed poll is logged, not returned: the poll loop retries it.
+/// `?after=&limit=` of a paginated catalog listing (M18 spec Decision 7):
+/// `GET /catalogs`, `GET /whoami` and `GET /labels`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct PageQuery {
+    /// The `next` of the previous page; absent or empty for the first.
+    after: Option<String>,
+    /// The page size: default 100, at most 1000 (a larger one is cut).
+    limit: Option<u32>,
+}
+
+/// One page of the catalogs `principal` reaches, for `query`.
 ///
 /// # Arguments
-/// * `app` - the application. An `&Arc<App>` argument coerces to `&App`
-///   automatically (deref coercion).
+/// * `app` - the application, for its catalog directory.
+/// * `principal` - the caller.
+/// * `query` - the request's paging parameters.
+///
+/// # Returns
+/// The page, as [`crate::cache::directory::CatalogDirectory::reachable_page`]
+/// gives it.
+///
+/// # Errors
+/// 400 for a malformed cursor; 500 if the read fails.
 #[tracing::instrument(level = "debug", skip_all)]
-pub(crate) async fn settle(app: &App) {
-    if let Err(error) = app.poll().await {
-        split_event!(
-            error,
-            { kind = error.kind(), },
-            { %error, },
-            "poll after an administrative change failed; the poll loop retries"
-        );
-    }
+pub(crate) async fn reachable_page(
+    app: &App,
+    principal: &Principal,
+    query: &PageQuery,
+) -> Result<Page<Arc<CatalogRow>>, OkfError> {
+    app.directory()
+        .reachable_page(principal, query.after.as_deref(), page_size(query.limit))
+        .await
 }

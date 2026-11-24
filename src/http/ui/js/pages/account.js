@@ -1,22 +1,30 @@
-// Account: how the signed-in person signs in, and where. Profile and
-// ceiling (read-only, from /me on every load, never the sign-in snapshot),
+// Account: how the signed-in person signs in, and where. Profile (from /me
+// on every load, never the sign-in snapshot) and ceiling (read-only, a page
+// at a time from /me/ceiling, with a Find box: never the whole ceiling),
 // password, passkeys (add, rename, remove), linked sign-in accounts (link,
 // unlink), console sessions (sign any one out, this browser's included)
 // and recent sign-ins. Each section loads and redraws on its own, only
 // while the page is shown. The server refuses removing the last sign-in
 // method (409, toasted with its reason). Changing the password, adding a
 // passkey or linking an account signs the other sessions out, unless
-// "Keep me signed in elsewhere" is ticked.
+// "Keep me signed in elsewhere" is ticked. "Delete your account" (issue
+// #355) asks for the current password or a passkey, then DELETE /me; a
+// refusal (the personal team owns catalogs, the last owner of a shared
+// team, the last admin) shows its reason on the page and keeps the
+// controls, and a deletion signs the console out.
 import { h, fill, fact } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { toast } from '../core/toast.js';
 import { ago, when } from '../core/format.js';
-import { freshAccount, requireSession, signedOut } from '../core/shell.js';
+import { freshAccount, refreshIdentity, requireSession, signedOut } from '../core/shell.js';
+import { catalogLabel, named, teamLabel } from '../core/labels.js';
+import { guard, once } from '../core/pending.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
 import { accessPill } from '../components/levels.js';
+import { ceilingPager } from '../components/ceiling.js';
 import { sessionTable, signInTable } from '../components/activity.js';
-import { createCredential } from '../signin/webauthn.js';
+import { assertionJson, createCredential, requestOptions } from '../signin/webauthn.js';
 
 export async function render(main) {
     main.append(h('header', { class: 'page-head' },
@@ -25,6 +33,8 @@ export async function render(main) {
             h('p', { class: 'muted' }, 'How you sign in, where you are signed in, and what your account may reach.'))));
     if (!requireSession(main, 'account-denied')) return;
     const profile = section('account-profile', 'Profile');
+    const owned = section('account-owned-teams', 'Teams you own',
+        'Rename the shared teams you own. Everyone who sees a team sees this name.');
     const ceiling = section('account-ceiling', 'Your ceiling',
         'The most a key or OAuth grant you create can reach: the catalogs of your teams, at each catalog\'s '
         + 'member access, and the catalogs an admin entitled you to; where both apply, the higher level. '
@@ -34,26 +44,103 @@ export async function render(main) {
     const identities = section('account-identities', 'Linked accounts', 'Sign in through another identity provider.');
     const sessions = section('account-sessions', 'Where you are signed in');
     const signIns = section('account-sign-ins', 'Recent sign-ins');
-    main.append(profile.el, ceiling.el, password.el, passkeys.el, identities.el, sessions.el, signIns.el);
+    const removal = section('account-deletion', 'Delete your account',
+        'Deleting your account removes your keys, OAuth grants, sessions, passkeys, linked accounts and your '
+        + 'personal team, at once and for good. Catalogs and their history stay; the audit log keeps its '
+        + 'entries, naming you only as a deleted user.');
+    main.append(profile.el, owned.el, ceiling.el, password.el, passkeys.el, identities.el, sessions.el, signIns.el,
+        removal.el);
+    // What the delete section is drawn from: the account (whether it has a
+    // password) and how many passkeys it has, each set by its own read;
+    // `null` until that read answers. `deleteRefusal` is the last refusal's
+    // reason, kept across redraws until the next attempt.
+    let deleteAccount = null;
+    let deletePasskeys = null;
+    let deleteRefusal = null;
+    // The ceiling table, a page at a time: drawn once, then redrawn with
+    // each committed page. `shownPrefix` is the prefix the drawn rows
+    // answer (null before the first page), for the empty text.
+    let shownPrefix = null;
+    const ceilingTable = listTable([
+        { key: 'catalog', label: 'Catalog',
+          render: row => h('span', { dataset: { test: `ceiling-${row.catalog}` } },
+              named(catalogLabel(row.catalog), row.catalog)) },
+        { key: 'access', label: 'Access', render: row => accessPill(row.access) },
+    ], [], { empty: () => {
+        if (shownPrefix === null) return 'Loading...';
+        return shownPrefix ? `No catalog of yours starts with ${shownPrefix}.` : 'Your account reaches no catalog yet. Ask an admin.';
+    } });
+    ceilingTable.id = 'ceiling-table';
+    const ceilingPage = ceilingPager({ id: 'ceiling', draw: (rows, prefix) => {
+        shownPrefix = prefix;
+        ceilingTable.redraw(rows);
+    } });
+    fill(ceiling.body, h('label', { class: 'small' }, 'Find ', ceilingPage.find), ceilingTable, ceilingPage.footer);
 
     async function drawAccount() {
         let account;
         try { account = await freshAccount(); } catch { return; /* toasted */ }
         if (!main.isConnected) return;
         fill(profile.body, h('dl', { class: 'facts', id: 'account-facts' },
-            fact('Name', h('code', {}, account.user)),
-            fact('Display name', account.display_name || '-'),
+            fact('Display name', displayNameForm(account)),
             fact('Email', account.email ?? 'none'),
-            fact('Teams', account.teams.length ? account.teams.join(', ') : '-'),
+            fact('Teams', account.teams.length ? account.teams.map(teamLabel).join(', ') : '-'),
             fact('Admin', account.admin ? 'yes: you sign in to the full console' : 'no')));
-        const table = listTable([
-            { key: 'catalog', label: 'Catalog', sort: row => row.catalog,
-              render: row => h('code', { dataset: { test: `ceiling-${row.catalog}` } }, row.catalog) },
-            { key: 'access', label: 'Access', render: row => accessPill(row.access) },
-        ], account.ceiling, { empty: 'Your account reaches no catalog yet. Ask an admin.' });
-        table.id = 'ceiling-table';
-        fill(ceiling.body, table);
+        // The slug stays visible as an id, never as the person's name.
+        profile.body.append(h('p', { id: 'account-id', class: 'muted id-line' },
+            'Account ID: ', h('code', {}, account.user)));
+        fill(owned.body, ownedTeams(account.owned_team_details ?? []));
+        owned.el.hidden = !(account.owned_team_details ?? []).length;
         fill(password.body, passwordForm(account));
+        deleteAccount = account;
+        drawDelete();
+    }
+
+    // The display-name editor: the label is user text, shown in an input's
+    // value (never markup). The server answers a too-long or control-
+    // character name with its reason (toasted by api.js).
+    function displayNameForm(account) {
+        const key = 'account:display-name';
+        const input = h('input', { id: 'account-display-name', autocomplete: 'off',
+                                   'aria-label': 'Display name', value: account.display_name,
+                                   placeholder: account.label });
+        const save = guard(h('button', { type: 'button', id: 'account-display-name-save' }, 'Save'), key);
+        save.addEventListener('click', () => once(key, async () => {
+            try { await api.patch('/me', { display_name: input.value }); } catch { return; /* toasted */ }
+            toast('Display name saved', 'ok');
+            // The header and every label come from the identity read.
+            try { await refreshIdentity(); } catch { /* the next load shows it */ }
+            if (main.isConnected) await drawAccount();
+        }));
+        return h('div', { class: 'inline-form' }, input, save);
+    }
+
+    // One row per team the user owns: an editor for a shared team, a note
+    // for the personal one (whose label follows the user). The Teams page
+    // is admin-only, so this is how an owner who is not an admin renames.
+    function ownedTeams(details) {
+        return h('ul', { class: 'grant-list', id: 'account-owned-list' }, details.map(team => {
+            if (team.personal) {
+                return h('li', { dataset: { test: `owned-team-${team.name}` } },
+                    h('span', {}, team.label), ' ', h('span', { class: 'muted small' }, 'Named after you'));
+            }
+            const key = `account:team:${team.name}`;
+            const input = h('input', { id: `account-team-${team.name}`, autocomplete: 'off',
+                                       'aria-label': `Display name of ${team.name}`, value: team.display_name,
+                                       placeholder: team.label });
+            const save = guard(h('button', { type: 'button', id: `account-team-${team.name}-save` }, 'Save'), key);
+            save.addEventListener('click', () => once(key, async () => {
+                try {
+                    await api.patch(`/teams/${enc(team.name)}`, { display_name: input.value });
+                } catch { return; /* toasted */ }
+                toast('Team name saved', 'ok');
+                try { await refreshIdentity(); } catch { /* the next load shows it */ }
+                if (main.isConnected) await drawAccount();
+            }));
+            return h('li', { dataset: { test: `owned-team-${team.name}` } },
+                h('div', { class: 'inline-form' }, input, save),
+                h('span', { class: 'id-line muted' }, team.name));
+        }));
     }
 
     function passwordForm(account) {
@@ -108,6 +195,8 @@ export async function render(main) {
         let list;
         try { ({ passkeys: list } = await api.get('/me/passkeys')); } catch { return; }
         if (!main.isConnected) return;
+        deletePasskeys = list.length;
+        drawDelete();
         const name = h('input', { id: 'passkey-name', 'aria-label': 'A name for the new passkey',
                                   placeholder: 'a name, such as laptop', autocomplete: 'off' });
         const keep = keepSessionsBox('passkey-keep-sessions');
@@ -270,13 +359,104 @@ export async function render(main) {
         signedOut();
     }
 
+    // The delete section: a password box when the account has a password,
+    // a passkey button when it has a passkey, else a note saying how to get
+    // either. Both controls share one pending key, so a second click (or a
+    // redraw while the request runs) never sends a second deletion. No
+    // control is drawn until the account read has answered: the typed
+    // confirmation needs its id, whichever read answers first.
+    function drawDelete() {
+        if (!main.isConnected) return;
+        if (deleteAccount === null) {
+            fill(removal.body, h('p', { class: 'muted small', id: 'account-delete-loading' },
+                'Loading your account... Deleting it needs your account ID, so this waits for it.'));
+            return;
+        }
+        const key = 'account:delete';
+        const refusal = h('p', { id: 'account-delete-reason', class: 'error', role: 'alert' }, deleteRefusal ?? '');
+        refusal.hidden = !deleteRefusal;
+        const parts = [refusal];
+        if (deleteAccount?.has_password) {
+            const typed = h('input', { type: 'password', id: 'account-delete-password', autocomplete: 'current-password',
+                                       'aria-label': 'Your current password' });
+            const go = guard(h('button', { type: 'button', id: 'account-delete', class: 'danger' },
+                'Delete my account'), key);
+            go.addEventListener('click', () => removeAccount(key, () => ({ password: typed.value })));
+            parts.push(h('label', {}, 'Current password', typed), go);
+        }
+        if (deletePasskeys) {
+            const go = guard(h('button', { type: 'button', id: 'account-delete-passkey', class: 'danger' },
+                'Confirm with a passkey and delete my account'), key);
+            go.addEventListener('click', () => removeAccount(key, passkeyProof));
+            parts.push(h('div', { class: 'inline-form' }, go));
+        }
+        if (deleteAccount && !deleteAccount.has_password && deletePasskeys === 0) {
+            parts.push(h('p', { class: 'muted small', id: 'account-delete-needs-proof' },
+                'Set a password or add a passkey first: deleting your account asks for one to confirm it is you.'));
+        }
+        fill(removal.body, ...parts);
+    }
+
+    // The passkey proof: the server's challenge for this account's own
+    // passkeys, the browser's prompt, and its assertion. Rejects with the
+    // refusal to show.
+    async function passkeyProof() {
+        const challenge = await api.post('/me/passkeys/confirm/start', {}, { quiet: true });
+        let credential;
+        try {
+            credential = await navigator.credentials.get(requestOptions(challenge));
+        } catch (error) {
+            throw new Error(error?.name === 'NotAllowedError'
+                ? 'the passkey prompt was cancelled or timed out'
+                : String(error?.message ?? error));
+        }
+        return { passkey: assertionJson(credential) };
+    }
+
+    // Confirms, re-authenticates and deletes. A refusal keeps the page and
+    // its controls, with the reason shown; a 401 means this session ended
+    // (the 401 handler shows the sign-in card); a deletion signs out.
+    async function removeAccount(key, proof) {
+        // The typed confirmation is never skipped: without the account id
+        // there is nothing to type, so there is no deletion.
+        const id = deleteAccount?.user;
+        if (!id) return;
+        const ok = await confirmDialog({
+            title: 'Delete your account?',
+            message: 'This cannot be undone. You are signed out everywhere, and your keys and grants stop working.',
+            action: 'Delete my account',
+            typed: id,
+        });
+        if (!ok) return;
+        await once(key, async () => {
+            try {
+                await api.del('/me', { body: await proof(), quiet: true });
+            } catch (error) {
+                if (error.status === 401) return;
+                deleteRefusal = `Your account was not deleted: ${reason(error)}.`;
+                drawDelete();
+                return;
+            }
+            signedOut('Your account was deleted.');
+        });
+        // Drawn again once the write settled, so the controls are usable.
+        if (main.isConnected) drawDelete();
+    }
+
     async function drawSignIns() {
         let list;
         try { ({ sign_ins: list } = await api.get('/me/sign-ins')); } catch { return; }
         if (main.isConnected) fill(signIns.body, signInTable({ id: 'sign-in-table', signIns: list }));
     }
 
-    await Promise.all([drawAccount(), drawPasskeys(), drawIdentities(), drawSessions(), drawSignIns()]);
+    await Promise.all([drawAccount(), ceilingPage.start(), drawPasskeys(), drawIdentities(), drawSessions(), drawSignIns()]);
+    // Every section has now drawn (each draw settles on its own, a failed
+    // read included). The sections load in any order and each one moves the
+    // controls below it, so a browser journey waits for this marker
+    // (`.view[data-loaded=true]`) before it clicks, instead of for the one
+    // control it wants: that control can appear while the rest of the page
+    // is still arriving (issue #373).
+    if (main.isConnected) main.dataset.loaded = 'true';
 }
 
 // A refusal's reason as the server gave it, without the "forbidden: "

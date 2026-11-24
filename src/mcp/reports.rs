@@ -36,7 +36,7 @@ const DEFAULT_N: usize = 5;
 // its input schema, with the doc comments as the fields' descriptions.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct CatalogParam {
-    /// The catalog (default: the changeset's, else the first selected catalog).
+    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`).
     pub catalog: Option<String>,
     /// Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it.
     pub changeset: Option<String>,
@@ -65,8 +65,10 @@ pub struct ConceptQuestions {
 /// `open_questions`' result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct OpenQuestions {
-    /// The catalog.
+    /// The catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// Concepts with queued questions, stalest first (as `oldest` orders them).
     pub concepts: Vec<ConceptQuestions>,
 }
@@ -74,7 +76,7 @@ pub struct OpenQuestions {
 /// `oldest`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct OldestParams {
-    /// The catalog (default: the changeset's, else the first selected catalog).
+    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`).
     pub catalog: Option<String>,
     /// Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it.
     pub changeset: Option<String>,
@@ -91,8 +93,10 @@ pub struct OldestParams {
 // No `Eq`: `OldestRow` holds an `f64`, which is only `PartialEq` (NaN).
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct Oldest {
-    /// The catalog.
+    /// The catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// The `oldest` report's rows, stalest first.
     pub rows: Vec<OldestRow>,
 }
@@ -100,7 +104,7 @@ pub struct Oldest {
 /// `sprawl`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct SprawlParams {
-    /// The catalog (default: the changeset's, else the first selected catalog).
+    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`).
     pub catalog: Option<String>,
     /// Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it.
     pub changeset: Option<String>,
@@ -114,8 +118,10 @@ pub struct SprawlParams {
 /// `sprawl`'s result.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct Sprawl {
-    /// The catalog.
+    /// The catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// The `sprawl` report's concepts, worst first.
     pub reports: Vec<SprawlReport>,
 }
@@ -123,7 +129,7 @@ pub struct Sprawl {
 /// `links_report`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct LinksParams {
-    /// The catalog (default: the changeset's, else the first selected catalog).
+    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`).
     pub catalog: Option<String>,
     /// Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it.
     pub changeset: Option<String>,
@@ -135,8 +141,10 @@ pub struct LinksParams {
 /// `links_report`'s result: the link report plus the catalog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Links {
-    /// The catalog.
+    /// The catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// The report; `flatten` writes its fields beside `catalog`.
     #[serde(flatten)]
     pub report: LinksReport,
@@ -145,7 +153,7 @@ pub struct Links {
 /// `lint`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct LintParams {
-    /// The catalog (default: the changeset's, else the first selected catalog).
+    /// The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`).
     pub catalog: Option<String>,
     /// Lint this changeset's drafts (its handle) applied to the published catalog, instead of the published catalog; its changed paths count as uncommitted for `generated-after-commit`.
     pub changeset: Option<String>,
@@ -154,8 +162,10 @@ pub struct LintParams {
 /// `lint`'s result: the lint report plus the catalog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Lint {
-    /// The catalog.
+    /// The catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// Whether a changeset's drafts were linted: the call named `changeset`.
     pub pending: bool,
     /// The findings; `flatten` writes `errors` and `warnings` beside `catalog`.
@@ -207,6 +217,7 @@ pub(crate) async fn open_questions(
         .collect();
     Ok(OpenQuestions {
         catalog: state.name().to_string(),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         concepts,
     })
 }
@@ -237,6 +248,7 @@ pub(crate) async fn oldest_report(
     let rows = blocking(move || oldest(view.snapshot(), now, query)).await;
     Ok(Oldest {
         catalog: state.name().to_string(),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         rows,
     })
 }
@@ -274,6 +286,7 @@ pub(crate) async fn sprawl_report(
     .await?;
     Ok(Sprawl {
         catalog: state.name().to_string(),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         reports,
     })
 }
@@ -297,6 +310,7 @@ pub(crate) async fn links(ctx: &ToolContext, params: LinksParams) -> Result<Link
     let report = blocking(move || links_report(view.snapshot(), mentions)).await;
     Ok(Links {
         catalog: state.name().to_string(),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         report,
     })
 }
@@ -323,6 +337,7 @@ pub(crate) async fn lint_report(ctx: &ToolContext, params: LintParams) -> Result
     let report = blocking(move || view.lint(now)).await;
     Ok(Lint {
         catalog: state.name().to_string(),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         pending,
         report,
     })
@@ -349,7 +364,7 @@ async fn one_view(
     changeset: Option<&str>,
 ) -> Result<(Arc<CatalogState>, View), OkfError> {
     let pinned = ctx.pin(changeset).await?;
-    let state = ctx.report_catalog(catalog, pinned.as_ref())?;
+    let state = ctx.report_catalog(catalog, pinned.as_ref()).await?;
     let view = ctx.view(&state, pinned.as_ref()).await?;
     Ok((state, view))
 }

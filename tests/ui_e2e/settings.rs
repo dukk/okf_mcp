@@ -8,7 +8,7 @@ use okf_mcp::config::AuthConfig;
 use okf_mcp::mail::queue;
 use okf_mcp::mail::Template;
 use okf_mcp::store::keys::Access;
-use okf_mcp::store::settings::{self, SettingKey};
+use okf_mcp::store::settings::{self, Brand, SettingKey};
 use rustwright::GotoOptions;
 use serde_json::json;
 
@@ -43,7 +43,7 @@ const RETRY_ELSEWHERE: &str = "async (id) => (await fetch(`/api/v1/mail/queue/${
 /// If a database call fails or the mail is not listed.
 async fn failed_mail(server: &TestServer, to: &str) -> String {
     let pool = &server.db.pool;
-    queue::enqueue(pool, to, &Template::Test, Utc::now())
+    queue::enqueue(pool, to, &Template::Test, Utc::now(), &Brand::default())
         .await
         .expect("queue a mail");
     sqlx::query(
@@ -351,4 +351,53 @@ async fn the_product_name_set_on_the_settings_page_brands_the_console() {
         .expect("load settings")
         .brand();
     assert_eq!(brand.product_name, "Acme Notes");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_feedback_url_set_on_the_settings_page_shows_a_send_feedback_link() {
+    let server = login_server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    let ran = drive(console_base(&server), move |ui| {
+        ui.login(&admin);
+        // Unset by default: the link is there to fill, but hidden.
+        ui.wait_text(".brand-block .brand", "okf");
+        ui.wait_hidden("#feedback-link");
+        ui.click("a[data-nav=settings]");
+        ui.wait_text("[data-test=setting-source-feedback_url]", "default");
+        ui.fill(
+            "[data-test=setting-input-feedback_url]",
+            "https://example.com/feedback",
+        );
+        ui.click("[data-test=setting-save-feedback_url]");
+        ui.wait_text("[data-test=setting-source-feedback_url]", "override");
+        // The shell follows the save without a reload.
+        ui.wait_visible("#feedback-link");
+        ui.wait_text("#feedback-link", "Send feedback");
+        let link = ui.eval(
+            "() => { const a = document.getElementById('feedback-link'); \
+             return [a.getAttribute('href'), a.target, a.rel]; }",
+            json!(null),
+        );
+        assert_eq!(
+            link,
+            json!(["https://example.com/feedback", "_blank", "noopener"])
+        );
+        // A fresh load reads it at boot.
+        ui.page.reload(GotoOptions::default()).expect("reload");
+        ui.wait_visible("#feedback-link");
+        // `none` clears it, and the link goes away again.
+        ui.click("a[data-nav=settings]");
+        ui.fill("[data-test=setting-input-feedback_url]", "none");
+        ui.click("[data-test=setting-save-feedback_url]");
+        ui.wait_hidden("#feedback-link");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let brand = settings::load(&server.db.pool, &AuthConfig::default())
+        .await
+        .expect("load settings")
+        .brand();
+    assert_eq!(brand.feedback_url, None);
 }

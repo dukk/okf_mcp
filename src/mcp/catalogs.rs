@@ -2,34 +2,41 @@
 
 use axum::http::request::Parts;
 use rmcp::handler::server::tool::Extension;
+use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::{tool, tool_router, Json};
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
+use crate::cache::directory::DEFAULT_PAGE;
 use crate::clock::format_timestamp;
+use crate::error::OkfError;
+use crate::labels::catalog_label;
 use crate::mcp::context::ToolContext;
-use crate::mcp::OkfServer;
+use crate::mcp::{reply, OkfServer};
 use crate::store::teams::SuspendedCatalog;
 
 /// Why a listed catalog is unavailable: its owner team is suspended (M13).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct SuspensionInfo {
-    /// The owner team.
+    /// The owner team's id.
     pub team: String,
+    /// The owner team's label: say this to people, pass `team` in calls.
+    pub team_label: String,
     /// The operator's notice, if any.
     pub notice: Option<String>,
 }
 
 // `From` is Rust's conversion trait (like a Python `from_x` classmethod);
 // implementing it also gives `.into()` and lets `.map(SuspensionInfo::from)`
-// convert a borrowed cache entry into an owned listing field.
-impl From<&SuspendedCatalog> for SuspensionInfo {
+// turn a principal's view of a suspension into a listing field.
+impl From<SuspendedCatalog> for SuspensionInfo {
     #[tracing::instrument(level = "trace", skip_all)]
-    fn from(suspended: &SuspendedCatalog) -> Self {
+    fn from(suspended: SuspendedCatalog) -> Self {
         Self {
-            team: suspended.team.clone(),
-            notice: suspended.notice.clone(),
+            team: suspended.team,
+            team_label: suspended.team_label,
+            notice: suspended.notice,
         }
     }
 }
@@ -39,8 +46,13 @@ impl From<&SuspendedCatalog> for SuspensionInfo {
 // fields' descriptions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct CatalogInfo {
-    /// The catalog's name.
+    /// The catalog's id: pass it as `catalog` in other tools.
     pub name: String,
+    /// Its display name, empty when none is set.
+    pub display_name: String,
+    /// What to call it when talking to people: its display name, else its
+    /// description. Say this, and pass `name` in tool calls.
+    pub label: String,
     /// Its description.
     pub description: String,
     /// How many files it holds.
@@ -52,12 +64,22 @@ pub struct CatalogInfo {
     pub suspended: Option<SuspensionInfo>,
 }
 
+/// `list_catalogs`' arguments.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+pub struct ListCatalogsParams {
+    /// The `next` of the previous call, for the page after it; omit it for the first page.
+    pub after: Option<String>,
+}
+
 /// `list_catalogs`' result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct CatalogList {
-    /// Every catalog this connection offers, by name: those the key reaches,
-    /// narrowed to the connection's list when it has one.
+    /// One page of the catalogs this connection offers, by name: those the
+    /// key reaches, narrowed to the connection's list when it has one.
     pub catalogs: Vec<CatalogInfo>,
+    /// Pass this as `after` for the next page; absent on the last page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
     /// The catalogs a call without a `catalog` argument reads, in order.
     pub selection: Vec<String>,
     /// Where writes go by default: the first of `selection`.
@@ -66,50 +88,67 @@ pub struct CatalogList {
     pub selection_error: Option<String>,
 }
 
-/// Lists the catalogs `ctx` offers ([`ToolContext::offers`]) and the
-/// connection's selection.
+/// Lists one page of the catalogs `ctx` offers ([`ToolContext::offers`])
+/// and the connection's selection (M18 spec Decision 7).
 ///
 /// # Arguments
 /// * `ctx` - the call's context.
+/// * `after` - the `next` of the previous page, if any.
 ///
 /// # Returns
-/// The list; a selection that fails is reported in `selection_error`
-/// rather than failing the call, since this is the tool to diagnose it with.
-/// A suspended catalog is listed with `suspended` set, and the selection
-/// leaves it out of a connection's list ([`crate::selection::resolve`]).
+/// The page, by name, with `next` while more follow; a selection that
+/// fails is reported in `selection_error` rather than failing the call,
+/// since this is the tool to diagnose it with. A suspended catalog is
+/// listed with `suspended` set, and the selection leaves it out of a
+/// connection's list ([`crate::selection::resolve`]). A catalog whose
+/// stored data does not build is left out of its page.
+///
+/// # Errors
+/// [`OkfError::InvalidPath`] for a malformed `after`;
+/// [`OkfError::Database`] if the catalog directory cannot be read or a
+/// listed catalog cannot be loaded.
 #[tracing::instrument(level = "debug", skip_all)]
-pub(crate) fn list(ctx: &ToolContext) -> CatalogList {
-    let catalogs = ctx
-        .catalogs()
-        .iter()
-        .filter(|(name, _)| ctx.offers(name))
-        .map(|(name, state)| {
-            let loaded = state.current();
-            CatalogInfo {
-                name: name.clone(),
-                description: state.description().to_string(),
-                files: loaded.files(),
-                last_change: loaded.last_change().map(format_timestamp),
-                // Listed only after `offers` (reach), so a credential that does
-                // not reach a catalog never learns it is suspended.
-                suspended: ctx.principal().suspension(name).map(SuspensionInfo::from),
-            }
-        })
-        .collect();
+pub(crate) async fn list(ctx: &ToolContext, after: Option<&str>) -> Result<CatalogList, OkfError> {
+    let page = ctx
+        .app()
+        .directory()
+        .offered_page(ctx.principal(), ctx.connection(), after, DEFAULT_PAGE)
+        .await?;
+    let mut catalogs = Vec::with_capacity(page.items.len());
+    for row in &page.items {
+        // A listing's snapshot fields; a catalog whose data does not build
+        // is left out of its page.
+        let Some(state) = ctx.app().listed_state(row).await? else {
+            continue;
+        };
+        let loaded = state.current();
+        catalogs.push(CatalogInfo {
+            name: row.name.clone(),
+            display_name: row.display_name.clone(),
+            label: catalog_label(&row.display_name, &row.description),
+            description: row.description.clone(),
+            files: loaded.files(),
+            last_change: loaded.last_change().map(format_timestamp),
+            // Listed only after reach (the page), so a credential that
+            // does not reach a catalog never learns it is suspended.
+            suspended: ctx.principal().suspension(row).map(SuspensionInfo::from),
+        });
+    }
     // The selection's names only, not its contents: nothing is admitted.
-    let (selection, write_target, selection_error) = match ctx.select(None) {
+    let (selection, write_target, selection_error) = match ctx.select(None).await {
         Ok(selection) => {
             let write_target = Some(selection.write_target().to_string());
             (selection.catalogs().to_vec(), write_target, None)
         }
         Err(error) => (Vec::new(), None, Some(error.to_string())),
     };
-    CatalogList {
+    Ok(CatalogList {
         catalogs,
+        next: page.next,
         selection,
         write_target,
         selection_error,
-    }
+    })
 }
 
 // `#[tool_router]` is a macro that runs at compile time: it turns the
@@ -125,12 +164,19 @@ impl OkfServer {
     // written type, and an alias hides it.
     #[tool(
         title = "List Catalogs",
-        description = "List the catalogs this connection offers (name, description, file \
-                       count, last change): those the API key can reach, limited to the \
+        description = "List the catalogs this connection offers (name, display name, label, \
+                       description, file count, last change). Pass `name` (the id) in other \
+                       tools and say `label` to people: those the API key can reach, limited to the \
                        connection's X-OKF-Catalogs list when it has one. A catalog whose \
                        team is suspended is listed with `suspended` set, and only export \
-                       works on it. Also this connection's selection: the catalogs a call \
-                       without a `catalog` argument reads, and the default write target.",
+                       works on it. Returns up to 100 catalogs, by name; when `next` is set, \
+                       call again with it as `after` for the rest. Also this connection's \
+                       selection: the catalogs a call without a `catalog` argument reads, and \
+                       the default write target. It comes from the X-OKF-Catalogs header or \
+                       `?catalogs=`, else the key's or the server's default catalog, else the \
+                       only catalog the key reaches (a key granted every catalog has no such \
+                       fallback). When the selection is empty, `selection_error` says why: \
+                       pass `catalog`.",
         annotations(
             title = "List Catalogs",
             read_only_hint = true,
@@ -142,10 +188,11 @@ impl OkfServer {
     async fn list_catalogs(
         &self,
         Extension(parts): Extension<Parts>,
+        Parameters(params): Parameters<ListCatalogsParams>,
     ) -> Result<Json<CatalogList>, CallToolResult> {
         // `?` returns the error result at once, like a Python early `return`.
         let ctx = self.context(&parts)?;
-        Ok(Json(list(&ctx)))
+        reply(list(&ctx, params.after.as_deref()).await)
     }
 }
 
@@ -170,7 +217,9 @@ mod tests {
         .await;
         let key = principal(&["pg", "work"], None);
 
-        let listed = list(&context(&test, key, Some(&["work", "pg"])));
+        let listed = list(&context(&test, key, Some(&["work", "pg"])), None)
+            .await
+            .unwrap();
 
         let names: Vec<&str> = listed.catalogs.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["pg", "work"]);
@@ -192,8 +241,12 @@ mod tests {
         .await;
         let key = principal(&["pg", "work"], Some("pg"));
 
-        let listed = list(&context(&test, Arc::clone(&key), Some(&["work"])));
-        let mistyped = list(&context(&test, key, Some(&["work", "home"])));
+        let listed = list(&context(&test, Arc::clone(&key), Some(&["work"])), None)
+            .await
+            .unwrap();
+        let mistyped = list(&context(&test, key, Some(&["work", "home"])), None)
+            .await
+            .unwrap();
 
         let names: Vec<&str> = listed.catalogs.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["work"]);
@@ -206,11 +259,103 @@ mod tests {
         assert!(mistyped.selection_error.unwrap().contains("\"home\""));
     }
 
+    /// Issue #663: a key granted exactly one catalog, with no other source,
+    /// selects it, so bare reads and `open_changeset` work against it; a key
+    /// granted two is still refused, with the client's fix first.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_s_only_catalog_is_the_selection_when_nothing_else_names_one() {
+        use crate::mcp::documents::{
+            get_concept, read_document, GetConceptParams, ReadDocumentParams,
+        };
+        use crate::mcp::search::{run, SearchParams};
+        use crate::mcp::testing::{open, principal_as, store_key};
+        use crate::store::keys::Access;
+
+        let test = app_with(
+            &[
+                (
+                    "pg",
+                    &[("router.md", "# Router\n"), ("index.md", "# Index\n")],
+                ),
+                ("work", &[("router.md", "# Router\n")]),
+            ],
+            Config::default(),
+        )
+        .await;
+        store_key(&test, "only-pg").await;
+        let only = context(
+            &test,
+            principal_as("only-pg", Access::Write, &["pg"], None),
+            None,
+        );
+        let both = context(&test, principal(&["pg", "work"], None), None);
+        let search = SearchParams {
+            query: "router".to_string(),
+            catalogs: None,
+            concept_type: None,
+            tags: Vec::new(),
+            status: None,
+            limit: None,
+            changeset: None,
+        };
+
+        let listed = list(&only, None).await.unwrap();
+        let hits = run(&only, search.clone()).await.unwrap();
+        let concept = get_concept(
+            &only,
+            GetConceptParams {
+                path: "router".to_string(),
+                catalog: None,
+                links: false,
+                raw: false,
+                section: None,
+                full: false,
+                changeset: None,
+            },
+        )
+        .await
+        .unwrap();
+        let document = read_document(
+            &only,
+            ReadDocumentParams {
+                path: None,
+                catalog: None,
+                changeset: None,
+            },
+        )
+        .await
+        .unwrap();
+        let handle = open(&only).await;
+        let refused = run(&both, search).await.unwrap_err();
+        let unselected = list(&both, None).await.unwrap();
+
+        assert_eq!(listed.selection, ["pg"]);
+        assert_eq!(listed.write_target.as_deref(), Some("pg"));
+        assert_eq!(listed.selection_error, None);
+        let catalogs: Vec<&str> = hits
+            .hits
+            .iter()
+            .map(|hit| hit.hit.catalog.as_str())
+            .collect();
+        assert_eq!(catalogs, ["pg"]);
+        assert_eq!(concept.catalog, "pg");
+        assert_eq!(document.catalog, "pg");
+        assert!(!handle.is_empty());
+        assert_eq!(refused.kind(), "Refused");
+        assert!(unselected.selection.is_empty());
+        assert!(unselected
+            .selection_error
+            .unwrap()
+            .starts_with("no catalog selected: pass `catalog` (see `list_catalogs`)"));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn without_any_source_the_selection_says_why() {
         let test = app_with(&[("pg", &[])], Config::default()).await;
 
-        let listed = list(&context(&test, principal(&[], None), None));
+        let listed = list(&context(&test, principal(&[], None), None), None)
+            .await
+            .unwrap();
 
         assert_eq!(listed.catalogs.len(), 1);
         assert!(listed.selection.is_empty());
@@ -241,20 +386,29 @@ mod tests {
         let stranger = stored_secret(&test, "stranger", Access::Read, &["other"], false).await;
         let root = stored_secret(&test, "root", Access::Admin, &[], false).await;
         suspend_catalogs(&test, &["main"]).await;
-        let on = |secret: &str, connection: &[&str]| {
-            context(&test, cached_principal(&test, secret), Some(connection))
+        let on = async |secret: &str, connection: &[&str]| {
+            context(
+                &test,
+                cached_principal(&test, secret).await,
+                Some(connection),
+            )
         };
 
-        let listed = list(&on(&reader, &["main", "other"]));
-        let only_suspended = list(&on(&reader, &["main"]));
-        let strangers = list(&on(&stranger, &["other"]));
-        let admins = list(&on(&root, &["main", "other"]));
+        let listed = list(&on(&reader, &["main", "other"]).await, None)
+            .await
+            .unwrap();
+        let only_suspended = list(&on(&reader, &["main"]).await, None).await.unwrap();
+        let strangers = list(&on(&stranger, &["other"]).await, None).await.unwrap();
+        let admins = list(&on(&root, &["main", "other"]).await, None)
+            .await
+            .unwrap();
 
         let main = listed.catalogs.iter().find(|c| c.name == "main").unwrap();
         assert_eq!(
             main.suspended,
             Some(SuspensionInfo {
                 team: SUSPENDED_TEAM.to_string(),
+                team_label: "Family".to_string(),
                 notice: Some(SUSPENSION_NOTICE.to_string()),
             })
         );
@@ -286,6 +440,47 @@ mod tests {
             "an admin sees the mark"
         );
         assert_eq!(admins.selection, ["main", "other"], "and selects both");
+    }
+
+    /// M18 Task 10: `after` continues the list by name, narrowed as the
+    /// first page is, and a malformed one is refused.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn after_continues_the_list_and_a_malformed_one_is_refused() {
+        use crate::cache::directory::cursor_of;
+        let test = app_with(
+            &[("pg", &[]), ("work", &[]), ("home", &[])],
+            Config::default(),
+        )
+        .await;
+        let every = principal(&[], None);
+
+        let after_home = list(
+            &context(&test, Arc::clone(&every), None),
+            Some(&cursor_of("home")),
+        )
+        .await
+        .unwrap();
+        let narrowed = list(
+            &context(&test, Arc::clone(&every), Some(&["work", "home"])),
+            Some(&cursor_of("pg")),
+        )
+        .await
+        .unwrap();
+        let refused = list(&context(&test, every, None), Some("not a cursor")).await;
+
+        let names: Vec<&str> = after_home
+            .catalogs
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(names, ["pg", "work"]);
+        assert_eq!(after_home.next, None);
+        let names: Vec<&str> = narrowed.catalogs.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["work"], "the connection's list still narrows it");
+        assert!(
+            matches!(&refused, Err(OkfError::InvalidPath { path, .. }) if path == "after"),
+            "{refused:?}"
+        );
     }
 
     #[test]

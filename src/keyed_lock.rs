@@ -1,10 +1,15 @@
-//! An async mutex per key (a changeset id), created on first use and
-//! dropped when the last holder or waiter lets go, so the map holds only
-//! keys in use.
+//! An async mutex per key (a changeset or catalog id), created on first
+//! use and dropped when the last holder or waiter lets go, so the map holds
+//! only keys in use.
 //!
 //! [`crate::write::apply`] queues each changeset's writers here before they
 //! take a pooled connection, and [`crate::overlay::Overlays`] builds each
 //! changeset's overlay under one, so concurrent first reads build it once.
+//! [`crate::app::App`] keeps each catalog's publish lock and rebuild lock
+//! here, by catalog id, outside any `CatalogState`, so a catalog's states
+//! (an evicted entry still in use, and its reload) share them. A holder
+//! of the rebuild lock may wait for a pooled connection, so no code that
+//! already holds a connection waits for it (issue #671).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -71,7 +76,7 @@ impl KeyedLocks {
     /// no entry behind.
     ///
     /// # Arguments
-    /// * `key` - what to lock (a changeset id).
+    /// * `key` - what to lock (a changeset or catalog id).
     ///
     /// # Returns
     /// The guard; the lock is held until it is dropped.

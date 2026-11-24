@@ -5,6 +5,11 @@
 //! the entries it wrote (and may not export: the provisioner gate allows
 //! `GET /audit` only). The redaction lives in [`audit::list`], so the CLI
 //! (Task 8b) and these routes cannot drift apart.
+//!
+//! An owner's view carries no value of the global `audit_entries.id`
+//! sequence (issue #430): its records have no `id`, and its `next_after`
+//! is a sealed cursor ([`cursor`]), the only `after` it accepts. Admins and
+//! provisioners page by raw ids, as before.
 
 use std::sync::Arc;
 
@@ -21,7 +26,9 @@ use crate::error::OkfError;
 use crate::http::api::require_every_catalog;
 use crate::http::AppError;
 use crate::store::audit::{self, Action, AuditQuery, AuditRecord, FilterText, Viewer};
-use crate::store::teams;
+use crate::store::{server_keys, teams};
+
+mod cursor;
 
 /// `GET /audit` and `/audit/export`'s query string.
 #[derive(Debug, Default, Deserialize)]
@@ -33,12 +40,16 @@ struct AuditParams {
     target: Option<String>,
     since: Option<String>,
     until: Option<String>,
-    after: Option<i64>,
+    /// A raw entry id for an admin or provisioner, a sealed cursor for an
+    /// owner ([`AuditParams::cursor`] tells them apart once the viewer is
+    /// known).
+    after: Option<String>,
     limit: Option<i64>,
 }
 
 impl AuditParams {
-    /// The filters, checked.
+    /// The filters, checked, without the cursor ([`AuditParams::cursor`]
+    /// adds it once the viewer is known).
     ///
     /// # Errors
     /// As [`audit::parse_filters`]: 400 for an unknown action or a time
@@ -52,10 +63,62 @@ impl AuditParams {
             target: self.target.as_deref(),
             since: self.since.as_deref(),
             until: self.until.as_deref(),
-            after: self.after,
+            after: None,
             limit: self.limit,
         })
     }
+
+    /// The `after` cursor as the entry id it stands for: for an admin or a
+    /// provisioner the raw id as sent; for an owner the id sealed in the
+    /// cursor an earlier page of the same team gave it ([`cursor::open`]).
+    /// An empty value is no cursor.
+    ///
+    /// # Arguments
+    /// * `app` - the application (the cursor key's database).
+    /// * `viewer` - who reads.
+    ///
+    /// # Returns
+    /// The entry id, or `None` for no cursor.
+    ///
+    /// # Errors
+    /// 400 ([`OkfError::InvalidPath`]) for an admin's or provisioner's
+    /// value that is not an integer, and for an owner's that is not a
+    /// cursor issued for that team under the current key (a raw id
+    /// included, so an owner cannot probe the sequence);
+    /// [`OkfError::Database`] reading the key.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn cursor(&self, app: &App, viewer: &Viewer) -> Result<Option<i64>, OkfError> {
+        let Some(after) = self.after.as_deref().filter(|after| !after.is_empty()) else {
+            return Ok(None);
+        };
+        match viewer {
+            Viewer::Owner { audit_team, .. } => {
+                let key = server_keys::get_or_create(app.pool(), server_keys::AUDIT_CURSOR).await?;
+                cursor::open(&key, *audit_team, after).map(Some)
+            }
+            Viewer::Admin | Viewer::Credential(_) => {
+                after
+                    .parse::<i64>()
+                    .map(Some)
+                    .map_err(|_| OkfError::InvalidPath {
+                        path: "after".to_string(),
+                        reason: format!("{after:?} is not an entry id"),
+                    })
+            }
+        }
+    }
+}
+
+/// A page's `next_after`: a raw entry id for an admin or a provisioner, a
+/// sealed cursor for an owner.
+// `untagged` serializes each variant as its bare value: `42` or `"..."`.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub(crate) enum NextAfter {
+    /// The last entry's id.
+    Id(i64),
+    /// The last entry's id and the owner's team, sealed ([`cursor::seal`]).
+    Sealed(String),
 }
 
 /// `GET /audit`'s answer.
@@ -65,7 +128,7 @@ pub(crate) struct AuditPage {
     pub entries: Vec<AuditRecord>,
     /// The cursor for the next page (`?after=`), or null when this page is
     /// not full. A full last page is followed by an empty one.
-    pub next_after: Option<i64>,
+    pub next_after: Option<NextAfter>,
     /// Every action name, for the console's filter.
     pub actions: Vec<&'static str>,
 }
@@ -137,13 +200,25 @@ async fn list_audit(
     Extension(principal): Extension<Arc<Principal>>,
     Query(params): Query<AuditParams>,
 ) -> Result<Json<AuditPage>, AppError> {
-    let query = params.query()?;
+    let mut query = params.query()?;
     let viewer = viewer(&app, &principal, query.team).await?;
-    let entries = audit::list(app.pool(), &viewer, &query).await?;
+    query.after = params.cursor(&app, &viewer).await?;
+    let entries = audit::list(app.pool(), &viewer, &query, app.labels()).await?;
     // A full page may have more after it. `try_from` converts the length,
     // a `usize`, to the `i64` the page size is.
     let full = i64::try_from(entries.len()).is_ok_and(|len| len >= query.page_size());
-    let next_after = entries.last().filter(|_| full).map(|entry| entry.id);
+    let next_after = match (entries.last().filter(|_| full), &viewer) {
+        (None, _) => None,
+        (Some(last), Viewer::Owner { audit_team, .. }) => {
+            let key = server_keys::get_or_create(app.pool(), server_keys::AUDIT_CURSOR).await?;
+            Some(NextAfter::Sealed(cursor::seal(
+                &key,
+                *audit_team,
+                last.cursor,
+            )?))
+        }
+        (Some(last), Viewer::Admin | Viewer::Credential(_)) => Some(NextAfter::Id(last.cursor)),
+    };
     Ok(Json(AuditPage {
         entries,
         next_after,
@@ -154,8 +229,9 @@ async fn list_audit(
 /// `GET /audit/export`: every entry the filters select, as JSON Lines (one
 /// record per line, newest first), for a compliance request, built by
 /// [`audit::export_lines`] (which `okf-mcp audit export` prints): `after`
-/// is a starting cursor and `limit` is ignored, since the export pages
-/// through to the end. Retention bounds the total.
+/// is a starting cursor (an owner's sealed one, as `GET /audit` gave it)
+/// and `limit` is ignored, since the export pages through to the end. An
+/// owner's lines have no `id`. Retention bounds the total.
 ///
 /// # Errors
 /// As [`list_audit`].
@@ -165,9 +241,10 @@ async fn export_audit(
     Extension(principal): Extension<Arc<Principal>>,
     Query(params): Query<AuditParams>,
 ) -> Result<Response, AppError> {
-    let query = params.query()?;
+    let mut query = params.query()?;
     let viewer = viewer(&app, &principal, query.team).await?;
-    let body = audit::export_lines(app.pool(), &viewer, &query).await?;
+    query.after = params.cursor(&app, &viewer).await?;
+    let body = audit::export_lines(app.pool(), &viewer, &query, app.labels()).await?;
     let headers = [
         (header::CONTENT_TYPE, "application/x-ndjson"),
         (

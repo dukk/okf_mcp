@@ -5,7 +5,7 @@
 //! one `#[tool_router]` block with its own router, joined in
 //! `OkfServer::tools`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use axum::http::request::Parts;
@@ -19,9 +19,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use similar::TextDiff;
 
+use crate::auth::Reach;
 use crate::catalog::Loaded;
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
+use crate::labels::directory::Wanted;
 use crate::mcp::context::{Pinned, ToolContext};
 use crate::mcp::{blocking, reply, OkfServer};
 use crate::okf::ops::OpOutcome;
@@ -30,6 +32,9 @@ use crate::okf::rules;
 use crate::okf::workspace::Workspace;
 use crate::store::audit::Action;
 use crate::store::keys::Access;
+// `as publishing`: the module's `publish` would clash with this file's
+// `publish` function.
+use crate::store::publish as publishing;
 use crate::write::{apply_audited, OpAudit, WriteReport};
 
 /// `list_changesets`' arguments.
@@ -37,7 +42,7 @@ use crate::write::{apply_audited, OpAudit, WriteReport};
 // its input schema, with the doc comments as the fields' descriptions.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct ListParams {
-    /// Only this catalog (default: every catalog the connection offers: the
+    /// Only this catalog id (the `name` from `list_catalogs`; default: every catalog the connection offers: the
     /// key's, limited to the connection's list when it has one).
     pub catalog: Option<String>,
 }
@@ -47,14 +52,18 @@ pub struct ListParams {
 pub struct ListedChangeset {
     /// Its handle: pass it as `changeset` to resume work on it.
     pub changeset: String,
-    /// Its catalog.
+    /// Its catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// The key it belongs to; null once that key is deleted.
     pub key: Option<String>,
     /// The key's grouping name; null once that key is deleted.
     pub key_name: Option<String>,
     /// The actor of the key that opened it.
     pub actor: String,
+    /// The actor's label, when the actor is a user; null for a key or OAuth actor.
+    pub actor_label: Option<String>,
     /// When it was opened.
     pub created: String,
     /// Its last change.
@@ -117,44 +126,85 @@ pub(crate) async fn list_changesets(
     use crate::store::changesets;
 
     let principal = ctx.principal();
-    let catalog_ids: Vec<i64> = match params.catalog.as_deref() {
-        // `one` refuses a catalog the key does not reach; it admits
-        // nothing, and a list of changesets reads no catalog's contents.
-        // `one` checks the name and the incarnation whose changesets are
-        // listed; it admits nothing.
-        Some(name) => vec![ctx.one(Some(name))?.id()],
-        None => {
-            // A list naming a bad catalog fails here as it does elsewhere.
-            ctx.check_connection()?;
-            ctx.catalogs()
-                .values()
-                // A closed catalog shows no changesets: its handles and paths
-                // are part of what suspension (M13) and a lock (M14) withhold.
-                // `offers` (reach) is checked first; the lock is checked
-                // against the incarnation listed, not only its name.
-                .filter(|state| {
-                    ctx.offers(state.name())
-                        && principal.check_not_suspended(state.name()).is_ok()
-                        && ctx.check_contents(state, Access::Read).is_ok()
-                })
-                .map(|state| state.id())
-                .collect()
-        }
-    };
     let admin = principal.access >= Access::Admin;
     // The database narrows by key (unless admin) and catalog, so other
     // keys' changesets and paths never leave it.
     let key_filter = (!admin).then_some(principal.key_id.as_str());
-    let rows = changesets::list_open(ctx.app().pool(), &catalog_ids, key_filter).await?;
+    let pool = ctx.app().pool();
+    let rows = match params.catalog.as_deref() {
+        // `one` refuses a catalog the key does not reach; it checks the name
+        // and the incarnation whose changesets are listed, and admits
+        // nothing: a list of changesets reads no catalog's contents.
+        Some(name) => {
+            let id = ctx.one(Some(name)).await?.id();
+            changesets::list_open(pool, &[id], key_filter).await?
+        }
+        None => {
+            // A list naming a bad catalog fails here as it does elsewhere.
+            ctx.check_connection().await?;
+            // Narrowed in SQL to the catalogs the connection offers (its
+            // list, else the key's grants; every catalog for a key that
+            // reaches them all), without enumerating the catalogs first.
+            let names: Option<Vec<String>> = match (ctx.connection(), &principal.reach) {
+                (Some(list), _) if !list.is_empty() => Some(list.to_vec()),
+                (_, Reach::Catalogs(levels)) => Some(levels.keys().cloned().collect()),
+                // A console session's ceiling is not listed: it is never
+                // admin, so the key filter (its own changesets) bounds the
+                // rows, and each is checked against its row below.
+                (_, Reach::All | Reach::Ceiling) => None,
+            };
+            let rows = changesets::open_for_catalogs(pool, names.as_deref(), key_filter).await?;
+            // A closed catalog shows no changesets: its handles and paths are
+            // part of what suspension (M13) and a lock (M14) withhold.
+            // `offers` (reach) is checked first; the lock is checked against
+            // the incarnation each row belongs to, not only its name.
+            let mut open = Vec::with_capacity(rows.len());
+            for row in rows {
+                // The by-name half of `offers` first, so a row the name
+                // rules out costs no lookup.
+                if principal.excludes(&row.catalog) {
+                    continue;
+                }
+                let catalog_id = row.changeset.catalog_id;
+                let catalog = match ctx.row_by_id(&row.catalog, catalog_id).await {
+                    Ok(catalog) => catalog,
+                    // A failed read is not a closed catalog.
+                    Err(error @ OkfError::Database { .. }) => return Err(error),
+                    // Gone, or now another catalog: nothing of it to list.
+                    Err(_) => continue,
+                };
+                if ctx.offers(&catalog)
+                    && principal.check_not_suspended(&catalog).is_ok()
+                    && ctx
+                        .check_contents_by_id(&row.catalog, catalog_id, Access::Read)
+                        .await
+                        .is_ok()
+                {
+                    open.push(row);
+                }
+            }
+            open
+        }
+    };
     let idle_since = idle_cutoff(
         ctx.app().clock().now(),
         ctx.app().config().session_idle_timeout,
     );
+    let mut wanted = Wanted::default();
+    for row in &rows {
+        wanted.catalog(&row.catalog).user(&row.changeset.actor);
+    }
+    let labels = ctx.labels_for(&wanted).await?;
     let changesets = rows
         .into_iter()
         .map(|row| ListedChangeset {
             changeset: row.changeset.handle,
+            catalog_label: labels
+                .catalog(&row.catalog)
+                .unwrap_or(&row.catalog)
+                .to_string(),
             catalog: row.catalog,
+            actor_label: labels.actor(&row.changeset.actor).map(str::to_string),
             key: row.changeset.key_id,
             key_name: row.key_name,
             actor: row.changeset.actor,
@@ -205,7 +255,7 @@ impl OkfServer {
 /// `open_changeset`'s arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct OpenParams {
-    /// The catalog (default: this connection's write target).
+    /// The catalog id (the `name` from `list_catalogs`; default: this connection's write target; when `list_catalogs` shows none, pass `catalog`).
     pub catalog: Option<String>,
 }
 
@@ -214,8 +264,10 @@ pub struct OpenParams {
 pub struct Opened {
     /// The new changeset's handle: pass it as `changeset` to every write, `publish`, `discard`, `revert` and `pending_changes`, and to reads that should see the drafts.
     pub changeset: String,
-    /// Its catalog.
+    /// Its catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
 }
 
 /// Opens a changeset and returns its handle (M8 Decision 1).
@@ -243,7 +295,7 @@ pub(crate) async fn open_changeset(
 
     // Opening reads no contents: nothing is admitted (the writes are
     // recorded as publishes).
-    let state = ctx.one(params.catalog.as_deref())?;
+    let state = ctx.one(params.catalog.as_deref()).await?;
     let principal = ctx.principal();
     // `changesets.key_id` references `api_keys`. MCP takes only bearer
     // credentials, so this guards any later `/api/v1` caller.
@@ -255,11 +307,10 @@ pub(crate) async fn open_changeset(
     let now = ctx.app().clock().now();
     // The changeset's writes go to the catalog's contents, so they need
     // what any write does, the unlock included (M14 Task 9b).
-    principal.require_contents(Access::Write, state.name(), now)?;
-    // An unlock is of one catalog incarnation: one let in by gates that
-    // predate this call's catalog map (the catalog was created again under
-    // its name) must not open a changeset in the replacement (PR #442).
-    ctx.check_contents(&state, Access::Write)?;
+    // Decided by the row of this very incarnation: an unlock is of one
+    // catalog incarnation, and one of a catalog created again under its
+    // name must not open a changeset in the replacement (PR #442).
+    ctx.require_contents(Access::Write, &state).await?;
     // The lock order of every changeset write: the catalog row first, so a
     // concurrent `catalog delete` either waits for this or is seen here.
     let mut tx = ctx.app().pool().begin().await?;
@@ -276,6 +327,7 @@ pub(crate) async fn open_changeset(
     Ok(Opened {
         changeset: opened.handle,
         catalog: state.name().to_string(),
+        catalog_label: ctx.catalog_label(state.name()).await?,
     })
 }
 
@@ -323,8 +375,10 @@ pub struct PublishParams {
 /// `publish`'s result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Published {
-    /// The changeset's catalog.
+    /// The changeset's catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// The changeset's handle. With `published: false` it was not published and stays open (it held no entries, for instance after a discard emptied it).
     pub changeset: String,
     /// What was written; `flatten` puts its fields beside these.
@@ -352,9 +406,6 @@ pub(crate) async fn publish(
     ctx: &ToolContext,
     params: PublishParams,
 ) -> Result<Published, OkfError> {
-    // `as publishing`: the module's `publish` would clash with this function.
-    use crate::store::publish as publishing;
-
     let message = params.message.trim();
     if message.is_empty() {
         return Err(OkfError::Refused {
@@ -370,6 +421,7 @@ pub(crate) async fn publish(
     let report = publishing::publish(ctx.app(), &state, &input, &ctx.audit_actor()).await?;
     Ok(Published {
         catalog: state.name().to_string(),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         changeset: row.handle,
         report,
     })
@@ -383,9 +435,12 @@ impl OkfServer {
         description = "Publish the changeset `changeset` names: its edits become the \
                        published documents, each with a new revision carrying `message`. Refused \
                        with Conflict when a document changed since this changeset read it \
-                       (log.md and index.md bookkeeping is replayed onto the new text instead), \
+                       (log.md and index.md bookkeeping, and the stamp, review, question, unquestion, \
+                       add_source and remove_source edits of a concept, are replayed onto the new \
+                       text instead; a replay that can no longer apply is refused with its reason), \
                        or with LintFailed when a changed file has lint errors; the changeset \
-                       then stays open. Lint errors elsewhere come back as warnings. When every \
+                       then stays open (an error the published file already has is a warning, not \
+                       a refusal). Lint errors elsewhere come back as warnings. When every \
                        edit already matches the published text, the changeset is closed with \
                        published: true and no revisions. Write access.",
         annotations(
@@ -422,8 +477,10 @@ pub struct DiscardParams {
 /// `discard`'s result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Discarded {
-    /// The changeset's catalog.
+    /// The changeset's catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// The changeset's handle.
     pub changeset: String,
     /// How many entries were dropped.
@@ -456,9 +513,13 @@ pub struct PendingFile {
     pub current_revision: Option<i32>,
     /// Whether the path was published since the entry was made (`base_revision` differs from `current_revision`). Publish replays a stale replayable entry and refuses any other with Conflict.
     pub stale: bool,
-    /// Whether publish can replay the entry onto newer text (log.md and index.md bookkeeping only).
+    /// Whether publish can replay the entry onto newer text (bookkeeping only: log.md and index.md edits, and a concept's stamp, review, question, unquestion, add_source and remove_source edits, unless a free edit of the path follows).
     pub replayable: bool,
-    /// A unified diff against the published text (`/dev/null` for a new or deleted file). A deletion of a path deleted since (no published file), or a file equal to the published one, gets a one-line note instead.
+    /// Whether `diff` shows the entry replayed onto the published text, the bytes publish would write: true only for a stale, replayable entry whose replay succeeds. Publish still runs its lint on that result. False: `diff` shows the entry's stored text, or the `replay_error` note.
+    pub replayed: bool,
+    /// Why publish cannot replay this stale, replayable entry (null otherwise): publish would refuse the changeset until the path is discarded and the change made again. `diff` is then a one-line note saying so.
+    pub replay_error: Option<String>,
+    /// A unified diff against the published text (`/dev/null` for a new or deleted file); for a stale, replayable entry, of its replayed text (`replayed`). A deletion of a path deleted since (no published file), a file equal to the published one, or a replay that would fail at publish (`replay_error`) gets a one-line note instead.
     pub diff: String,
 }
 
@@ -472,8 +533,10 @@ pub struct PendingParams {
 /// `pending_changes`' result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct PendingChanges {
-    /// The changeset's catalog.
+    /// The changeset's catalog (id).
     pub catalog: String,
+    /// The catalog's label: say this to people, pass `catalog` in calls.
+    pub catalog_label: String,
     /// The changeset's handle.
     pub changeset: String,
     /// Its entries, in path order.
@@ -556,6 +619,7 @@ pub(crate) async fn discard(
     } = ctx.changeset(&params.changeset, Access::Write).await?;
     let mut discarded = Discarded {
         catalog: state.name().to_string(),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         changeset: params.changeset,
         removed: 0,
         closed: false,
@@ -568,7 +632,7 @@ pub(crate) async fn discard(
     let app = ctx.app();
     // The guard releases the mutex when it goes out of scope, after the
     // overlay is forgotten.
-    let _closing = state.publish_lock().lock().await;
+    let _closing = app.publish_lock(state.id()).await;
     let now = app.clock().now();
     // Closing another key's changeset is an admin's administrative change;
     // an owner closing its own is not recorded. Decided from the row read
@@ -615,7 +679,7 @@ pub(crate) async fn discard(
         }
     }
     tx.commit().await?;
-    app.overlays().forget(changeset.id);
+    app.overlays().forget(changeset.id).await;
     Ok(discarded)
 }
 
@@ -623,9 +687,13 @@ pub(crate) async fn discard(
 /// `delete` revision) to the changeset a handle names, as a free edit.
 ///
 /// It goes through [`apply_audited`], so every write rule applies, and
-/// records `catalog.reverted` in the edit's own transaction. Sending a path
-/// the changeset created (never published) back to "absent" leaves no
-/// entry for it, so the report's `touched` is empty.
+/// records `catalog.reverted` in the edit's own transaction. The entry's
+/// base is the revision published now, in the snapshot the write's overlay
+/// is built on, even when the changeset had edited the path before (issue
+/// #788): publish then conflicts only if the path is published again after
+/// the revert. Sending a path that is not published now (one the changeset
+/// created, or one deleted since) back to "absent" leaves no entry for it,
+/// so the report's `touched` is empty.
 ///
 /// # Arguments
 /// * `ctx` - the call's context.
@@ -697,12 +765,17 @@ pub(crate) async fn revert(
         }
         let message = format!("{path}: reverted to revision {revision}");
         // No replay: a revert is a free edit, which conflicts on a stale
-        // base. `path` moves into the outcome (no copy).
+        // base. Its text is a whole-file choice made against the published
+        // history, so its base is the revision published now, even when the
+        // changeset already had an entry for the path (`rebased`, issue
+        // #788): an earlier edit's base and replay no longer apply to it.
+        // `path` moves into the outcome after one copy for `rebased`.
         Ok(OpOutcome {
-            touched: vec![path],
+            touched: vec![path.clone()],
             replay: BTreeMap::new(),
             message,
             notes: Vec::new(),
+            rebased: BTreeSet::from([path]),
         })
     })
     .await
@@ -732,11 +805,28 @@ pub(crate) async fn pending_changes(
     use crate::store::changesets;
 
     let Pinned { state, row } = ctx.changeset(&params.changeset, Access::Read).await?;
-    let entries = changesets::entries(ctx.app().pool(), row.id).await?;
-    let loaded = state.current();
-    let files = blocking(move || pending_files(&loaded, &entries)).await;
+    let pool = ctx.app().pool();
+    let entries = changesets::entries(pool, row.id).await?;
+    // An entry made on another replica (or before this one's snapshot moved)
+    // can have a base newer than the snapshot here: refresh before diffing,
+    // or the diff would be against older text (issue #659).
+    let bases = entries
+        .iter()
+        .map(|entry| (entry.path.as_str(), entry.base_revision));
+    // The changeset's latest base, not the request's pinned snapshot: the
+    // diff is against what the entries were made on.
+    let before = state.current().generation();
+    let loaded = state
+        .current_covering(pool, ctx.app().rebuild_locks(), bases)
+        .await?;
+    ctx.app()
+        .catalog_cache()
+        .refreshed_if_moved(&state, before)
+        .await;
+    let files = blocking(move || pending_files(&loaded, &entries)).await?;
     Ok(PendingChanges {
         catalog: state.name().to_string(),
+        catalog_label: ctx.catalog_label(state.name()).await?,
         changeset: row.handle,
         files,
     })
@@ -750,11 +840,20 @@ pub(crate) async fn pending_changes(
 ///
 /// # Returns
 /// One [`PendingFile`] per entry, in the same order.
+///
+/// # Errors
+/// [`OkfError::Busy`] if a path's published revision in `loaded` is older
+/// than its entry's base: the snapshot is behind the changeset, and a diff
+/// against it would show published text as pending (issue #659). The
+/// response never reports `current_revision < base_revision`;
+/// [`CatalogState::current_covering`](crate::catalog::CatalogState::current_covering)
+/// refreshes first, so only a snapshot that a refresh could not bring up to
+/// date reaches this.
 #[tracing::instrument(level = "trace", skip_all)]
 fn pending_files(
     loaded: &Loaded,
     entries: &[crate::store::changesets::EntryRow],
-) -> Vec<PendingFile> {
+) -> Result<Vec<PendingFile>, OkfError> {
     // The diffs are independent: rayon's `par_iter` spreads them over the
     // CPU pool, and `collect` keeps the entries' (path) order.
     entries
@@ -767,18 +866,85 @@ fn pending_files(
                 (Some(_), Some(_)) => "update",
             };
             let current_revision = loaded.revision(&entry.path);
+            // The invariant: a published revision is never older than the
+            // base an entry was made on.
+            if let (Some(base), Some(current)) = (entry.base_revision, current_revision) {
+                if current < base {
+                    return Err(OkfError::Busy {
+                        reason: format!(
+                            "this replica's snapshot of /{} is at revision {current}, older than \
+                             the changeset's base revision {base}",
+                            entry.path
+                        ),
+                    });
+                }
+            }
             let old = published.as_ref().map(|file| file.content.as_slice());
-            PendingFile {
+            let stale = entry.base_revision != current_revision;
+            let replayable = entry.replay.is_some();
+            // A stale, replayable entry is shown as publish would write it:
+            // its operations redone on the published text by the function
+            // publish calls (issue #787). Its stored text was built on the
+            // old base, so a diff of that would show everything published
+            // since as deleted.
+            let (replayed, replay_error, diff) = if stale && replayable {
+                match publishing::replayed_text(entry, old) {
+                    Ok(Some(text)) => (
+                        true,
+                        None,
+                        unified_diff(&entry.path, old, Some(text.as_bytes())),
+                    ),
+                    Ok(None) => {
+                        let reason = cannot_replay(&entry.path, current_revision);
+                        (false, Some(reason.clone()), format!("{reason}\n"))
+                    }
+                    Err(error) => {
+                        let reason = error.to_string();
+                        let note = format!(
+                            "Publish cannot replay this entry onto the published text: {reason}\n"
+                        );
+                        (false, Some(reason), note)
+                    }
+                }
+            } else {
+                let diff = unified_diff(&entry.path, old, entry.content.as_deref());
+                (false, None, diff)
+            };
+            Ok(PendingFile {
                 path: format!("/{}", entry.path),
                 change,
                 base_revision: entry.base_revision,
                 current_revision,
-                stale: entry.base_revision != current_revision,
-                replayable: entry.replay.is_some(),
-                diff: unified_diff(&entry.path, old, entry.content.as_deref()),
-            }
+                stale,
+                replayable,
+                replayed,
+                replay_error,
+                diff,
+            })
         })
         .collect()
+}
+
+/// Why a stale, replayable entry has no replay at publish (the cases
+/// [`publishing::replayed_text`] answers `None` for): publish refuses it
+/// with Conflict.
+///
+/// # Arguments
+/// * `path` - catalog-relative path.
+/// * `current` - the path's published revision now (`None`: not live).
+///
+/// # Returns
+/// The reason, naming the path and what to do.
+#[tracing::instrument(level = "trace", skip_all)]
+fn cannot_replay(path: &str, current: Option<i32>) -> String {
+    let now = match current {
+        Some(revision) => format!("revision {revision}"),
+        None => "a deleted document".to_string(),
+    };
+    format!(
+        "Publish cannot replay this entry onto /{path} as published now ({now}) and would \
+         refuse it with Conflict; discard /{path} from this changeset and make the change again"
+    )
 }
 
 /// A unified diff (3 lines of context) between the published and the
@@ -863,8 +1029,11 @@ impl OkfServer {
         description = "Add a document's content at an earlier revision (from `history`), or its \
                        deletion for a `delete` revision, to the changeset `changeset` names, for \
                        review and publish like any other edit. Every write rule applies, so \
-                       machinery cannot be reverted. Reverting a file this changeset created to \
-                       a `delete` revision drops it from the changeset. Write access.",
+                       machinery cannot be reverted. The revert is based on the revision \
+                       published now, even if this changeset edited the document before, so \
+                       publish conflicts only if the document is published again after it. \
+                       Reverting a file this changeset created to a `delete` revision drops it \
+                       from the changeset. Write access.",
         annotations(
             title = "Revert Document",
             read_only_hint = false,
@@ -888,7 +1057,10 @@ impl OkfServer {
         description = "The unpublished changeset `changeset` names: each changed path \
                        (create, update or delete), the revision it was based on and the one \
                        published now, whether that base is stale, whether publish can replay \
-                       it, and a unified diff against the published text.",
+                       it, and a unified diff against the published text. A stale entry \
+                       publish can replay is diffed as replayed onto the published text \
+                       (replayed: true), the bytes publish would write; one whose replay would \
+                       fail gets replay_error and a note instead.",
         annotations(
             title = "Show Pending Changes",
             read_only_hint = true,
@@ -954,16 +1126,12 @@ mod open_tests {
         let user = crate::store::users::UserAuth {
             id: "9eaae459-441c-49c2-8613-e3996bdc96ee".to_string(),
             name: "alice".to_string(),
+            display_name: String::new(),
             email: None,
             is_admin: true,
         };
         // An admin session: it passes every level check.
-        let session = crate::auth::Principal::for_session(
-            &user,
-            Default::default(),
-            Default::default(),
-            Default::default(),
-        );
+        let session = crate::auth::Principal::for_session(&user, Default::default());
         let ctx = crate::mcp::testing::context(&test, std::sync::Arc::new(session), None);
 
         let refused = open_changeset(
@@ -993,7 +1161,7 @@ mod open_tests {
         let secret = staff_root(&test).await;
         let ctx = context(
             &test,
-            cached_principal(&test, &secret),
+            cached_principal(&test, &secret).await,
             Some(&["main", "other"]),
         );
         let named = |name: &str| ListParams {
@@ -1246,7 +1414,6 @@ mod publish_tests {
     use crate::store::{catalogs, history};
     use crate::telemetry::subscriber::capture::{SeenSpan, SeenValue, SpanRecorder};
     use crate::write::{apply, WriteReport};
-    use tracing::Instrument;
 
     const NOTE: &str = "---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# A\n";
     const X: &str = "---\ntype: Note\ntitle: X\ndescription: X.\n---\n# X\n";
@@ -1345,99 +1512,6 @@ mod publish_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn each_poll_tick_is_its_own_trace() {
-        let (test, _registry) = pg_with_metrics().await;
-        let recorder = SpanRecorder::new();
-
-        // Each pass runs inside a caller span: the pass must still be a root.
-        // The caller span is attached with `instrument`, so no entered guard
-        // is held across an await.
-        // The span is made inside the subscribed future, so it is a real one.
-        // The span is made inside the recorded future, so it is a real one.
-        recorder.run(async {
-            async {
-                test.app.poll().await.unwrap();
-                test.app.poll().await.unwrap();
-            }
-            .instrument(tracing::info_span!("caller"))
-            .await;
-        });
-
-        let spans = recorder.finished();
-        let polls: Vec<_> = spans
-            .iter()
-            .filter(|span| span.name == "okf.poll")
-            .collect();
-        assert_eq!(polls.len(), 2);
-        // A root has no parent, so each pass starts a trace of its own.
-        assert!(polls.iter().all(|span| span.parent.is_none()));
-        // A catalog's turn is a child of its pass.
-        let turn = spans
-            .iter()
-            .find(|span| span.name == "okf.catalog.refresh")
-            .expect("a catalog refresh span");
-        assert!(polls.iter().any(|poll| Some(poll.id) == turn.parent));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn catalog_gauges_follow_the_snapshot() {
-        let (test, registry) = pg_with_metrics().await;
-        let state = test.app.catalog("pg").unwrap();
-        let concepts = state.current().snapshot().concepts().count();
-        let generation = state.current().generation();
-        assert!(concepts > 0);
-
-        let text = render(&registry);
-
-        assert!(
-            text.contains(&format!(
-                r#"okf_catalog_concepts{{catalog="pg"}} {concepts}"#
-            )),
-            "{text}"
-        );
-        assert!(
-            text.contains(&format!(
-                r#"okf_catalog_generation{{catalog="pg"}} {generation}"#
-            )),
-            "{text}"
-        );
-        // A publish moves the generation; the gauge follows after a poll.
-        let ctx = writer(&test, "writer-a", "pg").await;
-        let handle = open(&ctx).await;
-        body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
-        publish_as(&ctx, &handle, "edit a").await.unwrap();
-        test.app.poll().await.unwrap();
-        let text = render(&registry);
-        assert!(
-            text.contains(&format!(
-                r#"okf_catalog_generation{{catalog="pg"}} {}"#,
-                generation + 1
-            )),
-            "{text}"
-        );
-        // A deleted catalog's series is gone after the next poll.
-        catalogs::delete(
-            test.app.pool(),
-            "pg",
-            true,
-            &crate::store::audit::AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        test.app.poll().await.unwrap();
-        let text = render(&registry);
-        assert!(
-            !text.contains(r#"okf_catalog_concepts{catalog="pg"}"#),
-            "{text}"
-        );
-        assert!(
-            !text.contains(r#"okf_changesets_open{catalog="pg"}"#),
-            "{text}"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn open_changesets_gauge() {
         let (test, registry) = pg_with_metrics().await;
         let first = writer(&test, "writer-a", "pg").await;
@@ -1445,54 +1519,49 @@ mod publish_tests {
         let _kept = open(&first).await;
         let published = open(&second).await;
         body(&second, &published, "/a.md", "# A\n\nNew.\n").await;
-        test.app.poll().await.unwrap();
+        // Counted by the `cluster_stats` housekeeping job, read into the
+        // gauge by the ticker (issue #693): one cluster-wide series.
+        let count = || async {
+            crate::housekeeping::run(crate::housekeeping::Task::ClusterStats, &test.app)
+                .await
+                .unwrap();
+            crate::housekeeping::refresh_gauges(&test.app).await;
+        };
+        count().await;
         let text = render(&registry);
-        assert!(
-            text.contains(r#"okf_changesets_open{catalog="pg"} 2"#),
-            "{text}"
-        );
+        assert!(text.contains("okf_changesets_open 2"), "{text}");
 
         publish_as(&second, &published, "edit a").await.unwrap();
-        // Counted by the poll, not read at the scrape.
-        assert!(render(&registry).contains(r#"okf_changesets_open{catalog="pg"} 2"#));
-        test.app.poll().await.unwrap();
+        // Counted by the job, not read at the scrape.
+        assert!(render(&registry).contains("okf_changesets_open 2"));
+        count().await;
 
         let text = render(&registry);
-        assert!(
-            text.contains(r#"okf_changesets_open{catalog="pg"} 1"#),
-            "{text}"
-        );
+        assert!(text.contains("okf_changesets_open 1"), "{text}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_poll_counts_catalog_refreshes_and_the_key_reload() {
+    async fn a_settings_message_counts_the_settings_load() {
         let (test, registry) = pg_with_metrics().await;
-        // The database moved past this snapshot (an import by another process).
-        sqlx::query("UPDATE catalogs SET generation = generation + 1 WHERE name = 'pg'")
-            .execute(test.app.pool())
+        // A settings write moves `admin_generation`, so its message's check
+        // loads the settings.
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::settings::set(
+                test.app.pool(),
+                crate::store::settings::SettingKey::MaxKeysPerUser,
+                "5",
+                &crate::store::audit::AuditActor::cli(),
+                chrono::Utc::now(),
+            )
             .await
             .unwrap();
-        // A key change moves `admin_generation`, so the poll reloads the cache.
-        let mut conn = test.app.pool().acquire().await.unwrap();
-        catalogs::bump_admin_generation(&mut conn).await.unwrap();
-        drop(conn);
-
-        test.app.poll().await.unwrap();
-        test.app.poll().await.unwrap();
+        })
+        .await;
 
         let text = render(&registry);
-        assert!(
-            text.contains(r#"okf_catalog_refreshes_total{catalog="pg",result="reloaded"} 1"#),
-            "{text}"
-        );
-        assert!(
-            text.contains(r#"okf_catalog_refreshes_total{catalog="pg",result="unchanged"} 1"#),
-            "{text}"
-        );
-        assert!(
-            text.contains(r#"okf_poll_duration_seconds_count{outcome="ok"} 2"#),
-            "{text}"
-        );
+        // No poll (M18 Task 16), and catalogs were never polled (Task 8).
+        assert!(!text.contains("okf_poll_duration_seconds"), "{text}");
+        assert!(!text.contains("okf_catalog_refreshes_total"), "{text}");
         assert!(
             text.contains(r#"okf_keycache_reloads_total{outcome="ok"} 1"#),
             "{text}"
@@ -1540,8 +1609,8 @@ mod publish_tests {
         publish(ctx, params).await
     }
 
-    fn published_text(test: &TestApp, path: &str) -> String {
-        let loaded = test.app.catalog("pg").unwrap().current();
+    async fn published_text(test: &TestApp, path: &str) -> String {
+        let loaded = test.app.catalog("pg").await.unwrap().unwrap().current();
         loaded
             .snapshot()
             .get(path)
@@ -1556,7 +1625,7 @@ mod publish_tests {
     /// Stores an entry directly, as no write tool would (a rule changed, a
     /// hand edit), to show publish checks again.
     async fn insert_entry(test: &TestApp, handle: &str, entry: EntryRow) {
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let row = changeset_row(test, handle).await;
         let mut tx = test.app.pool().begin().await.unwrap();
         changesets::lock_catalog(&mut tx, state.id()).await.unwrap();
@@ -1595,7 +1664,7 @@ mod publish_tests {
         body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
         // Resolved while open, as the losing publish read it before the lock.
         let stale = changeset_row(&test, &handle).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         publish_as(&ctx, &handle, "first").await.unwrap();
 
         let input = crate::store::publish::PublishInput {
@@ -1616,12 +1685,51 @@ mod publish_tests {
         );
     }
 
+    /// A publish sends its catalog's new generation on the change feed
+    /// (milestone 18 Task 2), without bumping `admin_generation`; a publish
+    /// that writes nothing sends nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_publish_invalidates_its_catalog_at_the_new_generation() {
+        use crate::invalidate::{testing::invalidations_of, Invalidation};
+        let test = pg().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let pool = test.app.pool();
+        let catalog = catalogs::find(pool, "pg").await.unwrap();
+        let admin_before = catalogs::admin_generation(pool).await.unwrap();
+        let handle = open(&ctx).await;
+        body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
+
+        let got = invalidations_of(pool, async {
+            publish_as(&ctx, &handle, "edit a").await.unwrap();
+        })
+        .await;
+        let empty = open(&ctx).await;
+        let nothing = invalidations_of(pool, async {
+            publish_as(&ctx, &empty, "nothing").await.unwrap();
+        })
+        .await;
+
+        assert_eq!(
+            got,
+            [Invalidation::Catalog {
+                id: catalog.id,
+                generation: catalog.generation + 1,
+            }]
+        );
+        assert_eq!(nothing, []);
+        assert_eq!(
+            catalogs::admin_generation(pool).await.unwrap(),
+            admin_before,
+            "a publish is not an administrative change"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn publish_writes_revisions_bumps_the_generation_and_swaps_the_snapshot() {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let before = catalogs::find(test.app.pool(), "pg")
             .await
             .unwrap()
@@ -1647,7 +1755,9 @@ mod publish_tests {
             .generation;
         assert_eq!(after, before + 1);
         assert_eq!(state.current().generation(), after);
-        assert!(published_text(&test, "a.md").ends_with("# A\n\nNew.\n"));
+        assert!(published_text(&test, "a.md")
+            .await
+            .ends_with("# A\n\nNew.\n"));
         let rows = history::revisions(test.app.pool(), state.id(), "a.md", 5)
             .await
             .unwrap();
@@ -1741,11 +1851,11 @@ mod publish_tests {
         assert!(refused.is_err(), "{refused:?}");
         assert_eq!(state_of(&test, &handle).await, ChangesetState::Open);
         assert_eq!(
-            published_text(&test, "a.md"),
+            published_text(&test, "a.md").await,
             NOTE,
             "the publish rolled back"
         );
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let rows = history::revisions(test.app.pool(), state.id(), "a.md", 5)
             .await
             .unwrap();
@@ -1769,7 +1879,7 @@ mod publish_tests {
 
         assert!(published.report.published);
         assert_eq!(state_of(&test, &handle).await, ChangesetState::Published);
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let rows = history::revisions(test.app.pool(), state.id(), "a.md", 5)
             .await
             .unwrap();
@@ -1866,7 +1976,7 @@ mod publish_tests {
         import(test.app.pool(), "pg", republished, &options)
             .await
             .unwrap();
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let stale = state.current().generation();
         let size = test.app.pool().options().get_max_connections();
         let mut held = Vec::with_capacity(size as usize);
@@ -1888,7 +1998,7 @@ mod publish_tests {
         assert!(published.unwrap().report.published);
         assert!(state.current().generation() > stale);
         assert!(state.current().snapshot().get("z.md").is_some());
-        assert!(published_text(&test, "a.md").ends_with("Edited.\n"));
+        assert!(published_text(&test, "a.md").await.ends_with("Edited.\n"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1916,7 +2026,7 @@ mod publish_tests {
             .await
             .unwrap();
         assert_eq!(entries.len(), 1);
-        assert!(published_text(&test, "a.md").ends_with("From a.\n"));
+        assert!(published_text(&test, "a.md").await.ends_with("From a.\n"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1941,7 +2051,7 @@ mod publish_tests {
             .chain(&two.report.replayed)
             .collect();
         assert_eq!(replayed, ["/log.md"]);
-        let text = published_text(&test, "log.md");
+        let text = published_text(&test, "log.md").await;
         assert!(
             text.contains("* **Update:** from a") && text.contains("* **Update:** from b"),
             "{text}"
@@ -1961,11 +2071,425 @@ mod publish_tests {
         let published = publish_as(&second, &b, "list y").await.unwrap();
 
         assert_eq!(published.report.replayed, ["/infra/index.md"]);
-        let text = published_text(&test, "infra/index.md");
+        let text = published_text(&test, "infra/index.md").await;
         assert!(
             text.contains("[X](x.md) - the x") && text.contains("[Y](y.md) - the y"),
             "{text}"
         );
+    }
+
+    /// `pending_changes` on `handle`.
+    async fn shown(ctx: &ToolContext, handle: &str) -> PendingChanges {
+        let params = PendingParams {
+            changeset: handle.to_string(),
+        };
+        pending_changes(ctx, params).await.unwrap()
+    }
+
+    /// The `+` and `-` lines of a unified diff, without its two headers.
+    fn changed_lines(diff: &str) -> Vec<&str> {
+        diff.lines()
+            .filter(|line| !line.starts_with("+++ ") && !line.starts_with("--- "))
+            .filter(|line| line.starts_with('+') || line.starts_with('-'))
+            .collect()
+    }
+
+    /// The replayable bookkeeping write a test makes.
+    #[derive(Clone, Copy)]
+    enum Bookkeeping {
+        /// A `log` entry (log.md).
+        Log,
+        /// An `index` listing of `/infra/<name>.md` (infra/index.md).
+        Listing,
+    }
+
+    impl Bookkeeping {
+        /// The path the write changes.
+        fn path(self) -> &'static str {
+            match self {
+                Bookkeeping::Log => "log.md",
+                Bookkeeping::Listing => "infra/index.md",
+            }
+        }
+
+        /// Writes `name`'s entry in `handle`; returns the text it adds.
+        async fn write(self, ctx: &ToolContext, handle: &str, name: &str) -> String {
+            match self {
+                Bookkeeping::Log => {
+                    let text = format!("from {name}");
+                    log_entry(ctx, handle, &text).await;
+                    text
+                }
+                Bookkeeping::Listing => {
+                    let summary = format!("the {name}");
+                    list(ctx, handle, &format!("/infra/{name}.md"), &summary).await;
+                    summary
+                }
+            }
+        }
+    }
+
+    /// A stale, replayable entry in `a` (another changeset published its
+    /// path since) is shown as publish writes it: one `+` line for this
+    /// entry, and nothing published since shown as deleted (issue #787).
+    /// Publishing then writes exactly the diff shown.
+    async fn a_stale_replayable_entry_is_shown_as_publish_writes_it(kind: Bookkeeping) {
+        let test = pg().await;
+        let first = writer(&test, "writer-a", "pg").await;
+        let second = writer(&test, "writer-b", "pg").await;
+        let (a, b) = (open(&first).await, open(&second).await);
+        let ours = kind.write(&first, &a, "x").await;
+        let theirs = kind.write(&second, &b, "y").await;
+        publish_as(&second, &b, "theirs").await.unwrap();
+        let path = kind.path();
+        let before = published_text(&test, path).await;
+        assert!(before.contains(&theirs), "{before}");
+
+        let pending = shown(&first, &a).await;
+
+        let file = &pending.files[0];
+        let expected_path = format!("/{path}");
+        assert_eq!(
+            (
+                file.path.as_str(),
+                file.stale,
+                file.replayable,
+                file.replayed,
+                file.replay_error.as_deref()
+            ),
+            (expected_path.as_str(), true, true, true, None)
+        );
+        let changed = changed_lines(&file.diff);
+        assert_eq!(changed.len(), 1, "{}", file.diff);
+        assert!(
+            changed[0].starts_with('+') && changed[0].contains(&ours),
+            "{}",
+            file.diff
+        );
+        publish_as(&first, &a, "ours").await.unwrap();
+        let after = published_text(&test, path).await;
+        assert!(after.contains(&ours) && after.contains(&theirs), "{after}");
+        assert_eq!(
+            file.diff,
+            unified_diff(path, Some(before.as_bytes()), Some(after.as_bytes()))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stale_log_entry_is_shown_replayed_without_deleting_one_published_since() {
+        a_stale_replayable_entry_is_shown_as_publish_writes_it(Bookkeeping::Log).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stale_index_listing_is_shown_replayed_without_deleting_one_published_since() {
+        a_stale_replayable_entry_is_shown_as_publish_writes_it(Bookkeeping::Listing).await;
+    }
+
+    /// The revision of `path` in this server's snapshot.
+    async fn published_revision(test: &TestApp, path: &str) -> Option<i32> {
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
+        state.current().revision(path)
+    }
+
+    /// The entry `handle` holds for `path` (`path` without its `/`).
+    async fn entry_for(test: &TestApp, handle: &str, path: &str) -> Option<EntryRow> {
+        let row = changeset_row(test, handle).await;
+        let entries = changesets::entries(test.app.pool(), row.id).await.unwrap();
+        entries.into_iter().find(|entry| entry.path == path)
+    }
+
+    /// `revert` of `path` to `revision` in `handle`.
+    async fn revert_in(ctx: &ToolContext, handle: &str, path: &str, revision: i32) -> WriteReport {
+        let params = RevertParams {
+            path: path.to_string(),
+            revision,
+            changeset: handle.to_string(),
+        };
+        revert(ctx, params).await.unwrap()
+    }
+
+    /// A concept for a.md whose body is the heading `title`.
+    fn note(title: &str) -> String {
+        format!("---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# {title}\n")
+    }
+
+    /// Publishes, in a changeset of its own, `text` at `path` (`None`
+    /// deletes it), as another writer would.
+    async fn publish_file(ctx: &ToolContext, path: &str, text: Option<&str>) {
+        let handle = open(ctx).await;
+        let (path, text) = (path.to_string(), text.map(str::to_string));
+        apply(ctx, &handle, None, move |workspace, _| {
+            match &text {
+                Some(text) => workspace.write_atomic(&path, text)?,
+                None => {
+                    workspace.remove(&path)?;
+                }
+            }
+            let mut outcome = OpOutcome::default();
+            outcome.touch(&path);
+            Ok(outcome)
+        })
+        .await
+        .unwrap();
+        publish_as(ctx, &handle, "another writer").await.unwrap();
+    }
+
+    /// The issue's sequence: a `log` entry, two publishes of log.md by
+    /// others, a revert to the revision published now and the same `log`
+    /// again. The entry is based on that revision, is not stale, shows one
+    /// added line, and publishes it beside both others' lines (issue #788).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_revert_to_the_published_revision_rebases_a_stale_entry_so_it_publishes() {
+        let test = pg().await;
+        let ours = writer(&test, "writer-a", "pg").await;
+        let theirs = writer(&test, "writer-b", "pg").await;
+        let handle = open(&ours).await;
+        log_entry(&ours, &handle, "from a").await;
+        let first_base = published_revision(&test, "log.md").await;
+        for text in ["from b one", "from b two"] {
+            let other = open(&theirs).await;
+            log_entry(&theirs, &other, text).await;
+            publish_as(&theirs, &other, text).await.unwrap();
+        }
+        let now = published_revision(&test, "log.md").await.unwrap();
+        assert_eq!(first_base.map(|base| base + 2), Some(now));
+        let before = published_text(&test, "log.md").await;
+        assert!(shown(&ours, &handle).await.files[0].stale);
+
+        revert_in(&ours, &handle, "/log.md", now).await;
+        log_entry(&ours, &handle, "from a").await;
+
+        let entry = entry_for(&test, &handle, "log.md").await.unwrap();
+        // Based on the revision the revert read; the revert is a free edit,
+        // so the `log` after it adds no replay to it.
+        assert_eq!((entry.base_revision, entry.replay), (Some(now), None));
+        let pending = shown(&ours, &handle).await;
+        let file = &pending.files[0];
+        assert_eq!(
+            (
+                file.base_revision,
+                file.current_revision,
+                file.stale,
+                file.replayable,
+                file.replayed,
+                file.replay_error.as_deref()
+            ),
+            (Some(now), Some(now), false, false, false, None)
+        );
+        let changed = changed_lines(&file.diff);
+        assert_eq!(changed.len(), 1, "{}", file.diff);
+        assert!(
+            changed[0].starts_with('+') && changed[0].contains("from a"),
+            "{}",
+            file.diff
+        );
+        let published = publish_as(&ours, &handle, "ours").await.unwrap();
+        assert!(published.report.published);
+        let after = published_text(&test, "log.md").await;
+        assert!(
+            ["from a", "from b one", "from b two"]
+                .iter()
+                .all(|text| after.contains(&format!("* **Update:** {text}"))),
+            "{after}"
+        );
+        assert_eq!(
+            file.diff,
+            unified_diff("log.md", Some(before.as_bytes()), Some(after.as_bytes()))
+        );
+    }
+
+    /// A revert to an older revision of a path the changeset had edited is
+    /// a whole-file choice based on the revision published now: it publishes
+    /// that revision's text over the later ones. Another revert, then a
+    /// publish by someone else, conflicts on the revision the revert read.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_revert_to_an_older_revision_conflicts_only_on_a_publish_after_it() {
+        let test = pg().await;
+        let ours = writer(&test, "writer-a", "pg").await;
+        let theirs = writer(&test, "writer-b", "pg").await;
+        let (handle, later) = (open(&ours).await, open(&ours).await);
+        body(&ours, &handle, "/a.md", "# A\n\nOurs.\n").await;
+        body(&ours, &later, "/a.md", "# A\n\nLater.\n").await;
+        publish_file(&theirs, "a.md", Some(&note("Two"))).await;
+        publish_file(&theirs, "a.md", Some(&note("Three"))).await;
+        let three = published_revision(&test, "a.md").await;
+
+        revert_in(&ours, &handle, "/a.md", 1).await;
+        let entry = entry_for(&test, &handle, "a.md").await.unwrap();
+        assert_eq!(
+            (entry.base_revision, entry.content.as_deref()),
+            (three, Some(NOTE.as_bytes()))
+        );
+        publish_as(&ours, &handle, "back to one").await.unwrap();
+        assert_eq!(published_text(&test, "a.md").await, NOTE);
+
+        // `later` was based on revision 1 too; reverting it reads revision
+        // 4 (the one just published), and a publish after that conflicts.
+        let four = published_revision(&test, "a.md").await;
+        revert_in(&ours, &later, "/a.md", 2).await;
+        publish_file(&theirs, "a.md", Some(&note("Five"))).await;
+        let five = published_revision(&test, "a.md").await;
+        let error = publish_as(&ours, &later, "back to two").await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                OkfError::Conflict { ref files } if files == &[ConflictFile {
+                    path: "/a.md".to_string(),
+                    base_revision: four,
+                    current_revision: five,
+                }]
+            ),
+            "{error:?}"
+        );
+    }
+
+    /// A revert to a `delete` revision of a path the changeset had edited
+    /// takes the revision published now as its base too: a deletion of a
+    /// file published since, or no entry once the file is gone already.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_revert_to_a_deletion_rebases_or_drops_the_entry() {
+        let test = pg().await;
+        let ours = writer(&test, "writer-a", "pg").await;
+        let theirs = writer(&test, "writer-b", "pg").await;
+        let (gone, back) = (open(&ours).await, open(&ours).await);
+        body(&ours, &gone, "/a.md", "# A\n\nOurs.\n").await;
+        body(&ours, &back, "/a.md", "# A\n\nOurs.\n").await;
+        publish_file(&theirs, "a.md", None).await;
+        // The deletion is a.md's revision 2.
+        let deleted = 2;
+
+        // Deleted since: nothing to delete, so the entry goes.
+        let report = revert_in(&ours, &gone, "/a.md", deleted).await;
+        assert!(report.touched.is_empty(), "{report:?}");
+        assert!(entry_for(&test, &gone, "a.md").await.is_none());
+
+        // Created again since: a deletion based on that revision, which
+        // publishes.
+        publish_file(&theirs, "a.md", Some(&note("Again"))).await;
+        let again = published_revision(&test, "a.md").await;
+        revert_in(&ours, &back, "/a.md", deleted).await;
+        let entry = entry_for(&test, &back, "a.md").await.unwrap();
+        assert_eq!((entry.base_revision, entry.content), (again, None));
+        publish_as(&ours, &back, "delete again").await.unwrap();
+        assert_eq!(published_revision(&test, "a.md").await, None);
+    }
+
+    /// A revert on a snapshot this server has not refreshed (here after an
+    /// import, which refreshes nothing) refreshes it first, so the entry's
+    /// base is the revision published now and publish writes the revert over
+    /// it instead of reporting a conflict on a base that was only ever out
+    /// of date (issue #672).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_revert_on_a_stale_snapshot_refreshes_and_takes_the_current_base() {
+        let test = pg().await;
+        let ours = writer(&test, "writer-a", "pg").await;
+        let theirs = writer(&test, "writer-b", "pg").await;
+        let handle = open(&ours).await;
+        // Based on revision 1; revision 2 is published, and seen, after it.
+        body(&ours, &handle, "/a.md", "# A\n\nOurs.\n").await;
+        publish_file(&theirs, "a.md", Some(&note("Two"))).await;
+        let options = ImportOptions {
+            replace: true,
+            scope: ImportScope::Everything,
+            expect_generation: None,
+            expect_catalog_id: None,
+            actor: "cli",
+            audit: &crate::store::audit::AuditActor::cli(),
+            now: Utc::now(),
+        };
+        let incoming = files(&[
+            ("a.md", "# Imported\n"),
+            ("hub.md", HUB),
+            ("infra/index.md", "# Infra\n"),
+            ("infra/x.md", X),
+            ("infra/y.md", Y),
+            ("log.md", "# Log\n"),
+        ]);
+        import(test.app.pool(), "pg", incoming, &options)
+            .await
+            .unwrap();
+        // The import wrote revision 3; this server's snapshot still has 2
+        // (an import refreshes nothing, and the cached catalog directory row
+        // still names the old generation, so no read here refreshes it).
+        // The assertion on `seen` checks that premise.
+        let seen = published_revision(&test, "a.md").await;
+        assert_eq!(seen, Some(2));
+
+        revert_in(&ours, &handle, "/a.md", 1).await;
+
+        // Not the stale snapshot's 2, nor the first edit's 1: the revision
+        // published now.
+        let entry = entry_for(&test, &handle, "a.md").await.unwrap();
+        assert_eq!(entry.base_revision, Some(3));
+        publish_as(&ours, &handle, "revert").await.unwrap();
+        assert_ne!(published_text(&test, "a.md").await, "# Imported\n");
+    }
+
+    /// An entry nobody published over keeps today's diff: its stored text
+    /// against the published text, not marked replayed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_fresh_replayable_entry_is_diffed_as_stored() {
+        let test = pg().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        log_entry(&ctx, &handle, "from a").await;
+        let published = published_text(&test, "log.md").await;
+        let row = changeset_row(&test, &handle).await;
+        let entries = changesets::entries(test.app.pool(), row.id).await.unwrap();
+
+        let pending = shown(&ctx, &handle).await;
+
+        let file = &pending.files[0];
+        assert_eq!(
+            (
+                file.stale,
+                file.replayable,
+                file.replayed,
+                file.replay_error.as_deref()
+            ),
+            (false, true, false, None)
+        );
+        assert_eq!(
+            file.diff,
+            unified_diff(
+                "log.md",
+                Some(published.as_bytes()),
+                entries[0].content.as_deref()
+            )
+        );
+    }
+
+    /// A stale entry whose replay publish would refuse as a conflict (its
+    /// stored operations do not read) shows why, not a diff.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stale_entry_publish_cannot_replay_shows_the_conflict_not_a_diff() {
+        let test = pg().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        let unreadable = EntryRow {
+            path: "a.md".to_string(),
+            base_revision: Some(0),
+            content: Some(b"# A\n".to_vec()),
+            executable: false,
+            replay: Some(serde_json::json!("not a list of operations")),
+        };
+        insert_entry(&test, &handle, unreadable).await;
+
+        let pending = shown(&ctx, &handle).await;
+
+        let file = &pending.files[0];
+        assert_eq!(
+            (file.stale, file.replayable, file.replayed),
+            (true, true, false)
+        );
+        let reason = file.replay_error.as_deref().unwrap();
+        assert!(
+            reason.contains("refuse it with Conflict") && reason.contains("discard /a.md"),
+            "{reason}"
+        );
+        assert_eq!(file.diff, format!("{reason}\n"));
+        let error = publish_as(&ctx, &handle, "a").await.unwrap_err();
+        assert_eq!(error.kind(), "Conflict");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1985,7 +2509,86 @@ mod publish_tests {
             .iter()
             .any(|finding| finding.file == "a.md" && finding.rule == "broken-link"));
         assert_eq!(state_of(&test, &handle).await, ChangesetState::Open);
-        assert_eq!(published_text(&test, "a.md"), NOTE);
+        assert_eq!(published_text(&test, "a.md").await, NOTE);
+    }
+
+    /// A catalog whose `log.md` and `old.md` hold a broken link already
+    /// (text from before angle-bracket links parsed as links).
+    async fn pg_with_old_broken_links() -> TestApp {
+        let old = format!("{NOTE}See [x](<a b.md>).\n");
+        let log = "# Log\n\n## 2026-11-01\n\n* **Update:** was ([x](<a b.md>), ...)\n";
+        let files: &[(&str, &str)] = &[("a.md", NOTE), ("old.md", &old), ("log.md", log)];
+        app_with(&[("pg", files)], Config::default()).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_logged_publish_over_an_old_broken_link_in_log_md_reports_it_as_a_warning() {
+        let test = pg_with_old_broken_links().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        log_entry(&ctx, &handle, "fine").await;
+
+        let published = publish_as(&ctx, &handle, "log").await.unwrap();
+
+        assert!(published.report.published);
+        let text = published_text(&test, "log.md").await;
+        assert!(text.contains("* **Update:** fine"), "{text}");
+        assert!(
+            published
+                .report
+                .warnings
+                .iter()
+                .any(|finding| finding.file == "log.md"
+                    && finding.rule == "broken-link"
+                    && finding.message.contains("a b.md")),
+            "{:?}",
+            published.report.warnings
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_broken_link_in_a_log_entry_is_still_refused_beside_an_old_one() {
+        let test = pg_with_old_broken_links().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        // The same target as the old finding: one old plus one new is one new.
+        log_entry(&ctx, &handle, "now [y](<a b.md>)").await;
+
+        let error = publish_as(&ctx, &handle, "log").await.unwrap_err();
+
+        let OkfError::LintFailed { errors, warnings } = &error else {
+            panic!("not LintFailed: {error:?}")
+        };
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(
+            (errors[0].file.as_str(), errors[0].rule.as_str()),
+            ("log.md", "broken-link")
+        );
+        assert!(warnings.iter().any(|finding| finding.rule == "broken-link"));
+        assert_eq!(state_of(&test, &handle).await, ChangesetState::Open);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_old_broken_link_in_a_concept_is_a_warning_when_the_concept_is_edited() {
+        let test = pg_with_old_broken_links().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        body(
+            &ctx,
+            &handle,
+            "/old.md",
+            "See [x](<a b.md>).\n\nMore text.\n",
+        )
+        .await;
+
+        let published = publish_as(&ctx, &handle, "edit").await.unwrap();
+
+        assert!(published.report.published);
+        assert!(published
+            .report
+            .warnings
+            .iter()
+            .any(|finding| finding.file == "old.md" && finding.rule == "broken-link"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2010,7 +2613,7 @@ mod publish_tests {
         assert!(errors
             .iter()
             .any(|finding| finding.file == "hub.md" && finding.rule == "link-into-deleted"));
-        assert_eq!(published_text(&test, "infra/x.md"), X);
+        assert_eq!(published_text(&test, "infra/x.md").await, X);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2050,7 +2653,7 @@ mod publish_tests {
         import(test.app.pool(), "pg", files(&incoming), &options)
             .await
             .unwrap();
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         let stale = state.current().generation();
 
         let error = publish_as(&ctx, &handle, "drop y").await.unwrap_err();
@@ -2084,7 +2687,7 @@ mod publish_tests {
         let error = publish_as(&ctx, &handle, "leak").await.unwrap_err();
 
         assert_eq!(error.kind(), "SecretDetected");
-        assert_eq!(published_text(&test, "a.md"), NOTE);
+        assert_eq!(published_text(&test, "a.md").await, NOTE);
     }
 
     /// `(revision, deleted, content)` of a document row.
@@ -2125,7 +2728,7 @@ mod publish_tests {
         let first = publish_as(&ctx, &handle, "add b, drop y").await.unwrap();
         // A tombstone: the number moved on, the content and the snapshot entry are gone.
         let tombstone = document_row(&test, "infra/y.md").await;
-        let gone = test.app.catalog("pg").unwrap().current();
+        let gone = test.app.catalog("pg").await.unwrap().unwrap().current();
         assert_eq!(tombstone, (2, true, Vec::new()));
         assert!(gone.snapshot().get("infra/y.md").is_none());
         // The changeset is closed, so a new one brings y back on its tombstone.
@@ -2158,8 +2761,8 @@ mod publish_tests {
             second.report.revisions,
             [revision("/infra/y.md", 3, "create")]
         );
-        assert_eq!(published_text(&test, "b.md"), created);
-        assert_eq!(published_text(&test, "infra/y.md"), Y);
+        assert_eq!(published_text(&test, "b.md").await, created);
+        assert_eq!(published_text(&test, "infra/y.md").await, Y);
         assert_eq!(
             document_row(&test, "infra/y.md").await,
             (3, false, Y.as_bytes().to_vec())
@@ -2182,7 +2785,7 @@ mod publish_tests {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         body(&ctx, &handle, "/a.md", "# A\n\nMine.\n").await;
         // A revision 2 of a.md that the publish lock should have ruled out
         // (a hand edit of the database): the backstop must report it.
@@ -2210,7 +2813,7 @@ mod publish_tests {
         ));
         assert_eq!(state_of(&test, &handle).await, ChangesetState::Open);
         assert_eq!(document_row(&test, "a.md").await.0, 1);
-        assert_eq!(published_text(&test, "a.md"), NOTE);
+        assert_eq!(published_text(&test, "a.md").await, NOTE);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2218,7 +2821,7 @@ mod publish_tests {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         body(&ctx, &handle, "/a.md", "# A\n\nFirst.\n").await;
         // Hold the changeset's row lock, so the publish and then the write
         // queue on it in that order.
@@ -2275,7 +2878,7 @@ mod publish_tests {
         assert_eq!(refused.kind(), "Refused");
         let message = refused.to_string();
         assert!(message.contains("while this write waited"), "{message}");
-        assert_eq!(published_text(&test, "infra/y.md"), Y);
+        assert_eq!(published_text(&test, "infra/y.md").await, Y);
         let entries: i64 =
             sqlx::query_scalar("SELECT count(*) FROM changeset_entries WHERE path = 'infra/y.md'")
                 .fetch_one(test.app.pool())
@@ -2332,8 +2935,10 @@ mod changes_tests {
             .unwrap();
         test.app
             .catalog("pg")
+            .await
             .unwrap()
-            .refresh(test.app.pool())
+            .unwrap()
+            .refresh(test.app.pool(), test.app.rebuild_locks())
             .await
             .unwrap();
     }
@@ -2361,6 +2966,7 @@ mod changes_tests {
             body: "# New\n".to_string(),
             index_summary: None,
             index_section: None,
+            folder_summary: None,
             by: None,
             changeset: handle.to_string(),
         };
@@ -2491,7 +3097,7 @@ mod changes_tests {
             );
         }
         // The published documents are untouched.
-        let loaded = test.app.catalog("pg").unwrap().current();
+        let loaded = test.app.catalog("pg").await.unwrap().unwrap().current();
         assert_eq!(
             loaded.snapshot().get("a.md").map(|doc| doc.text()),
             Some(NOTE)
@@ -2523,7 +3129,7 @@ mod changes_tests {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         body(&ctx, &handle, "/a.md", "First.\n").await;
         // Hold the changeset's row lock, so the discard and then the write
         // queue on it in that order.
@@ -2637,6 +3243,8 @@ mod changes_tests {
             (file.base_revision, file.current_revision, file.stale),
             (Some(2), Some(3), true)
         );
+        // A free edit has no replay: the stored text, as before issue #787.
+        assert!(!file.replayed && file.replay_error.is_none());
         assert!(file.diff.contains("-# Three\n"), "{}", file.diff);
     }
 
@@ -2847,7 +3455,7 @@ mod changes_tests {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         // `a.md` is a published file, so an entry under it can never apply
         // (no write tool stores one; a publish made after the edit can).
         let edit = PendingEdit {
@@ -2998,7 +3606,7 @@ mod restructure_publish_tests {
     async fn moved(session: &Session, old: &str, new: &str) -> WriteReport {
         let (old, new) = (old.to_string(), new.to_string());
         apply(&session.ctx, &session.handle, None, move |ws, _| {
-            ops::move_concept(ws, &old, &new)
+            ops::move_concept(ws, &old, &new, None)
         })
         .await
         .unwrap()
@@ -3037,6 +3645,7 @@ mod restructure_publish_tests {
                 description: Some("The part."),
                 stub: None,
                 sources: &[],
+                folder_summary: None,
             };
             ops::split_concept(ws, op, &split)
         })
@@ -3054,6 +3663,7 @@ mod restructure_publish_tests {
             // `bool::then`: `Some(..)` when true, like `x if cond else None`.
             index_summary: listed.then(|| "q".to_string()),
             index_section: None,
+            folder_summary: None,
             by: None,
             changeset: session.handle.clone(),
         };
@@ -3068,8 +3678,8 @@ mod restructure_publish_tests {
         publish(&session.ctx, params).await
     }
 
-    fn published_text(test: &TestApp, path: &str) -> String {
-        let loaded = test.app.catalog("pg").unwrap().current();
+    async fn published_text(test: &TestApp, path: &str) -> String {
+        let loaded = test.app.catalog("pg").await.unwrap().unwrap().current();
         loaded
             .snapshot()
             .get(path)
@@ -3103,7 +3713,7 @@ mod restructure_publish_tests {
     async fn a_published_move_deletes_the_old_path_and_creates_the_new_one() {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
-        let state = test.app.catalog("pg").unwrap();
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
         moved(&ctx, "infra/x.md", "infra/z.md").await;
 
         let published = publish_as(&ctx, "move x").await.unwrap();
@@ -3131,9 +3741,13 @@ mod restructure_publish_tests {
         assert_eq!(old[0].message, "move x");
         assert_eq!((new.len(), new[0].op.as_str()), (1, "create"));
         assert!(tombstoned(&test, "infra/x.md").await);
-        assert_eq!(published_text(&test, "infra/z.md"), X);
-        assert!(published_text(&test, "hub.md").contains("[X](/infra/z.md)"));
-        assert!(published_text(&test, "infra/index.md").contains("* [X](z.md) - x"));
+        assert_eq!(published_text(&test, "infra/z.md").await, X);
+        assert!(published_text(&test, "hub.md")
+            .await
+            .contains("[X](/infra/z.md)"));
+        assert!(published_text(&test, "infra/index.md")
+            .await
+            .contains("* [X](z.md) - x"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -3148,7 +3762,7 @@ mod restructure_publish_tests {
         let published = publish_as(&mover, "rename y").await.unwrap();
 
         assert_eq!(published.report.replayed, ["/infra/index.md"]);
-        let index = published_text(&test, "infra/index.md");
+        let index = published_text(&test, "infra/index.md").await;
         assert!(index.contains("* [Y](w.md) - y"), "{index}");
         assert!(index.contains("* [Q](q.md) - q"), "{index}");
     }
@@ -3165,7 +3779,7 @@ mod restructure_publish_tests {
         let published = publish_as(&mover, "move x").await.unwrap();
 
         assert_eq!(published.report.replayed, ["/log.md"]);
-        let log = published_text(&test, "log.md");
+        let log = published_text(&test, "log.md").await;
         assert!(log.contains("* **Update:** from b"), "{log}");
         assert!(log.contains("Added [X](/infra/z.md)."), "{log}");
         assert!(!log.contains("/infra/x.md"), "{log}");
@@ -3301,7 +3915,7 @@ mod restructure_publish_tests {
                 ("/infra/y.md", "delete", 2)
             ]
         );
-        let index = published_text(&test, "infra/index.md");
+        let index = published_text(&test, "infra/index.md").await;
         assert!(
             !index.contains("[Y](y.md)") && index.contains("[Q](q.md)"),
             "{index}"
@@ -3326,11 +3940,18 @@ mod restructure_publish_tests {
                 ("/infra/part.md", "create", 1),
             ]
         );
-        assert!(published_text(&test, "infra/part.md").contains("Part text."));
+        assert!(published_text(&test, "infra/part.md")
+            .await
+            .contains("Part text."));
         assert!(published_text(&test, "infra/big.md")
+            .await
             .contains("## Part\n\n[Part](/infra/part.md): The part.\n"));
-        assert!(published_text(&test, "hub.md").contains("[the part](/infra/part.md)"));
-        assert!(published_text(&test, "infra/index.md").contains("* [Part](part.md) - The part."));
+        assert!(published_text(&test, "hub.md")
+            .await
+            .contains("[the part](/infra/part.md)"));
+        assert!(published_text(&test, "infra/index.md")
+            .await
+            .contains("* [Part](part.md) - The part."));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -3367,8 +3988,12 @@ mod restructure_publish_tests {
             !warnings.iter().any(|finding| finding.file == "c.md"),
             "{warnings:?}"
         );
-        assert!(published_text(&test, "infra/big.md").contains("## Part\n"));
-        assert!(published_text(&test, "infra/part.md").contains("Deep text."));
+        assert!(published_text(&test, "infra/big.md")
+            .await
+            .contains("## Part\n"));
+        assert!(published_text(&test, "infra/part.md")
+            .await
+            .contains("Deep text."));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -3399,7 +4024,7 @@ mod restructure_publish_tests {
                 ("/infra/y.md", "delete", 2)
             ]
         );
-        let index = published_text(&test, "infra/index.md");
+        let index = published_text(&test, "infra/index.md").await;
         assert!(!index.contains("y.md"), "{index}");
         assert!(index.contains("* [X](x.md) - x"), "{index}");
         assert!(tombstoned(&test, "infra/y.md").await);
@@ -3458,8 +4083,8 @@ mod suspension_tests {
     const NOTE: &str = "---\ntype: Note\ntitle: A\ndescription: A note.\n---\n# A\n";
 
     /// A connection of the key behind `secret`, as the cache holds it now.
-    fn connect(test: &TestApp, secret: &str) -> ToolContext {
-        context(test, cached_principal(test, secret), None)
+    async fn connect(test: &TestApp, secret: &str) -> ToolContext {
+        context(test, cached_principal(test, secret).await, None)
     }
 
     /// Opens a changeset in `catalog` and edits `a.md` in it.
@@ -3590,23 +4215,23 @@ mod suspension_tests {
         let writer = stored_secret(&test, "writer", Access::Write, &["pg", "work"], false).await;
         let stranger = stored_secret(&test, "stranger", Access::Write, &["work"], false).await;
         let root = stored_secret(&test, "root", Access::Admin, &[], false).await;
-        let handle = open_with_edit(&connect(&test, &writer), "pg").await;
-        let in_work = open_with_edit(&connect(&test, &writer), "work").await;
-        let roots = open_with_edit(&connect(&test, &root), "pg").await;
+        let handle = open_with_edit(&connect(&test, &writer).await, "pg").await;
+        let in_work = open_with_edit(&connect(&test, &writer).await, "work").await;
+        let roots = open_with_edit(&connect(&test, &root).await, "pg").await;
 
         suspend_catalogs(&test, &["pg"]).await;
-        let suspended = every_path(&connect(&test, &writer), "pg", &handle).await;
+        let suspended = every_path(&connect(&test, &writer).await, "pg", &handle).await;
         let refused = open_changeset(
-            &connect(&test, &writer),
+            &connect(&test, &writer).await,
             OpenParams {
                 catalog: Some("pg".to_string()),
             },
         )
         .await
         .unwrap_err();
-        let elsewhere = every_path(&connect(&test, &writer), "work", &in_work).await;
-        let strangers = every_path(&connect(&test, &stranger), "pg", &handle).await;
-        let admins = every_path(&connect(&test, &root), "pg", &roots).await;
+        let elsewhere = every_path(&connect(&test, &writer).await, "work", &in_work).await;
+        let strangers = every_path(&connect(&test, &stranger).await, "pg", &handle).await;
+        let admins = every_path(&connect(&test, &root).await, "pg", &roots).await;
 
         for (tool, kind) in &suspended {
             assert_eq!(kind, "Suspended", "{tool} on the suspended catalog");
@@ -3637,7 +4262,7 @@ mod suspension_tests {
 
         lift_suspension(&test).await;
         let lifted = pending_changes(
-            &connect(&test, &writer),
+            &connect(&test, &writer).await,
             PendingParams {
                 changeset: handle.clone(),
             },
@@ -3673,27 +4298,31 @@ mod suspension_tests {
         let writer = stored_secret(&test, "writer", Access::Write, &["pg", "work"], false).await;
         let stranger = stored_secret(&test, "stranger", Access::Write, &["work"], false).await;
         let root = stored_secret(&test, "root", Access::Admin, &[], false).await;
-        open_with_edit(&connect(&test, &writer), "pg").await;
-        open_with_edit(&connect(&test, &writer), "work").await;
+        open_with_edit(&connect(&test, &writer).await, "pg").await;
+        open_with_edit(&connect(&test, &writer).await, "work").await;
         let all = || ListParams { catalog: None };
         let named = |catalog: &str| ListParams {
             catalog: Some(catalog.to_string()),
         };
-        let on = |secret: &str, connection: &[&str]| {
-            context(&test, cached_principal(&test, secret), Some(connection))
+        let on = async |secret: &str, connection: &[&str]| {
+            context(
+                &test,
+                cached_principal(&test, secret).await,
+                Some(connection),
+            )
         };
 
         suspend_catalogs(&test, &["pg"]).await;
-        let plain = list_changesets(&connect(&test, &writer), all())
+        let plain = list_changesets(&connect(&test, &writer).await, all())
             .await
             .unwrap();
-        let mixed = list_changesets(&on(&writer, &["pg", "work"]), all())
+        let mixed = list_changesets(&on(&writer, &["pg", "work"]).await, all())
             .await
             .unwrap();
-        let only_suspended = list_changesets(&on(&writer, &["pg"]), all()).await;
-        let refused = list_changesets(&connect(&test, &writer), named("pg")).await;
-        let unreached = list_changesets(&connect(&test, &stranger), named("pg")).await;
-        let admin = list_changesets(&connect(&test, &root), all())
+        let only_suspended = list_changesets(&on(&writer, &["pg"]).await, all()).await;
+        let refused = list_changesets(&connect(&test, &writer).await, named("pg")).await;
+        let unreached = list_changesets(&connect(&test, &stranger).await, named("pg")).await;
+        let admin = list_changesets(&connect(&test, &root).await, all())
             .await
             .unwrap();
 
@@ -3714,7 +4343,7 @@ mod suspension_tests {
         assert_eq!(catalogs_of(&admin), ["pg", "work"], "an admin is exempt");
 
         lift_suspension(&test).await;
-        let lifted = list_changesets(&connect(&test, &writer), all())
+        let lifted = list_changesets(&connect(&test, &writer).await, all())
             .await
             .unwrap();
         assert_eq!(

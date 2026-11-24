@@ -414,6 +414,7 @@ pub async fn submit(
     now: DateTime<Utc>,
 ) -> Result<Receipt, OkfError> {
     validate(actor, idempotency_key)?;
+    runs::no_nul(&[work_id, token])?;
     if work_id.trim().is_empty() || token.trim().is_empty() {
         return Err(refused("work ID and lease token are required"));
     }

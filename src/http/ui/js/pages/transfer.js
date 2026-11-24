@@ -4,6 +4,7 @@
 import { h, clear, fill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
+import { catalogLabel } from '../core/labels.js';
 import { toast } from '../core/toast.js';
 import { count } from '../core/format.js';
 import { fileDrop, upload } from '../components/upload.js';
@@ -54,10 +55,21 @@ function errorPanel(error) {
         problems.length ? h('ul', { id: 'import-problems', class: 'mono small' }, problems.map(p => h('li', {}, p))) : null);
 }
 
+// The name the server gives the export (`Content-Disposition: attachment;
+// filename="<label>-<slug>.tar.gz"`), else the slug's own name. A header
+// without a usable filename, or one that would escape a directory, is
+// ignored.
+export function exportFilename(disposition, slug) {
+    const fallback = `${slug}.tar.gz`;
+    const found = /filename="?([^";]+)"?/i.exec(disposition ?? '');
+    const name = found?.[1].trim();
+    return name && !/[\\/]/.test(name) ? name : fallback;
+}
+
 export async function render(main, rest) {
     forget();
     let catalogs;
-    try { catalogs = (await api.get('/catalogs')).catalogs; } catch { return; }
+    try { catalogs = (await api.pages('/catalogs', 'catalogs')).catalogs; } catch { return; }
     const known = name => catalogs.some(c => c.name === name);
     let chosen = known(rest[0]) ? rest[0] : known(store.catalog) ? store.catalog : catalogs[0]?.name;
     if (!chosen) {
@@ -71,7 +83,7 @@ export async function render(main, rest) {
     let busy = false;
     const current = () => catalogs.find(c => c.name === chosen);
 
-    const picker = h('select', { id: 'transfer-catalog' }, catalogs.map(c => h('option', { value: c.name }, c.name)));
+    const picker = h('select', { id: 'transfer-catalog' }, catalogs.map(c => h('option', { value: c.name }, catalogLabel(c.name))));
     picker.value = chosen;
     const generationLabel = h('span', { id: 'transfer-generation', class: 'mono small muted' });
     const generation = h('input', { type: 'number', id: 'import-generation', min: '0', step: '1' });
@@ -90,13 +102,14 @@ export async function render(main, rest) {
         try {
             const response = await api.get(`/catalogs/${enc(target)}/export`, { raw: true });
             const blob = await response.blob();
+            const filename = exportFilename(response.headers.get('Content-Disposition'), target);
             // Navigated away meanwhile: hand nothing over, and leave the
             // object URL slot to the newer render.
             if (!main.isConnected) return;
             forget();
             exportUrl = URL.createObjectURL(blob);
-            const link = h('a', { id: 'export-link', href: exportUrl, download: `${target}.tar.gz`,
-                                  dataset: { size: String(blob.size) } }, `Save ${target}.tar.gz again`);
+            const link = h('a', { id: 'export-link', href: exportUrl, download: filename,
+                                  dataset: { size: String(blob.size) } }, `Save ${filename} again`);
             exportOut.replaceChildren(link, h('span', { class: 'muted small' }, ` ${blob.size} bytes`));
             link.click();
         } catch { /* toasted */ } finally {
@@ -104,7 +117,13 @@ export async function render(main, rest) {
         }
     });
 
-    // Import (admin only; the server checks anyway)
+    // Import: shown for `write` or more on the picked catalog (issue #260;
+    // the server checks anyway). A member's level differs per catalog, so
+    // the panel follows the picker. While the catalog's owner team is
+    // suspended (`suspended` is {team, notice}, else null, in the catalog
+    // list) only an admin may import, as the server decides: everyone else
+    // keeps the panel, disabled, with a note saying why (issue #647).
+    const importBlocked = () => !!current().suspended && !store.canOn('admin', chosen);
     const result = h('div', { id: 'import-result' });
     const progress = h('progress', { id: 'import-progress', max: '100', value: '0', hidden: true });
     const replace = h('input', { type: 'checkbox', id: 'import-replace' });
@@ -119,7 +138,7 @@ export async function render(main, rest) {
             // A file chosen during an import waits for it: the running
             // import's button state and result panel stay its own.
             if (busy) return;
-            importButton.disabled = false;
+            importButton.disabled = importBlocked();
             clear(result);
         },
     });
@@ -127,7 +146,7 @@ export async function render(main, rest) {
         busy = value;
         picker.disabled = value;
         exportButton.disabled = value;
-        importButton.disabled = value || !file;
+        importButton.disabled = value || !file || importBlocked();
     }
     importButton.addEventListener('click', async () => {
         if (!file || busy) return;
@@ -146,7 +165,7 @@ export async function render(main, rest) {
                 fraction => { progress.value = Math.round(fraction * 100); });
             result.append(reportPanel(report));
             toast(`Imported into ${target}.`, 'ok');
-            try { catalogs = (await api.get('/catalogs')).catalogs; showGeneration(); } catch { /* toasted */ }
+            try { catalogs = (await api.pages('/catalogs', 'catalogs')).catalogs; showGeneration(); showImport(); } catch { /* toasted */ }
         } catch (error) {
             result.append(errorPanel(error));
             toast(error.status === 0 ? error.message : 'The import was refused.', 'error');
@@ -159,14 +178,37 @@ export async function render(main, rest) {
     picker.addEventListener('change', () => {
         chosen = picker.value;
         showGeneration();
+        showImport();
         clear(result);
         exportOut.replaceChildren();
         forget();
     });
     showGeneration();
 
-    // fill(), not native append: the import panel is null without admin
-    // (issue #302).
+    const suspendedNote = h('p', { id: 'import-suspended', class: 'notice', role: 'status', hidden: true },
+        'This catalog is suspended: only an admin can import into it. Export still works.');
+    const importControls = h('fieldset', { id: 'import-controls', class: 'import-controls' },
+        drop,
+        h('div', { class: 'options' },
+            h('label', {}, replace, ' Replace the catalog\'s contents'),
+            h('label', {}, machinery, ' Only machinery (AGENTS.md, tools/, ...)'),
+            h('label', {}, 'Expected generation ', generation)),
+        h('p', { class: 'muted small' }, 'The import is refused if the catalog has moved past the expected generation; clear the field to skip the check.'),
+        importButton);
+    // The panel follows the picked catalog's level and suspension.
+    function showImport() {
+        importPanel.hidden = !store.canOn('write', chosen);
+        const blocked = importBlocked();
+        suspendedNote.hidden = !blocked;
+        importControls.disabled = blocked;
+        importButton.disabled = busy || !file || blocked;
+    }
+
+    const importPanel = h('section', { class: 'panel', id: 'import-panel' },
+        h('h2', {}, 'Import'),
+        suspendedNote, importControls, progress, result);
+    showImport();
+
     fill(main,
         h('div', { class: 'page-head' },
             h('div', {}, h('h1', {}, 'Import & export'),
@@ -176,15 +218,5 @@ export async function render(main, rest) {
             h('h2', {}, 'Export'),
             h('p', { class: 'muted small' }, 'The published documents, as the catalog stands now.'),
             exportButton, ' ', exportOut),
-        store.can('admin')
-            ? h('section', { class: 'panel', id: 'import-panel' },
-                h('h2', {}, 'Import'),
-                drop,
-                h('div', { class: 'options' },
-                    h('label', {}, replace, ' Replace the catalog\'s contents'),
-                    h('label', {}, machinery, ' Only machinery (AGENTS.md, tools/, ...)'),
-                    h('label', {}, 'Expected generation ', generation)),
-                h('p', { class: 'muted small' }, 'The import is refused if the catalog has moved past the expected generation; clear the field to skip the check.'),
-                importButton, progress, result)
-            : null);
+        importPanel);
 }

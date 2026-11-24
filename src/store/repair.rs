@@ -21,12 +21,13 @@ use serde::Serialize;
 use sqlx::PgPool;
 
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
 use crate::okf::ops::{repair_catalog, OpContext, OpOutcome};
 use crate::okf::rules;
 use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
 use crate::store::audit::{self, Action, AuditActor, People};
-use crate::store::catalogs::{self, CatalogEvent};
+use crate::store::catalogs::{self, CatalogEvent, CatalogGeneration};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::store::import::{existing_rows, ExistingRow};
 
@@ -60,6 +61,11 @@ pub struct RepairReport {
     /// The catalog's generation after the repair; `None` for a dry run or a
     /// repair that wrote nothing.
     pub generation: Option<i64>,
+    /// The catalog and [`RepairReport::generation`], for the command line to
+    /// announce to the serving replicas (issue #659); `None` exactly when
+    /// `generation` is. Not serialized.
+    #[serde(skip)]
+    pub changed: Option<CatalogGeneration>,
 }
 
 /// Repairs a catalog's indexes and log in place (see the module docs).
@@ -134,6 +140,7 @@ pub async fn repair(
         message: outcome.message,
         notes: outcome.notes,
         generation: None,
+        changed: None,
     };
     if options.dry_run || files.is_empty() {
         return Ok(report);
@@ -160,8 +167,20 @@ pub async fn repair(
         options.now,
     )
     .await?;
+    invalidate(
+        &mut tx,
+        &[Invalidation::Catalog {
+            id: found.id,
+            generation,
+        }],
+    )
+    .await?;
     tx.commit().await?;
     report.generation = Some(generation);
+    report.changed = Some(CatalogGeneration {
+        catalog_id: found.id,
+        generation,
+    });
     Ok(report)
 }
 
@@ -289,6 +308,7 @@ mod tests {
     async fn legacy(pool: &PgPool, name: &str, description: &str, files: &[(&str, &str)]) {
         let new = catalogs::NewCatalog {
             name,
+            display_name: &crate::labels::DisplayName::default(),
             description,
             owner_team: TEST_TEAM,
         };
@@ -499,6 +519,7 @@ mod tests {
         legacy(&db.pool, "old", "", &[("a.md", NOTE)]).await;
         let new = catalogs::NewCatalog {
             name: "fresh",
+            display_name: &crate::labels::DisplayName::default(),
             description: "",
             owner_team: TEST_TEAM,
         };

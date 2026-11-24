@@ -8,11 +8,13 @@ use serde_json::{Map, Value as Json};
 
 use crate::error::OkfError;
 use crate::okf::doc::{is_top_key, Doc, KEY_ORDER};
-use crate::okf::ops::log_index::{list_concept, Listing};
-use crate::okf::ops::replay::{insert_index_bullet_text, missing_heading, new_index_text};
+use crate::okf::ops::log_index::{check_new_folder, list_concept, require_link_back, Listing};
+use crate::okf::ops::replay::{
+    insert_index_bullet_text, lists_target, missing_heading, new_index_text,
+};
 use crate::okf::ops::{
-    blank_type, ensure_index, load_concept, refused, save, stamp_value, LoadedConcept, OpContext,
-    OpOutcome,
+    blank_type, ensure_folder_index, load_concept, refused, save, stamp_value, LoadedConcept,
+    OpContext, OpOutcome,
 };
 use crate::okf::paths::{basename, dirname, is_concept, join, new_concept_path, resolve_concept};
 use crate::okf::pystr::{py_repr_str, py_strip};
@@ -45,6 +47,10 @@ pub struct NewConcept<'a> {
     /// The heading to list it under (`index`'s `section`); refused without
     /// `index_summary`.
     pub index_section: Option<&'a str>,
+    /// The summary of the concept's new folder in its parent's index
+    /// (issue #668), instead of the TODO placeholder; refused without
+    /// `index_summary`, or when the folder exists or is the root.
+    pub folder_summary: Option<&'a str>,
 }
 
 /// A JSON value as frontmatter. Every scalar is a string in `okf.py`'s
@@ -130,8 +136,9 @@ fn checked_key(key: &str) -> Result<(), OkfError> {
 /// # Errors
 /// [`OkfError::InvalidPath`] from [`new_concept_path`] (outside the catalog,
 /// reserved, machinery, taken); [`OkfError::Refused`] without a non-blank
-/// string `type`, for a stamp key, an invalid key, for `index_section`
-/// without `index_summary`, or a listing without a non-blank `title`;
+/// string `type`, for a stamp key, an invalid key, for `index_section` or
+/// `folder_summary` without `index_summary`, a `folder_summary` for a folder
+/// that exists (or the root), or a listing without a non-blank `title`;
 /// [`OkfError::FrontmatterParse`] if the rendered frontmatter would not
 /// parse (a guard: the renderers always write parseable YAML); the
 /// listing's refusals (see `index`).
@@ -140,7 +147,7 @@ fn checked_key(key: &str) -> Result<(), OkfError> {
 /// folder index (or, when `ensure_index` will create it, the text it will
 /// have) is checked for `index_section` first, and a missing folder index
 /// needs a root `index.md` to be listed under. Only a read or write failure
-/// past that point leaves files written; as for [`ensure_index`], run the
+/// past that point leaves files written; as for [`ensure_folder_index`], run the
 /// op on a scratch copy, as the write path does, and drop the copy on
 /// error.
 #[tracing::instrument(level = "debug", skip_all)]
@@ -167,6 +174,14 @@ pub fn create_concept(
         }
         (_, _, title) => title,
     };
+    if new.folder_summary.is_some() {
+        if new.index_summary.is_none() {
+            return Err(refused(format!(
+                "{path}: folder_summary needs index_summary"
+            )));
+        }
+        check_new_folder(workspace, dirname(&path))?;
+    }
     let mut entries: Vec<(&str, Value)> = Vec::with_capacity(new.frontmatter.len() + 1);
     for (key, value) in new.frontmatter {
         checked_key(key)?;
@@ -197,8 +212,15 @@ pub fn create_concept(
     text.push_str("---\n");
     text.push_str(new.body);
     Doc::from_text(&path, &text).parse_checked()?;
-    if new.index_summary.is_some() {
-        check_listing(workspace, &path, new.index_section)?;
+    if let (Some(summary), Some(title)) = (new.index_summary, listed_title) {
+        let listing = Listing {
+            concept: &path,
+            title,
+            summary,
+            section: new.index_section,
+            accept_raw: false,
+        };
+        check_listing(workspace, &listing)?;
     }
     workspace.write_atomic(&path, &text)?;
     let mut outcome = OpOutcome::default();
@@ -209,12 +231,13 @@ pub fn create_concept(
         .extend(note.map(|note| format!("note: {note}")));
     let mut lines = vec![format!("created {path}")];
     if let (Some(summary), Some(title)) = (new.index_summary, listed_title) {
-        ensure_index(workspace, dirname(&path), &mut outcome)?;
+        ensure_folder_index(workspace, dirname(&path), new.folder_summary, &mut outcome)?;
         let listing = Listing {
             concept: &path,
             title,
             summary,
             section: new.index_section,
+            accept_raw: false,
         };
         lines.push(list_concept(workspace, &listing, &mut outcome)?);
     }
@@ -235,13 +258,11 @@ const ROOT_MISSING: &str =
 /// `repair_indexes`, when there is no root `index.md` and the folder's
 /// index is missing (`ensure_index` creates every other folder index, but
 /// needs the root's to list them in), or a `section` that is not a heading
-/// of the index.
+/// of the index, or a bullet that would not link back (see
+/// [`require_link_back`]).
 #[tracing::instrument(level = "trace", skip_all)]
-fn check_listing(
-    workspace: &dyn Workspace,
-    concept: &str,
-    section: Option<&str>,
-) -> Result<(), OkfError> {
+fn check_listing(workspace: &dyn Workspace, listing: &Listing<'_>) -> Result<(), OkfError> {
+    let (concept, section) = (listing.concept, listing.section);
     let folder = dirname(concept);
     let index_path = join(folder, "index.md");
     let text = if workspace.exists(&index_path) {
@@ -255,12 +276,17 @@ fn check_listing(
         new_index_text(folder)
     };
     // The bullet is irrelevant here: `None` means only "no such heading".
-    match section {
-        Some(section) if insert_index_bullet_text(&text, "", Some(section), false).is_none() => {
-            Err(missing_heading(&index_path, section))
+    if let Some(section) = section {
+        if insert_index_bullet_text(&text, "", Some(section), false).is_none() {
+            return Err(missing_heading(&index_path, section));
         }
-        Some(_) | None => Ok(()),
     }
+    // An index that already lists the concept is not refused (`list_concept`
+    // writes nothing then); otherwise the bullet must link back (#432).
+    if !lists_target(workspace, &text, &index_path, concept) {
+        require_link_back(workspace, &index_path, listing)?;
+    }
+    Ok(())
 }
 
 /// Refuses an edit that changes the frontmatter: its presence, or any of
@@ -555,6 +581,7 @@ mod tests {
             body,
             index_summary: None,
             index_section: None,
+            folder_summary: None,
         }
     }
 
@@ -752,6 +779,7 @@ mod tests {
         let listed = |path, section| NewConcept {
             index_summary: Some("b"),
             index_section: Some(section),
+            folder_summary: None,
             ..concept(path, &frontmatter, "")
         };
 
@@ -762,6 +790,7 @@ mod tests {
         let no_root = create_concept(&rootless, &ctx(), &listed("c", "Hosts")).unwrap_err();
         let nested = NewConcept {
             index_section: None,
+            folder_summary: None,
             ..listed("ops/new/c", "Hosts")
         };
         let nested_no_root = create_concept(&rootless, &ctx(), &nested).unwrap_err();
@@ -834,6 +863,7 @@ mod tests {
         .unwrap_err();
         let unlisted = NewConcept {
             index_section: Some("Concepts"),
+            folder_summary: None,
             ..concept("a", &untitled, "")
         };
         let section_only = create_concept(&ws, &ctx(), &unlisted).unwrap_err();
@@ -1130,5 +1160,163 @@ mod tests {
             "n.md has no frontmatter; add it with your editor first"
         );
         assert_eq!(read(&ws, "s.md"), SET_DOC);
+    }
+
+    #[test]
+    fn create_concept_lists_with_an_encoded_bullet_beside_an_old_raw_one() {
+        // Creation never counts an older raw bullet as the listing: the new
+        // concept gets its working, encoded one (issue #453).
+        let ws = MemWorkspace::default();
+        ws.write_atomic("index.md", "# Root\n").unwrap();
+        ws.write_atomic("d/index.md", "# D\n\n# Concepts\n\n* [Old](a b.md) - old\n")
+            .unwrap();
+        let frontmatter = json!({"type": "Note", "title": "New"});
+        let new = NewConcept {
+            path: "d/a b",
+            frontmatter: frontmatter.as_object().unwrap(),
+            body: "x\n",
+            index_summary: Some("new"),
+            index_section: None,
+            folder_summary: None,
+        };
+
+        create_concept(&ws, &ctx(), &new).unwrap();
+
+        let got = ws.read_to_string("d/index.md").unwrap();
+        assert!(got.contains("* [New](a%20b.md) - new"), "{got}");
+        assert!(got.contains("* [Old](a b.md) - old"), "{got}");
+    }
+
+    #[test]
+    fn create_concept_refuses_a_listing_that_would_not_link_back() {
+        let ws = MemWorkspace::default();
+        ws.write_atomic("index.md", "# Root\n").unwrap();
+        ws.write_atomic("d/index.md", "# D\n\n# Concepts\n")
+            .unwrap();
+        let frontmatter = json!({"type": "Note", "title": "Odd\\"});
+        let new = NewConcept {
+            path: "d/plain",
+            frontmatter: frontmatter.as_object().unwrap(),
+            body: "x\n",
+            index_summary: Some("s"),
+            index_section: None,
+            folder_summary: None,
+        };
+
+        let error = create_concept(&ws, &ctx(), &new).unwrap_err();
+
+        assert!(matches!(error, OkfError::Refused { .. }), "{error:?}");
+        assert_eq!(
+            ws.read_to_string("d/index.md").unwrap(),
+            "# D\n\n# Concepts\n"
+        );
+        assert!(!ws.exists("d/plain.md"), "the concept was written");
+        assert_eq!(ws.read_to_string("index.md").unwrap(), "# Root\n");
+    }
+
+    #[test]
+    fn create_concept_refuses_before_creating_a_new_folder_index() {
+        // The folder has no index yet: nothing may be created for it either.
+        let ws = MemWorkspace::default();
+        ws.write_atomic("index.md", "# Root\n").unwrap();
+        let frontmatter = json!({"type": "Note", "title": "Odd\\"});
+        let new = NewConcept {
+            path: "fresh/plain",
+            frontmatter: frontmatter.as_object().unwrap(),
+            body: "x\n",
+            index_summary: Some("s"),
+            index_section: None,
+            folder_summary: None,
+        };
+
+        let error = create_concept(&ws, &ctx(), &new).unwrap_err();
+
+        assert!(matches!(error, OkfError::Refused { .. }), "{error:?}");
+        assert!(!ws.exists("fresh/plain.md") && !ws.exists("fresh/index.md"));
+        assert_eq!(ws.read_to_string("index.md").unwrap(), "# Root\n");
+    }
+
+    #[test]
+    fn create_concept_still_accepts_a_concept_the_index_already_lists() {
+        // The pre-check short-circuits on an existing listing.
+        let ws = MemWorkspace::default();
+        ws.write_atomic("index.md", "# Root\n").unwrap();
+        ws.write_atomic(
+            "d/index.md",
+            "# D\n\n# Concepts\n\n* [Other](plain.md) - old\n",
+        )
+        .unwrap();
+        let frontmatter = json!({"type": "Note", "title": "Odd\\"});
+        let new = NewConcept {
+            path: "d/plain",
+            frontmatter: frontmatter.as_object().unwrap(),
+            body: "x\n",
+            index_summary: Some("s"),
+            index_section: None,
+            folder_summary: None,
+        };
+
+        create_concept(&ws, &ctx(), &new).unwrap();
+
+        assert!(ws.exists("d/plain.md"));
+    }
+
+    #[test]
+    fn create_concept_describes_its_new_folder_with_folder_summary() {
+        let ws = MemWorkspace::from_files([("index.md", ROOT_INDEX)]);
+        let frontmatter = object(json!({ "type": "Note", "title": "Thing" }));
+        let new = NewConcept {
+            index_summary: Some("a thing"),
+            folder_summary: Some("Operations\n work."),
+            ..concept("ops/thing", &frontmatter, "")
+        };
+
+        let outcome = create_concept(&ws, &ctx(), &new).unwrap();
+
+        assert_eq!(
+            read(&ws, "index.md"),
+            format!("{ROOT_INDEX}\n# Sections\n\n* [Ops](ops/) - Operations work.\n")
+        );
+        assert_eq!(
+            outcome.replay["index.md"],
+            [ReplayOp::ListBullet {
+                target: "ops/index.md".to_string(),
+                bullet: "* [Ops](ops/) - Operations work.".to_string(),
+                section: Some("Sections".to_string()),
+                create_section: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn create_concept_refuses_a_folder_summary_it_cannot_use_before_writing() {
+        let ws = MemWorkspace::from_files([("index.md", ROOT_INDEX), ("infra/index.md", "# I\n")]);
+        let frontmatter = object(json!({ "type": "Note", "title": "Thing" }));
+        let unlisted = NewConcept {
+            folder_summary: Some("x"),
+            ..concept("ops/thing", &frontmatter, "")
+        };
+        let existing = NewConcept {
+            index_summary: Some("a thing"),
+            folder_summary: Some("x"),
+            ..concept("infra/thing", &frontmatter, "")
+        };
+        let at_root = NewConcept {
+            index_summary: Some("a thing"),
+            folder_summary: Some("x"),
+            ..concept("thing", &frontmatter, "")
+        };
+
+        let unlisted = refusal(create_concept(&ws, &ctx(), &unlisted).unwrap_err());
+        let existing = refusal(create_concept(&ws, &ctx(), &existing).unwrap_err());
+        let at_root = refusal(create_concept(&ws, &ctx(), &at_root).unwrap_err());
+
+        assert_eq!(unlisted, "ops/thing.md: folder_summary needs index_summary");
+        assert!(existing.contains("/infra/ exists"), "{existing}");
+        assert!(at_root.contains("the root is no new folder"), "{at_root}");
+        assert!(
+            !ws.exists("ops/thing.md") && !ws.exists("infra/thing.md") && !ws.exists("thing.md")
+        );
+        assert_eq!(read(&ws, "index.md"), ROOT_INDEX);
     }
 }

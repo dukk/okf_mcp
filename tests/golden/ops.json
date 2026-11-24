@@ -117,20 +117,20 @@
     {
       "output": "ops/deep/er/index.md\nops/deep/index.md\nops/index.md",
       "notes": [
-        "created /ops/deep/index.md; replace its TODO lines (and the parent's listing)",
-        "created /ops/deep/er/index.md; replace its TODO lines (and the parent's listing)"
+        "created /ops/deep/index.md; replace its TODO line, and describe the folder with folder_summary, or with index on the folder's path (ending in /)",
+        "created /ops/deep/er/index.md; replace its TODO line, and describe the folder with folder_summary, or with index on the folder's path (ending in /)"
       ]
     },
     {
       "output": "analysis/new-stuff/index.md\nanalysis/index.md",
       "notes": [
-        "created /analysis/new-stuff/index.md; replace its TODO lines (and the parent's listing)"
+        "created /analysis/new-stuff/index.md; replace its TODO line, and describe the folder with folder_summary, or with index on the folder's path (ending in /)"
       ]
     },
     {
       "output": "brand-new/index.md\nindex.md",
       "notes": [
-        "created /brand-new/index.md; replace its TODO lines (and the parent's listing)"
+        "created /brand-new/index.md; replace its TODO line, and describe the folder with folder_summary, or with index on the folder's path (ending in /)"
       ]
     },
     {
@@ -145,8 +145,8 @@
     {
       "output": "moved /moves/beta.md -> /elsewhere/new-folder/beta.md\ntouched (pass these to publish):\n  moves/beta.md\n  elsewhere/new-folder/beta.md\n  elsewhere/new-folder/index.md\n  elsewhere/index.md\n  index.md\n  moves/index.md\n  moves/gamma.md\n  moves/renamed.md\n  people/linker.md",
       "notes": [
-        "created /elsewhere/index.md; replace its TODO lines (and the parent's listing)",
-        "created /elsewhere/new-folder/index.md; replace its TODO lines (and the parent's listing)"
+        "created /elsewhere/index.md; replace its TODO line, and describe the folder with folder_summary, or with index on the folder's path (ending in /)",
+        "created /elsewhere/new-folder/index.md; replace its TODO line, and describe the folder with folder_summary, or with index on the folder's path (ending in /)"
       ]
     },
     {
@@ -166,7 +166,7 @@
       "notes": [
         "note: 'Last bit' is the last section, so it runs to the end of the document; check that its closing paragraphs really belong to it and move any that don't back",
         "note: no description given; write a real one in the new concept and its index listing",
-        "created /splits/deeper/index.md; replace its TODO lines (and the parent's listing)"
+        "created /splits/deeper/index.md; replace its TODO line, and describe the folder with folder_summary, or with index on the folder's path (ending in /)"
       ]
     },
     {

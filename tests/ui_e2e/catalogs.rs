@@ -6,8 +6,9 @@ use base64::Engine as _;
 use chrono::Utc;
 use okf_mcp::archive::{write_tarball, ExportFile};
 use okf_mcp::config::Config;
+use okf_mcp::okf::workspace::Workspace as _;
 use okf_mcp::store::audit::AuditActor;
-use okf_mcp::store::ceiling::{self, MemberAccess};
+use okf_mcp::store::ceiling::{self, MemberAccess, NewEntitlement};
 use okf_mcp::store::keys::Access;
 use okf_mcp::store::teams::{self, NewTeam, Role};
 use okf_mcp::store::users::AdminChange;
@@ -90,7 +91,7 @@ async fn an_admin_creates_and_deletes_a_catalog_and_the_switcher_follows() {
         ui.click("#catalog-create-form button[type=submit]");
         // The page rebuilds the switcher before it redraws the table.
         ui.wait_visible("[data-catalog=scratch]");
-        ui.wait_text("[data-test=catalog-owner-scratch]", OWNER);
+        ui.wait_text("[data-test=catalog-owner-scratch]", "'s team");
         assert_eq!(switcher(ui), ["main", "scratch"]);
 
         ui.click("[data-catalog=scratch]");
@@ -114,7 +115,7 @@ async fn an_admin_changes_a_catalogs_owner_and_a_scoped_admin_cannot() {
         .await;
     let family = NewTeam {
         name: "family",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
         owner: OWNER,
     };
     teams::create(
@@ -129,7 +130,7 @@ async fn an_admin_changes_a_catalogs_owner_and_a_scoped_admin_cannot() {
         // A scoped admin sees the owner, but the control is disabled.
         ui.login(&scoped);
         ui.open("/catalogs");
-        ui.wait_text("[data-test=catalog-owner-main]", OWNER);
+        ui.wait_text("[data-test=catalog-owner-main]", "'s team");
         ui.click("[data-catalog=main]");
         ui.wait_visible("#catalog-owner-select[disabled]");
         ui.wait_visible("#catalog-owner-save[disabled]");
@@ -145,7 +146,7 @@ async fn an_admin_changes_a_catalogs_owner_and_a_scoped_admin_cannot() {
         ui.wait_text("#catalog-owner-save", "Change owner");
         ui.select("#catalog-owner-select", "family");
         ui.click("#catalog-owner-save");
-        ui.wait_text("[data-test=catalog-owner-main]", "family");
+        ui.wait_text("[data-test=catalog-owner-main]", "Unnamed team");
     })
     .await;
     if !ran {
@@ -157,6 +158,19 @@ async fn an_admin_changes_a_catalogs_owner_and_a_scoped_admin_cannot() {
     assert_eq!(owned.catalogs, ["main"]);
 }
 
+/// The admin-only navigation links (catalogs, API keys, users, teams,
+/// settings) that are showing. The "Your teams" group's own Catalogs link,
+/// shown to a non-admin signed in with an account, is not one of them.
+fn visible_admin_links(ui: &Ui) -> serde_json::Value {
+    ui.eval(
+        "() => ['catalogs', 'keys', 'users', 'teams', 'settings'] \
+         .filter(nav => [...document.querySelectorAll(`a[data-nav=${nav}]`)] \
+             .some(link => link.offsetParent !== null \
+                 && !link.closest('[data-need=owner]')))",
+        json!(null),
+    )
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn export_hands_the_browser_the_catalog_tarball() {
     let server = server().await;
@@ -166,7 +180,12 @@ async fn export_hands_the_browser_the_catalog_tarball() {
     let browser_key = key.clone();
     drive(server.base.clone(), move |ui| {
         ui.login(&browser_key);
-        ui.open("/transfer");
+        // A read key reaches the page from the navigation (issue #260),
+        // while the Administer group stays hidden.
+        ui.wait_visible("a[data-nav=transfer]");
+        assert!(!ui.page.is_visible("[data-need=admin]").expect("visible"));
+        assert_eq!(visible_admin_links(ui), json!([]));
+        ui.click("a[data-nav=transfer]");
         ui.wait_visible("#export-btn");
         ui.click("#export-btn");
         ui.wait_visible("#export-link");
@@ -179,9 +198,10 @@ async fn export_hands_the_browser_the_catalog_tarball() {
             link["href"].as_str().expect("an href").starts_with("blob:"),
             "{link}"
         );
-        assert_eq!(link["download"], "main.tar.gz");
+        assert_eq!(link["download"], "untitled-catalog-main.tar.gz");
         assert!(link["size"].as_u64().expect("a size") > 0);
         // A read key sees no import form.
+        assert!(!ui.page.is_visible("#import-panel").expect("visible"));
         assert!(!ui.page.is_visible("#import-btn").expect("visible"));
     })
     .await;
@@ -202,12 +222,15 @@ async fn export_hands_the_browser_the_catalog_tarball() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_import_reports_its_counts_and_a_stale_generation_is_refused() {
     let server = server().await;
+    // A `write` key: import needs no more (issue #260).
     let key = server
-        .key("console-importer", Access::Admin, &["main"], Some("main"))
+        .key("console-importer", Access::Write, &["main"], Some("main"))
         .await;
     let generation = server
         .app
         .catalog("main")
+        .await
+        .unwrap()
         .expect("main")
         .current()
         .generation();
@@ -221,8 +244,13 @@ async fn an_import_reports_its_counts_and_a_stale_generation_is_refused() {
     ]);
     drive(server.base.clone(), move |ui| {
         ui.login(&key);
-        ui.open("/transfer");
+        ui.wait_visible("a[data-nav=transfer]");
+        assert_eq!(visible_admin_links(ui), json!([]));
+        ui.click("a[data-nav=transfer]");
         ui.wait_text("#transfer-generation", &format!("generation {generation}"));
+        // A writer exports too.
+        ui.click("#export-btn");
+        ui.wait_visible("#export-link");
         let prefilled = ui.eval(
             "() => document.querySelector('#import-generation').value",
             json!(null),
@@ -260,6 +288,8 @@ async fn an_import_reports_its_counts_and_a_stale_generation_is_refused() {
         server
             .app
             .catalog("main")
+            .await
+            .unwrap()
             .expect("main")
             .current()
             .generation(),
@@ -322,6 +352,8 @@ async fn an_export_or_import_in_flight_locks_the_catalog_and_admits_no_second_im
     let generation = server
         .app
         .catalog("main")
+        .await
+        .unwrap()
         .expect("main")
         .current()
         .generation();
@@ -343,7 +375,7 @@ async fn an_export_or_import_in_flight_locks_the_catalog_and_admits_no_second_im
             "() => document.querySelector('#export-link').download",
             json!(null),
         );
-        assert_eq!(download, json!("main.tar.gz"));
+        assert_eq!(download, json!("untitled-catalog-main.tar.gz"));
         assert_eq!(disabled(ui, &controls[..2]), [false, false]);
 
         // An import in flight: choosing another file does not unlock Import,
@@ -380,6 +412,8 @@ async fn an_export_or_import_in_flight_locks_the_catalog_and_admits_no_second_im
         server
             .app
             .catalog("main")
+            .await
+            .unwrap()
             .expect("main")
             .current()
             .generation(),
@@ -405,22 +439,26 @@ async fn an_admin_signed_in_with_a_password_imports_an_archive() {
     server
         .user_with_password("erin", "erin@example.com", password)
         .await;
-    okf_mcp::store::users::set_admin(
-        &server.db.pool,
-        "erin",
-        AdminChange {
-            on: true,
-            allow_last: false,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("make erin an admin");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        okf_mcp::store::users::set_admin(
+            &server.db.pool,
+            "erin",
+            AdminChange {
+                on: true,
+                allow_last: false,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("make erin an admin");
+    })
+    .await;
     let generation = server
         .app
         .catalog("main")
+        .await
+        .unwrap()
         .expect("main")
         .current()
         .generation();
@@ -437,7 +475,17 @@ async fn an_admin_signed_in_with_a_password_imports_an_archive() {
             ui.eval("() => localStorage.getItem('okf.key')", json!(null)),
             serde_json::Value::Null
         );
-        ui.open("/transfer");
+        // An admin keeps the Administer group, and Import & export sits
+        // outside it.
+        ui.wait_visible("[data-need=admin]");
+        assert_eq!(
+            ui.eval(
+                "() => !!document.querySelector('[data-need=admin] a[data-nav=transfer]')",
+                json!(null)
+            ),
+            json!(false)
+        );
+        ui.click("a[data-nav=transfer]");
         ui.wait_text("#transfer-generation", &format!("generation {generation}"));
         ui.wait_visible("#upload-file");
         let chosen = ui.eval(
@@ -460,8 +508,242 @@ async fn an_admin_signed_in_with_a_password_imports_an_archive() {
     if !ran {
         return;
     }
-    let current = server.app.catalog("main").expect("main").current();
+    let current = server
+        .app
+        .catalog("main")
+        .await
+        .unwrap()
+        .expect("main")
+        .current();
     assert_eq!(current.generation(), generation + 1);
+}
+
+/// Issue #260: a member signed in with an account, entitled to `main` at
+/// `write` and `other` at `read`, finds Import & export in the navigation
+/// (no Administer group), sees only those two catalogs in the picker (not
+/// `private`), gets the import form only on `main`, and imports there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_imports_where_they_write_and_only_exports_where_they_read() {
+    let server = TestServer::start_with(
+        vec![
+            ("main", files(&[("index.md", "# Main\n")])),
+            ("other", files(&[("index.md", "# Other\n")])),
+            ("private", files(&[("index.md", "# Private\n")])),
+        ],
+        |base| Config {
+            public_url: Some(base.replace("127.0.0.1", "localhost")),
+            ..Config::default()
+        },
+    )
+    .await;
+    server.user_with_password("alice", EMAIL, PASSWORD).await;
+    crate::support::server::applied(&server.app, async {
+        for (catalog, access) in [("main", Access::Write), ("other", Access::Read)] {
+            ceiling::entitle(
+                &server.db.pool,
+                &NewEntitlement {
+                    user: "alice",
+                    catalog,
+                    access,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("entitle");
+        }
+    })
+    .await;
+    // The generation `app` serves for catalog `name`.
+    async fn generation(app: &okf_mcp::app::App, name: &str) -> i64 {
+        app.catalog(name)
+            .await
+            .unwrap()
+            .expect(name)
+            .current()
+            .generation()
+    }
+    let (main_before, other_before) = (
+        generation(&server.app, "main").await,
+        generation(&server.app, "other").await,
+    );
+    let archive = tarball(&[("index.md", "# Main\n\nImported by a member.\n")]);
+
+    let ran = drive(console_base(&server), move |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.wait_visible("a[data-nav=transfer]");
+        assert!(!ui.page.is_visible("[data-need=admin]").expect("visible"));
+        assert_eq!(visible_admin_links(ui), json!([]));
+        ui.click("a[data-nav=transfer]");
+        ui.select("#transfer-catalog", "main");
+        let options = ui.eval(
+            "() => [...document.querySelectorAll('#transfer-catalog option')].map(o => o.value)",
+            json!(null),
+        );
+        assert_eq!(options, json!(["main", "other"]), "only reachable catalogs");
+        ui.wait_text("#transfer-generation", &format!("generation {main_before}"));
+        ui.wait_visible("#import-panel");
+        // Read-only on `other`: export, but no import form.
+        ui.select("#transfer-catalog", "other");
+        ui.wait_text(
+            "#transfer-generation",
+            &format!("generation {other_before}"),
+        );
+        ui.wait_hidden("#import-panel");
+        ui.click("#export-btn");
+        ui.wait_visible("#export-link");
+        // Back on `main`, the form returns, and the import goes through.
+        ui.select("#transfer-catalog", "main");
+        ui.wait_visible("#import-panel");
+        let chosen = ui.eval(
+            CHOOSE_FILE,
+            json!({ "name": "main.tar.gz", "data": STANDARD.encode(&archive) }),
+        );
+        assert_eq!(chosen, json!(1));
+        ui.wait_text("#upload-name", "main.tar.gz");
+        ui.click("#import-replace");
+        ui.click("#import-btn");
+        ui.wait_visible("#import-report");
+        assert_eq!(ui.text("#import-updated"), "1");
+        ui.wait_text(
+            "#transfer-generation",
+            &format!("generation {}", main_before + 1),
+        );
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert_eq!(generation(&server.app, "main").await, main_before + 1);
+    assert_eq!(
+        generation(&server.app, "other").await,
+        other_before,
+        "nothing imported there"
+    );
+    let main = server
+        .app
+        .catalog("main")
+        .await
+        .unwrap()
+        .expect("main")
+        .current();
+    assert_eq!(
+        main.workspace()
+            .read_to_string("index.md")
+            .expect("index.md"),
+        "# Main\n\nImported by a member.\n"
+    );
+}
+
+/// Issue #647: while a catalog's owner team is suspended, a writer sees the
+/// Import panel disabled with a note saying why (the server would refuse the
+/// upload with 403 `Suspended`), export still works, and an admin keeps a
+/// working import.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_suspended_catalog_disables_import_for_a_writer_but_not_an_admin() {
+    let server = server().await;
+    let writer = server
+        .key(
+            "console-suspended-writer",
+            Access::Write,
+            &["main"],
+            Some("main"),
+        )
+        .await;
+    let admin = server
+        .key("console-suspended-admin", Access::Admin, &[], Some("main"))
+        .await;
+    crate::support::server::applied(&server.app, async {
+        teams::suspend(
+            &server.db.pool,
+            OWNER,
+            Some("Paused for review."),
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("suspend the owner team");
+    })
+    .await;
+    let generation = server
+        .app
+        .catalog("main")
+        .await
+        .unwrap()
+        .expect("main")
+        .current()
+        .generation();
+    let archive = tarball(&[("index.md", "# Main\n\nImported by an admin.\n")]);
+    // The import controls' state: the note, and whether each control is
+    // disabled (the button itself, and the fieldset holding the file input).
+    const CONTROLS: &str = "() => ({ \
+        note: !document.querySelector('#import-suspended').hidden, \
+        button: document.querySelector('#import-btn').disabled, \
+        fieldset: document.querySelector('#import-controls').disabled, \
+        file: document.querySelector('#upload-file').matches(':disabled') })";
+
+    let writer_archive = archive.clone();
+    drive(server.base.clone(), move |ui| {
+        ui.login(&writer);
+        ui.open("/transfer/main");
+        ui.wait_visible("#import-panel");
+        ui.wait_visible("#import-suspended");
+        let text = ui.text("#import-suspended");
+        assert!(
+            text.contains("suspended") && text.contains("only an admin"),
+            "{text}"
+        );
+        // A file chosen anyway (the input is disabled, so only a script can
+        // do it) must not enable the button.
+        let chosen = ui.eval(
+            CHOOSE_FILE,
+            json!({ "name": "main.tar.gz", "data": STANDARD.encode(&writer_archive) }),
+        );
+        assert_eq!(chosen, json!(1));
+        assert_eq!(
+            ui.eval(CONTROLS, json!(null)),
+            json!({ "note": true, "button": true, "fieldset": true, "file": true })
+        );
+        // Export is not refused for a suspended catalog.
+        ui.click("#export-btn");
+        ui.wait_visible("#export-link");
+    })
+    .await;
+
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/transfer/main");
+        ui.wait_visible("#import-panel");
+        assert_eq!(
+            ui.eval(CONTROLS, json!(null)),
+            json!({ "note": false, "button": true, "fieldset": false, "file": false }),
+            "no file chosen yet: only the button waits for one"
+        );
+        let chosen = ui.eval(
+            CHOOSE_FILE,
+            json!({ "name": "main.tar.gz", "data": STANDARD.encode(&archive) }),
+        );
+        assert_eq!(chosen, json!(1));
+        ui.wait_text("#upload-name", "main.tar.gz");
+        ui.click("#import-replace");
+        ui.click("#import-btn");
+        ui.wait_visible("#import-report");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    assert_eq!(
+        server
+            .app
+            .catalog("main")
+            .await
+            .unwrap()
+            .expect("main")
+            .current()
+            .generation(),
+        generation + 1
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -471,7 +753,7 @@ async fn member_access_read_makes_a_team_catalog_read_only_for_its_members() {
     let pool = &server.db.pool;
     let family = NewTeam {
         name: "family",
-        display_name: "",
+        display_name: &okf_mcp::labels::DisplayName::default(),
         owner: OWNER,
     };
     teams::create(
@@ -494,19 +776,22 @@ async fn member_access_read_makes_a_team_catalog_read_only_for_its_members() {
     )
     .await
     .expect("add alice");
-    okf_mcp::store::catalogs::create(
-        pool,
-        &okf_mcp::store::catalogs::NewCatalog {
-            name: "shared",
-            description: "",
-            owner_team: "family",
-        },
-        &okf_mcp::store::audit::AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("create the team's catalog");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        okf_mcp::store::catalogs::create(
+            pool,
+            &okf_mcp::store::catalogs::NewCatalog {
+                name: "shared",
+                display_name: &okf_mcp::labels::DisplayName::default(),
+                description: "",
+                owner_team: "family",
+            },
+            &okf_mcp::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("create the team's catalog");
+    })
+    .await;
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
     let ran = drive(console_base(&server), move |ui| {
         ui.login(&admin);
@@ -569,7 +854,8 @@ async fn member_access_read_makes_a_team_catalog_read_only_for_its_members() {
         ui.sign_in_password(EMAIL, PASSWORD);
         ui.open("/my-keys");
         ui.click("#my-key-new");
-        ui.wait_visible("#my-key-form");
+        // The picker reads the ceiling a page at a time (issue #736).
+        ui.wait_visible("#my-key-form select[name=level-shared]");
         assert_eq!(
             ui.eval(
                 "() => [...document.querySelectorAll('#my-key-form select[name=level-shared] option')] \
@@ -606,6 +892,465 @@ async fn a_scoped_admin_cannot_change_member_access() {
         ui.wait_text("#catalog-member-access", "every catalog");
         // The page itself carries no stray "null" under the table.
         assert!(!ui.text("#main").contains("null"));
+    })
+    .await;
+}
+
+/// The value of the input `selector`.
+fn input_value(ui: &Ui, selector: &str) -> serde_json::Value {
+    ui.eval(
+        "(selector) => document.querySelector(selector).value",
+        json!(selector),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_admin_edits_a_catalogs_display_name_and_description_together() {
+    let server = server().await;
+    let root = server.key("console-root", Access::Admin, &[], None).await;
+    crate::account::acme_with_owner_and_member(&server).await;
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&root);
+        ui.open("/catalogs");
+        // The label heads the cell with the slug beneath; Owner is the team's label.
+        let cell = ui.wait_text("[data-catalog=acme-notes]", "acme-notes");
+        assert!(cell.contains("acme-notes"), "{cell}");
+        ui.wait_text("[data-test=catalog-owner-acme-notes]", "Acme");
+        ui.click("[data-catalog=acme-notes]");
+        ui.wait_visible("#catalog-display-name");
+        ui.fill("#catalog-display-name", "Notes");
+        ui.fill("#catalog-description", "Shared notes");
+        ui.click("#catalog-save");
+        ui.wait_text("#toasts", "Saved Notes");
+        ui.wait_text("[data-catalog=acme-notes]", "Notes");
+        ui.wait_text("#catalog-select", "Notes");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let row = okf_mcp::store::catalogs::find(&server.db.pool, "acme-notes")
+        .await
+        .expect("the catalog");
+    assert_eq!(row.display_name, "Notes");
+    assert_eq!(row.description, "Shared notes");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_non_admin_team_owner_renames_their_catalog_and_a_member_sees_no_editor() {
+    let server = login_server().await;
+    crate::account::acme_with_owner_and_member(&server).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password("carol@example.com", PASSWORD);
+        ui.open("/catalogs");
+        ui.click("[data-catalog=acme-notes]");
+        ui.wait_visible("#catalog-maintenance-section");
+        assert!(!ui
+            .page
+            .is_visible("#catalog-display-name")
+            .expect("visible"));
+        assert!(!ui.page.is_visible("#catalog-save").expect("visible"));
+        // A member who is not an owner gets no access controls either.
+        for hidden in ["#catalog-member-access", "#catalog-entitlements"] {
+            assert!(!ui.page.is_visible(hidden).expect("visible"), "{hidden}");
+        }
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password("bob@example.com", PASSWORD);
+        ui.open("/catalogs");
+        ui.click("[data-catalog=acme-notes]");
+        ui.wait_visible("#catalog-display-name");
+        // No team picker or Delete: the admin's alone. The owner of a
+        // shared team has the team's member access and entitlements.
+        assert!(!ui
+            .page
+            .is_visible("#catalog-owner-select")
+            .expect("visible"));
+        ui.wait_visible("#catalog-member-access");
+        ui.wait_visible("#catalog-entitlements");
+        assert!(!ui.page.is_visible("#catalog-delete").expect("visible"));
+        assert_eq!(input_value(ui, "#catalog-display-name"), "");
+        ui.fill("#catalog-display-name", "Acme Notes");
+        ui.click("#catalog-save");
+        ui.wait_text("#toasts", "Saved Acme Notes");
+        ui.wait_text("[data-catalog=acme-notes]", "Acme Notes");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let row = okf_mcp::store::catalogs::find(&server.db.pool, "acme-notes")
+        .await
+        .expect("the catalog");
+    assert_eq!(row.display_name, "Acme Notes");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_team_owner_sets_member_access_and_entitles_a_member_from_the_drawer() {
+    let server = login_server().await;
+    crate::account::acme_with_owner_and_member(&server).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password("bob@example.com", PASSWORD);
+        ui.open("/catalogs");
+        ui.click("[data-catalog=acme-notes]");
+        // Member access: lower it to read, and the server's value shows.
+        ui.wait_text("#catalog-member-access-current", "write");
+        ui.wait_visible("#catalog-member-access-select:not([disabled])");
+        ui.select("#catalog-member-access-select", "read");
+        ui.click("#catalog-member-access-save");
+        ui.wait_text("#catalog-member-access-current", "read");
+        // Entitle the team's member above it, from the members only.
+        ui.wait_visible("#catalog-entitle-user:not([disabled])");
+        ui.select("#catalog-entitle-user", "carol");
+        ui.select("#catalog-entitle-level", "write");
+        ui.click("#catalog-entitle-save");
+        ui.wait_text("#catalog-entitlements-list", "carol: write");
+        ui.wait_text("#toasts", "now reaches");
+        // Taking it away.
+        ui.click("[data-remove=carol]");
+        ui.wait_text_gone("#catalog-entitlements-list", "carol: write");
+        ui.wait_text("#catalog-entitlements-list", "No one is entitled");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    // The writes happened and are what the server holds.
+    let pool = &server.db.pool;
+    assert_eq!(
+        ceiling::member_access(pool, "acme-notes")
+            .await
+            .expect("member access"),
+        MemberAccess::Read
+    );
+    assert!(ceiling::entitlements(pool, "carol")
+        .await
+        .expect("entitlements")
+        .is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_large_team_is_picked_from_a_page_at_a_time_with_load_more() {
+    let server = login_server().await;
+    crate::account::acme_with_owner_and_member(&server).await;
+    // 102 members in all: bob, carol and 100 more, past the page of 100.
+    let pool = &server.db.pool;
+    for number in 0..100 {
+        let name = format!("m{number:03}");
+        okf_mcp::store::users::create(
+            pool,
+            &okf_mcp::store::users::NewUser {
+                name: &name,
+                display_name: &okf_mcp::labels::DisplayName::default(),
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("create a member");
+        teams::set_member(
+            pool,
+            &teams::Membership {
+                team: "acme",
+                user: &name,
+                role: Role::Member,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("add the member");
+    }
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password("bob@example.com", PASSWORD);
+        ui.open("/catalogs");
+        ui.click("[data-catalog=acme-notes]");
+        ui.wait_visible("#catalog-entitle-user:not([disabled])");
+        // The first page holds 100 of the 102: the last names wait.
+        ui.wait_visible("#catalog-members-more");
+        ui.click("#catalog-members-more");
+        ui.wait_hidden("#catalog-members-more");
+        // Picked from the continued page.
+        ui.select("#catalog-entitle-user", "m099");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_entitle_in_flight_is_sent_once_and_a_refusal_shows_its_reason() {
+    let server = login_server().await;
+    crate::account::acme_with_owner_and_member(&server).await;
+    let ran = drive(console_base(&server), |ui| {
+        ui.sign_in_password("bob@example.com", PASSWORD);
+        ui.open("/catalogs");
+        ui.click("[data-catalog=acme-notes]");
+        ui.wait_visible("#catalog-entitle-user:not([disabled])");
+        ui.select("#catalog-entitle-user", "carol");
+        // Held: a double click sends one request.
+        ui.hold_next("PUT", "/entitlements/acme-notes");
+        assert!(
+            ui.click_twice("#catalog-entitle-save"),
+            "Entitle is not disabled while it runs"
+        );
+        assert_eq!(ui.held_matches(), 1, "a second entitle was sent");
+        ui.release_held();
+        ui.wait_text("#catalog-entitlements-list", "carol: read");
+        // A refused write keeps its reason on the page.
+        ui.fail_next(
+            "PUT",
+            "/entitlements/acme-notes",
+            403,
+            "refused by the test",
+        );
+        ui.select("#catalog-entitle-level", "write");
+        ui.click("#catalog-entitle-save");
+        ui.wait_visible("#catalog-entitlements-error");
+        ui.wait_text("#catalog-entitlements-error", "refused by the test");
+        ui.wait_text("#catalog-entitlements-list", "carol: read");
+        ui.wait_visible("#catalog-entitle-save:not([disabled])");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let given = ceiling::entitlements(&server.db.pool, "carol")
+        .await
+        .expect("entitlements");
+    assert_eq!(given.len(), 1);
+    assert_eq!(given[0].access, Access::Read);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_delete_dialog_still_asks_for_the_slug_of_a_labelled_catalog() {
+    let server = server().await;
+    let root = server.key("console-root", Access::Admin, &[], None).await;
+    crate::account::acme_with_owner_and_member(&server).await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&root);
+        ui.open("/catalogs");
+        ui.click("[data-catalog=acme-notes]");
+        ui.wait_visible("#catalog-display-name");
+        ui.fill("#catalog-display-name", "Notes");
+        ui.click("#catalog-save");
+        ui.wait_text("[data-catalog=acme-notes]", "Notes");
+        ui.click("[data-catalog=acme-notes]");
+        ui.click("#catalog-delete");
+        ui.wait_text("dialog.confirm", "Delete Notes?");
+        ui.wait_text("dialog.confirm", "acme-notes");
+        ui.fill("#confirm-typed", "Notes");
+        assert_eq!(disabled(ui, &["#confirm-ok"]), [true]);
+        ui.fill("#confirm-typed", "acme-notes");
+        assert_eq!(disabled(ui, &["#confirm-ok"]), [false]);
+    })
+    .await;
+}
+
+/// The option texts of the `<select>` `selector`, as `[value, text]` pairs.
+fn options(ui: &Ui, selector: &str) -> serde_json::Value {
+    ui.eval(
+        "(selector) => [...document.querySelector(selector).options].map(o => [o.value, o.text])",
+        serde_json::json!(selector),
+    )
+}
+
+/// Whether the options of `selector` hold `value` with exactly the text
+/// `text`.
+fn has_option(ui: &Ui, selector: &str, value: &str, text: &str) -> bool {
+    options(ui, selector).as_array().is_some_and(|all| {
+        all.iter()
+            .any(|pair| pair == &serde_json::json!([value, text]))
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn team_pickers_say_personal_team_or_team_and_still_send_the_bare_name() {
+    let server = server().await;
+    let root = server.key("console-root", Access::Admin, &[], None).await;
+    let family = NewTeam {
+        name: "acme",
+        display_name: &okf_mcp::labels::DisplayName::parse("Acme").expect("a display name"),
+        owner: OWNER,
+    };
+    teams::create(
+        &server.db.pool,
+        &family,
+        &okf_mcp::store::audit::AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("create a team");
+    // Give the fixture user a distinct display name (this also reloads the label
+    // table the console reads), so the full option texts are deterministic.
+    server.set_user_label(OWNER, "Alice Example").await;
+    let personal_text = "Alice Example (personal team)";
+    let ran = drive(server.base.clone(), move |ui| {
+        ui.login(&root);
+        ui.open("/catalogs");
+        // The owner column of the existing catalog names its team's kind.
+        ui.wait_text("[data-test=catalog-owner-main]", "personal team");
+        // The create form's picker: values are bare names, texts say the kind.
+        ui.click("#catalog-create");
+        ui.wait_visible("#catalog-create-form select[name=owner]");
+        ui.wait_text("#catalog-create-form select[name=owner]", "Acme (team)");
+        let create_owner = "#catalog-create-form select[name=owner]";
+        assert!(
+            has_option(ui, create_owner, OWNER, personal_text),
+            "{}",
+            options(ui, create_owner)
+        );
+        assert!(has_option(ui, create_owner, "acme", "Acme (team)"));
+        ui.fill("#catalog-create-form input[name=name]", "scratch");
+        ui.select("#catalog-create-form select[name=owner]", OWNER);
+        ui.click("#catalog-create-form button[type=submit]");
+        ui.wait_visible("[data-catalog=scratch]");
+        // Change owner: the same labels, and the bare name is what is sent.
+        ui.click("[data-catalog=scratch]");
+        ui.wait_visible("#catalog-owner-select:not([disabled])");
+        ui.wait_text("#catalog-owner-select", "Acme (team)");
+        assert!(has_option(
+            ui,
+            "#catalog-owner-select",
+            OWNER,
+            personal_text
+        ));
+        assert!(has_option(
+            ui,
+            "#catalog-owner-select",
+            "acme",
+            "Acme (team)"
+        ));
+        ui.select("#catalog-owner-select", "acme");
+        ui.click("#catalog-owner-save");
+        ui.wait_text("[data-test=catalog-owner-scratch]", "Acme");
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    // Created with the bare personal team's name, then moved to "acme".
+    let row = okf_mcp::store::catalogs::find(&server.db.pool, "scratch")
+        .await
+        .expect("the catalog");
+    assert_eq!(row.owner_team.as_deref(), Some("acme"));
+    assert!(
+        !teams::find(&server.db.pool, OWNER)
+            .await
+            .expect("team")
+            .catalogs
+            .contains(&"scratch".to_string()),
+        "the first owner was the personal team, by its bare name"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_older_list_read_that_answers_late_never_redraws_the_catalogs_table() {
+    let server = server().await;
+    let key = server
+        .key("console-root", Access::Admin, &[], Some("main"))
+        .await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&key);
+        ui.open("/catalogs");
+        ui.wait_visible("[data-catalog=main]");
+        // The list read after creating "older" is sent at once but answers
+        // late: the server's answer lists "older" but not "newer".
+        ui.click("#catalog-create");
+        ui.wait_visible("#catalog-create-form select[name=owner]");
+        ui.fill("#catalog-create-form input[name=name]", "older");
+        ui.select("#catalog-create-form select[name=owner]", OWNER);
+        ui.hold_answer("GET", "/api/v1/catalogs", || {
+            ui.click("#catalog-create-form button[type=submit]")
+        });
+        // A newer write's list read answers first and lists both.
+        ui.click("#catalog-create");
+        ui.wait_visible("#catalog-create-form select[name=owner]");
+        ui.fill("#catalog-create-form input[name=name]", "newer");
+        ui.select("#catalog-create-form select[name=owner]", OWNER);
+        ui.click("#catalog-create-form button[type=submit]");
+        ui.wait_visible("[data-catalog=newer]");
+        // The older answer, released now, must not replace the newer table.
+        ui.release_held();
+        assert!(
+            ui.present("[data-catalog=newer]") && ui.present("[data-catalog=older]"),
+            "the older read redrew the catalogs table"
+        );
+    })
+    .await;
+}
+
+/// M18 Task 10: the catalogs page draws the first page (100) and a Load
+/// more control; the rows drawn keep their cursor while an older reload
+/// answers late and a newer one fails, and Load more then appends the next
+/// page once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_catalogs_page_loads_more_and_keeps_its_cursor_when_reloads_fail() {
+    // `c000` to `c100` and `main`: 102 catalogs, so the first page ends at
+    // `c099` and the second holds `c100` and `main`.
+    let names: Vec<String> = (0..=100).map(|index| format!("c{index:03}")).collect();
+    let mut catalogs: Vec<(&str, _)> = names
+        .iter()
+        .map(|name| (name.as_str(), files(&[])))
+        .collect();
+    catalogs.push(("main", files(&[("index.md", "# Main\n")])));
+    let server = TestServer::start(catalogs, Config::default()).await;
+    let key = server
+        .key("console-root", Access::Admin, &[], Some("main"))
+        .await;
+    drive(server.base.clone(), move |ui| {
+        let count = |selector: &str| {
+            ui.eval(
+                "(selector) => document.querySelectorAll(selector).length",
+                json!(selector),
+            )
+        };
+        let create = |name: &str| {
+            ui.click("#catalog-create");
+            ui.wait_visible("#catalog-create-form select[name=owner]");
+            ui.fill("#catalog-create-form input[name=name]", name);
+            ui.select("#catalog-create-form select[name=owner]", OWNER);
+        };
+        ui.login(&key);
+        ui.open("/catalogs");
+        ui.wait_visible("[data-catalog=c000]");
+        ui.wait_visible("#catalogs-more");
+        assert_eq!(count("span[data-catalog]"), json!(100), "one page drawn");
+        assert!(!ui.present("[data-catalog=main]"));
+
+        // The list read after creating `n-one` answers late; the one after
+        // creating `n-two` fails. Neither may take the rows' cursor away.
+        create("n-one");
+        ui.hold_answer("GET", "/api/v1/catalogs", || {
+            ui.click("#catalog-create-form button[type=submit]")
+        });
+        create("n-two");
+        ui.fail_next("GET", "/api/v1/catalogs", 503, "the list is away");
+        ui.click("#catalog-create-form button[type=submit]");
+        ui.wait_visible("#catalogs-stale");
+        ui.release_held();
+        ui.wait_visible("#catalogs-more");
+        assert_eq!(
+            count("span[data-catalog]"),
+            json!(100),
+            "the rows drawn stay"
+        );
+
+        ui.click("#catalogs-more");
+        ui.wait_visible("[data-catalog=n-two]");
+
+        // c100, main, n-one and n-two, appended once.
+        assert_eq!(count("span[data-catalog]"), json!(104));
+        assert_eq!(count("[data-catalog=c099]"), json!(1));
+        assert_eq!(count("[data-catalog=main]"), json!(1));
+        ui.wait_hidden("#catalogs-more");
+        // The first page still comes from the read before the failed one.
+        ui.wait_visible("#catalogs-stale");
     })
     .await;
 }

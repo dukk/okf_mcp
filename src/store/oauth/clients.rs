@@ -2,12 +2,17 @@
 //! Client ID Metadata Documents. Task 2 reads and prunes; Task 3 writes.
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use crate::error::OkfError;
+use crate::store::decode_column;
 
 /// How a client got its id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// `Serialize, Deserialize` (serde): stored in Redis inside a pending
+// authorization (M16 Task 8), spelled as [`ClientKind::as_str`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ClientKind {
     /// Registered at `POST /oauth/register`; its id is a UUID.
     Dcr,
@@ -58,8 +63,10 @@ impl ClientKind {
 }
 
 /// One client.
-// `PartialEq` but not `Eq`: `serde_json::Value` holds floats.
-#[derive(Debug, Clone, PartialEq)]
+// `PartialEq` but not `Eq`: `serde_json::Value` holds floats. `Serialize,
+// Deserialize`: a pending authorization holds it, in Redis with `[redis]`
+// (M16 Task 8); the timestamps use chrono's `serde` feature (RFC 3339).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientRecord {
     /// Its id (a UUID, or the metadata document's URL).
     pub client_id: String,
@@ -107,7 +114,9 @@ struct ClientRow {
     created_at: DateTime<Utc>,
 }
 
-impl From<ClientRow> for ClientRecord {
+impl TryFrom<ClientRow> for ClientRecord {
+    type Error = OkfError;
+
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -115,17 +124,17 @@ impl From<ClientRow> for ClientRecord {
             reason = "trivial accessor or conversion: maps a value, no I/O"
         )
     )]
-    fn from(row: ClientRow) -> Self {
-        Self {
+    fn try_from(row: ClientRow) -> Result<Self, OkfError> {
+        Ok(Self {
             client_id: row.client_id,
-            kind: ClientKind::parse(&row.kind).expect("the schema checks oauth_clients.kind"),
+            kind: decode_column(ClientKind::parse(&row.kind), "oauth_clients.kind")?,
             client_name: row.client_name,
             redirect_uris: row.redirect_uris,
             metadata: row.metadata,
             fetched_at: row.fetched_at,
             cache_expires_at: row.cache_expires_at,
             created_at: row.created_at,
-        }
+        })
     }
 }
 
@@ -150,8 +159,9 @@ pub async fn find(pool: &PgPool, client_id: &str) -> Result<Option<ClientRecord>
     .bind(client_id)
     .fetch_optional(pool)
     .await?;
-    // `Option::map(ClientRecord::from)` converts the row, if there is one.
-    Ok(row.map(ClientRecord::from))
+    // `Option::map(ClientRecord::try_from)` converts the row, if there is
+    // one; `transpose` turns `Option<Result<..>>` into `Result<Option<..>>`.
+    row.map(ClientRecord::try_from).transpose()
 }
 
 /// Deletes the dynamically registered clients created before
@@ -264,8 +274,10 @@ pub async fn insert_dcr(
     .bind(max_unbound)
     .fetch_optional(&mut *tx)
     .await?;
+    // Converted before the commit: a corrupt row errors and `tx` rolls back.
+    let record = row.map(ClientRecord::try_from).transpose()?;
     tx.commit().await?;
-    Ok(row.map(ClientRecord::from))
+    Ok(record)
 }
 
 /// Stores a freshly fetched Client ID Metadata Document, or refreshes the
@@ -338,6 +350,42 @@ mod tests {
         Utc.with_ymd_and_hms(2026, 11, 11, 12, 0, 0).unwrap()
     }
 
+    /// The JSON spelling (Redis, M16 Task 8) is the stored spelling.
+    #[test]
+    fn client_kind_json_is_its_stored_spelling() {
+        for kind in [ClientKind::Dcr, ClientKind::Cimd] {
+            let json = serde_json::to_value(kind).expect("serializes");
+
+            assert_eq!(json, serde_json::json!(kind.as_str()));
+            assert_eq!(
+                serde_json::from_value::<ClientKind>(json).expect("deserializes"),
+                kind
+            );
+        }
+    }
+
+    /// A record survives a JSON round trip, timestamps included.
+    #[test]
+    fn a_client_record_round_trips_through_json() {
+        let record = ClientRecord {
+            client_id: "https://client.example.com/client.json".into(),
+            kind: ClientKind::Cimd,
+            client_name: Some("Example Client".into()),
+            redirect_uris: vec!["https://client.example.com/callback".into()],
+            metadata: serde_json::json!({"client_name": "Example Client"}),
+            fetched_at: Some(now()),
+            cache_expires_at: Some(now() + TimeDelta::hours(1)),
+            created_at: now(),
+        };
+
+        let json = serde_json::to_vec(&record).expect("serializes");
+
+        assert_eq!(
+            serde_json::from_slice::<ClientRecord>(&json).expect("deserializes"),
+            record
+        );
+    }
+
     async fn insert_dcr_row(pool: &PgPool, client_id: &str, created_at: DateTime<Utc>) {
         sqlx::query(
             "INSERT INTO oauth_clients (client_id, kind, redirect_uris, metadata, created_at) \
@@ -380,6 +428,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "main",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -477,6 +526,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "main",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -553,6 +603,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "main",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -568,5 +619,22 @@ mod tests {
         insert_grant(&db.pool, "bound", Access::Read, &["main"], now()).await;
 
         assert_eq!(count_unbound_dcr(&db.pool).await.unwrap(), 2);
+    }
+
+    /// Issue #642: a stored kind that is not a known spelling is a database
+    /// error, not a panic.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_corrupt_kind_is_a_database_error() {
+        let db = test_db().await;
+        insert_dcr_row(&db.pool, "corrupt-client", now()).await;
+        crate::store::drop_check_constraints(&db.pool, "oauth_clients").await;
+        sqlx::query("UPDATE oauth_clients SET kind = 'bogus-kind'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let found = find(&db.pool, "corrupt-client").await;
+
+        crate::store::assert_decode_error(found, "oauth_clients.kind", "bogus-kind");
     }
 }

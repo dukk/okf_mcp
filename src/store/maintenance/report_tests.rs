@@ -1,3 +1,4 @@
+use super::runs::RunOrder;
 use super::tests::{actor, revision, setup, t0};
 use super::{reports, runs};
 use crate::db::test_db;
@@ -427,6 +428,7 @@ async fn maintenance_report_pages_are_catalog_scoped() {
         &db.pool,
         &crate::store::catalogs::NewCatalog {
             name: "foreign",
+            display_name: &crate::labels::DisplayName::default(),
             description: "",
             owner_team: crate::db::TEST_TEAM,
         },
@@ -439,15 +441,25 @@ async fn maintenance_report_pages_are_catalog_scoped() {
     revision(&db.pool, foreign, "a.md", 1, t0(), "Body").await;
     revision(&db.pool, foreign, "b.md", 1, t0(), "Body").await;
     let (foreign_run, foreign_finding) = fixture(&db.pool, foreign, "first").await;
-    let all = runs::list_runs(&db.pool, catalog, None, 20).await.unwrap();
+    let all = runs::list_runs(&db.pool, catalog, None, 20, RunOrder::Asc)
+        .await
+        .unwrap();
     assert_eq!(all.items.len(), 2);
     assert!(all.items[0].id < all.items[1].id); // Equal timestamps: ID is the tie breaker.
     assert_eq!(all.next_after, None);
-    let page = runs::list_runs(&db.pool, catalog, None, 1).await.unwrap();
-    assert_eq!(page.items, all.items[..1]);
-    let last = runs::list_runs(&db.pool, catalog, page.next_after.as_deref(), 1)
+    let page = runs::list_runs(&db.pool, catalog, None, 1, RunOrder::Asc)
         .await
         .unwrap();
+    assert_eq!(page.items, all.items[..1]);
+    let last = runs::list_runs(
+        &db.pool,
+        catalog,
+        page.next_after.as_deref(),
+        1,
+        RunOrder::Asc,
+    )
+    .await
+    .unwrap();
     assert_eq!(last.items, all.items[1..]);
     assert_eq!(last.next_after, None);
     let findings = reports::list_findings(&db.pool, catalog, None, 200)
@@ -473,7 +485,7 @@ async fn maintenance_report_pages_are_catalog_scoped() {
     );
     for cursor in [&foreign_run.run_id, "missing", ""] {
         assert!(matches!(
-            runs::list_runs(&db.pool, catalog, Some(cursor), 20).await,
+            runs::list_runs(&db.pool, catalog, Some(cursor), 20, RunOrder::Asc).await,
             Err(OkfError::NotFound { .. })
         ));
     }
@@ -485,7 +497,7 @@ async fn maintenance_report_pages_are_catalog_scoped() {
     }
     for limit in [0, 201, u32::MAX] {
         assert!(matches!(
-            runs::list_runs(&db.pool, catalog, None, limit).await,
+            runs::list_runs(&db.pool, catalog, None, limit, RunOrder::Asc).await,
             Err(OkfError::Refused { .. })
         ));
         assert!(matches!(
@@ -504,11 +516,13 @@ async fn maintenance_report_pages_are_catalog_scoped() {
     for id in ["", " ", "missing"] {
         assert!(runs::get_run(&db.pool, catalog, id).await.is_err());
     }
-    assert!(runs::list_runs(&db.pool, foreign + 1, None, 20)
-        .await
-        .unwrap()
-        .items
-        .is_empty());
+    assert!(
+        runs::list_runs(&db.pool, foreign + 1, None, 20, RunOrder::Asc)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
     // Unequal timestamps must outrank ID ordering, including cursor continuation.
     sqlx::query("UPDATE maintenance_runs SET created_at=$3 WHERE catalog_id=$1 AND id=$2")
         .bind(catalog)
@@ -517,13 +531,21 @@ async fn maintenance_report_pages_are_catalog_scoped() {
         .execute(&db.pool)
         .await
         .unwrap();
-    let by_time = runs::list_runs(&db.pool, catalog, None, 1).await.unwrap();
+    let by_time = runs::list_runs(&db.pool, catalog, None, 1, RunOrder::Asc)
+        .await
+        .unwrap();
     assert_eq!(by_time.items[0].id, all.items[1].id);
     assert_eq!(
-        runs::list_runs(&db.pool, catalog, by_time.next_after.as_deref(), 200)
-            .await
-            .unwrap()
-            .items[0]
+        runs::list_runs(
+            &db.pool,
+            catalog,
+            by_time.next_after.as_deref(),
+            200,
+            RunOrder::Asc
+        )
+        .await
+        .unwrap()
+        .items[0]
             .id,
         all.items[0].id
     );
@@ -815,7 +837,9 @@ async fn maintenance_report_assessment_and_sibling_pins_and_dto_contracts() {
         .unwrap();
     assert_dto(&page, &["items", "next_after"]);
     assert_dto(
-        &runs::list_runs(&db.pool, catalog, None, 20).await.unwrap(),
+        &runs::list_runs(&db.pool, catalog, None, 20, RunOrder::Asc)
+            .await
+            .unwrap(),
         &["items", "next_after"],
     );
 }
@@ -1011,4 +1035,58 @@ async fn maintenance_findings_filter_and_count_by_current_disposition() {
             ..Default::default()
         }
     );
+}
+
+/// Newest-first paging is the exact reverse of the default order, its
+/// cursor continues in that direction (including across unequal
+/// timestamps), and the default stays oldest first.
+#[tokio::test]
+async fn runs_page_newest_first_with_a_descending_cursor() {
+    let db = test_db().await;
+    let catalog = setup(&db.pool, &["a.md", "b.md"]).await;
+    let (first, _) = fixture(&db.pool, catalog, "first").await;
+    let (second, _) = fixture(&db.pool, catalog, "second").await;
+    // Make the later-created fixture also the earlier by time, so the
+    // order is not just the ID order.
+    sqlx::query("UPDATE maintenance_runs SET created_at=$3 WHERE catalog_id=$1 AND id=$2")
+        .bind(catalog)
+        .bind(&second.run_id)
+        .bind(t0() - Duration::seconds(5))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let asc = runs::list_runs(&db.pool, catalog, None, 20, RunOrder::Asc)
+        .await
+        .unwrap();
+    let desc = runs::list_runs(&db.pool, catalog, None, 20, RunOrder::Desc)
+        .await
+        .unwrap();
+    let mut reversed = asc.items.clone();
+    reversed.reverse();
+    assert_eq!(desc.items, reversed);
+    assert_eq!(desc.items[0].id, first.run_id);
+    assert_eq!(desc.next_after, None);
+    let page = runs::list_runs(&db.pool, catalog, None, 1, RunOrder::Desc)
+        .await
+        .unwrap();
+    assert_eq!(page.items, desc.items[..1]);
+    assert_eq!(page.next_after.as_deref(), Some(first.run_id.as_str()));
+    let last = runs::list_runs(
+        &db.pool,
+        catalog,
+        page.next_after.as_deref(),
+        1,
+        RunOrder::Desc,
+    )
+    .await
+    .unwrap();
+    assert_eq!(last.items, desc.items[1..]);
+    assert_eq!(last.next_after, None);
+    // An unknown cursor is refused in this order too.
+    assert!(matches!(
+        runs::list_runs(&db.pool, catalog, Some("missing"), 20, RunOrder::Desc).await,
+        Err(OkfError::NotFound { .. })
+    ));
+    // The default order is unchanged.
+    assert_eq!(RunOrder::default(), RunOrder::Asc);
 }

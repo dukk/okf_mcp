@@ -11,11 +11,13 @@ import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
+import { latest } from '../core/latest.js';
 import { guard, once } from '../core/pending.js';
 import { ago, when } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
-import { assignControl, namesOf } from '../components/picker.js';
+import { assignControl, rowsOf, teamChoices, userChoices } from '../components/picker.js';
+import { named } from '../core/labels.js';
 import { accountSections, loadAccount } from '../components/user-account.js';
 import { canAdministerPeople, keyUserChanged, refreshIdentity, refreshUnassigned } from '../core/shell.js';
 
@@ -33,12 +35,11 @@ export async function render(main, rest) {
     }
     const manager = canAdministerPeople();
     const columns = [
-        { key: 'name', label: 'Name', sort: user => user.name,
-          render: user => h('code', { dataset: { test: `user-${user.name}` } }, user.name,
+        { key: 'name', label: 'Name', sort: user => user.label.toLowerCase(),
+          render: user => h('span', { dataset: { test: `user-${user.name}` } },
+              named(user.label, user.name),
               user.name === store.whoami.user ? [' ', pill('you', 'info')] : null,
               user.is_admin ? [' ', pill('admin', 'warn')] : null) },
-        { key: 'display_name', label: 'Display name',
-          render: user => user.display_name || h('span', { class: 'muted' }, '-') },
         { key: 'email', label: 'Email', sort: user => user.email ?? '',
           render: user => (user.email ? h('span', { class: 'mono small' }, user.email) : h('span', { class: 'muted' }, '-')) },
         { key: 'credentials', label: 'Credentials', sort: user => user.credentials, class: 'num' },
@@ -58,7 +59,7 @@ export async function render(main, rest) {
     table.id = 'users-table';
     filter.addEventListener('input', () => {
         const text = filter.value.trim().toLowerCase();
-        table.setFilter(text ? user => [user.name, user.display_name, user.email ?? '']
+        table.setFilter(text ? user => [user.name, user.label, user.display_name, user.email ?? '']
             .some(value => value.toLowerCase().includes(text)) : null);
     });
     // fill(), not native append: the note is null for a manager (issue #302).
@@ -73,6 +74,9 @@ export async function render(main, rest) {
                 h('button', { type: 'button', id: 'user-new', disabled: !manager, onclick: openCreate }, 'New user'))),
         table,
         manager ? null : h('p', { class: 'muted small' }, NEEDS_EVERY_CATALOG));
+    // Numbers the list's reads: a slower older read never draws over a
+    // newer one, nor into another page once this one is left.
+    const listReads = latest(main);
     await load();
 
     // The user drawer shown or loading ({name, ticket, last}), and the count
@@ -84,9 +88,10 @@ export async function render(main, rest) {
     if (rest[0] === 'detail' && rest[1]) await openDetail(rest[1]);
 
     async function load() {
+        const current = listReads();
         try {
             const { users } = await api.get('/users');
-            if (main.isConnected) table.redraw(users);
+            if (current()) table.redraw(users);
         } catch { /* toasted */ }
     }
 
@@ -150,6 +155,28 @@ export async function render(main, rest) {
         shown.last = { detail, personal, account };
         const { user, keys, codes } = detail;
         const reason = deleteReason(personal);
+        // The save of the display-name field below (a pending write like
+        // the account actions, so a second click cannot send it twice).
+        const naming = `user:${name}:display-name`;
+        const displayName = guard(h('input', { id: 'user-display-name', name: 'display_name',
+            value: user.display_name, autocomplete: 'off', 'aria-label': 'Display name' }), naming, manager);
+        const saveName = guard(h('button', { type: 'submit', id: 'user-display-name-save' }, 'Save'), naming, manager);
+        const nameForm = h('form', { id: 'user-display-name-form', class: 'inline-form' }, displayName, saveName);
+        nameForm.addEventListener('submit', event => {
+            event.preventDefault();
+            once(naming, async () => {
+                let refused = null;
+                try {
+                    await api.patch(`/users/${enc(name)}`, { display_name: displayName.value.trim() });
+                    toast('Display name saved.', 'ok');
+                } catch (error) {
+                    refused = error.message;   // already toasted by api.js
+                }
+                // Every label on screen follows the new name.
+                await refreshIdentity().catch(() => {});
+                await changed(refused);
+            });
+        });
         const changed = async refused => {
             // An admin flag or session change of the signed-in user is
             // shell state (the Administer group, the session itself).
@@ -170,19 +197,21 @@ export async function render(main, rest) {
                 const self = name === store.whoami?.user
                     ? ' This is the user you are signed in as: your own access goes with it.' : '';
                 const ok = await confirmDialog({
-                    title: `Delete user ${name}?`,
+                    title: `Delete user ${user.label}?`,
                     message: `Its keys, grants and sign-in codes (revoked ones too), console sessions and `
                         + `personal team ${name} are deleted with it, and its open changesets are discarded. `
                         + `Catalogs and their history stay. This cannot be undone.${self}`,
                     action: 'Delete',
                 });
-                if (ok) await once(deleting, () => removeUser(name));
+                if (ok) await once(deleting, () => removeUser(name, user.label));
             },
         }, 'Delete user'), deleting, manager && !reason);
-        ticket.open(name, user.display_name || 'User',
+        ticket.open(user.label, 'User',
             h('div', { id: 'user-detail' },
                 stale ? h('p', { id: 'user-stale', class: 'error small', role: 'status' },
                     'Could not read this user again, so what is shown may be out of date.') : null,
+                h('p', { class: 'id-line muted' }, 'User ID: ', h('code', {}, name)),
+                h('section', {}, h('h3', {}, 'Display name'), nameForm),
                 h('p', {}, 'Personal team: ', h('code', {}, personal.name)),
                 h('dl', { class: 'facts' },
                     h('dt', {}, 'Teams'), h('dd', {}, user.teams.join(', ')),
@@ -208,7 +237,7 @@ export async function render(main, rest) {
     // Deletes user `name`. Once it settles, the drawer that shows that user
     // now (not necessarily the one Delete was clicked in) closes, or, when
     // the server refused, is drawn again with the reason kept in it.
-    async function removeUser(name) {
+    async function removeUser(name, label) {
         try {
             await api.del(`/users/${enc(name)}`);
         } catch (error) {
@@ -221,7 +250,7 @@ export async function render(main, rest) {
             await Promise.allSettled([redraw, main.isConnected ? load() : null]);
             return;
         }
-        toast(`Deleted user ${name}.`, 'ok');
+        toast(`Deleted user ${label}.`, 'ok');
         const view = shown;
         if (view?.name === name && view.ticket.current()) view.ticket.close();
         if (main.isConnected) await load();
@@ -260,36 +289,38 @@ async function renderUnassigned(main) {
         let users;
         let teams;
         try {
-            [rows, users, teams] = await Promise.all([api.get('/unassigned'), namesOf('users'), namesOf('teams')]);
+            [rows, users, teams] = await Promise.all([api.get('/unassigned'), rowsOf('users'), rowsOf('teams')]);
         } catch { return; }
         if (!main.isConnected) return;
+        const teamPick = teamChoices(teams);
+        const userPick = userChoices(users);
         const items = [
             ...rows.keys.map(key => assignRow(`key-${key.name}`,
                 [key.kind === 'oauth' ? 'Grant ' : 'Key ', h('code', {}, key.name), ` (actor ${key.actor})`,
                     key.revoked_at ? [' ', pill('revoked', 'error')] : null],
-                users, async user => {
+                userPick.names, async user => {
                     await api.put(`/keys/${enc(key.id)}/user`, { user });
                     await keyUserChanged(key.id);
-                }, `${key.name} now belongs to`)),
+                }, `${key.name} now belongs to`, userPick.labelOf)),
             ...rows.codes.map(code => assignRow(`code-${code.name}`,
                 ['Sign-in code ', h('code', {}, code.name), ' ', pill(code.state)],
-                users, user => api.put(`/oauth/codes/${enc(code.id)}/user`, { user }), `${code.name} now belongs to`)),
+                userPick.names, user => api.put(`/oauth/codes/${enc(code.id)}/user`, { user }), `${code.name} now belongs to`, userPick.labelOf)),
             ...rows.catalogs.map(name => assignRow(`catalog-${name}`,
                 ['Catalog ', h('code', {}, name)],
-                teams, team => api.put(`/catalogs/${enc(name)}/owner`, { team }), `${name} is now owned by`)),
+                teamPick.names, team => api.put(`/catalogs/${enc(name)}/owner`, { team }), `${name} is now owned by`, teamPick.labelOf)),
         ];
         body.replaceChildren(items.length
             ? h('ul', { class: 'grant-list' }, items)
             : h('p', { id: 'unassigned-empty', class: 'muted' }, 'Nothing is unassigned.'));
     }
 
-    function assignRow(test, label, names, assign, done) {
+    function assignRow(test, label, names, assign, done, labelOf) {
         return h('li', { dataset: { test: `assign-${test}` } }, label,
             assignControl({
-                names, label: 'Assign',
+                names, label: 'Assign', labelOf,
                 assign: async name => {
                     try { await assign(name); } catch { return; /* toasted */ }
-                    toast(`${done} ${name}.`, 'ok');
+                    toast(`${done} ${labelOf(name)}.`, 'ok');
                     await refreshUnassigned();
                     if (main.isConnected) await draw();
                 },

@@ -25,8 +25,10 @@ use crate::clock::{format_timestamp, Clock};
 use crate::config::Config;
 use crate::db;
 use crate::http;
+use crate::labels::DisplayName;
+use crate::shared::announce::announce_from_cli;
 use crate::store::audit::AuditActor;
-use crate::store::catalogs;
+use crate::store::catalogs::{self, CatalogGeneration};
 use crate::store::ceiling::MemberAccess;
 use crate::store::export;
 use crate::store::import::{self, ImportOptions, ImportScope};
@@ -36,6 +38,7 @@ use crate::store::repair;
 use crate::store::settings::SettingKey;
 use crate::store::teams::Role;
 use crate::store::unlocks::Category;
+use crate::telemetry::metrics::Metrics;
 use crate::telemetry::subscriber::split_event;
 use crate::telemetry::{self, StartUp, Telemetry};
 
@@ -43,6 +46,7 @@ use crate::telemetry::{self, StartUp, Telemetry};
 mod admin;
 // `src/cli/audit.rs`: the `audit` handlers.
 mod audit;
+mod feedback;
 // `src/cli/people.rs`: the user, team, assignment and `unassigned` handlers.
 mod people;
 // `src/cli/unlock.rs`: the `unlock` handlers.
@@ -100,6 +104,9 @@ pub enum Command {
     /// Send a test email, and list, retry or delete queued mail.
     #[command(subcommand)]
     Mail(MailCommand),
+    /// List failed feedback, and send one failed row again.
+    #[command(subcommand)]
+    Feedback(FeedbackCommand),
     /// Unlock a customer catalog for an admin user, list unlocks, or end
     /// one early.
     #[command(subcommand)]
@@ -159,6 +166,10 @@ pub enum CatalogCommand {
     Create {
         /// Its name (`[a-z0-9-]+`).
         name: String,
+        /// Its display name, shown instead of the name: at most 80
+        /// characters, no control characters or line breaks.
+        #[arg(long, default_value = "")]
+        display_name: String,
         /// Free text.
         #[arg(long, default_value = "")]
         description: String,
@@ -167,14 +178,25 @@ pub enum CatalogCommand {
         #[arg(long)]
         owner: String,
     },
-    /// Change an existing catalog's description. A running server shows the
-    /// new text within one `poll_interval`.
+    /// Change an existing catalog's display name and/or description. A
+    /// running server shows the new text at once (its change feed).
+    // At least one flag is required; both may be given.
+    #[command(group(
+        clap::ArgGroup::new("details")
+            .required(true)
+            .multiple(true)
+            .args(["display_name", "description"])
+    ))]
     Update {
         /// Its name.
         name: String,
+        /// The new display name (may be empty, which clears it): at most 80
+        /// characters, no control characters or line breaks.
+        #[arg(long)]
+        display_name: Option<String>,
         /// The new free text (may be empty).
         #[arg(long)]
-        description: String,
+        description: Option<String>,
     },
     /// List catalogs.
     List,
@@ -198,9 +220,10 @@ pub enum CatalogCommand {
     },
     /// Create the root index.md, log.md, folder indexes and listings that
     /// catalogs are missing, and publish them at once (each repaired
-    /// catalog's log.md records it). Only adds: existing text is kept, and
-    /// a second run changes nothing. A running server shows the result
-    /// within one `poll_interval`.
+    /// catalog's log.md records it). Existing text is kept, except that an
+    /// old raw (unencoded) concept or folder listing is percent-encoded in
+    /// place, or removed beside a working one; a second run changes
+    /// nothing. A running server shows the result at once (its change feed).
     RepairIndexes {
         /// The catalogs to repair. With `--missing-only`, only those of them
         /// without a root index.md; with none named, every such catalog.
@@ -300,8 +323,19 @@ pub enum UserCommand {
     Create {
         /// Its name (`[a-z0-9-]+`); also its personal team's.
         name: String,
-        /// Free text shown beside the name.
+        /// Its display name, shown instead of the name: at most 80
+        /// characters, no control characters or line breaks.
         #[arg(long, default_value = "")]
+        display_name: String,
+    },
+    /// Change a user's display name (empty clears it). Its personal team
+    /// follows.
+    Update {
+        /// Its name.
+        name: String,
+        /// The new display name: at most 80 characters, no control
+        /// characters or line breaks.
+        #[arg(long)]
         display_name: String,
     },
     /// List users with their credential counts, emails, admin flags and
@@ -392,12 +426,23 @@ pub enum TeamCommand {
     Create {
         /// Its name (`[a-z0-9-]+`, not taken by a user or team).
         name: String,
-        /// Free text shown beside the name.
+        /// Its display name, shown instead of the name: at most 80
+        /// characters, no control characters or line breaks.
         #[arg(long, default_value = "")]
         display_name: String,
         /// The user who owns it first.
         #[arg(long)]
         owner: String,
+    },
+    /// Change a shared team's display name (empty clears it). A personal
+    /// team's follows its user: use `user update`.
+    Update {
+        /// Its name.
+        name: String,
+        /// The new display name: at most 80 characters, no control
+        /// characters or line breaks.
+        #[arg(long)]
+        display_name: String,
     },
     /// List teams with their members and the catalogs they own.
     List,
@@ -459,8 +504,8 @@ pub enum TeamCommand {
 pub enum SettingsCommand {
     /// List every setting with its value and where it comes from.
     List,
-    /// Override a setting (validated; a running server applies it within
-    /// one poll interval).
+    /// Override a setting (validated; a running server applies it at once,
+    /// through its change feed).
     Set {
         /// The setting, by its snake_case name.
         // `SettingKey` spells its clap values as stored (`max_keys_per_user`),
@@ -537,6 +582,19 @@ pub enum MailCommand {
     /// Delete a queued mail.
     Delete {
         /// Its id, from `mail queue`.
+        id: String,
+    },
+}
+
+/// `okf-mcp feedback ...`: the operator's path for feedback the worker gave
+/// up on (`failed`).
+#[derive(Debug, Subcommand)]
+pub enum FeedbackCommand {
+    /// List failed feedback, oldest first (never the messages).
+    List,
+    /// Send a failed row again: it goes back to pending, with no tries.
+    Retry {
+        /// Its id, from `feedback list`.
         id: String,
     },
 }
@@ -665,7 +723,8 @@ pub enum CodeCommand {
 pub enum GrantCommand {
     /// List OAuth grants, revoked ones included.
     List,
-    /// Revoke an OAuth grant: its tokens stop working within `poll_interval`.
+    /// Revoke an OAuth grant: its tokens stop working at once (the change
+    /// feed), or within `credential_ttl` should the message be lost.
     Revoke {
         /// The grant's id (from `oauth grant list`).
         id: String,
@@ -815,7 +874,7 @@ async fn serve(
 #[cfg(test)]
 pub(crate) async fn run_in_tests(cli: Cli, clock: Arc<dyn Clock>) -> anyhow::Result<()> {
     let config = Config::load(cli.config.as_deref())?;
-    dispatch(cli, config, None, clock).await
+    dispatch(cli, config, None, clock, &|name| std::env::var(name).ok()).await
 }
 
 /// Runs one command line.
@@ -848,7 +907,7 @@ pub async fn run(cli: Cli, clock: Arc<dyn Clock>) -> anyhow::Result<()> {
         telemetry.as_ref(),
         env("RUST_LOG").as_deref(),
     )?;
-    dispatch(cli, config, telemetry, clock).await
+    dispatch(cli, config, telemetry, clock, &env).await
 }
 
 /// Runs the parsed command with the configuration loaded and the subscriber
@@ -860,6 +919,8 @@ pub async fn run(cli: Cli, clock: Arc<dyn Clock>) -> anyhow::Result<()> {
 /// * `config` - the loaded configuration.
 /// * `telemetry` - `serve`'s running telemetry (`None` for other commands).
 /// * `clock` - the source of every timestamp written.
+/// * `env` - reads an environment variable (the `[redis]` URL, for the
+///   announcement every command but `serve` makes when it succeeds).
 ///
 /// # Errors
 /// Any failure, with context, for `main` to print.
@@ -875,7 +936,11 @@ async fn dispatch(
     config: Config,
     telemetry: Option<Telemetry>,
     clock: Arc<dyn Clock>,
+    env: &dyn Fn(&str) -> Option<String>,
 ) -> anyhow::Result<()> {
+    // The catalog generations the command committed (an import or a
+    // repair), announced with the rest after it succeeds (issue #659).
+    let mut changed: Vec<CatalogGeneration> = Vec::new();
     // `unwrap_or_else` builds the default only when no subcommand was given.
     match cli
         .command
@@ -894,6 +959,9 @@ async fn dispatch(
                 telemetry.shutdown().await;
             }
             served?;
+            // `serve` is the one command that does not announce: the serving
+            // instances are what listen.
+            return Ok(());
         }
         Command::Migrate => {
             connect(cli.database_url.as_deref(), &config).await?;
@@ -901,7 +969,12 @@ async fn dispatch(
         }
         Command::Catalog(command) => {
             let pool = connect(cli.database_url.as_deref(), &config).await?;
-            run_catalog(&pool, command, clock.as_ref()).await?;
+            let ran = run_catalog(&pool, command, clock.as_ref(), &mut changed).await;
+            if ran.is_err() {
+                // What it committed before failing is announced all the same.
+                announce_from_cli(&config, env, &Metrics::global(), &changed, false).await;
+            }
+            ran?;
         }
         Command::Key(command) => {
             let pool = connect(cli.database_url.as_deref(), &config).await?;
@@ -933,7 +1006,15 @@ async fn dispatch(
             // Only queues and lists: no mailer is built, so no mail secret
             // is needed here.
             let pool = connect(cli.database_url.as_deref(), &config).await?;
-            print!("{}", admin::mail(&pool, command, clock.now()).await?);
+            print!(
+                "{}",
+                admin::mail(&pool, &config.auth, command, clock.now()).await?
+            );
+        }
+        Command::Feedback(command) => {
+            // Only reads and requeues: a running server's worker sends.
+            let pool = connect(cli.database_url.as_deref(), &config).await?;
+            print!("{}", feedback::feedback(&pool, command).await?);
         }
         Command::Unlock(command) => {
             let pool = connect(cli.database_url.as_deref(), &config).await?;
@@ -983,6 +1064,7 @@ async fn dispatch(
                 now: clock.now(),
             };
             let report = import::import(&pool, &catalog, files, &options).await?;
+            changed.extend(report.changed);
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Command::Export { catalog, output } => {
@@ -1009,6 +1091,10 @@ async fn dispatch(
             eprintln!("exported catalog {catalog:?} at generation {generation}");
         }
     }
+    // Every command that got here succeeded. Read-only ones announce too: it
+    // costs each instance one row read, and a list of the mutating commands
+    // would go stale.
+    announce_from_cli(&config, env, &Metrics::global(), &changed, true).await;
     Ok(())
 }
 
@@ -1144,12 +1230,53 @@ fn write_file_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The lines `catalog update` prints: one per field the caller gave.
+///
+/// # Arguments
+/// * `name` - the catalog.
+/// * `previous` - what the fields held before the change.
+/// * `display_name` - the new display name, if given.
+/// * `description` - the new description, if given.
+///
+/// # Returns
+/// `updated catalog <name> <field>: <old> -> <new>\n` per field given. `{:?}`
+/// quotes the text, so an empty value shows as `""`.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "pure formatting")
+)]
+fn describe_details_change(
+    name: &str,
+    previous: &catalogs::Details,
+    display_name: Option<&DisplayName>,
+    description: Option<&str>,
+) -> String {
+    let mut text = String::new();
+    if let Some(new) = display_name {
+        text.push_str(&format!(
+            "updated catalog {name} display name: {:?} -> {:?}\n",
+            previous.display_name,
+            new.as_str()
+        ));
+    }
+    if let Some(new) = description {
+        text.push_str(&format!(
+            "updated catalog {name} description: {:?} -> {new:?}\n",
+            previous.description
+        ));
+    }
+    text
+}
+
 /// Runs `okf-mcp catalog ...`.
 ///
 /// # Arguments
 /// * `pool` - the migrated database.
 /// * `command` - which catalog subcommand.
 /// * `clock` - the source of `created_at`.
+/// * `changed` - gets each catalog generation the command committed
+///   (`repair-indexes`), for the announcement (issue #659), even when the
+///   command then fails.
 ///
 /// # Errors
 /// The store's refusal or database error.
@@ -1158,32 +1285,46 @@ async fn run_catalog(
     pool: &PgPool,
     command: CatalogCommand,
     clock: &dyn Clock,
+    changed: &mut Vec<CatalogGeneration>,
 ) -> anyhow::Result<()> {
     match command {
         CatalogCommand::Create {
             name,
+            display_name,
             description,
             owner,
         } => {
+            let display_name = DisplayName::parse(&display_name)?;
             let new = catalogs::NewCatalog {
                 name: &name,
+                display_name: &display_name,
                 description: &description,
                 owner_team: &owner,
             };
             let catalog = catalogs::create(pool, &new, &AuditActor::cli(), clock.now()).await?;
             println!("created catalog {}", catalog.name);
         }
-        CatalogCommand::Update { name, description } => {
-            let previous = catalogs::update_description(
-                pool,
-                &name,
-                &description,
-                &AuditActor::cli(),
-                clock.now(),
-            )
-            .await?;
-            // `{:?}` quotes the text, so an empty description shows as `""`.
-            println!("updated catalog {name} description: {previous:?} -> {description:?}");
+        CatalogCommand::Update {
+            name,
+            display_name,
+            description,
+        } => {
+            let parsed = display_name
+                .as_deref()
+                .map(DisplayName::parse)
+                .transpose()?;
+            let change = catalogs::DetailsChange {
+                catalog: &name,
+                display_name: parsed.as_ref(),
+                description: description.as_deref(),
+                owner: None,
+            };
+            let previous =
+                catalogs::update_details(pool, &change, &AuditActor::cli(), clock.now()).await?;
+            print!(
+                "{}",
+                describe_details_change(&name, &previous, parsed.as_ref(), description.as_deref())
+            );
         }
         CatalogCommand::List => {
             for catalog in catalogs::list(pool).await? {
@@ -1229,7 +1370,10 @@ async fn run_catalog(
                 audit: &audit,
                 now: clock.now(),
             };
-            print!("{}", repair_catalogs(pool, &targets, &options).await?);
+            print!(
+                "{}",
+                repair_catalogs(pool, &targets, &options, changed).await?
+            );
         }
     }
     Ok(())
@@ -1279,6 +1423,7 @@ async fn repair_targets(
 /// * `pool` - the migrated database.
 /// * `targets` - the catalogs.
 /// * `options` - dry run, actor and time.
+/// * `changed` - gets the generation of each catalog a repair wrote.
 ///
 /// # Returns
 /// The report: per catalog its summary, the files written (or that would
@@ -1292,6 +1437,7 @@ async fn repair_catalogs(
     pool: &PgPool,
     targets: &[String],
     options: &repair::RepairOptions<'_>,
+    changed: &mut Vec<CatalogGeneration>,
 ) -> anyhow::Result<String> {
     let mut out = String::new();
     let mut failures = Vec::new();
@@ -1307,6 +1453,8 @@ async fn repair_catalogs(
                 if !report.written.is_empty() {
                     repaired += 1;
                 }
+                // `Vec::extend` with an `Option` adds its one value, if any.
+                changed.extend(report.changed);
                 out.push_str(&format!("{name}{mode}: {}\n", report.message));
                 for path in &report.written {
                     out.push_str(&format!("  {path}\n"));
@@ -1536,8 +1684,10 @@ fn format_catalog(catalog: &catalogs::Catalog) -> String {
 }
 
 /// One `key list` line, tab-separated: name, actor, id, access, state,
-/// catalogs (`*` for all), `default X`, `maintenance_report B`, `user U`
-/// (`-` for none).
+/// catalogs (`*` for all), `default X`, `maintenance_report B`,
+/// `provisioner yes|no`, `user U` (`-` for none), `kind key|oauth`,
+/// `client NAME` (`-` for a key) and `last_activity T` (a grant's newest
+/// token's issue time; `-` for a key or a grant with no token on record).
 ///
 /// # Arguments
 /// * `key` - the key or grant.
@@ -1567,6 +1717,12 @@ fn format_key_record(key: &keys::KeyRecord) -> String {
         &format!("maintenance_report {}", key.maintenance_report),
         &format!("provisioner {}", if key.provisioner { "yes" } else { "no" }),
         &labelled("user", key.user.as_deref()),
+        &format!("kind {}", key.kind.as_str()),
+        &labelled("client", key.client_name.as_deref()),
+        &labelled(
+            "last_activity",
+            key.last_activity.map(format_timestamp).as_deref(),
+        ),
     ])
 }
 
@@ -1631,11 +1787,7 @@ async fn run_oauth(
         OauthCommand::Grant(GrantCommand::List) => {
             for grant in keys::list(pool).await? {
                 if grant.kind == KeyKind::OAuth {
-                    println!(
-                        "{}\t{}",
-                        format_key_record(&grant),
-                        labelled("client", grant.client_name.as_deref())
-                    );
+                    println!("{}", format_key_record(&grant));
                 }
             }
         }
@@ -1778,7 +1930,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             parsed.command,
-            Some(Command::Catalog(CatalogCommand::Create { ref name, ref description, ref owner }))
+            Some(Command::Catalog(CatalogCommand::Create { ref name, ref description, ref owner, .. }))
                 if name == "pg" && description == "D" && owner == "family"
         ));
         // Every new catalog has an owner, so `--owner` is required.
@@ -1788,11 +1940,21 @@ mod tests {
                 .unwrap();
         assert!(matches!(
             parsed.command,
-            Some(Command::Catalog(CatalogCommand::Update { ref name, ref description }))
-                if name == "pg" && description.is_empty()
+            Some(Command::Catalog(CatalogCommand::Update { ref name, ref description, ref display_name }))
+                if name == "pg" && description.as_deref() == Some("") && display_name.is_none()
         ));
-        // `--description` is what `update` changes, so it is required.
+        // `update` changes at least one field, so it needs a flag; either
+        // flag alone or both together parse.
         assert!(Cli::try_parse_from(["okf-mcp", "catalog", "update", "pg"]).is_err());
+        for flags in [
+            vec!["--display-name", "N"],
+            vec!["--display-name", "N", "--description", "D"],
+        ] {
+            let args = ["okf-mcp", "catalog", "update", "pg"]
+                .into_iter()
+                .chain(flags);
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
         let parsed =
             Cli::try_parse_from(["okf-mcp", "catalog", "delete", "pg", "--force"]).unwrap();
         assert!(matches!(
@@ -1801,11 +1963,95 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn catalog_update_prints_one_line_per_field_given() {
+        let previous = catalogs::Details {
+            display_name: String::new(),
+            description: "Old".to_string(),
+        };
+        let name = DisplayName::parse("Work notes").unwrap();
+
+        let both = describe_details_change("pg", &previous, Some(&name), Some(""));
+        let only_name = describe_details_change("pg", &previous, Some(&name), None);
+
+        assert_eq!(
+            both,
+            "updated catalog pg display name: \"\" -> \"Work notes\"\n\
+             updated catalog pg description: \"Old\" -> \"\"\n"
+        );
+        assert_eq!(
+            only_name,
+            "updated catalog pg display name: \"\" -> \"Work notes\"\n"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn catalog_create_and_update_store_the_display_name() {
+        // Arrange
+        let db = crate::db::test_db().await;
+        let clock = fixed_now();
+        let run_catalog_command = |command: CatalogCommand| {
+            run(
+                cli(Some(db.url.clone()), Command::Catalog(command)),
+                Arc::clone(&clock),
+            )
+        };
+        let stored = || async {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT display_name, description FROM catalogs WHERE name = 'pg'",
+            )
+            .fetch_one(&db.pool)
+            .await
+            .unwrap()
+        };
+
+        // Act and assert: create with a display name (trimmed), then change
+        // each field alone, then refuse one over the limit.
+        run_catalog_command(CatalogCommand::Create {
+            name: "pg".to_string(),
+            display_name: " Work ".to_string(),
+            description: "D".to_string(),
+            owner: crate::db::TEST_TEAM.to_string(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(stored().await, ("Work".to_string(), "D".to_string()));
+        run_catalog_command(CatalogCommand::Update {
+            name: "pg".to_string(),
+            display_name: Some("Work notes".to_string()),
+            description: None,
+        })
+        .await
+        .unwrap();
+        assert_eq!(stored().await, ("Work notes".to_string(), "D".to_string()));
+        run_catalog_command(CatalogCommand::Update {
+            name: "pg".to_string(),
+            display_name: None,
+            description: Some("E".to_string()),
+        })
+        .await
+        .unwrap();
+        assert_eq!(stored().await, ("Work notes".to_string(), "E".to_string()));
+        let refused = run_catalog_command(CatalogCommand::Update {
+            name: "pg".to_string(),
+            display_name: Some("x".repeat(81)),
+            description: None,
+        })
+        .await
+        .expect_err("81 characters are refused");
+        assert!(
+            refused.to_string().contains("display name refused"),
+            "{refused}"
+        );
+        assert_eq!(stored().await, ("Work notes".to_string(), "E".to_string()));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn catalog_create_runs_against_the_database() {
         let db = crate::db::test_db().await;
         let create = CatalogCommand::Create {
             name: "pg".to_string(),
+            display_name: String::new(),
             description: String::new(),
             owner: crate::db::TEST_TEAM.to_string(),
         };
@@ -2063,7 +2309,10 @@ mod tests {
         );
         assert!(
             format_key_record(records.iter().find(|record| record.id == old_id).unwrap())
-                .ends_with("\tmaintenance_report false\tprovisioner no\tuser test-user")
+                .ends_with(
+                "\tmaintenance_report false\tprovisioner no\tuser test-user\tkind key\tclient -\t\
+                 last_activity -"
+            )
         );
         run(
             cli(
@@ -2183,6 +2432,7 @@ mod tests {
             user: None,
             user_id: None,
             self_issued: false,
+            last_activity: None,
         };
         let assigned = keys::KeyRecord {
             user: Some("alice".to_string()),
@@ -2192,9 +2442,20 @@ mod tests {
         assert_eq!(
             format_key_record(&record),
             "claude\tclaude-code-tui\tcredential-id\twrite\tactive\tpg,work\tdefault pg\t\
-             maintenance_report false\tprovisioner no\tuser -"
+             maintenance_report false\tprovisioner no\tuser -\tkind key\tclient -\t\
+             last_activity -"
         );
-        assert!(format_key_record(&assigned).ends_with("\tuser alice"));
+        assert!(format_key_record(&assigned)
+            .ends_with("\tuser alice\tkind key\tclient -\tlast_activity -"));
+        let grant = keys::KeyRecord {
+            kind: keys::KeyKind::OAuth,
+            client_name: Some("Example Client".to_string()),
+            last_activity: Some("2026-11-09T12:00:00Z".parse().expect("a time")),
+            ..record.clone()
+        };
+        assert!(format_key_record(&grant).ends_with(
+            "\tuser -\tkind oauth\tclient Example Client\tlast_activity 2026-11-09T12:00:00Z"
+        ));
     }
 
     #[test]
@@ -2202,6 +2463,7 @@ mod tests {
         let catalog = catalogs::Catalog {
             id: 1,
             name: "pg".to_string(),
+            display_name: String::new(),
             description: "Notes\tand more".to_string(),
             generation: 3,
             created_at: chrono::Utc::now(),
@@ -2572,6 +2834,7 @@ mod tests {
         for name in ["old", "other", "fresh"] {
             let new = catalogs::NewCatalog {
                 name,
+                display_name: &DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             };
@@ -2599,13 +2862,15 @@ mod tests {
         let (targets, none_skipped) = repair_targets(&db.pool, Vec::new(), true).await.unwrap();
         let named = vec!["fresh".into(), "old".into(), "typo".into()];
         let (filtered, skipped) = repair_targets(&db.pool, named, true).await.unwrap();
-        let dry = repair_catalogs(&db.pool, &targets, &options(true))
+        let mut changed = Vec::new();
+        let dry = repair_catalogs(&db.pool, &targets, &options(true), &mut changed)
             .await
             .unwrap();
         let still_missing = repair_targets(&db.pool, Vec::new(), true).await.unwrap().0;
         // A failing catalog in the middle of a batch stops neither neighbour.
         let batch = ["old".to_string(), "nope".to_string(), "other".to_string()];
-        let mixed = repair_catalogs(&db.pool, &batch, &options(false))
+        let dry_changed = std::mem::take(&mut changed);
+        let mixed = repair_catalogs(&db.pool, &batch, &options(false), &mut changed)
             .await
             .unwrap_err()
             .to_string();
@@ -2630,6 +2895,19 @@ mod tests {
             "{mixed}"
         );
         assert!(after.is_empty(), "{after:?}");
+        assert!(
+            dry_changed.is_empty(),
+            "a dry run commits nothing to announce"
+        );
+        let ids: Vec<i64> = changed.iter().map(|change| change.catalog_id).collect();
+        let expected = vec![
+            catalogs::find(&db.pool, "old").await.unwrap().id,
+            catalogs::find(&db.pool, "other").await.unwrap().id,
+        ];
+        assert_eq!(
+            ids, expected,
+            "both repairs are announced, the failure is not"
+        );
     }
 
     #[test]
@@ -2676,6 +2954,7 @@ mod tests {
         let clock = fixed_now();
         let create = CatalogCommand::Create {
             name: "pg".to_string(),
+            display_name: String::new(),
             description: String::new(),
             owner: crate::db::TEST_TEAM.to_string(),
         };
@@ -2715,6 +2994,7 @@ mod tests {
         let clock = fixed_now();
         let create = CatalogCommand::Create {
             name: "pg".to_string(),
+            display_name: String::new(),
             description: String::new(),
             owner: crate::db::TEST_TEAM.to_string(),
         };
@@ -2802,6 +3082,7 @@ mod tests {
         let clock = fixed_now();
         let create = CatalogCommand::Create {
             name: "pg".to_string(),
+            display_name: String::new(),
             description: String::new(),
             owner: crate::db::TEST_TEAM.to_string(),
         };
@@ -2938,5 +3219,242 @@ mod tests {
             plain_without_access.is_err(),
             "--access is still required without --provisioner"
         );
+    }
+
+    /// Runs `key create k` (no `[redis]`, so nothing is announced).
+    async fn created_key_config(db: &crate::db::pg_support::TestDb, clock: &Arc<dyn Clock>) {
+        let create = KeyCommand::Create(KeyCreateArgs {
+            name: "k".to_string(),
+            access: Some(Access::Read),
+            provisioner: false,
+            maintenance_report: false,
+            catalogs: Vec::new(),
+            all: true,
+            default: None,
+            actor: None,
+            user: crate::db::TEST_USER.to_string(),
+        });
+        run(
+            cli(Some(db.url.clone()), Command::Key(create)),
+            Arc::clone(clock),
+        )
+        .await
+        .unwrap();
+    }
+
+    fn revoke_cli(db: &crate::db::pg_support::TestDb) -> Cli {
+        cli(
+            Some(db.url.clone()),
+            Command::Key(KeyCommand::Revoke {
+                id: "k".to_string(),
+                actor: None,
+            }),
+        )
+    }
+
+    /// Runs `key revoke` with `[redis]` on `server` and checks one M16
+    /// bridge message reaches a subscriber.
+    async fn revoke_announces(server: crate::db::redis_support::TestRedis) {
+        use crate::shared::{announce::CHANNEL, SubscriptionEvent};
+        const WAIT: Duration = Duration::from_secs(10);
+
+        let db = crate::db::test_db().await;
+        let clock = fixed_now();
+        created_key_config(&db, &clock).await;
+        let redis = crate::shared::testing::connect(&server).await;
+        let mut subscription = redis.subscribe(&redis.channel(CHANNEL)).await.unwrap();
+        let first = tokio::time::timeout(WAIT, subscription.next())
+            .await
+            .expect("the subscription confirms");
+        assert!(matches!(first, Some(SubscriptionEvent::Subscribed)));
+        let mut config = Config::default();
+        config.redis = Some(crate::shared::testing::config(&server));
+
+        dispatch(revoke_cli(&db), config, None, clock, &server.env())
+            .await
+            .unwrap();
+
+        let message = tokio::time::timeout(WAIT, subscription.next())
+            .await
+            .expect("an announcement arrives");
+        assert!(
+            matches!(message, Some(SubscriptionEvent::Message(ref payload)) if payload == crate::shared::announce::BRIDGE_PAYLOAD.as_bytes())
+        );
+        // One message only: the next wait finds nothing.
+        let more = tokio::time::timeout(Duration::from_millis(300), subscription.next()).await;
+        assert!(more.is_err(), "a second announcement arrived");
+    }
+
+    /// `okf-mcp import` on a database two replicas serve announces the
+    /// catalog's new generation: B refreshes its snapshot without a poll
+    /// (issue #659). B's subscriber handles events in order, so once B has
+    /// the first import (through its announcement or the catch-up on
+    /// subscribing), the second can reach it only through its announcement.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_import_on_the_command_line_is_announced_to_the_serving_replicas() {
+        const WAIT: Duration = Duration::from_secs(10);
+        let (first, b, server) = tokio::time::timeout(
+            Duration::from_secs(120),
+            crate::mcp::testing::replica_pair(
+                &[("pg", &[("index.md", "# PG\n")])],
+                Config::default(),
+            ),
+        )
+        .await
+        .expect("starting two replicas within 120 s");
+        let (shutdown, listener) = crate::shared::testing::listening_for_catalogs(&b).await;
+        let clock = fixed_now();
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.redis = Some(crate::shared::testing::config(&server));
+        // Whether `app` serves `pg` with an `index.md` ending in `text`.
+        async fn holds(app: &App, text: &str) -> bool {
+            app.catalog("pg")
+                .await
+                .unwrap()
+                .and_then(|state| state.current().workspace().stored("index.md"))
+                .is_some_and(|file| file.content.ends_with(text.as_bytes()))
+        }
+        let mut reached = Vec::new();
+
+        for text in ["First.\n", "Imported.\n"] {
+            let tarball = dir.path().join("pg.tar.gz");
+            let content = format!("# PG\n\n{text}");
+            let index = archive::ExportFile {
+                path: "index.md",
+                content: content.as_bytes(),
+                executable: false,
+                modified: clock.now(),
+            };
+            archive::write_tarball(File::create(&tarball).unwrap(), &[index]).unwrap();
+            let import = Command::Import {
+                catalog: "pg".to_string(),
+                source: tarball,
+                replace: true,
+                only_machinery: false,
+                expect_generation: None,
+                actor: "test".to_string(),
+            };
+            dispatch(
+                cli(Some(first.db_url().to_string()), import),
+                config.clone(),
+                None,
+                Arc::clone(&clock),
+                &server.env(),
+            )
+            .await
+            .unwrap();
+            let refreshed = tokio::time::timeout(WAIT, async {
+                while !holds(&b, text).await {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await;
+            reached.push(refreshed.is_ok());
+        }
+        shutdown.cancel();
+        tokio::time::timeout(WAIT, listener)
+            .await
+            .expect("the subscriber stops")
+            .expect("the subscriber's task");
+
+        assert_eq!(reached, [true, true], "B refreshed after each import");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn key_revoke_announces_to_a_standalone_redis() {
+        revoke_announces(crate::db::redis_support::TestRedis::start().await).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn key_revoke_announces_to_a_cluster() {
+        revoke_announces(crate::db::redis_support::TestRedis::start_cluster().await).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_read_only_command_announces_too() {
+        use crate::shared::{announce::CHANNEL, SubscriptionEvent};
+        const WAIT: Duration = Duration::from_secs(10);
+
+        let server = crate::db::redis_support::TestRedis::start().await;
+        let db = crate::db::test_db().await;
+        let redis = crate::shared::testing::connect(&server).await;
+        let mut subscription = redis.subscribe(&redis.channel(CHANNEL)).await.unwrap();
+        tokio::time::timeout(WAIT, subscription.next())
+            .await
+            .expect("the subscription confirms");
+        let mut config = Config::default();
+        config.redis = Some(crate::shared::testing::config(&server));
+        let list = cli(Some(db.url.clone()), Command::Key(KeyCommand::List));
+
+        dispatch(list, config, None, fixed_now(), &server.env())
+            .await
+            .unwrap();
+
+        let message = tokio::time::timeout(WAIT, subscription.next())
+            .await
+            .expect("an announcement arrives");
+        assert!(
+            matches!(message, Some(SubscriptionEvent::Message(ref payload)) if payload == crate::shared::announce::BRIDGE_PAYLOAD.as_bytes())
+        );
+    }
+
+    // A current-thread runtime, so the thread-local subscriber sees the
+    // warning `dispatch` logs.
+    #[tokio::test]
+    async fn an_unset_variable_warns_and_the_command_still_succeeds() {
+        let db = crate::db::test_db().await;
+        let clock = fixed_now();
+        created_key_config(&db, &clock).await;
+        let mut config = Config::default();
+        config.redis = Some(crate::config::RedisConfig {
+            url_env: "OKF_TEST_UNSET_REDIS_URL".to_string(),
+            key_prefix: "okftest:".to_string(),
+            mode: crate::config::RedisMode::Standalone,
+        });
+        let capture = crate::telemetry::subscriber::capture::Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_ansi(false)
+            .finish();
+        let guard = crate::test_tracing::set_default(subscriber);
+
+        let result = dispatch(revoke_cli(&db), config, None, clock, &|_| None).await;
+
+        drop(guard);
+        result.unwrap();
+        let logged = capture.text();
+        assert!(logged.contains("WARN"), "{logged}");
+        assert!(logged.contains("announcement skipped"), "{logged}");
+        assert!(!logged.contains("redis://"), "{logged}");
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_redis_warns_and_the_command_still_succeeds() {
+        let db = crate::db::test_db().await;
+        let clock = fixed_now();
+        created_key_config(&db, &clock).await;
+        let mut config = Config::default();
+        config.redis = Some(crate::config::RedisConfig {
+            url_env: "OKF_TEST_DEAD_REDIS_URL".to_string(),
+            key_prefix: "okftest:".to_string(),
+            mode: crate::config::RedisMode::Standalone,
+        });
+        // A closed port on the loopback: refused at once.
+        let env = |_: &str| Some("redis://user:sekrit-7f3a@127.0.0.1:1/0".to_string());
+        let capture = crate::telemetry::subscriber::capture::Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_ansi(false)
+            .finish();
+        let guard = crate::test_tracing::set_default(subscriber);
+
+        let result = dispatch(revoke_cli(&db), config, None, clock, &env).await;
+
+        drop(guard);
+        result.unwrap();
+        let logged = capture.text();
+        assert!(logged.contains("announcement skipped"), "{logged}");
+        assert!(!logged.contains("sekrit-7f3a"), "{logged}");
     }
 }

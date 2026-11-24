@@ -3,30 +3,32 @@
 import { h, pill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
+import { catalogLabel } from '../core/labels.js';
 import { openDrawer, closeDrawer } from '../core/drawer.js';
 import { ago, when } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
+import { latest } from '../core/latest.js';
 import { maintenancePath, refreshFindingsBadge } from './findings.js';
 import { browseHash } from '../core/router.js';
 
 const STATE_KIND = { running: 'info', completed: 'ok', failed: 'error', cancelled: 'muted' };
 const OUTCOME_KIND = { completed: 'ok', inconclusive: 'warn', failed: 'error', superseded: 'muted' };
-const PAGE_SIZE = 200;
+let pageSize = 20;
+
+// A test hook: a journey shrinks the page so a few runs make several pages.
+export function setRunsPageSize(size) {
+    pageSize = size;
+}
+
 const statePill = state => pill(state, STATE_KIND[state] ?? 'muted');
 
-// Every run, newest first. The API pages oldest first, so read every page:
-// runs are few (one per scheduled pass).
-async function allRuns(catalog) {
-    const runs = [];
-    let after = null;
-    do {
-        const query = new URLSearchParams({ limit: String(PAGE_SIZE) });
-        if (after) query.set('after', after);
-        const page = await api.get(`${maintenancePath(catalog, '/runs')}?${query}`);
-        runs.push(...page.items);
-        after = page.next_after;
-    } while (after);
-    return runs.reverse();
+// One page of runs, newest first (`order=desc`); `after` continues past the
+// last run of the previous page. The default order, oldest first, is what
+// MCP clients get, so the console asks for the newest explicitly.
+async function runsPage(catalog, after) {
+    const query = new URLSearchParams({ limit: String(pageSize), order: 'desc' });
+    if (after) query.set('after', after);
+    return api.get(`${maintenancePath(catalog, '/runs')}?${query}`);
 }
 
 function columns() {
@@ -83,13 +85,43 @@ export async function render(main, rest) {
     refreshFindingsBadge();
     main.append(h('header', { class: 'page-head' },
         h('div', {}, h('h1', {}, 'Runs'),
-            h('p', { class: 'muted' }, catalog ? `Maintenance runs in ${catalog}, newest first.` : 'No catalog selected.'))));
+            h('p', { class: 'muted' }, catalog ? `Maintenance runs in ${catalogLabel(catalog)}, newest first.` : 'No catalog selected.'))));
     if (!catalog) return;
     const table = listTable(columns(), [], { onRow: run => openRun(main, catalog, run.id), empty: 'No maintenance runs yet.' });
     table.id = 'runs-table';
-    main.append(table);
-    try {
-        table.redraw(await allRuns(catalog));
-    } catch { /* the API showed a toast */ }
+    // The rows drawn and the cursor that continues them are one committed
+    // state: a page replaces both or appends to both, and a failed read
+    // changes neither, so "Load older" survives it for a retry.
+    let rows = [];
+    let next = null;
+    let loading = false;
+    // `loading` already keeps reads from overlapping (a newer read never
+    // starts while one is pending, and Load older appends to the rows drawn,
+    // so a later page must not cancel an earlier one), so no read is ever
+    // outdated by another. `latest` is used for its other half: a page that
+    // answers after the user left draws and commits nothing.
+    const reads = latest(main);
+    const older = h('button', { type: 'button', id: 'runs-older', class: 'secondary', hidden: true, onclick: () => load() }, 'Load older');
+    main.append(table, older);
+    // Loads the first page, or the one after the committed cursor. A pending
+    // read only hides the button, so one click cannot start two reads.
+    async function load() {
+        if (loading) return;
+        const first = rows.length === 0 && next === null;
+        if (!first && !next) return;
+        loading = true;
+        older.hidden = true;
+        const current = reads();
+        try {
+            const page = await runsPage(catalog, next);
+            if (!current()) return;
+            rows = rows.concat(page.items);
+            next = page.next_after ?? null;
+            table.redraw(rows);
+        } catch { /* the API showed a toast */ }
+        loading = false;
+        older.hidden = !next;
+    }
+    await load();
     if (rest[0]) await openRun(main, catalog, rest[0]);
 }

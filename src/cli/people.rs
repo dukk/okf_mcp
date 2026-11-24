@@ -19,6 +19,7 @@ use sqlx::PgPool;
 use super::{comma_list, labelled, tab_row, TeamCommand, UserCommand};
 use crate::clock::format_timestamp;
 use crate::config::Config;
+use crate::labels::DisplayName;
 use crate::mail::invite;
 use crate::store::audit::AuditActor;
 use crate::store::catalogs;
@@ -60,6 +61,7 @@ pub(super) async fn user(
 ) -> anyhow::Result<String> {
     Ok(match command {
         UserCommand::Create { name, display_name } => {
+            let display_name = DisplayName::parse(&display_name)?;
             let new = NewUser {
                 name: &name,
                 display_name: &display_name,
@@ -69,6 +71,15 @@ pub(super) async fn user(
             format!(
                 "created user {} (personal team {})\n",
                 created.name, created.name
+            )
+        }
+        UserCommand::Update { name, display_name } => {
+            let display_name = DisplayName::parse(&display_name)?;
+            let previous = users::find(pool, &name).await?.display_name;
+            users::set_display_name(pool, &name, &display_name, &AuditActor::cli(), now).await?;
+            format!(
+                "updated user {name} display name: {previous:?} -> {:?}\n",
+                display_name.as_str()
             )
         }
         // `--email`: zero or one user; `Option::iter` yields it or nothing,
@@ -85,7 +96,14 @@ pub(super) async fn user(
         UserCommand::Delete { name } => {
             // `allow_last_admin: true`: operator access may delete the last
             // admin user, as it may clear the last admin flag.
-            let deleted = users::delete(pool, &name, true, &AuditActor::cli(), now).await?;
+            let deleted = users::delete(
+                pool,
+                &name,
+                users::DeleteOptions::OPERATOR,
+                &AuditActor::cli(),
+                now,
+            )
+            .await?;
             format!(
                 "deleted user {name} ({} key(s) and grant(s), {} sign-in code(s), \
                  {} open changeset(s) discarded)\n",
@@ -193,6 +211,7 @@ pub(super) async fn team(
             display_name,
             owner,
         } => {
+            let display_name = DisplayName::parse(&display_name)?;
             let new = NewTeam {
                 name: &name,
                 display_name: &display_name,
@@ -200,6 +219,20 @@ pub(super) async fn team(
             };
             let created = teams::create(pool, &new, &AuditActor::cli(), now).await?;
             format!("created team {} (owner {owner})\n", created.name)
+        }
+        TeamCommand::Update { name, display_name } => {
+            let display_name = DisplayName::parse(&display_name)?;
+            let previous = teams::find(pool, &name).await?.display_name;
+            let change = teams::TeamDisplayNameChange {
+                team: &name,
+                display_name: &display_name,
+                owner: None,
+            };
+            teams::set_display_name(pool, &change, &AuditActor::cli(), now).await?;
+            format!(
+                "updated team {name} display name: {previous:?} -> {:?}\n",
+                display_name.as_str()
+            )
         }
         TeamCommand::List => lines(teams::list(pool).await?.iter().map(format_team)),
         // `|` matches either variant and binds the same names from both,
@@ -606,7 +639,9 @@ mod tests {
             Command::Settings(command) => {
                 crate::cli::admin::settings(pool, &config.auth, command, now).await
             }
-            Command::Mail(command) => crate::cli::admin::mail(pool, command, now).await,
+            Command::Mail(command) => {
+                crate::cli::admin::mail(pool, &config.auth, command, now).await
+            }
             Command::Catalog(CatalogCommand::SetOwner { name, team }) => {
                 set_owner(pool, &name, &team, now).await
             }
@@ -661,6 +696,107 @@ mod tests {
              0 open changeset(s) discarded)\n"
         );
         assert!(!after.contains("alice"), "{after}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn user_and_team_update_change_the_display_name() {
+        // Arrange
+        let db = test_db().await;
+        okf(&db, &["user", "create", "alice"]).await.unwrap();
+        okf(&db, &["team", "create", "acme", "--owner", "alice"])
+            .await
+            .unwrap();
+
+        // Act
+        let user = okf(
+            &db,
+            &["user", "update", "alice", "--display-name", "Alice Example"],
+        )
+        .await;
+        let team = okf(&db, &["team", "update", "acme", "--display-name", "Acme"]).await;
+        let personal = okf(&db, &["team", "update", "alice", "--display-name", "Nope"]).await;
+        let unknown = okf(&db, &["user", "update", "nobody", "--display-name", "X"]).await;
+        let long = okf(
+            &db,
+            &["user", "update", "alice", "--display-name", &"x".repeat(81)],
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            user.unwrap(),
+            "updated user alice display name: \"\" -> \"Alice Example\"\n"
+        );
+        assert_eq!(
+            team.unwrap(),
+            "updated team acme display name: \"\" -> \"Acme\"\n"
+        );
+        let refusal = personal
+            .expect_err("a personal team follows its user")
+            .to_string();
+        assert!(
+            refusal.contains("a personal team's label follows its user"),
+            "{refusal}"
+        );
+        assert!(unknown.is_err());
+        assert!(long
+            .expect_err("81 characters are refused")
+            .to_string()
+            .contains("display name refused"));
+        assert_eq!(
+            teams::find(&db.pool, "acme").await.unwrap().display_name,
+            "Acme"
+        );
+        // The refused personal-team update wrote nothing.
+        assert_eq!(
+            teams::find(&db.pool, "alice").await.unwrap().display_name,
+            ""
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn user_and_team_create_parse_the_display_name() {
+        // Arrange
+        let db = test_db().await;
+        let too_long = "x".repeat(81);
+
+        // Act: a name the rule trims, then one too long for each command.
+        okf(
+            &db,
+            &["user", "create", "alice", "--display-name", " Alice "],
+        )
+        .await
+        .unwrap();
+        let user = okf(&db, &["user", "create", "bob", "--display-name", &too_long]).await;
+        let team = okf(
+            &db,
+            &[
+                "team",
+                "create",
+                "family",
+                "--display-name",
+                &too_long,
+                "--owner",
+                "alice",
+            ],
+        )
+        .await;
+
+        // Assert: stored trimmed; both refusals name the rule and wrote nothing.
+        assert_eq!(
+            users::find(&db.pool, "alice").await.unwrap().display_name,
+            "Alice"
+        );
+        for refused in [user, team] {
+            let error = refused.expect_err("81 characters are refused");
+            assert!(
+                error.to_string().contains("display name refused"),
+                "{error}"
+            );
+        }
+        let listed = okf(&db, &["user", "list"]).await.unwrap();
+        assert!(!listed.contains("bob"), "{listed}");
+        assert!(teams::find(&db.pool, "family").await.is_err());
     }
 
     #[tokio::test(flavor = "multi_thread")]

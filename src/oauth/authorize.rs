@@ -3,15 +3,21 @@
 //! The GET validates the request in a fixed order. Until the client and its
 //! exact redirect URI are known, a failure is an error page, never a
 //! redirect (no open redirect). After that, failures go back to the client
-//! as `error=...`. A valid request becomes a pending authorization in
-//! memory, and the POSTs walk it through the sign-in code and consent.
+//! as `error=...`. A valid request becomes a pending authorization (in
+//! memory, or in Redis with `[redis]`, so the POSTs may reach any replica),
+//! and the POSTs walk it through the sign-in code and consent. A Redis
+//! failure fails closed: the busy page (503), never a fallback to memory.
 //! Approve and Deny answer with a page that forwards the browser to the
 //! client rather than a 303 (issue #435).
 //!
 //! Who approves (spec "OAuth consent as the user"): with `signin=code`, the
 //! sign-in code path (step 1 and 2), whose grants stay admin-issued. Else a
 //! signed-in person (the console session cookie) chooses catalogs within
-//! their ceiling, and the approval is a self-issued grant. Without a
+//! their ceiling, and the approval is a self-issued grant. The page offers
+//! one page of the ceiling at a time (`CONSENT_PAGE` catalogs), found by
+//! a name prefix (Find) or continued (Next catalogs), and carries the
+//! ticked catalogs over (at most `MAX_CARRIED`): it never reads or holds
+//! the whole ceiling (issue #736). Without a
 //! session, the GET sends the browser to `/signin` first, before anything
 //! is stored.
 
@@ -33,6 +39,8 @@ use crate::error::OkfError;
 use crate::http::console_session::{cookie, signed_in_user, COOKIE};
 use crate::http::signin::cross_site;
 use crate::keys;
+use crate::labels::directory::{Labels, Wanted};
+use crate::labels::user_label;
 use crate::maintenance::types::new_id;
 use crate::oauth::clients;
 use crate::oauth::consent::{self, GrantSummary, PageView, UserPage};
@@ -77,6 +85,19 @@ const NOTHING_CHOSEN: &str = "Choose at least one catalog, or Deny.";
 const DEFAULT_NOT_CHOSEN: &str = "The default catalog must be one you allow.";
 /// A form posted from another site (403).
 const CROSS_SITE: &str = "This form can only be sent from this site. Start again from your client.";
+/// The message for a Find or Next catalogs with too many catalogs ticked.
+const TOO_MANY_CARRIED: &str =
+    "You can carry at most 50 ticked catalogs to another search. Approve these first, or untick some.";
+/// How many catalogs of the ceiling a signed-in consent page shows at once
+/// (issue #736).
+pub(crate) const CONSENT_PAGE: u32 = 50;
+/// The most ticked catalogs a Find or Next catalogs carries over (named in
+/// [`TOO_MANY_CARRIED`]), so a pending authorization holds at most
+/// `CONSENT_PAGE + MAX_CARRIED` offered catalogs.
+pub(crate) const MAX_CARRIED: usize = 50;
+/// The busy page (503): a Redis failure or a database deadlock, or no room
+/// for an authorization code.
+const BUSY: &str = "The server is busy. Start again from your client in a minute.";
 
 /// The routes: `GET` and `POST /oauth/authorize`.
 ///
@@ -125,6 +146,8 @@ struct ConsentForm {
     summary: Option<String>,
     /// The signed-in page's default catalog select (empty: none).
     default_catalog: Option<String>,
+    /// The signed-in page's Find box: the name prefix to find catalogs by.
+    find: Option<String>,
     /// Every other field: the signed-in page's `grant.<catalog>` checkboxes
     /// and `level.<catalog>` selects. `flatten` collects the fields not
     /// named above into this map, like `**kwargs`.
@@ -149,7 +172,7 @@ impl std::fmt::Debug for ConsentForm {
     }
 }
 
-/// What an Approve finds, decided under the pending map's lock.
+/// What an Approve finds, decided in the consent POST's one atomic update.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Approval {
     /// No code has been accepted yet: back to step 1.
@@ -191,7 +214,8 @@ fn approval(accepted: Option<&AcceptedCode>, posted: Option<&str>) -> Approval {
 
 /// Spends a signed-in page's consent nonce: when `posted` is the current
 /// nonce, it is replaced by `fresh`, so the same page (or a replay of its
-/// form) cannot approve again. Runs under the pending map's lock.
+/// form) cannot approve again. Runs inside the consent POST's one atomic
+/// update ([`consent_change`]).
 ///
 /// # Arguments
 /// * `consent` - the pending request's consent, if it is on the user path.
@@ -328,19 +352,92 @@ fn view(pending_id: &str, pending: &PendingAuthorization) -> PageView {
     }
 }
 
+/// The labels a sign-in code's summary shows: its catalogs, its default
+/// and its user.
+///
+/// # Arguments
+/// * `app` - the application, for its label lookup.
+/// * `record` - the code.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
+async fn summary_labels(app: &App, record: &SignInCodeRecord) -> Result<Labels, OkfError> {
+    let mut wanted = Wanted::default();
+    for slug in record.catalogs.iter().chain(record.default_catalog.iter()) {
+        wanted.catalog(slug);
+    }
+    if let Some(user) = &record.user {
+        wanted.user(user);
+    }
+    app.labels().labels_with_owners(&wanted).await
+}
+
+/// The labels a consent page shows: the catalogs it offers.
+///
+/// # Arguments
+/// * `app` - the application, for its label lookup.
+/// * `pending` - the request; its `consent` is set (an unset one offers
+///   nothing).
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "trace", skip_all)]
+async fn consent_labels(app: &App, pending: &PendingAuthorization) -> Result<Labels, OkfError> {
+    let mut wanted = Wanted::default();
+    for slug in pending
+        .consent
+        .iter()
+        .flat_map(|consent| consent.offered.keys())
+    {
+        wanted.catalog(slug);
+    }
+    app.labels().labels_with_owners(&wanted).await
+}
+
 /// What a sign-in code grants, as step 2 states it.
 #[tracing::instrument(level = "trace", skip_all)]
-fn summary(record: &SignInCodeRecord) -> GrantSummary {
+fn summary(record: &SignInCodeRecord, labels: &Labels) -> GrantSummary {
+    // A slug the directory does not hold yet (created since the last
+    // load) is shown as itself, as `catalog_choices` does for catalogs.
+    let user_shown = |slug: &String| labels.user(slug).unwrap_or(slug).to_string();
+    // The texts are built once, over the listed catalogs and the default,
+    // so the default is told apart from a same-label catalog exactly as
+    // the list does. An all-catalog grant lists none, so the default is
+    // shown by its own label alone. A default outside the list (not expected) joins the
+    // set, so it is still told apart.
+    let listed: &[String] = if record.all_catalogs {
+        &[]
+    } else {
+        &record.catalogs
+    };
+    let default = record.default_catalog.as_deref();
+    let choices = labels.catalog_choices(
+        listed
+            .iter()
+            .map(String::as_str)
+            .chain(default.filter(|slug| !listed.iter().any(|listed| listed == slug))),
+    );
+    let shown = |slug: &str| {
+        choices
+            .iter()
+            .find(|(candidate, _)| candidate == slug)
+            .map_or_else(|| slug.to_string(), |(_, text)| text.clone())
+    };
     GrantSummary {
         access: record.access.as_str(),
         catalogs: if record.all_catalogs {
             "every catalog".to_string()
         } else {
-            record.catalogs.join(", ")
+            listed
+                .iter()
+                .map(|slug| shown(slug))
+                .collect::<Vec<_>>()
+                .join(", ")
         },
         actor: record.actor.clone(),
-        user: record.user.clone(),
-        default_catalog: record.default_catalog.clone(),
+        user: record.user.as_ref().map(user_shown),
+        default_catalog: default.map(shown),
     }
 }
 
@@ -365,7 +462,8 @@ fn canonical_query(query: &AuthorizeQuery) -> String {
         ("code_challenge_method", &query.code_challenge_method),
         ("resource", &query.resource),
     ];
-    // `filter_map` drops the absent ones (only `state` can be, by now).
+    // `filter_map` drops the absent ones (only `state` and `resource` can
+    // be, by now).
     form_urlencoded::Serializer::new(String::new())
         .extend_pairs(
             fields
@@ -440,18 +538,44 @@ enum Choice {
 ///
 /// # Arguments
 /// * `choices` - the form's `grant.<catalog>` and `level.<catalog>` fields.
-/// * `offered` - the ceiling the page showed.
+/// * `offered` - what the page offered.
 ///
 /// # Returns
 /// Each ticked catalog's level.
 ///
 /// # Errors
-/// [`Choice::Empty`] when nothing is ticked; [`Choice::Tampered`] for a
-/// catalog not offered, a level above the offer or unknown, a ticked
-/// catalog without a level, a checkbox value other than `on`, or any
-/// other field.
+/// [`Choice::Empty`] when nothing is ticked; [`Choice::Tampered`] as for
+/// [`ticked_levels`].
 #[tracing::instrument(level = "trace", skip_all)]
 fn chosen_levels(
+    choices: &BTreeMap<String, String>,
+    offered: &Ceiling,
+) -> Result<BTreeMap<String, Access>, Choice> {
+    let chosen = ticked_levels(choices, offered)?;
+    if chosen.is_empty() {
+        Err(Choice::Empty)
+    } else {
+        Ok(chosen)
+    }
+}
+
+/// The catalogs ticked on a signed-in consent page and their levels,
+/// checked against what the page offered; none ticked is an empty map (a
+/// Find or Next catalogs carries what is ticked, which may be nothing).
+///
+/// # Arguments
+/// * `choices` - the form's `grant.<catalog>` and `level.<catalog>` fields.
+/// * `offered` - what the page offered.
+///
+/// # Returns
+/// Each ticked catalog's level.
+///
+/// # Errors
+/// [`Choice::Tampered`] for a catalog not offered, a level above the offer
+/// or unknown, a ticked catalog without a level, a checkbox value other
+/// than `on`, or any other field.
+#[tracing::instrument(level = "trace", skip_all)]
+fn ticked_levels(
     choices: &BTreeMap<String, String>,
     offered: &Ceiling,
 ) -> Result<BTreeMap<String, Access>, Choice> {
@@ -478,18 +602,16 @@ fn chosen_levels(
             return Err(Choice::Tampered);
         }
     }
-    if chosen.is_empty() {
-        Err(Choice::Empty)
-    } else {
-        Ok(chosen)
-    }
+    Ok(chosen)
 }
 
 /// Renders the signed-in consent page for a pending authorization.
 ///
 /// # Arguments
 /// * `pending_id`, `pending` - the request; its `consent` is set.
-/// * `user` - the signed-in user's name.
+/// * `user` - the signed-in user, and the labels of what it is offered.
+/// * `chosen` - the catalogs carried over ticked (a Find or Next
+///   catalogs), if any.
 /// * `error` - a message, if the page is shown again.
 /// * `brand` - the product name and support contact.
 ///
@@ -499,18 +621,29 @@ fn chosen_levels(
 fn user_consent_page(
     pending_id: &str,
     pending: &PendingAuthorization,
-    user: &str,
+    (user, labels): (&UserAuth, &Labels),
+    chosen: Option<&BTreeMap<String, Access>>,
     error: Option<&str>,
     brand: &Brand,
 ) -> Response {
     let Some(consent) = pending.consent.as_ref() else {
         return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, brand);
     };
+    // The person sees labels; the slugs stay in the form's ids and values.
+    let user_label = user_label(&user.display_name, user.email.as_deref());
+    let catalog_labels = labels.catalog_choices(consent.offered.keys().map(String::as_str));
     consent::user_page(
         &view(pending_id, pending),
         &UserPage {
-            user,
+            user_label: &user_label,
+            catalog_labels: &catalog_labels,
             ceiling: &consent.offered,
+            browse: consent::Browse {
+                prefix: &consent.prefix,
+                more: consent.next.is_some(),
+                whole: consent.whole,
+                chosen,
+            },
             nonce: &consent.nonce,
             code_href: &code_href(&pending.query),
         },
@@ -519,18 +652,22 @@ fn user_consent_page(
     )
 }
 
-/// The consent a signed-in person's page starts with: their ceiling now
-/// and a fresh nonce.
+/// The consent a signed-in person's page starts with: the first page of
+/// their ceiling now (never the whole ceiling, issue #736) and a fresh
+/// nonce.
 ///
 /// # Errors
-/// [`OkfError::UnknownName`] once the user is gone; [`OkfError::Io`] if
-/// the OS random source fails; [`OkfError::Database`].
+/// [`OkfError::Io`] if the OS random source fails; [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
 async fn new_consent(app: &App, user: &UserAuth) -> Result<UserConsent, OkfError> {
+    let page = ceiling::page(app.pool(), &user.id, "", None, CONSENT_PAGE).await?;
     Ok(UserConsent {
         user_id: user.id.clone(),
         nonce: keys::generate_with("")?,
-        offered: ceiling::ceiling_of(app.pool(), &user.name).await?,
+        whole: page.next.is_none(),
+        offered: page.entries,
+        prefix: String::new(),
+        next: page.next,
     })
 }
 
@@ -652,7 +789,15 @@ async fn authorize(
     if query.code_challenge_method.as_deref() != Some("S256") {
         return back("invalid_request", "code_challenge_method must be S256");
     }
-    if query.resource.as_deref() != Some(oauth.settings.resource.as_str()) {
+    // RFC 8707 makes `resource` optional here, and some clients (Crush)
+    // strip it from the browser URL and send it only at the token endpoint.
+    // This server has one resource, so a missing one means `/mcp`; a named
+    // one must be it. The token endpoint still requires and checks it.
+    if query
+        .resource
+        .as_deref()
+        .is_some_and(|resource| resource != oauth.settings.resource)
+    {
         return back(
             "invalid_target",
             "resource must name this server's MCP endpoint",
@@ -699,19 +844,104 @@ async fn authorize(
         query: query_string,
     };
     let page = match &user {
-        Some(user) => user_consent_page(&pending_id, &pending, &user.name, None, &brand),
+        Some(user) => match consent_labels(&app, &pending).await {
+            Ok(labels) => {
+                user_consent_page(&pending_id, &pending, (user, &labels), None, None, &brand)
+            }
+            Err(error) => return server_error(&error, &brand),
+        },
         None => consent::code_page(&view(&pending_id, &pending), None, &brand),
     };
-    // `insert` is `false` when the bounded map is full: an unauthenticated
-    // GET must not grow memory without limit.
-    if !oauth.pending.insert(pending_id, pending, Instant::now()) {
-        return consent::error_page(
+    // `insert` is `false` when the bounded memory map is full: an
+    // unauthenticated GET must not grow memory without limit. A Redis
+    // failure is the busy page (spec Decision 16).
+    match oauth
+        .pending
+        .insert(&pending_id, pending, Instant::now())
+        .await
+    {
+        Ok(true) => page,
+        Ok(false) => consent::error_page(
             StatusCode::SERVICE_UNAVAILABLE,
             "Too many sign-ins are in progress. Try again in a few minutes.",
             &brand,
-        );
+        ),
+        Err(error) => server_error(&error, &brand),
     }
-    page
+}
+
+/// What a consent POST's update reads: a snapshot of the request after the
+/// change, the Approve decision, and whether a signed-in page's nonce was
+/// spent.
+type Decided = (PendingAuthorization, Approval, bool);
+
+/// The change a consent POST makes to its pending authorization, in one
+/// atomic update (a compare-and-set in Redis).
+///
+/// The CSRF token is checked first, and a mismatch changes nothing:
+/// someone who learned the id cannot cancel the request. A request whose
+/// wrong codes are spent is refused too (it is normally gone already). An
+/// Approve's summary token is matched against the code it was rendered for,
+/// so the code id and its token come from one snapshot, and a signed-in
+/// Approve's nonce is spent, so one page approves once on every replica.
+///
+/// # Arguments
+/// * `form` - the posted form.
+/// * `fresh` - the replacement nonce for a signed-in Approve, else `None`.
+///
+/// # Returns
+/// The closure for [`crate::shared::ephemeral::Ephemeral::update`]. It may
+/// run more than once, each time on a fresh copy, so it reads only that copy
+/// and clones `fresh` (`lessons.md`). It answers `None` when the CSRF token
+/// does not match.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "builds a closure and returns it; the update that runs it has the span"
+    )
+)]
+// `impl FnMut(..) + 'f`: an unnamed closure type that may be called several
+// times and borrows `form` for `'f` (Python: returning an inner function).
+fn consent_change<'f>(
+    form: &'f ConsentForm,
+    fresh: Option<String>,
+) -> impl FnMut(&mut PendingAuthorization) -> Option<Decided> + 'f {
+    // `move`: the closure owns `fresh` (and a copy of the `form` reference).
+    move |pending| {
+        let matches: bool = pending.csrf.as_bytes().ct_eq(form.csrf.as_bytes()).into();
+        let live = pending.failed_attempts < MAX_FAILED_ATTEMPTS;
+        (matches && live).then(|| {
+            let decided = approval(pending.accepted.as_ref(), form.summary.as_deref());
+            // Cloned, not taken: in Redis this closure can run again on a
+            // fresh copy (`Ephemeral::update`), and that run must see the
+            // same token, or it would refuse a valid Approve.
+            let claimed = fresh.clone().is_some_and(|fresh| {
+                claim_consent(pending.consent.as_mut(), form.summary.as_deref(), fresh)
+            });
+            (pending.clone(), decided, claimed)
+        })
+    }
+}
+
+/// Drops a pending authorization (denied, spent or refused), then answers
+/// `answer`.
+///
+/// # Arguments
+/// * `oauth` - the OAuth state.
+/// * `pending_id` - the request's id.
+/// * `brand` - for the busy page.
+/// * `answer` - the page to answer once it is dropped.
+///
+/// # Returns
+/// `answer`, or the busy page when Redis fails: the request then stays
+/// until it expires, and the answer must not say it ended.
+#[tracing::instrument(level = "trace", skip_all)]
+async fn ending(oauth: &OAuth, pending_id: &str, brand: &Brand, answer: Response) -> Response {
+    match oauth.pending.remove(pending_id).await {
+        Ok(()) => answer,
+        Err(error) => server_error(&error, brand),
+    }
 }
 
 /// `POST /oauth/authorize`: the consent form (spec "Consent flow").
@@ -732,7 +962,7 @@ async fn consent_post(
         return consent::error_page(StatusCode::FORBIDDEN, CROSS_SITE, &brand);
     }
     let now = Instant::now();
-    if !oauth.consent_limit.try_take(now) {
+    if !oauth.consent_limit.try_take(now).await {
         app.metrics().rate_limited(Limiter::OauthConsent);
         return consent::error_page(
             StatusCode::TOO_MANY_REQUESTS,
@@ -744,8 +974,8 @@ async fn consent_post(
         return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand);
     };
     // A signed-in Approve spends its page's nonce; the replacement is made
-    // here, outside the lock, because making it can fail.
-    let mut fresh = if form.action == "consent" {
+    // here, outside the update, because making it can fail.
+    let fresh = if matches!(form.action.as_str(), "consent" | "find" | "more") {
         match keys::generate_with("") {
             Ok(nonce) => Some(nonce),
             Err(error) => return server_error(&error, &brand),
@@ -753,23 +983,16 @@ async fn consent_post(
     } else {
         None
     };
-    // The CSRF token is checked before anything else, and a mismatch leaves
-    // the pending authorization alone: someone who learned its id cannot
-    // cancel it. Under the same lock (`update` holds it only for the
-    // closure), an Approve's summary token is matched against the code it
-    // was rendered for, so the code id and its token come from one snapshot,
-    // and a signed-in Approve's nonce is spent, so it approves once.
-    let pending = oauth.pending.update(&form.pending, now, |pending| {
-        let matches: bool = pending.csrf.as_bytes().ct_eq(form.csrf.as_bytes()).into();
-        matches.then(|| {
-            let decided = approval(pending.accepted.as_ref(), form.summary.as_deref());
-            // `take` moves the token out of the `Option`, leaving `None`.
-            let claimed = fresh.take().is_some_and(|fresh| {
-                claim_consent(pending.consent.as_mut(), form.summary.as_deref(), fresh)
-            });
-            (pending.clone(), decided, claimed)
-        })
-    });
+    // The CSRF token, the summary token and the nonce, in one atomic update
+    // ([`consent_change`]).
+    let pending = match oauth
+        .pending
+        .update(&form.pending, now, consent_change(&form, fresh))
+        .await
+    {
+        Ok(pending) => pending,
+        Err(error) => return server_error(&error, &brand),
+    };
     // `Some(Some(_))`: the entry is live (outer) and the token matched (inner).
     let Some(Some((pending, decided, claimed))) = pending else {
         return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand);
@@ -779,14 +1002,14 @@ async fn consent_post(
     let code_path = pending.consent.is_none();
     match form.action.as_str() {
         "deny" => {
-            oauth.pending.remove(&form.pending);
-            error_to_client(
+            let denied = error_to_client(
                 &brand,
                 &pending.redirect_uri,
                 (pending.state.as_deref(), &oauth.settings.issuer),
                 ("access_denied", "the person signing in denied access"),
                 Hop::Forward,
-            )
+            );
+            ending(oauth, &form.pending, &brand, denied).await
         }
         "code" if code_path => {
             let presented = form.sign_in_code.as_deref().unwrap_or_default();
@@ -804,6 +1027,9 @@ async fn consent_post(
         },
         // `claimed`: on the user path, with this page's current nonce.
         "consent" if claimed => consent_as_user(&app, oauth, &form, &pending, &parts).await,
+        "find" | "more" if claimed => {
+            consent_browse(&app, oauth, &form, &pending, &parts.headers).await
+        }
         _ => consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand),
     }
 }
@@ -811,29 +1037,35 @@ async fn consent_post(
 /// Counts a failed attempt and answers step 1 again, or drops the request
 /// at [`MAX_FAILED_ATTEMPTS`].
 #[tracing::instrument(level = "trace", skip_all)]
-fn failed_attempt(
+async fn failed_attempt(
     oauth: &OAuth,
     pending_id: &str,
     pending: &PendingAuthorization,
     brand: &Brand,
 ) -> Response {
-    let attempts = oauth.pending.update(pending_id, Instant::now(), |pending| {
-        pending.failed_attempts = pending.failed_attempts.saturating_add(1);
-        pending.accepted = None;
-        pending.failed_attempts
-    });
+    // Idempotent on a fresh copy: each run counts once on the value it was
+    // given, so wrong codes on every replica add up.
+    let attempts = oauth
+        .pending
+        .update(pending_id, Instant::now(), |pending| {
+            pending.failed_attempts = pending.failed_attempts.saturating_add(1);
+            pending.accepted = None;
+            pending.failed_attempts
+        })
+        .await;
     match attempts {
-        Some(attempts) if attempts < MAX_FAILED_ATTEMPTS => {
+        Ok(Some(attempts)) if attempts < MAX_FAILED_ATTEMPTS => {
             consent::code_page(&view(pending_id, pending), Some(BAD_CODE), brand)
         }
-        Some(_) | None => {
-            oauth.pending.remove(pending_id);
-            consent::error_page(
+        Ok(Some(_) | None) => {
+            let refused = consent::error_page(
                 StatusCode::BAD_REQUEST,
                 "Too many wrong sign-in codes.",
                 brand,
-            )
+            );
+            ending(oauth, pending_id, brand, refused).await
         }
+        Err(error) => server_error(&error, brand),
     }
 }
 
@@ -920,21 +1152,32 @@ async fn check_code(
                 code_id: record.id.clone(),
                 summary_nonce: summary_nonce.clone(),
             };
-            let stored = oauth.pending.update(pending_id, Instant::now(), |pending| {
-                pending.accepted = Some(accepted);
-            });
-            if stored.is_none() {
-                return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand);
+            let stored = oauth
+                .pending
+                .update(pending_id, Instant::now(), |pending| {
+                    // Cloned, not moved: the closure may run again on a
+                    // fresh copy (`Ephemeral::update`).
+                    pending.accepted = Some(accepted.clone());
+                })
+                .await;
+            match stored {
+                Ok(Some(())) => {}
+                Ok(None) => return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand),
+                Err(error) => return server_error(&error, &brand),
             }
+            let labels = match summary_labels(app, &record).await {
+                Ok(labels) => labels,
+                Err(error) => return server_error(&error, &brand),
+            };
             decision.accept();
             consent::summary_page(
                 &view(pending_id, pending),
-                &summary(&record),
+                &summary(&record, &labels),
                 &summary_nonce,
                 &brand,
             )
         }
-        Ok(None) => failed_attempt(oauth, pending_id, pending, &brand),
+        Ok(None) => failed_attempt(oauth, pending_id, pending, &brand).await,
         Err(error) => server_error(&error, &brand),
     }
 }
@@ -950,14 +1193,15 @@ async fn approve(
     code_id: &str,
 ) -> Response {
     let brand = app.settings().brand();
-    let grant_id = match code_rows::redeem(app.pool(), code_id, &pending.client, app.clock().now())
-        .await
-    {
-        Ok(grant_id) => grant_id,
-        // Expired, revoked or redeemed meanwhile (another approve won).
-        Err(OkfError::Refused { .. }) => return failed_attempt(oauth, pending_id, pending, &brand),
-        Err(error) => return server_error(&error, &brand),
-    };
+    let grant_id =
+        match code_rows::redeem(app.pool(), code_id, &pending.client, app.clock().now()).await {
+            Ok(grant_id) => grant_id,
+            // Expired, revoked or redeemed meanwhile (another approve won).
+            Err(OkfError::Refused { .. }) => {
+                return failed_attempt(oauth, pending_id, pending, &brand).await
+            }
+            Err(error) => return server_error(&error, &brand),
+        };
     finish(app, oauth, pending_id, pending, grant_id).await
 }
 
@@ -985,19 +1229,21 @@ async fn finish(
     grant_id: String,
 ) -> Response {
     let mut decision = Decision::start();
-    // The request is spent once the grant exists, whatever happens next.
-    oauth.pending.remove(pending_id);
     let brand = app.settings().brand();
-    // Creating the grant bumped admin_generation, so this loads it into the
-    // key cache before the client's token request can arrive.
-    if let Err(error) = app.poll().await {
-        split_event!(
-            error,
-            { kind = error.kind(), },
-            { %error, },
-            "poll after creating a grant failed"
-        );
+    // The request is spent once the grant exists, whatever happens next. A
+    // Redis failure stops here (spec Decision 16), and no code is minted, so
+    // the grant just created can never be used: revoke it (issue #589), so
+    // the user's grant list shows no consent that never completed. The
+    // person starts again from their client.
+    if let Err(error) = oauth.pending.remove(pending_id).await {
+        revoke_unused_grant(app, &grant_id).await;
+        return server_error(&error, &brand);
     }
+    // The credential cache reads the new grant on first use, so nothing
+    // needs loading here. Creating it bumped admin_generation: tell
+    // milestone 16 replicas, which still reload on announcements.
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     let (code, family_id) = match (
         keys::generate_with(keys::AUTHORIZATION_CODE_PREFIX),
         new_id(),
@@ -1005,28 +1251,31 @@ async fn finish(
         (Ok(code), Ok(family_id)) => (code, family_id),
         (Err(error), _) | (_, Err(error)) => return server_error(&error, &brand),
     };
-    // A full map refuses the code; the grant stays and can be revoked, and
-    // the person starts again from their client.
-    let stored = oauth.codes.insert(
-        code_key(&code),
-        AuthorizationCode {
-            grant_id,
-            client_id: pending.client.client_id.clone(),
-            redirect_uri: pending.redirect_uri.clone(),
-            code_challenge: pending.code_challenge.clone(),
-            resource: pending.resource.clone(),
-            family_id,
-            used: false,
-            replayed: false,
-        },
-        Instant::now(),
-    );
+    // A full map refuses the code, and so does a Redis failure (counted and
+    // logged by `Ephemeral`; never a fallback to memory, spec Decision 16):
+    // `unwrap_or(false)` sends an `Err` to the busy page, as a full map.
+    // The grant stays and can be revoked, and the person starts again from
+    // their client.
+    let stored = oauth
+        .codes
+        .insert(
+            &code_key(&code),
+            AuthorizationCode {
+                grant_id,
+                client_id: pending.client.client_id.clone(),
+                redirect_uri: pending.redirect_uri.clone(),
+                code_challenge: pending.code_challenge.clone(),
+                resource: pending.resource.clone(),
+                family_id,
+                used: false,
+                replayed: false,
+            },
+            Instant::now(),
+        )
+        .await
+        .unwrap_or(false);
     if !stored {
-        return consent::error_page(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "The server is busy. Start again from your client in a minute.",
-            &brand,
-        );
+        return consent::error_page(StatusCode::SERVICE_UNAVAILABLE, BUSY, &brand);
     }
     decision.accept();
     back_to_client(
@@ -1036,6 +1285,30 @@ async fn finish(
         (pending.state.as_deref(), &oauth.settings.issuer),
         Hop::Forward,
     )
+}
+
+/// Revokes the grant this request created and could not finish with a code,
+/// by its own id: a grant that existed before the request is never touched,
+/// because both ways of creating one (`redeem`, `create_self_issued`) insert
+/// a new row. Best effort: a failure is logged, and the grant, which no code
+/// leads to, stays until it is revoked by hand or goes idle.
+///
+/// # Arguments
+/// * `app` - the application.
+/// * `grant_id` - the grant the approval created.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn revoke_unused_grant(app: &App, grant_id: &str) {
+    let audit = crate::store::audit::AuditActor::system("oauth");
+    if let Err(error) =
+        crate::store::keys::revoke_by_id(app.pool(), grant_id, &audit, app.clock().now()).await
+    {
+        split_event!(
+            warn,
+            { grant = %grant_id, },
+            { %error, },
+            "could not revoke a grant whose consent did not complete"
+        );
+    }
 }
 
 /// `action=consent`: a signed-in person's approval, its nonce already spent
@@ -1067,27 +1340,35 @@ async fn consent_as_user(
         return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand);
     };
     // Every refusal below ends the request: the page cannot be trusted again.
-    let refuse = |message| {
-        oauth.pending.remove(&form.pending);
-        consent::error_page(StatusCode::BAD_REQUEST, message, &brand)
+    // The closure returns `ending`'s future, which the caller awaits; `move`
+    // copies the references it uses into it.
+    let brand = &brand;
+    let refuse = move |message| {
+        let refused = consent::error_page(StatusCode::BAD_REQUEST, message, brand);
+        ending(oauth, &form.pending, brand, refused)
     };
     let Some(session_id) = cookie(headers, COOKIE) else {
-        return refuse(SIGNED_OUT);
+        return refuse(SIGNED_OUT).await;
     };
     let user = match signed_in_user(app, headers).await {
         Ok(Some(user)) if user.id == consent.user_id => user,
-        Ok(_) => return refuse(SIGNED_OUT),
-        Err(error) => return server_error(&error, &brand),
+        Ok(_) => return refuse(SIGNED_OUT).await,
+        Err(error) => return server_error(&error, brand),
     };
     let chosen = match chosen_levels(&form.choices, &consent.offered) {
         Ok(chosen) => chosen,
         Err(Choice::Empty) => {
+            let labels = match consent_labels(app, pending).await {
+                Ok(labels) => labels,
+                Err(error) => return server_error(&error, brand),
+            };
             return user_consent_page(
                 &form.pending,
                 pending,
-                &user.name,
+                (&user, &labels),
+                None,
                 Some(NOTHING_CHOSEN),
-                &brand,
+                brand,
             );
         }
         Err(Choice::Tampered) => {
@@ -1097,7 +1378,7 @@ async fn consent_as_user(
                 { user = %user.name, client = %pending.client.client_id, },
                 "refused a consent outside the offered choices"
             );
-            return refuse(TAMPERED);
+            return refuse(TAMPERED).await;
         }
     };
     let default_catalog = form
@@ -1105,12 +1386,17 @@ async fn consent_as_user(
         .as_deref()
         .filter(|name| !name.is_empty());
     if default_catalog.is_some_and(|name| !chosen.contains_key(name)) {
+        let labels = match consent_labels(app, pending).await {
+            Ok(labels) => labels,
+            Err(error) => return server_error(&error, brand),
+        };
         return user_consent_page(
             &form.pending,
             pending,
-            &user.name,
+            (&user, &labels),
+            None,
             Some(DEFAULT_NOT_CHOSEN),
-            &brand,
+            brand,
         );
     }
     let new = NewSelfIssuedGrant {
@@ -1134,12 +1420,12 @@ async fn consent_as_user(
         match grant_rows::create_self_issued(app.pool(), &new, &audit, app.clock().now()).await {
             Ok(grant_id) => grant_id,
             // Signed out, reset or deleted since the check above.
-            Err(OkfError::Unauthenticated { .. }) => return refuse(SIGNED_OUT),
+            Err(OkfError::Unauthenticated { .. }) => return refuse(SIGNED_OUT).await,
             // The ceiling shrank, or a chosen catalog was deleted, meanwhile.
             Err(OkfError::Refused { .. } | OkfError::CatalogNotSelected { .. }) => {
-                return refuse(CHANGED)
+                return refuse(CHANGED).await
             }
-            Err(error) => return server_error(&error, &brand),
+            Err(error) => return server_error(&error, brand),
         };
     split_event!(
         info,
@@ -1150,7 +1436,223 @@ async fn consent_as_user(
     finish(app, oauth, &form.pending, pending, grant_id).await
 }
 
-/// A 500 error page; the details go to the log only.
+/// The offer a Find or Next catalogs moves to, read from the database now:
+/// the ticked catalogs at the user's ceiling on each now (one dropped when
+/// the ceiling no longer reaches it, its level lowered with the ceiling),
+/// and one page of the ceiling (issue #736). Bounded by [`MAX_CARRIED`]
+/// and [`CONSENT_PAGE`]: no read here grows with the ceiling.
+///
+/// # Arguments
+/// * `app` - the application.
+/// * `user_id` - the signed-in user's id.
+/// * `ticked` - the catalogs ticked on the page, checked against its offer.
+/// * `(prefix, after)` - the page to read: its name prefix and the name it
+///   continues after (`None` for the first).
+///
+/// # Returns
+/// The new consent (without its nonce, which the caller keeps) and the
+/// carried catalogs at their (possibly lowered) chosen levels.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn browse_offer(
+    app: &App,
+    user_id: &str,
+    ticked: &BTreeMap<String, Access>,
+    (prefix, after): (&str, Option<&str>),
+) -> Result<(UserConsent, BTreeMap<String, Access>), OkfError> {
+    let names: Vec<String> = ticked.keys().cloned().collect();
+    // `&mut *` borrows the pooled connection, returned when the statement ends.
+    let carried_ceiling = ceiling::ceiling_in(
+        &mut *app.pool().acquire().await.map_err(OkfError::from)?,
+        user_id,
+        &names,
+    )
+    .await?;
+    let page = ceiling::page(app.pool(), user_id, prefix, after, CONSENT_PAGE).await?;
+    // Each ticked catalog the ceiling still reaches, at the lower of the
+    // level chosen and the ceiling's now.
+    let carried: BTreeMap<String, Access> = ticked
+        .iter()
+        .filter_map(|(catalog, &level)| {
+            let allowed = *carried_ceiling.get(catalog)?;
+            Some((catalog.clone(), level.min(allowed)))
+        })
+        .collect();
+    let whole = prefix.is_empty() && after.is_none() && page.next.is_none();
+    // The page, and the carried catalogs at the ceiling's level (what the
+    // page may offer for them); `extend` overwrites a page entry with the
+    // same level read a moment apart.
+    let mut offered = page.entries;
+    offered.extend(
+        carried
+            .keys()
+            .filter_map(|catalog| Some((catalog.clone(), *carried_ceiling.get(catalog)?))),
+    );
+    Ok((
+        UserConsent {
+            user_id: user_id.to_string(),
+            nonce: String::new(),
+            offered,
+            prefix: prefix.to_string(),
+            next: page.next,
+            whole,
+        },
+        carried,
+    ))
+}
+
+/// `action=find` or `action=more`: a signed-in page's Find (catalogs whose
+/// names start with the Find box) or Next catalogs (the page after the
+/// one shown), its nonce already spent by [`claim_consent`] and replaced.
+/// The ticked catalogs are carried over (checked against the page's offer,
+/// at most [`MAX_CARRIED`]); the new offer is read now ([`browse_offer`])
+/// and stored in the pending authorization in one atomic update that
+/// checks the replacement nonce is still current, then shown (issue #736).
+///
+/// # Arguments
+/// * `app`, `oauth` - the application and its OAuth state.
+/// * `form` - the posted form.
+/// * `pending` - the request, holding the replacement nonce.
+/// * `headers` - the request's headers (the session cookie).
+///
+/// # Returns
+/// The page with the new offer, the page again (too many ticked), or an
+/// error page.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn consent_browse(
+    app: &App,
+    oauth: &OAuth,
+    form: &ConsentForm,
+    pending: &PendingAuthorization,
+    headers: &HeaderMap,
+) -> Response {
+    let brand = app.settings().brand();
+    let Some(consent) = pending.consent.as_ref() else {
+        return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, &brand);
+    };
+    let brand = &brand;
+    let refuse = move |message| {
+        let refused = consent::error_page(StatusCode::BAD_REQUEST, message, brand);
+        ending(oauth, &form.pending, brand, refused)
+    };
+    let user = match signed_in_user(app, headers).await {
+        Ok(Some(user)) if user.id == consent.user_id => user,
+        Ok(_) => return refuse(SIGNED_OUT).await,
+        Err(error) => return server_error(&error, brand),
+    };
+    let ticked = match ticked_levels(&form.choices, &consent.offered) {
+        Ok(ticked) => ticked,
+        Err(Choice::Empty | Choice::Tampered) => {
+            split_event!(
+                warn,
+                {},
+                { user = %user.name, client = %pending.client.client_id, },
+                "refused a consent search outside the offered choices"
+            );
+            return refuse(TAMPERED).await;
+        }
+    };
+    // What to show: the page as it was (its replacement nonce is stored)
+    // with its ticks and a message, or the new offer.
+    let (shown, chosen, error) = if ticked.len() > MAX_CARRIED {
+        (pending.clone(), ticked, Some(TOO_MANY_CARRIED))
+    } else {
+        match browse_to(app, oauth, form, consent, &ticked).await {
+            Ok(Some((updated, carried))) => (updated, carried, None),
+            // Gone, or another POST of this page spent the nonce meanwhile.
+            Ok(None) => return consent::error_page(StatusCode::BAD_REQUEST, EXPIRED, brand),
+            Err(error) => return server_error(&error, brand),
+        }
+    };
+    match consent_labels(app, &shown).await {
+        Ok(labels) => user_consent_page(
+            &form.pending,
+            &shown,
+            (&user, &labels),
+            Some(&chosen),
+            error,
+            brand,
+        ),
+        Err(error) => server_error(&error, brand),
+    }
+}
+
+/// What a stored Find or Next catalogs gives back: the request as stored,
+/// and the carried catalogs at their (possibly lowered) chosen levels.
+type Browsed = (PendingAuthorization, BTreeMap<String, Access>);
+
+/// Moves a signed-in page to the offer its Find or Next catalogs asks for:
+/// reads it ([`browse_offer`]) and stores it in the pending authorization
+/// while the page's replacement nonce is still current.
+///
+/// # Arguments
+/// * `app`, `oauth` - the application and its OAuth state.
+/// * `form` - the posted form: its action, Find box and pending id.
+/// * `consent` - the page's consent, its nonce already replaced.
+/// * `ticked` - the ticked catalogs, checked against its offer.
+///
+/// # Returns
+/// The stored request and the carried catalogs at their levels, or `None`
+/// when the request is gone or its nonce was spent meanwhile.
+///
+/// # Errors
+/// [`OkfError::Database`]; [`OkfError::Busy`] when Redis fails.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn browse_to(
+    app: &App,
+    oauth: &OAuth,
+    form: &ConsentForm,
+    consent: &UserConsent,
+    ticked: &BTreeMap<String, Access>,
+) -> Result<Option<Browsed>, OkfError> {
+    // Find starts over from the box's prefix; Next continues the shown
+    // page's. An unusable prefix finds nothing (`ceiling::page`).
+    let found;
+    let (prefix, after) = if form.action == "find" {
+        found = form
+            .find
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        (found.as_str(), None)
+    } else {
+        (consent.prefix.as_str(), consent.next.as_deref())
+    };
+    let (mut offer, carried) = browse_offer(app, &consent.user_id, ticked, (prefix, after)).await?;
+    offer.nonce.clone_from(&consent.nonce);
+    // Stored only while the replacement nonce is still the page's: the
+    // closure may run again on a fresh copy (Redis), so it clones `offer`
+    // inside and does nothing else (`lessons.md`).
+    let stored = oauth
+        .pending
+        .update(&form.pending, Instant::now(), |entry| {
+            let current = entry.consent.as_ref().is_some_and(|now| {
+                now.user_id == offer.user_id
+                    && bool::from(now.nonce.as_bytes().ct_eq(offer.nonce.as_bytes()))
+            });
+            current.then(|| {
+                entry.consent = Some(offer.clone());
+                entry.clone()
+            })
+        })
+        .await?;
+    // `flatten`: absent (outer `None`) or not current (inner) alike.
+    Ok(stored.flatten().map(|updated| (updated, carried)))
+}
+
+/// The page for a failure; the details go to the log only.
+///
+/// # Arguments
+/// * `error` - what failed.
+/// * `brand` - for the page.
+///
+/// # Returns
+/// The busy page (503, "try again") for [`OkfError::Busy`]: a Redis failure
+/// (spec Decision 16) or a database deadlock, as on the rest of the HTTP
+/// API. A 500 page for anything else.
 #[tracing::instrument(level = "trace", skip_all)]
 fn server_error(error: &OkfError, brand: &Brand) -> Response {
     split_event!(
@@ -1159,6 +1661,9 @@ fn server_error(error: &OkfError, brand: &Brand) -> Response {
         { %error, },
         "consent failed"
     );
+    if matches!(error, OkfError::Busy { .. }) {
+        return consent::error_page(StatusCode::SERVICE_UNAVAILABLE, BUSY, brand);
+    }
     consent::error_page(
         StatusCode::INTERNAL_SERVER_ERROR,
         "The server could not complete sign-in.",
@@ -1178,9 +1683,11 @@ mod tests {
     use tokio_util::sync::CancellationToken;
     use tower::ServiceExt;
 
-    use super::{chosen_levels, Choice};
+    use super::{chosen_levels, Choice, CONSENT_PAGE, MAX_CARRIED, TOO_MANY_CARRIED};
     use crate::http::api::testing::Browser;
     use crate::http::console_session::COOKIE;
+    use crate::labels::directory::Labels;
+    use crate::labels::DisplayName;
     use crate::mcp::testing::TestApp;
     use crate::oauth::pkce;
     use crate::oauth::state::code_key;
@@ -1194,7 +1701,9 @@ mod tests {
     use crate::store::ceiling::{self, Ceiling};
     use crate::store::keys::{self as key_rows, Access, KeyKind};
     use crate::store::oauth::codes as code_rows;
+    use crate::store::oauth::codes::SignInCodeRecord;
     use crate::store::settings::{self, SettingKey};
+    use crate::store::teams::{self, NewTeam};
     use crate::store::user_sessions;
     use crate::store::users::{self, NewUser};
 
@@ -1260,13 +1769,12 @@ mod tests {
 
     /// Runs step 1 and returns `(pending, csrf)`.
     async fn start(test: &TestApp) -> (String, String) {
-        let (_, _, page) = send(
-            test,
-            "GET",
-            &format!("/oauth/authorize?{}", authorize_query()),
-            None,
-        )
-        .await;
+        start_from(test, &authorize_query()).await
+    }
+
+    /// Runs step 1 for `query` and returns `(pending, csrf)`.
+    async fn start_from(test: &TestApp, query: &str) -> (String, String) {
+        let (_, _, page) = send(test, "GET", &format!("/oauth/authorize?{query}"), None).await;
         (hidden(&page, "pending"), hidden(&page, "csrf"))
     }
 
@@ -1377,6 +1885,8 @@ mod tests {
             .expect("oauth on")
             .codes
             .update(&code_key(&issued), Instant::now(), |code| code.clone())
+            .await
+            .unwrap()
             .expect("the code is stored");
         assert_eq!(stored.redirect_uri, LOOPBACK_ON_PORT, "kept with its port");
     }
@@ -1428,7 +1938,6 @@ mod tests {
                 query_with("resource", "https://other.example.com/mcp"),
                 "invalid_target",
             ),
-            (query_without("resource"), "invalid_target"),
         ] {
             let (status, headers, _) =
                 send(&test, "GET", &format!("/oauth/authorize?{query}"), None).await;
@@ -1443,6 +1952,42 @@ mod tests {
             assert_eq!(param(&target, "state").as_deref(), Some("xyz"));
             assert_eq!(param(&target, "iss").as_deref(), Some(PUBLIC_URL));
         }
+    }
+
+    /// RFC 8707 makes `resource` optional at authorize, and some clients
+    /// (Crush) strip it from the browser URL and send it only at the token
+    /// endpoint. A request without it is for this server's one resource:
+    /// the code and the tokens are bound to `/mcp` as usual.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_authorize_request_without_resource_is_for_the_mcp_endpoint() {
+        let test = oauth_app().await;
+        let code = sign_in_code(&test, Access::Write).await;
+        let (pending, csrf) = start_from(&test, &query_without("resource")).await;
+        let (status, _, summary) = post(
+            &test,
+            &[
+                ("pending", &pending),
+                ("csrf", &csrf),
+                ("action", "code"),
+                ("sign_in_code", &code),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, headers, body) = approve_from(&test, &summary).await;
+        let target = forwarded(status, &headers, &body);
+        let issued = param(&target, "code").expect("a code");
+        let oauth = test.app.oauth().expect("oauth on");
+        let waiting = oauth
+            .codes
+            .update(&code_key(&issued), Instant::now(), |code| code.clone())
+            .await
+            .unwrap()
+            .expect("the code is stored");
+        assert_eq!(waiting.resource, oauth.settings.resource);
+        let (access, _) = crate::oauth::testing::exchange_for_tokens(&test, &issued).await;
+        assert!(access.starts_with("okfat_"), "{access}");
     }
 
     /// Design, Auth row: the authorize decision spans carry `method` and
@@ -1530,11 +2075,13 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(summary.contains("<strong>write</strong> access to <strong>main</strong>"));
-        assert!(summary.contains(&format!(
-            "as <strong>{}</strong> (actor <strong>example-actor</strong>)",
-            crate::db::TEST_USER
-        )));
+        // The catalog and the user are shown by label (neither has a
+        // display name here), never by slug.
+        assert!(
+            summary.contains("<strong>write</strong> access to <strong>Untitled catalog</strong>")
+        );
+        assert!(summary
+            .contains("as <strong>Unnamed user</strong> (actor <strong>example-actor</strong>)"));
         assert!(headers["content-security-policy"]
             .to_str()
             .unwrap()
@@ -1552,6 +2099,8 @@ mod tests {
         let waiting = oauth
             .codes
             .update(&code_key(&issued), Instant::now(), |code| code.clone())
+            .await
+            .unwrap()
             .expect("the code is stored");
         assert!(!waiting.used);
         assert!(pkce::verify(&waiting.code_challenge, VERIFIER));
@@ -1559,8 +2108,9 @@ mod tests {
         assert_eq!(waiting.resource, oauth.settings.resource);
         let principal = test
             .app
-            .keys()
             .find_grant(&waiting.grant_id)
+            .await
+            .unwrap()
             .expect("cached grant");
         assert_eq!(principal.actor, "example-actor");
         assert_eq!(principal.access, Access::Write);
@@ -1719,7 +2269,7 @@ mod tests {
         // Drain the bucket at an instant a minute ahead: the handler's own
         // (earlier) instants then refill nothing, so the test is exact.
         let later = Instant::now() + Duration::from_secs(60);
-        while oauth.consent_limit.try_take(later) {}
+        while oauth.consent_limit.try_take(later).await {}
         let (status, headers, page) = post(
             &test,
             &[("pending", &pending), ("csrf", &csrf), ("action", "deny")],
@@ -1849,11 +2399,14 @@ mod tests {
         let waiting = oauth
             .codes
             .update(&code_key(&issued), Instant::now(), |code| code.clone())
+            .await
+            .unwrap()
             .expect("the code is stored");
         let principal = test
             .app
-            .keys()
             .find_grant(&waiting.grant_id)
+            .await
+            .unwrap()
             .expect("cached grant");
         assert_eq!(principal.access, Access::Write);
         let read_live = code_rows::find_live(test.app.pool(), &read_code, now)
@@ -1877,15 +2430,17 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn consent_pages_name_the_product_and_show_the_contact() {
         let test = oauth_app().await;
-        for (key, value) in [
-            (SettingKey::ProductName, "Acme Notes"),
-            (SettingKey::SupportContact, "help@example.com"),
-        ] {
-            settings::set(test.app.pool(), key, value, &AuditActor::cli(), Utc::now())
-                .await
-                .unwrap();
-        }
-        test.app.poll().await.unwrap();
+        crate::invalidate::testing::applied(&test.app, async {
+            for (key, value) in [
+                (SettingKey::ProductName, "Acme Notes"),
+                (SettingKey::SupportContact, "help@example.com"),
+            ] {
+                settings::set(test.app.pool(), key, value, &AuditActor::cli(), Utc::now())
+                    .await
+                    .unwrap();
+            }
+        })
+        .await;
 
         let (_, _, unknown_client) = send(&test, "GET", "/oauth/authorize", None).await;
         let (_, _, malformed) = send(
@@ -1917,7 +2472,7 @@ mod tests {
             test.app.pool(),
             &NewUser {
                 name,
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             Utc::now(),
@@ -1992,7 +2547,7 @@ mod tests {
 
     /// The grant behind the authorization code `target` carries to the
     /// client.
-    fn grant_of(test: &TestApp, target: &url::Url) -> String {
+    async fn grant_of(test: &TestApp, target: &url::Url) -> String {
         let issued = param(target, "code").expect("a code");
         test.app
             .oauth()
@@ -2001,6 +2556,8 @@ mod tests {
             .update(&code_key(&issued), Instant::now(), |code| {
                 code.grant_id.clone()
             })
+            .await
+            .unwrap()
             .expect("the code is stored")
     }
 
@@ -2093,7 +2650,9 @@ mod tests {
         let page = user_page(&test, &alice).await;
 
         assert!(page.contains("id=\"consent-user-form\""));
-        assert!(page.contains("<strong id=\"consent-user\">alice</strong>"));
+        // No display name and no email: a label, never the slug.
+        assert!(page.contains("<strong id=\"consent-user\">Unnamed user</strong>"));
+        assert!(!page.contains(">alice<"), "the slug is not shown as a name");
         assert!(page.contains("name=\"grant.main\""));
         assert!(
             !page.contains("grant.other"),
@@ -2109,6 +2668,231 @@ mod tests {
             user_authorize_query().replace('&', "&amp;")
         )));
         assert!(!hidden(&page, "summary").is_empty());
+    }
+
+    /// Sets display names straight in SQL and reloads the key cache the
+    /// way any label change does (a bump of `admin_generation`, then a poll).
+    async fn relabel(test: &TestApp, user: (&str, &str), catalogs: [(&str, &str); 2]) {
+        let pool = test.app.pool();
+        sqlx::query("UPDATE users SET display_name = $1 WHERE name = $2")
+            .bind(user.1)
+            .bind(user.0)
+            .execute(pool)
+            .await
+            .unwrap();
+        for (slug, display_name) in catalogs {
+            sqlx::query("UPDATE catalogs SET display_name = $1 WHERE name = $2")
+                .bind(display_name)
+                .bind(slug)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        // A raw update sends no change message: a catch-up (what a
+        // reconnect does) makes the label cache read the labels again.
+        test.app.apply_reconnect().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_signed_in_page_shows_labels_but_keeps_slugs_in_ids_names_and_values() {
+        let test = oauth_app().await;
+        let alice = signed_in(
+            &test,
+            "alice",
+            &[("main", Access::Write), ("other", Access::Read)],
+        )
+        .await;
+        relabel(
+            &test,
+            ("alice", "Alice <b>Example</b>"),
+            [("main", "Acme \"Handbook\""), ("other", "Field Notes")],
+        )
+        .await;
+
+        let page = user_page(&test, &alice).await;
+
+        assert!(
+            page.contains(r#"<strong id="consent-user">Alice &lt;b&gt;Example&lt;/b&gt;</strong>"#),
+            "{page}"
+        );
+        assert!(
+            page.contains(
+                r#"<input type="checkbox" name="grant.main" value="on" id="consent-catalog-main"> Acme &quot;Handbook&quot;</label>"#
+            ),
+            "{page}"
+        );
+        assert!(
+            page.contains(r#"aria-label="Access to Acme &quot;Handbook&quot;""#),
+            "{page}"
+        );
+        assert!(page.contains(r#"name="level.other""#), "{page}");
+        assert!(
+            page.contains(r#"<option value="main">Acme &quot;Handbook&quot;</option>"#),
+            "{page}"
+        );
+        assert!(
+            page.contains(r#"<option value="other">Field Notes</option>"#),
+            "{page}"
+        );
+        assert!(!page.contains("<b>Example"), "markup is escaped: {page}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn catalogs_sharing_a_label_are_told_apart_by_their_owner_team() {
+        let test = oauth_app().await;
+        let alice = signed_in(
+            &test,
+            "alice",
+            &[("main", Access::Read), ("other", Access::Read)],
+        )
+        .await;
+        // `other` moves to a second team, so the shared label gets a suffix.
+        teams::create(
+            test.app.pool(),
+            &NewTeam {
+                name: "acme",
+                display_name: &DisplayName::parse("Acme Team").unwrap(),
+                owner: crate::db::TEST_USER,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE catalogs SET owner_team_id = (SELECT id FROM teams WHERE name = 'acme') \
+             WHERE name = 'other'",
+        )
+        .execute(test.app.pool())
+        .await
+        .unwrap();
+        relabel(
+            &test,
+            ("alice", "Alice"),
+            [("main", "Handbook"), ("other", "Handbook")],
+        )
+        .await;
+
+        let page = user_page(&test, &alice).await;
+
+        assert!(page.contains("Handbook (Acme Team)</option>"), "{page}");
+        let bare = page.matches("Handbook</option>").count();
+        assert_eq!(bare, 0, "no option shows the bare shared label: {page}");
+        assert!(page.contains(r#"value="main">Handbook ("#), "{page}");
+        assert!(page.contains(r#"name="grant.other""#), "{page}");
+    }
+
+    /// A live code record granting `catalogs` (or every catalog) with
+    /// `default_catalog`, for the pure `summary` tests.
+    fn code_record(
+        all_catalogs: bool,
+        catalogs: &[&str],
+        default_catalog: Option<&str>,
+    ) -> SignInCodeRecord {
+        SignInCodeRecord {
+            id: "c-1".to_string(),
+            name: "example".to_string(),
+            access: Access::Read,
+            all_catalogs,
+            catalogs: catalogs.iter().map(ToString::to_string).collect(),
+            default_catalog: default_catalog.map(ToString::to_string),
+            actor: "example-actor".to_string(),
+            created_at: Utc::now(),
+            expires_at: Utc::now(),
+            redeemed_at: None,
+            grant_id: None,
+            revoked_at: None,
+            user: None,
+        }
+    }
+
+    /// Two catalogs both labelled `Notes`, owned by teams `Acme` and `Other
+    /// team`.
+    fn notes_labels() -> Labels {
+        use crate::labels::directory::{CatalogRow, TeamRow};
+        let team = |name: &str, display: &str| TeamRow {
+            name: name.to_string(),
+            display_name: display.to_string(),
+            personal_of: None,
+        };
+        let catalog = |name: &str, owner: &str| CatalogRow {
+            name: name.to_string(),
+            display_name: "Notes".to_string(),
+            description: String::new(),
+            owner_team: Some(owner.to_string()),
+        };
+        Labels::from_rows(
+            Vec::new(),
+            vec![team("t-a", "Acme"), team("t-b", "Other team")],
+            vec![catalog("notes-a", "t-a"), catalog("notes-b", "t-b")],
+        )
+    }
+
+    #[test]
+    fn the_summarys_default_catalog_is_told_apart_like_the_list() {
+        let labels = notes_labels();
+
+        let listed = super::summary(
+            &code_record(false, &["notes-a", "notes-b"], Some("notes-b")),
+            &labels,
+        );
+        let every = super::summary(&code_record(true, &[], Some("notes-b")), &labels);
+
+        assert_eq!(listed.catalogs, "Notes (Acme), Notes (Other team)");
+        assert_eq!(
+            listed.default_catalog.as_deref(),
+            Some("Notes (Other team)")
+        );
+        // An all-catalog grant lists none, so the default is shown alone,
+        // by its label (the fallback for a grant that names no catalogs).
+        assert_eq!(every.catalogs, "every catalog");
+        assert_eq!(every.default_catalog.as_deref(), Some("Notes"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_sign_in_code_summary_names_the_user_and_catalogs_by_label() {
+        let test = oauth_app().await;
+        relabel(
+            &test,
+            (crate::db::TEST_USER, "Tess <i>Tester</i>"),
+            [("main", "Acme Handbook"), ("other", "Field Notes")],
+        )
+        .await;
+        let code = sign_in_code(&test, Access::Read).await;
+        let (_, _, page) = send(
+            &test,
+            "GET",
+            &format!("/oauth/authorize?{}", authorize_query()),
+            None,
+        )
+        .await;
+
+        let (status, _, summary) = post(
+            &test,
+            &[
+                ("pending", &hidden(&page, "pending")),
+                ("csrf", &hidden(&page, "csrf")),
+                ("action", "code"),
+                ("sign_in_code", &code),
+            ],
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK, "{summary}");
+        assert!(
+            summary.contains("<strong>Acme Handbook</strong>"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("as <strong>Tess &lt;i&gt;Tester&lt;/i&gt;</strong>"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("default catalog <strong>Acme Handbook</strong>"),
+            "{summary}"
+        );
+        assert!(!summary.contains("<strong>main</strong>"), "{summary}");
+        assert!(!summary.contains("<i>Tester"), "{summary}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2138,8 +2922,13 @@ mod tests {
         let target = forwarded(status, &headers, &body);
         assert!(target.as_str().starts_with(REDIRECT_URI));
         assert_eq!(param(&target, "state").as_deref(), Some("xyz"));
-        let grant = grant_of(&test, &target);
-        let principal = test.app.keys().find_grant(&grant).expect("cached grant");
+        let grant = grant_of(&test, &target).await;
+        let principal = test
+            .app
+            .find_grant(&grant)
+            .await
+            .unwrap()
+            .expect("cached grant");
         assert_eq!(principal.user.as_deref(), Some("alice"));
         assert_eq!(principal.actor, "Example Client");
         assert_eq!(principal.level("main"), Some(Access::Write));
@@ -2172,47 +2961,54 @@ mod tests {
             ],
         )
         .await;
-        let grant = grant_of(&test, &forwarded(status, &headers, &body));
+        let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
         let granted = test
             .app
-            .keys()
             .find_grant(&grant)
+            .await
+            .unwrap()
             .expect("cached")
             .level("main");
 
-        ceiling::entitle(
-            test.app.pool(),
-            &NewEntitlement {
-                user: "alice",
-                catalog: "main",
-                access: Access::Read,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("lower");
-        test.app.poll().await.expect("reload");
+        crate::invalidate::testing::applied(&test.app, async {
+            ceiling::entitle(
+                test.app.pool(),
+                &NewEntitlement {
+                    user: "alice",
+                    catalog: "main",
+                    access: Access::Read,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("lower");
+        })
+        .await;
         let lowered = test
             .app
-            .keys()
             .find_grant(&grant)
+            .await
+            .unwrap()
             .expect("cached")
             .level("main");
-        ceiling::unentitle(
-            test.app.pool(),
-            "alice",
-            "main",
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("remove");
-        test.app.poll().await.expect("reload");
+        crate::invalidate::testing::applied(&test.app, async {
+            ceiling::unentitle(
+                test.app.pool(),
+                "alice",
+                "main",
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("remove");
+        })
+        .await;
         let removed = test
             .app
-            .keys()
             .find_grant(&grant)
+            .await
+            .unwrap()
             .map(|principal| principal.level("main"));
 
         assert_eq!(granted, Some(Access::Write));
@@ -2537,6 +3333,272 @@ mod tests {
         assert!(page.contains("id=\"consent-use-code\""));
     }
 
+    /// What a browser posts from the signed-in form as `page` renders it,
+    /// untouched: each ticked checkbox, and each select's `selected` option
+    /// (else its first). Hidden inputs and the button come from
+    /// [`consent_form`].
+    fn initial_choices(page: &str) -> Vec<(String, String)> {
+        let start = page.find("id=\"consent-user-form\"").expect("the form");
+        let form = &page[start..];
+        let form = &form[..form.find("</form>").expect("the form's end")];
+        let mut choices = Vec::new();
+        for (at, marker) in form.match_indices("<input type=\"checkbox\" name=\"") {
+            let rest = &form[at + marker.len()..];
+            let tag = &rest[..rest.find('>').expect("the tag's end")];
+            if tag.ends_with(" checked") {
+                let (name, rest) = tag.split_once("\" value=\"").expect("a value");
+                let (value, _) = rest.split_once('"').expect("closing quote");
+                choices.push((name.to_string(), value.to_string()));
+            }
+        }
+        for (at, marker) in form.match_indices("<select name=\"") {
+            let rest = &form[at + marker.len()..];
+            let (name, rest) = rest.split_once('"').expect("closing quote");
+            let options = &rest[..rest.find("</select>").expect("the select's end")];
+            let value = |option: &str| {
+                let rest = &option[option.find("value=\"").expect("a value") + 7..];
+                rest[..rest.find('"').expect("closing quote")].to_string()
+            };
+            let all: Vec<&str> = options.split("<option ").skip(1).collect();
+            let chosen = all
+                .iter()
+                .find(|option| option.contains(" selected>"))
+                .or_else(|| all.first())
+                .expect("an option");
+            choices.push((name.to_string(), value(chosen)));
+        }
+        choices
+    }
+
+    /// Approves `page`'s form as it starts, as `session`.
+    async fn approve_as_shown(
+        test: &TestApp,
+        session: &Browser,
+        page: &str,
+    ) -> (StatusCode, HeaderMap, String) {
+        let choices = initial_choices(page);
+        let pairs: Vec<(&str, &str)> = choices
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        consent_as(test, Some(session), page, &pairs).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn one_write_catalogs_collapsed_defaults_approve_write_with_it_as_default() {
+        let test = oauth_app().await;
+        let alice = signed_in(&test, "alice", &[("main", Access::Write)]).await;
+        let page = user_page(&test, &alice).await;
+        assert!(page.contains("<details id=\"consent-advanced\">"), "{page}");
+        assert_eq!(
+            initial_choices(&page),
+            [
+                ("grant.main".to_string(), "on".to_string()),
+                ("level.main".to_string(), "write".to_string()),
+                ("default_catalog".to_string(), "main".to_string()),
+            ]
+        );
+
+        let (status, headers, body) = approve_as_shown(&test, &alice, &page).await;
+
+        let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
+        let principal = test
+            .app
+            .find_grant(&grant)
+            .await
+            .unwrap()
+            .expect("cached grant");
+        assert_eq!(principal.user.as_deref(), Some("alice"));
+        assert_eq!(principal.level("main"), Some(Access::Write));
+        assert_eq!(principal.default_catalog.as_deref(), Some("main"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn one_read_only_catalogs_collapsed_defaults_approve_read_with_it_as_default() {
+        let test = oauth_app().await;
+        let alice = signed_in(&test, "alice", &[("main", Access::Read)]).await;
+        let page = user_page(&test, &alice).await;
+        assert!(page.contains("<details id=\"consent-advanced\">"), "{page}");
+        assert!(!page.contains("value=\"write\""), "write is not offered");
+
+        let (status, headers, body) = approve_as_shown(&test, &alice, &page).await;
+
+        let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
+        let principal = test
+            .app
+            .find_grant(&grant)
+            .await
+            .unwrap()
+            .expect("cached grant");
+        assert_eq!(principal.level("main"), Some(Access::Read));
+        assert_eq!(principal.default_catalog.as_deref(), Some("main"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn several_catalogs_start_open_and_preselect_nothing() {
+        let test = oauth_app().await;
+        let alice = signed_in(
+            &test,
+            "alice",
+            &[("main", Access::Write), ("other", Access::Read)],
+        )
+        .await;
+        let page = user_page(&test, &alice).await;
+
+        assert!(
+            page.contains("<details id=\"consent-advanced\" open>"),
+            "{page}"
+        );
+        assert!(!page.contains(" checked>"), "{page}");
+        // Untouched, the form chooses nothing, which is refused as before.
+        let (status, _, again) = approve_as_shown(&test, &alice, &page).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(again.contains("Choose at least one catalog"), "{again}");
+        assert_eq!(oauth_grants(&test).await, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn one_catalogs_preselection_can_be_changed_and_is_still_validated() {
+        let test = oauth_app().await;
+        let alice = signed_in(&test, "alice", &[("main", Access::Write)]).await;
+
+        // Unticked: refused as an empty choice, shown again open.
+        let page = user_page(&test, &alice).await;
+        let (nothing, _, again) = consent_as(
+            &test,
+            Some(&alice),
+            &page,
+            &[("level.main", "write"), ("default_catalog", "main")],
+        )
+        .await;
+        assert_eq!(nothing, StatusCode::OK);
+        assert!(again.contains("Choose at least one catalog"), "{again}");
+        assert!(
+            again.contains("<details id=\"consent-advanced\" open>"),
+            "{again}"
+        );
+        // A default outside the choice: refused.
+        let (not_chosen, _, refused) = consent_as(
+            &test,
+            Some(&alice),
+            &again,
+            &[
+                ("grant.main", "on"),
+                ("level.main", "write"),
+                ("default_catalog", "other"),
+            ],
+        )
+        .await;
+        assert_eq!(not_chosen, StatusCode::OK);
+        assert!(
+            refused.contains("The default catalog must be one you allow"),
+            "{refused}"
+        );
+        assert_eq!(oauth_grants(&test).await, 0);
+
+        // Lowered to read with no default: honoured as chosen.
+        let page = user_page(&test, &alice).await;
+        let (status, headers, body) = consent_as(
+            &test,
+            Some(&alice),
+            &page,
+            &[
+                ("grant.main", "on"),
+                ("level.main", "read"),
+                ("default_catalog", ""),
+            ],
+        )
+        .await;
+        let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
+        let principal = test
+            .app
+            .find_grant(&grant)
+            .await
+            .unwrap()
+            .expect("cached grant");
+        assert_eq!(principal.level("main"), Some(Access::Read));
+        assert_eq!(principal.default_catalog, None);
+    }
+
+    /// A signed-in Approve's form and a pending authorization it matches,
+    /// with `failed_attempts` wrong codes and an accepted code.
+    fn matching(failed_attempts: u8) -> (super::ConsentForm, super::PendingAuthorization) {
+        use crate::oauth::state::{AcceptedCode, UserConsent};
+        use crate::store::oauth::clients::{ClientKind, ClientRecord};
+        let form = super::ConsentForm {
+            pending: "pending-id".to_string(),
+            csrf: "csrf-token".to_string(),
+            action: "consent".to_string(),
+            sign_in_code: None,
+            summary: Some("page-nonce".to_string()),
+            default_catalog: None,
+            find: None,
+            choices: BTreeMap::new(),
+        };
+        let pending = super::PendingAuthorization {
+            csrf: "csrf-token".to_string(),
+            client: ClientRecord {
+                client_id: CLIENT_ID.to_string(),
+                kind: ClientKind::Dcr,
+                client_name: None,
+                redirect_uris: vec![REDIRECT_URI.to_string()],
+                metadata: serde_json::json!({}),
+                fetched_at: None,
+                cache_expires_at: None,
+                created_at: Utc::now(),
+            },
+            redirect_uri: REDIRECT_URI.to_string(),
+            state: None,
+            code_challenge: "c".repeat(43),
+            resource: "https://okf.example.com/mcp".to_string(),
+            accepted: Some(AcceptedCode {
+                code_id: "code-id".to_string(),
+                summary_nonce: "summary-nonce".to_string(),
+            }),
+            failed_attempts,
+            consent: Some(UserConsent {
+                user_id: "user-id".to_string(),
+                nonce: "page-nonce".to_string(),
+                offered: Ceiling::new(),
+                prefix: String::new(),
+                next: None,
+                whole: true,
+            }),
+            query: String::new(),
+        };
+        (form, pending)
+    }
+
+    /// A request whose wrong codes are spent (left behind by a failed
+    /// removal) is refused even with a matching CSRF token, and nothing in
+    /// it changes; one attempt fewer is still allowed.
+    #[test]
+    fn a_request_with_its_wrong_codes_spent_is_refused_untouched() {
+        use crate::oauth::state::MAX_FAILED_ATTEMPTS;
+        let (form, mut spent) = matching(MAX_FAILED_ATTEMPTS);
+        let before = (spent.accepted.clone(), spent.consent.clone());
+
+        let refused = super::consent_change(&form, Some("fresh".to_string()))(&mut spent);
+
+        assert!(refused.is_none(), "the spent request is refused");
+        assert_eq!((spent.accepted, spent.consent), before, "nothing changed");
+
+        let (form, mut live) = matching(MAX_FAILED_ATTEMPTS - 1);
+        let accepted = live.accepted.clone();
+
+        let allowed = super::consent_change(&form, Some("fresh".to_string()))(&mut live);
+
+        let (_, decided, claimed) = allowed.expect("one attempt fewer is allowed");
+        assert!(claimed, "the page's nonce is spent");
+        assert_eq!(
+            decided,
+            super::Approval::Stale,
+            "no summary token was posted"
+        );
+        assert_eq!(live.consent.expect("user path").nonce, "fresh");
+        assert_eq!(live.accepted, accepted);
+    }
+
     #[test]
     fn debug_never_prints_the_forms_secrets() {
         let posted = super::ConsentForm {
@@ -2546,6 +3608,7 @@ mod tests {
             sign_in_code: Some("okfsc_code-that-must-not-leak".to_string()),
             summary: Some("consent-nonce-that-must-not-leak".to_string()),
             default_catalog: None,
+            find: None,
             choices: BTreeMap::new(),
         };
 
@@ -2606,5 +3669,957 @@ mod tests {
                 "{tampered:?}"
             );
         }
+    }
+
+    /// Task 8: pending authorizations in Redis, across two replicas.
+    mod replicas {
+        use std::collections::BTreeMap;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+
+        use axum::http::StatusCode;
+
+        use super::super::{consent_change, ConsentForm, BAD_CODE, BUSY, EXPIRED};
+        use super::{oauth_grants, param, signed_in, user_page, TestApp, READ_MAIN};
+        use crate::db::redis_support::{TestRedis, CLUSTER_URL_VAR, SERVER_URL_VAR};
+        use crate::oauth::state::MAX_FAILED_ATTEMPTS;
+        use crate::oauth::testing::{
+            authorize_query, exchange_for_tokens, form, forwarded, hidden, oauth_replica_pair_on,
+            send, send_on, sign_in_code,
+        };
+        use crate::shared::ephemeral::Keyspace;
+        use crate::shared::hashed;
+        use crate::store::keys::{self as key_rows, Access, KeyKind};
+
+        /// Every body's bound (`lessons.md`: every wait is bounded).
+        const BOUND: Duration = Duration::from_secs(120);
+
+        /// The sign-in code step's form for `pending`.
+        fn code_form(pending: &str, csrf: &str, code: &str) -> String {
+            form(&[
+                ("pending", pending),
+                ("csrf", csrf),
+                ("action", "code"),
+                ("sign_in_code", code),
+            ])
+        }
+
+        async fn consent_started_on_one_replica_is_approved_on_the_other_and_exchanged_on_the_first(
+            server: TestRedis,
+        ) {
+            let (a, b, _server) = oauth_replica_pair_on(server).await;
+            let code = sign_in_code(&a, Access::Read).await;
+            let (status, _, page) = send(
+                &a,
+                "GET",
+                &format!("/oauth/authorize?{}", authorize_query()),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{page}");
+            let (pending, csrf) = (hidden(&page, "pending"), hidden(&page, "csrf"));
+
+            let (status, _, summary) = send_on(
+                &b,
+                "POST",
+                "/oauth/authorize",
+                Some(code_form(&pending, &csrf, &code)),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "B shows step 2: {summary}");
+            let approval = form(&[
+                ("pending", &pending),
+                ("csrf", &csrf),
+                ("summary", &hidden(&summary, "summary")),
+                ("action", "approve"),
+            ]);
+            let (status, headers, answer) =
+                send_on(&b, "POST", "/oauth/authorize", Some(approval), None).await;
+            let issued = param(&forwarded(status, &headers, &answer), "code").expect("a code");
+
+            // `exchange_for_tokens` asserts the 200.
+            let (access, refresh) = exchange_for_tokens(&a, &issued).await;
+
+            assert!(!access.is_empty() && !refresh.is_empty());
+        }
+
+        async fn a_consent_page_approves_once_across_replicas(server: TestRedis) {
+            let (a, b, _server) = oauth_replica_pair_on(server).await;
+            let alice = signed_in(&a, "alice", &[("main", Access::Read)]).await;
+            // Several rounds, so a nonce that is not spent atomically (both
+            // read it unspent) is caught even if one round serializes.
+            for round in 0..4 {
+                let page = user_page(&a, &alice).await;
+                let posted = super::consent_form(&page, READ_MAIN);
+
+                // `join!` polls both on this task, so the two reads overlap.
+                let (on_a, on_b) = tokio::join!(
+                    send_on(
+                        &a.app,
+                        "POST",
+                        "/oauth/authorize",
+                        Some(posted.clone()),
+                        Some(&alice)
+                    ),
+                    send_on(&b, "POST", "/oauth/authorize", Some(posted), Some(&alice)),
+                );
+
+                let mut statuses = [on_a.0, on_b.0];
+                statuses.sort();
+                assert_eq!(
+                    statuses,
+                    [StatusCode::OK, StatusCode::BAD_REQUEST],
+                    "round {round}: one approves: {} / {}",
+                    on_a.2,
+                    on_b.2
+                );
+                let refused = if on_a.0 == StatusCode::OK {
+                    on_b.2
+                } else {
+                    on_a.2
+                };
+                assert!(refused.contains(EXPIRED), "round {round}: {refused}");
+            }
+            assert_eq!(oauth_grants(&a).await, 4, "one grant per page");
+        }
+
+        async fn wrong_codes_count_across_replicas(server: TestRedis) {
+            let (a, b, _server) = oauth_replica_pair_on(server).await;
+            let (_, _, page) = send(
+                &a,
+                "GET",
+                &format!("/oauth/authorize?{}", authorize_query()),
+                None,
+            )
+            .await;
+            let (pending, csrf) = (hidden(&page, "pending"), hidden(&page, "csrf"));
+
+            for attempt in 1..=MAX_FAILED_ATTEMPTS {
+                let replica = if attempt % 2 == 1 { &b } else { &a.app };
+                let (status, _, answer) = send_on(
+                    replica,
+                    "POST",
+                    "/oauth/authorize",
+                    Some(code_form(&pending, &csrf, "okfsc_wrong")),
+                    None,
+                )
+                .await;
+                if attempt < MAX_FAILED_ATTEMPTS {
+                    assert_eq!(status, StatusCode::OK, "attempt {attempt}: {answer}");
+                    assert!(answer.contains(BAD_CODE), "attempt {attempt}: {answer}");
+                } else {
+                    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+                    assert!(answer.contains("Too many wrong sign-in codes."), "{answer}");
+                }
+            }
+
+            let code = sign_in_code(&a, Access::Read).await;
+            for replica in [&a.app, &b] {
+                let (status, _, answer) = send_on(
+                    replica,
+                    "POST",
+                    "/oauth/authorize",
+                    Some(code_form(&pending, &csrf, &code)),
+                    None,
+                )
+                .await;
+
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+                assert!(answer.contains(EXPIRED), "the request is gone: {answer}");
+            }
+        }
+
+        async fn an_expired_pending_authorization_is_refused(server: TestRedis) {
+            let (a, b, server) = oauth_replica_pair_on(server).await;
+            let code = sign_in_code(&a, Access::Read).await;
+            let (_, _, page) = send(
+                &a,
+                "GET",
+                &format!("/oauth/authorize?{}", authorize_query()),
+                None,
+            )
+            .await;
+            let (pending, csrf) = (hidden(&page, "pending"), hidden(&page, "csrf"));
+            let handle = crate::shared::testing::connect(&server).await;
+            let space = Keyspace::OauthPending.name();
+            // The raw id is never a key name (spec Decision 7): only its hash.
+            let raw: bool = redis::cmd("EXISTS")
+                .arg(handle.key(space, &pending))
+                .query_async(&mut handle.connection())
+                .await
+                .expect("EXISTS");
+            assert!(!raw, "no key is named by the raw pending id");
+            let expiring: bool = redis::cmd("PEXPIRE")
+                .arg(handle.key(space, &hashed(&pending)))
+                .arg(1)
+                .query_async(&mut handle.connection())
+                .await
+                .expect("PEXPIRE");
+            assert!(expiring, "the request is stored under the id's hash");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            for replica in [&b, &a.app] {
+                let (status, _, answer) = send_on(
+                    replica,
+                    "POST",
+                    "/oauth/authorize",
+                    Some(code_form(&pending, &csrf, &code)),
+                    None,
+                )
+                .await;
+
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+                assert!(answer.contains(EXPIRED), "{answer}");
+            }
+        }
+
+        /// The consent POST's change, rerun after another replica wrote
+        /// between its read and its write, still spends the page's nonce
+        /// (`lessons.md`: a closure passed to `update` may run twice).
+        async fn a_lost_race_reruns_the_consent_change_on_a_fresh_copy(server: TestRedis) {
+            let (a, b, _server) = oauth_replica_pair_on(server).await;
+            let alice = signed_in(&a, "alice", &[("main", Access::Read)]).await;
+            let page = user_page(&a, &alice).await;
+            let pending_id = hidden(&page, "pending");
+            let posted = ConsentForm {
+                pending: pending_id.clone(),
+                csrf: hidden(&page, "csrf"),
+                action: "consent".to_string(),
+                sign_in_code: None,
+                summary: Some(hidden(&page, "summary")),
+                default_catalog: None,
+                find: None,
+                choices: BTreeMap::new(),
+            };
+            // Two replicas, two Redis handles: A's update, B's interference.
+            let mine = &a.app.oauth().expect("OAuth is on").pending;
+            let theirs = &b.oauth().expect("OAuth is on").pending;
+            let runs = AtomicUsize::new(0);
+            let mut change = consent_change(&posted, Some("fresh-nonce".to_string()));
+
+            let decided = mine
+                .update(&pending_id, Instant::now(), |pending| {
+                    if runs.fetch_add(1, Ordering::SeqCst) == 0 {
+                        // B writes between this run's read and its write.
+                        // `block_in_place` lets this sync closure wait on
+                        // async code (multi-thread runtime only).
+                        tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(theirs.update(
+                                &pending_id,
+                                Instant::now(),
+                                |pending| pending.query.push_str("&changed=on-b"),
+                            ))
+                        })
+                        .expect("B's write")
+                        .expect("the request is live on B");
+                    }
+                    change(pending)
+                })
+                .await
+                .expect("Redis answers")
+                .expect("the request is live");
+
+            assert_eq!(runs.load(Ordering::SeqCst), 2, "the change ran again");
+            let (snapshot, _, claimed) = decided.expect("the CSRF token matches");
+            assert!(claimed, "the rerun still spends the page's nonce");
+            assert!(snapshot.query.ends_with("&changed=on-b"), "on B's copy");
+            assert_eq!(
+                snapshot.consent.expect("the user path").nonce,
+                "fresh-nonce",
+                "the stored nonce is the replacement"
+            );
+        }
+
+        async fn a_redis_outage_answers_the_busy_page(server: TestRedis) {
+            let (a, b, server) = oauth_replica_pair_on(server).await;
+            let code = sign_in_code(&a, Access::Read).await;
+            let (_, _, page) = send(
+                &a,
+                "GET",
+                &format!("/oauth/authorize?{}", authorize_query()),
+                None,
+            )
+            .await;
+            let (pending, csrf) = (hidden(&page, "pending"), hidden(&page, "csrf"));
+            if server.stop().await.is_none() {
+                eprintln!("skipped: a shared Redis (TEST_REDIS_URL) cannot be stopped");
+                return;
+            }
+
+            let (started, _, start_page) = send(
+                &a,
+                "GET",
+                &format!("/oauth/authorize?{}", authorize_query()),
+                None,
+            )
+            .await;
+            let (stepped, _, step_page) = send_on(
+                &b,
+                "POST",
+                "/oauth/authorize",
+                Some(code_form(&pending, &csrf, &code)),
+                None,
+            )
+            .await;
+
+            assert_eq!(started, StatusCode::SERVICE_UNAVAILABLE, "{start_page}");
+            assert!(start_page.contains(BUSY), "{start_page}");
+            assert_eq!(stepped, StatusCode::SERVICE_UNAVAILABLE, "{step_page}");
+            assert!(step_page.contains(BUSY), "{step_page}");
+        }
+
+        /// Sets the `default` user's command rule (`-del` or `+del`) through
+        /// `admin`, a connection of another user.
+        async fn default_user_may(admin: &mut redis::aio::MultiplexedConnection, rule: &str) {
+            let _: () = redis::cmd("ACL")
+                .arg("SETUSER")
+                .arg("default")
+                .arg(rule)
+                .query_async(admin)
+                .await
+                .expect("change the default user's permissions");
+        }
+
+        /// A connection to `server` as an admin user of its own, so a test can
+        /// take commands from the `default` user (the apps') and give them
+        /// back; `None` on a shared server, whose other tests use `default`.
+        async fn admin_of(server: &TestRedis) -> Option<redis::aio::MultiplexedConnection> {
+            let shared = [SERVER_URL_VAR, CLUSTER_URL_VAR]
+                .iter()
+                .any(|var| std::env::var(var).is_ok_and(|url| !url.is_empty()));
+            if shared {
+                return None;
+            }
+            // A plain connection: the container has one node in either mode.
+            let client = redis::Client::open(server.url.as_str()).expect("the test redis URL");
+            let mut admin = client
+                .get_multiplexed_async_connection()
+                .await
+                .expect("an admin connection");
+            let _: () = redis::cmd("ACL")
+                .arg("SETUSER")
+                .arg("okf-test-admin")
+                .arg("on")
+                .arg("nopass")
+                .arg("+@all")
+                .arg("~*")
+                .arg("&*")
+                .query_async(&mut admin)
+                .await
+                .expect("create the admin user");
+            let _: () = redis::cmd("AUTH")
+                .arg("okf-test-admin")
+                .arg("unused")
+                .query_async(&mut admin)
+                .await
+                .expect("authenticate as the admin user");
+            Some(admin)
+        }
+
+        /// The ids of the OAuth grants that are not revoked: the user's grant
+        /// list.
+        async fn live_grants(test: &TestApp) -> Vec<String> {
+            key_rows::list(test.app.pool())
+                .await
+                .expect("list the grants")
+                .into_iter()
+                .filter(|row| row.kind == KeyKind::OAuth && row.revoked_at.is_none())
+                .map(|row| row.id)
+                .collect()
+        }
+
+        /// When the removal after a successful update fails (`DEL` refused
+        /// with `NOPERM`, `GET` and the compare-and-set still allowed), Deny
+        /// and Approve answer the busy page: Deny does not forward the
+        /// denial, and Approve mints no authorization code. The grant the
+        /// failed approval created is revoked (issue #589), and a grant made
+        /// by an earlier, completed consent is left as it was.
+        async fn a_failed_removal_answers_the_busy_page(server: TestRedis) {
+            let Some(mut admin) = admin_of(&server).await else {
+                eprintln!("skipped: a shared Redis's default user cannot be restricted");
+                return;
+            };
+            let (a, b, _server) = oauth_replica_pair_on(server).await;
+            let start = || async {
+                let (_, _, page) = send(
+                    &a,
+                    "GET",
+                    &format!("/oauth/authorize?{}", authorize_query()),
+                    None,
+                )
+                .await;
+                (hidden(&page, "pending"), hidden(&page, "csrf"))
+            };
+            // An earlier consent that completed: its grant must survive.
+            let (earlier, earlier_csrf) = start().await;
+            let earlier_code = sign_in_code(&a, Access::Read).await;
+            let (_, _, earlier_summary) = send_on(
+                &b,
+                "POST",
+                "/oauth/authorize",
+                Some(code_form(&earlier, &earlier_csrf, &earlier_code)),
+                None,
+            )
+            .await;
+            let (earlier_status, earlier_headers, earlier_page) = send_on(
+                &b,
+                "POST",
+                "/oauth/authorize",
+                Some(form(&[
+                    ("pending", &earlier),
+                    ("csrf", &earlier_csrf),
+                    ("summary", &hidden(&earlier_summary, "summary")),
+                    ("action", "approve"),
+                ])),
+                None,
+            )
+            .await;
+            let earlier_target = forwarded(earlier_status, &earlier_headers, &earlier_page);
+            assert!(
+                param(&earlier_target, "code").is_some(),
+                "the earlier consent completed"
+            );
+            let before = live_grants(&a).await;
+            assert_eq!(before.len(), 1, "one grant before the failed approval");
+
+            let (denied, denied_csrf) = start().await;
+            let (approved, approved_csrf) = start().await;
+            let code = sign_in_code(&a, Access::Read).await;
+            let (_, _, summary) = send_on(
+                &b,
+                "POST",
+                "/oauth/authorize",
+                Some(code_form(&approved, &approved_csrf, &code)),
+                None,
+            )
+            .await;
+            let deny = form(&[
+                ("pending", &denied),
+                ("csrf", &denied_csrf),
+                ("action", "deny"),
+            ]);
+            let approval = form(&[
+                ("pending", &approved),
+                ("csrf", &approved_csrf),
+                ("summary", &hidden(&summary, "summary")),
+                ("action", "approve"),
+            ]);
+            let stored_codes = async |admin: &mut redis::aio::MultiplexedConnection| {
+                let mut keys: Vec<String> = redis::cmd("KEYS")
+                    .arg("*oauth:code:*")
+                    .query_async(admin)
+                    .await
+                    .expect("KEYS");
+                keys.sort();
+                keys
+            };
+            let codes_before = stored_codes(&mut admin).await;
+            default_user_may(&mut admin, "-del").await;
+
+            let refused_deny =
+                send_on(&b, "POST", "/oauth/authorize", Some(deny.clone()), None).await;
+            let refused_approval =
+                send_on(&b, "POST", "/oauth/authorize", Some(approval), None).await;
+            let codes = stored_codes(&mut admin).await;
+            default_user_may(&mut admin, "+del").await;
+            let later_deny = send_on(&b, "POST", "/oauth/authorize", Some(deny), None).await;
+
+            assert_eq!(
+                refused_deny.0,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{}",
+                refused_deny.2
+            );
+            assert!(refused_deny.2.contains(BUSY), "{}", refused_deny.2);
+            assert!(
+                !refused_deny.2.contains("access_denied"),
+                "no denial is forwarded"
+            );
+            assert_eq!(
+                refused_approval.0,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{}",
+                refused_approval.2
+            );
+            assert!(refused_approval.2.contains(BUSY), "{}", refused_approval.2);
+            assert!(
+                !refused_approval.2.contains("code="),
+                "no code is forwarded"
+            );
+            assert_eq!(
+                codes, codes_before,
+                "no authorization code was stored by the refused approval"
+            );
+            assert_eq!(
+                live_grants(&a).await,
+                before,
+                "the failed approval's grant is revoked and the earlier one survives"
+            );
+            // The denied request stayed, so the Deny goes through once Redis
+            // accepts the removal again.
+            let target = forwarded(later_deny.0, &later_deny.1, &later_deny.2);
+            assert_eq!(param(&target, "error").as_deref(), Some("access_denied"));
+        }
+
+        // `macro_rules!` writes a standalone and a cluster `#[tokio::test]`
+        // for every body named (Python: a parametrized test).
+        macro_rules! in_both_modes {
+            ($($name:ident),* $(,)?) => {
+                mod standalone {
+                    $(
+                        #[tokio::test(flavor = "multi_thread")]
+                        async fn $name() {
+                            let server = super::TestRedis::start().await;
+                            tokio::time::timeout(super::BOUND, super::$name(server))
+                                .await
+                                .expect(concat!(stringify!($name), " finished within the bound"));
+                        }
+                    )*
+                }
+                mod cluster {
+                    $(
+                        #[tokio::test(flavor = "multi_thread")]
+                        async fn $name() {
+                            let server = super::TestRedis::start_cluster().await;
+                            tokio::time::timeout(super::BOUND, super::$name(server))
+                                .await
+                                .expect(concat!(stringify!($name), " finished within the bound"));
+                        }
+                    )*
+                }
+            };
+        }
+
+        in_both_modes!(
+            consent_started_on_one_replica_is_approved_on_the_other_and_exchanged_on_the_first,
+            a_consent_page_approves_once_across_replicas,
+            wrong_codes_count_across_replicas,
+            an_expired_pending_authorization_is_refused,
+            a_lost_race_reruns_the_consent_change_on_a_fresh_copy,
+            a_redis_outage_answers_the_busy_page,
+            a_failed_removal_answers_the_busy_page,
+        );
+    }
+
+    // Issue #736: the signed-in page offers the ceiling a page at a time.
+
+    /// Gives `count` catalogs (`c00001`...) to `user`'s personal team by
+    /// SQL, their `member_access` cycling none, read, write.
+    async fn seed_owned(test: &TestApp, user: &str, count: i64) {
+        sqlx::query(
+            "INSERT INTO catalogs (name, description, created_at, owner_team_id, member_access) \
+             SELECT 'c' || lpad(n::text, 5, '0'), '', now(), \
+                    (SELECT id FROM teams WHERE name = $1), \
+                    (ARRAY['none', 'read', 'write'])[n % 3 + 1] \
+             FROM generate_series(1, $2) AS n",
+        )
+        .bind(user)
+        .bind(count)
+        .execute(test.app.pool())
+        .await
+        .unwrap();
+        sqlx::query("ANALYZE catalogs")
+            .execute(test.app.pool())
+            .await
+            .unwrap();
+    }
+
+    /// A Find (`find` set) or Next catalogs (`None`) of a signed-in page,
+    /// with `choices` ticked.
+    async fn browse_as(
+        test: &TestApp,
+        session: &Browser,
+        page: &str,
+        find: Option<&str>,
+        choices: &[(&str, &str)],
+    ) -> (StatusCode, String) {
+        let (pending, csrf, summary) = (
+            hidden(page, "pending"),
+            hidden(page, "csrf"),
+            hidden(page, "summary"),
+        );
+        let mut pairs = vec![
+            ("pending", pending.as_str()),
+            ("csrf", csrf.as_str()),
+            ("summary", summary.as_str()),
+        ];
+        match find {
+            Some(prefix) => pairs.extend([("action", "find"), ("find", prefix)]),
+            None => pairs.push(("action", "more")),
+        }
+        pairs.extend_from_slice(choices);
+        let (status, _, body) = send_as(
+            test,
+            "POST",
+            "/oauth/authorize",
+            Some(form(&pairs)),
+            Some(session),
+        )
+        .await;
+        (status, body)
+    }
+
+    /// What the page's pending authorization holds for its consent.
+    async fn consent_of(test: &TestApp, page: &str) -> crate::oauth::state::UserConsent {
+        test.app
+            .oauth()
+            .expect("oauth on")
+            .pending
+            .update(&hidden(page, "pending"), Instant::now(), |pending| {
+                pending.consent.clone()
+            })
+            .await
+            .unwrap()
+            .flatten()
+            .expect("a signed-in consent")
+    }
+
+    /// Equivalence with the whole-ceiling page it replaces: walking Next
+    /// catalogs offers exactly `ceiling_of` (every catalog once, at its
+    /// level), a page of at most `CONSENT_PAGE` at a time, and a Find
+    /// offers exactly the ceiling's catalogs with that prefix. Team
+    /// catalogs at each `member_access`, and entitlements raising one,
+    /// matching one, reaching a `none` one and one of another team.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn walking_the_consent_pages_offers_exactly_the_whole_ceiling() {
+        let test = oauth_app().await;
+        let alice = signed_in(&test, "alice", &[("main", Access::Read)]).await;
+        seed_owned(&test, "alice", 160).await;
+        for (catalog, access) in [
+            ("c00001", Access::Write),
+            ("c00002", Access::Write),
+            ("c00003", Access::Read),
+            ("c00004", Access::Read),
+        ] {
+            ceiling::entitle(
+                test.app.pool(),
+                &NewEntitlement {
+                    user: "alice",
+                    catalog,
+                    access,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("entitle");
+        }
+        let whole = ceiling::ceiling_of(test.app.pool(), "alice").await.unwrap();
+
+        let mut page = user_page(&test, &alice).await;
+        let mut walked = Ceiling::new();
+        let mut pages = 0;
+        loop {
+            let consent = consent_of(&test, &page).await;
+            assert!(consent.offered.len() <= CONSENT_PAGE as usize);
+            assert!(!consent.whole, "160 catalogs do not fit a page");
+            for (catalog, level) in &consent.offered {
+                assert!(page.contains(&format!("name=\"grant.{catalog}\"")));
+                assert_eq!(
+                    walked.insert(catalog.clone(), *level),
+                    None,
+                    "{catalog} twice"
+                );
+            }
+            pages += 1;
+            if consent.next.is_none() {
+                assert!(!page.contains("id=\"consent-more\""));
+                break;
+            }
+            assert!(page.contains("id=\"consent-more\""));
+            let (status, next) = browse_as(&test, &alice, &page, None, &[]).await;
+            assert_eq!(status, StatusCode::OK, "{next}");
+            page = next;
+        }
+        assert_eq!(walked, whole);
+        assert!(pages >= 3, "{pages} pages");
+
+        let (status, found) = browse_as(&test, &alice, &page, Some(" C0001"), &[]).await;
+        assert_eq!(status, StatusCode::OK, "{found}");
+        let wanted: Ceiling = whole
+            .iter()
+            .filter(|(catalog, _)| catalog.starts_with("c0001"))
+            .map(|(catalog, level)| (catalog.clone(), *level))
+            .collect();
+        let consent = consent_of(&test, &found).await;
+        assert_eq!(consent.offered, wanted);
+        assert_eq!(consent.prefix, "c0001");
+        assert!(
+            found.contains("value=\"c0001\""),
+            "the box keeps the prefix"
+        );
+    }
+
+    /// Ticked catalogs are carried across a Find, preselected at their
+    /// level, and approved with the found ones in one grant; a Find for a
+    /// prefix nothing starts with says so and still offers what is carried.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_find_carries_the_ticked_catalogs_into_one_grant() {
+        let test = oauth_app().await;
+        let alice = signed_in(
+            &test,
+            "alice",
+            &[("main", Access::Write), ("other", Access::Read)],
+        )
+        .await;
+        let page = user_page(&test, &alice).await;
+
+        let (status, found) = browse_as(
+            &test,
+            &alice,
+            &page,
+            Some("ot"),
+            &[("grant.main", "on"), ("level.main", "write")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{found}");
+        assert!(
+            found.contains("name=\"grant.main\" value=\"on\" id=\"consent-catalog-main\" checked")
+        );
+        assert!(found.contains("<option value=\"write\" selected>write</option>"));
+        assert!(found.contains("name=\"grant.other\" value=\"on\" id=\"consent-catalog-other\">"));
+        let (status, none) = browse_as(
+            &test,
+            &alice,
+            &found,
+            Some("zz"),
+            &[("grant.main", "on"), ("level.main", "write")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{none}");
+        assert!(
+            !none.contains("id=\"consent-none-found\""),
+            "main is carried"
+        );
+        assert_eq!(
+            consent_of(&test, &none).await.offered,
+            [("main".to_string(), Access::Write)]
+                .into_iter()
+                .collect::<Ceiling>()
+        );
+        let (status, empty) = browse_as(&test, &alice, &none, Some("zz"), &[]).await;
+        assert_eq!(status, StatusCode::OK, "{empty}");
+        assert!(empty.contains("id=\"consent-none-found\""), "{empty}");
+        assert!(!empty.contains("id=\"consent-empty\""), "she has catalogs");
+
+        let (status, again) = browse_as(&test, &alice, &empty, Some("ot"), &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, carried) = browse_as(
+            &test,
+            &alice,
+            &again,
+            Some("ma"),
+            &[("grant.other", "on"), ("level.other", "read")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, headers, body) = consent_as(
+            &test,
+            Some(&alice),
+            &carried,
+            &[
+                ("grant.main", "on"),
+                ("level.main", "write"),
+                ("grant.other", "on"),
+                ("level.other", "read"),
+                ("default_catalog", "main"),
+            ],
+        )
+        .await;
+        let grant = grant_of(&test, &forwarded(status, &headers, &body)).await;
+        let principal = test
+            .app
+            .find_grant(&grant)
+            .await
+            .unwrap()
+            .expect("cached grant");
+        assert_eq!(principal.level("main"), Some(Access::Write));
+        assert_eq!(principal.level("other"), Some(Access::Read));
+        assert_eq!(principal.default_catalog.as_deref(), Some("main"));
+    }
+
+    /// A carried catalog is offered at the ceiling's level now: lowered
+    /// since the page, it is carried at the lower level, and a write
+    /// chosen from the old page is refused; one the ceiling no longer
+    /// reaches is dropped. A tick the page never offered is refused, and so
+    /// is any later use of a page whose nonce a Find spent.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_find_rechecks_what_it_carries_and_spends_the_page() {
+        let test = oauth_app().await;
+        let alice = signed_in(
+            &test,
+            "alice",
+            &[("main", Access::Write), ("other", Access::Read)],
+        )
+        .await;
+        let page = user_page(&test, &alice).await;
+        ceiling::entitle(
+            test.app.pool(),
+            &NewEntitlement {
+                user: "alice",
+                catalog: "main",
+                access: Access::Read,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("lower");
+        ceiling::unentitle(
+            test.app.pool(),
+            "alice",
+            "other",
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("remove");
+
+        let (status, found) = browse_as(
+            &test,
+            &alice,
+            &page,
+            Some("zz"),
+            &[
+                ("grant.main", "on"),
+                ("level.main", "write"),
+                ("grant.other", "on"),
+                ("level.other", "read"),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{found}");
+        assert_eq!(
+            consent_of(&test, &found).await.offered,
+            [("main".to_string(), Access::Read)]
+                .into_iter()
+                .collect::<Ceiling>()
+        );
+        assert!(!found.contains("value=\"write\""), "{found}");
+        // The old page's nonce was spent by the Find.
+        let (stale, _, _) = consent_as(&test, Some(&alice), &page, READ_MAIN).await;
+        assert_eq!(stale, StatusCode::BAD_REQUEST);
+        let (write, _, body) = consent_as(
+            &test,
+            Some(&alice),
+            &found,
+            &[("grant.main", "on"), ("level.main", "write")],
+        )
+        .await;
+        assert_eq!(write, StatusCode::BAD_REQUEST);
+        assert!(body.contains("did not match what was offered"), "{body}");
+        assert_eq!(oauth_grants(&test).await, 0);
+
+        let page = user_page(&test, &alice).await;
+        let (tampered, body) = browse_as(
+            &test,
+            &alice,
+            &page,
+            Some("ma"),
+            &[("grant.other", "on"), ("level.other", "read")],
+        )
+        .await;
+        assert_eq!(tampered, StatusCode::BAD_REQUEST);
+        assert!(body.contains("did not match what was offered"), "{body}");
+    }
+
+    /// The offer stays bounded: more than `MAX_CARRIED` ticked catalogs are
+    /// not carried; the page comes back with the message and its ticks.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_find_carries_at_most_max_carried_catalogs() {
+        let test = oauth_app().await;
+        let alice = signed_in(&test, "alice", &[]).await;
+        // 160 catalogs, two thirds reachable: over two pages.
+        seed_owned(&test, "alice", 160).await;
+        let first = user_page(&test, &alice).await;
+        let ticks = |consent: &crate::oauth::state::UserConsent| -> Vec<(String, String)> {
+            consent
+                .offered
+                .keys()
+                .flat_map(|catalog| {
+                    [
+                        (format!("grant.{catalog}"), "on".to_string()),
+                        (format!("level.{catalog}"), "read".to_string()),
+                    ]
+                })
+                .collect()
+        };
+        let all = ticks(&consent_of(&test, &first).await);
+        let pairs: Vec<(&str, &str)> = all.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let (status, second) = browse_as(&test, &alice, &first, None, &pairs).await;
+        assert_eq!(status, StatusCode::OK, "{second}");
+        let offered = consent_of(&test, &second).await;
+        assert_eq!(offered.offered.len(), 2 * CONSENT_PAGE as usize);
+        let all = ticks(&offered);
+        let pairs: Vec<(&str, &str)> = all.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+
+        let (status, refused) = browse_as(&test, &alice, &second, None, &pairs).await;
+
+        assert_eq!(status, StatusCode::OK, "{refused}");
+        assert!(refused.contains("at most 50 ticked catalogs"), "{refused}");
+        assert_eq!(consent_of(&test, &refused).await.offered, offered.offered);
+        assert!(TOO_MANY_CARRIED.contains(&MAX_CARRIED.to_string()));
+    }
+
+    /// Issue #736's size bound: with a team owning 50,000 catalogs, `GET
+    /// /me`, `GET /session`, `GET /me/ceiling`, the consent page and a Find
+    /// each read a bounded number of rows (sqlx's `rows_returned`), not one
+    /// per catalog.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_team_owning_many_catalogs_keeps_each_page_small() {
+        use crate::rows_returned::counting;
+        let test = oauth_app().await;
+        let alice = signed_in(&test, "alice", &[]).await;
+        sqlx::query(
+            "INSERT INTO catalogs (name, description, created_at, owner_team_id) \
+             SELECT 'c' || lpad(n::text, 6, '0'), '', now(), \
+                    (SELECT id FROM teams WHERE name = 'alice') \
+             FROM generate_series(1, 50000) AS n",
+        )
+        .execute(test.app.pool())
+        .await
+        .unwrap();
+        sqlx::query("ANALYZE catalogs")
+            .execute(test.app.pool())
+            .await
+            .unwrap();
+        let (test, alice) = (&test, &alice);
+        let get = |path: &'static str| async move {
+            let (status, _, body) = send_as(test, "GET", path, None, Some(alice)).await;
+            assert_eq!(status, StatusCode::OK, "{path}: {body}");
+            body
+        };
+        // Warm the session and the caches, so only the page's own reads count.
+        get("/api/v1/session").await;
+
+        let (me, me_rows, _) = counting(get("/api/v1/me")).await;
+        let (_, session_rows, _) = counting(get("/api/v1/session")).await;
+        let (_, listing_rows, _) = counting(get("/api/v1/me/ceiling")).await;
+        let authorize = format!("/oauth/authorize?{}", user_authorize_query());
+        let (page, page_rows, _) =
+            counting(async { send_as(test, "GET", &authorize, None, Some(alice)).await.2 }).await;
+        // The page's offer is one page (the Find below replaces it).
+        assert_eq!(
+            consent_of(test, &page).await.offered.len(),
+            CONSENT_PAGE as usize
+        );
+        let ((status, found), find_rows, _) =
+            counting(browse_as(test, alice, &page, Some("c04999"), &[])).await;
+        assert_eq!(consent_of(test, &found).await.offered.len(), 10);
+
+        assert!(me.contains("\"ceiling_access\":\"write\""), "{me}");
+        assert_eq!(status, StatusCode::OK, "{found}");
+        assert!(found.contains("name=\"grant.c049999\""), "{found}");
+        for (what, rows) in [
+            ("GET /me", me_rows),
+            ("GET /session", session_rows),
+            ("GET /me/ceiling", listing_rows),
+            ("the consent page", page_rows),
+            ("a Find", find_rows),
+        ] {
+            assert!(rows < 1_000, "{what} returned {rows} rows");
+        }
+        assert!(page_rows > 0, "the page's reads are counted");
     }
 }

@@ -17,6 +17,7 @@
 import { h, fill, pill } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
 import { store } from '../core/store.js';
+import { catalogLabel, ensureLabels, named, userLabel } from '../core/labels.js';
 import { toast } from '../core/toast.js';
 import { when } from '../core/format.js';
 import { listTable } from '../components/list-table.js';
@@ -67,8 +68,8 @@ export async function render(main) {
 
     async function end(row) {
         const ok = await confirmDialog({
-            title: `End the unlock of ${row.catalog}?`,
-            message: `${row.user} loses operator access to ${row.catalog} now.`,
+            title: `End the unlock of ${catalogLabel(row.catalog)}?`,
+            message: `${userLabel(row.user)} loses operator access to ${catalogLabel(row.catalog)} now.`,
             action: 'End',
         });
         if (!ok) return;
@@ -78,7 +79,7 @@ export async function render(main) {
                 refusals.delete(row.id);
                 // The answer is drawn even when the reload after it fails.
                 rows = rows.map(shown => (shown.id === ended.id ? ended : shown));
-                toast(`Ended the unlock of ${ended.catalog}.`, 'ok');
+                toast(`Ended the unlock of ${catalogLabel(ended.catalog)}.`, 'ok');
             } catch (error) {
                 refusals.set(row.id, error.message);   // already toasted
             }
@@ -96,8 +97,8 @@ export async function render(main) {
             : null,
     ];
     const columns = [
-        { key: 'catalog', label: 'Catalog', sort: row => row.catalog, render: row => h('code', {}, row.catalog) },
-        admin ? { key: 'user', label: 'User', sort: row => row.user, render: row => row.user } : null,
+        { key: 'catalog', label: 'Catalog', sort: row => row.catalog, render: row => named(catalogLabel(row.catalog), row.catalog) },
+        admin ? { key: 'user', label: 'User', sort: row => row.user, render: row => named(userLabel(row.user), row.user) } : null,
         admin ? null : { key: 'by', label: 'By', render: row => h('span', { class: 'muted' }, row.by) },
         { key: 'category', label: 'Category', sort: row => row.category,
           render: row => CATEGORY_LABEL[row.category] ?? row.category },
@@ -129,6 +130,9 @@ export async function render(main) {
         try {
             answer = await api.get(admin ? '/unlocks' : `/unlocks?${new URLSearchParams({ team: team.value })}`);
         } catch { /* toasted */ }
+        // An admin's rows name their users: read those labels (a failed
+        // read shows the slugs; it never stops the rows from drawing).
+        if (admin && answer !== null) await ensureLabels({ users: answer.unlocks.map(row => row.user) });
         if (mine !== loads || !main.isConnected) return;
         stale.hidden = answer !== null;
         if (answer !== null) rows = answer.unlocks;

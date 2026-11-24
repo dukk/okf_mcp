@@ -1,20 +1,27 @@
 //! Signing in as a person: an emailed setup link, a password, the console
 //! showing the user, a reload that resumes the session, sign-out, and
-//! signing in again with the password.
+//! signing in again with the password. A first setup with an onboarding
+//! guide on another origin ends on a welcome page that links to it: a 303
+//! there after the setup form's POST would be blocked by the console CSP's
+//! `form-action 'self'`.
 
 use std::time::Duration;
 
+use axum::response::Html;
+use axum::routing::get;
+use axum::Router;
 use chrono::Utc;
 use okf_mcp::config::Config;
 use okf_mcp::mail::{link, SETUP_PATH};
 use okf_mcp::mail::{queue as mail_queue, Template};
 use okf_mcp::store::email_tokens::{self, Purpose};
 use okf_mcp::store::keys::Access;
+use okf_mcp::store::settings::Brand;
 use okf_mcp::store::sign_in_events::{self, Method, Outcome};
 use okf_mcp::store::{ceiling, passkeys, users};
 use rustwright::GotoOptions;
 
-use crate::harness::drive;
+use crate::harness::{drive, Ui};
 use crate::support::server::{files, TestServer};
 use okf_mcp::store::audit::AuditActor;
 use okf_mcp::store::ceiling::NewEntitlement;
@@ -64,7 +71,7 @@ async fn a_setup_link_sets_a_password_and_the_console_shows_the_user() {
         pool,
         &users::NewUser {
             name: "alice",
-            display_name: "Alice",
+            display_name: &okf_mcp::labels::DisplayName::parse("Alice").unwrap(),
         },
         &AuditActor::cli(),
         Utc::now(),
@@ -80,19 +87,21 @@ async fn a_setup_link_sets_a_password_and_the_console_shows_the_user() {
     )
     .await
     .expect("set the email");
-    ceiling::entitle(
-        pool,
-        &NewEntitlement {
-            user: "alice",
-            catalog: "main",
-            access: Access::Read,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("entitle");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            pool,
+            &NewEntitlement {
+                user: "alice",
+                catalog: "main",
+                access: Access::Read,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle");
+    })
+    .await;
     let alice = users::find_by_email(pool, "alice@example.com")
         .await
         .expect("find alice")
@@ -110,9 +119,15 @@ async fn a_setup_link_sets_a_password_and_the_console_shows_the_user() {
         link: link(&server.base, SETUP_PATH, &token),
         user: "alice".to_string(),
     };
-    mail_queue::enqueue(pool, "alice@example.com", &template, Utc::now())
-        .await
-        .expect("queue the mail");
+    mail_queue::enqueue(
+        pool,
+        "alice@example.com",
+        &template,
+        Utc::now(),
+        &Brand::default(),
+    )
+    .await
+    .expect("queue the mail");
     let job: String = sqlx::query_scalar("SELECT convert_from(job, 'UTF8') FROM apalis.jobs")
         .fetch_one(pool)
         .await
@@ -124,12 +139,13 @@ async fn a_setup_link_sets_a_password_and_the_console_shows_the_user() {
             .goto(&link, GotoOptions::default())
             .expect("open the setup link");
         ui.wait_text("#setup-form", "Confirm the password");
-        ui.wait_text("main strong", "alice");
+        // The page welcomes the display name ("Alice"), not the slug.
+        ui.wait_text("main strong", "Alice");
         ui.fill("#setup-password", PASSWORD);
         ui.fill("#setup-confirm", PASSWORD);
         ui.click("#setup-submit");
         ui.wait_visible("#app");
-        ui.wait_text("#whoami", "alice - read");
+        ui.wait_text("#whoami", "Alice - read");
         assert!(!ui.page.is_visible("[data-need=admin]").expect("visible"));
         // The first sign-out request fails (a 503 from a fetch wrapper):
         // the console says so and stays signed in, on the server too.
@@ -148,7 +164,7 @@ async fn a_setup_link_sets_a_password_and_the_console_shows_the_user() {
         ui.wait_visible("#login");
         assert!(!ui.page.is_visible("#app").expect("visible"));
         ui.sign_in_password("alice@example.com", PASSWORD);
-        ui.wait_text("#whoami", "alice - read");
+        ui.wait_text("#whoami", "Alice - read");
     })
     .await;
     if !ran {
@@ -170,25 +186,161 @@ async fn a_setup_link_sets_a_password_and_the_console_shows_the_user() {
     assert_eq!(events[0].ip, "127.0.0.1".parse().ok());
 }
 
+/// Serves a page at `/start/` standing in for the getting-started guide,
+/// on its own port (so another origin).
+///
+/// # Returns
+/// The guide's URL, `http://127.0.0.1:<port>/start/`.
+async fn guide_host() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let url = format!("http://{}/start/", listener.local_addr().expect("address"));
+    let router = Router::new().route(
+        "/start/",
+        get(|| async {
+            Html("<!DOCTYPE html><title>guide</title><p id=\"guide\">first fifteen minutes</p>")
+        }),
+    );
+    // Runs until the test's runtime shuts down.
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    url
+}
+
+/// A server whose `onboarding_url` is `guide`, with a setup link for a new
+/// user `alice` (no password yet); returns both.
+async fn onboarding_server(guide: String) -> (TestServer, String) {
+    let server = TestServer::start_with(
+        vec![("main", files(&[("index.md", "# Main\n")]))],
+        move |base| {
+            let mut config = Config {
+                public_url: Some(base.to_string()),
+                ..Config::default()
+            };
+            config.auth.onboarding_url = Some(guide);
+            config
+        },
+    )
+    .await;
+    let pool = &server.db.pool;
+    users::create(
+        pool,
+        &users::NewUser {
+            name: "alice",
+            display_name: &okf_mcp::labels::DisplayName::parse("Alice").unwrap(),
+        },
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("create alice");
+    users::set_email(
+        pool,
+        "alice",
+        Some("alice@example.com"),
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .expect("set the email");
+    let alice = users::find_by_email(pool, "alice@example.com")
+        .await
+        .expect("find alice")
+        .expect("alice exists");
+    let token = email_tokens::issue(
+        pool,
+        &alice.id,
+        Purpose::Setup,
+        Duration::from_secs(3600),
+        Utc::now(),
+    )
+    .await
+    .expect("issue a setup link");
+    let setup = link(&server.base, SETUP_PATH, &token);
+    (server, setup)
+}
+
+/// Sets alice's password on `setup`, and waits for the welcome page.
+fn set_password_and_welcome(ui: &Ui, setup: &str) {
+    ui.page
+        .goto(setup, GotoOptions::default())
+        .expect("open the setup link");
+    ui.wait_text("#setup-form", "Confirm the password");
+    ui.fill("#setup-password", PASSWORD);
+    ui.fill("#setup-confirm", PASSWORD);
+    ui.click("#setup-submit");
+    ui.wait_text("#setup-welcome", "Your account is ready");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_first_setup_welcomes_then_opens_an_onboarding_guide_on_another_origin() {
+    let guide = guide_host().await;
+    let (server, setup) = onboarding_server(guide.clone()).await;
+    let pool = server.db.pool.clone();
+    let origin = server.base.clone();
+
+    let ran = drive(server.base.clone(), move |ui| {
+        set_password_and_welcome(ui, &setup);
+        // Still on this origin: no redirect took the browser away.
+        let href = ui.eval("() => location.origin", serde_json::json!(null));
+        assert_eq!(href.as_str(), Some(origin.as_str()), "still on the console");
+        ui.click("#setup-guide");
+        ui.wait_visible("#guide");
+        let href = ui.eval("() => location.href", serde_json::json!(null));
+        assert_eq!(href.as_str(), Some(guide.as_str()), "on the guide");
+        // Signed in on the way: back at the console, the session is there.
+        ui.open("");
+        assert_eq!(ui.eval(SESSION_STATUS, serde_json::json!(null)), 200);
+    })
+    .await;
+    if !ran {
+        return;
+    }
+    let events = sign_in_events::recent(&pool, "alice", 10)
+        .await
+        .expect("events");
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        (&events[0].method, &events[0].outcome),
+        (Method::Setup, Outcome::Ok)
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_welcome_page_links_on_to_the_console_signed_in() {
+    let guide = guide_host().await;
+    let (server, setup) = onboarding_server(guide).await;
+
+    drive(server.base.clone(), move |ui| {
+        set_password_and_welcome(ui, &setup);
+        ui.click("#setup-console");
+        ui.wait_visible("#app");
+        ui.wait_text("#whoami", "Alice - ");
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_refused_password_says_so_and_a_session_survives_a_reload() {
     let server = server().await;
     server
         .user_with_password("bob", "bob@example.com", PASSWORD)
         .await;
-    ceiling::entitle(
-        &server.db.pool,
-        &NewEntitlement {
-            user: "bob",
-            catalog: "main",
-            access: Access::Write,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("entitle");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            &server.db.pool,
+            &NewEntitlement {
+                user: "bob",
+                catalog: "main",
+                access: Access::Write,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle");
+    })
+    .await;
 
     drive(server.base.clone(), move |ui| {
         // The login card links to the account sign-in.
@@ -303,19 +455,21 @@ async fn an_admin_session_writes_through_the_console_with_its_csrf_token() {
     server
         .user_with_password("erin", "erin@example.com", PASSWORD)
         .await;
-    users::set_admin(
-        &server.db.pool,
-        "erin",
-        AdminChange {
-            on: true,
-            allow_last: false,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("make erin an admin");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        users::set_admin(
+            &server.db.pool,
+            "erin",
+            AdminChange {
+                on: true,
+                allow_last: false,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("make erin an admin");
+    })
+    .await;
 
     let ran = drive(server.base.clone(), move |ui| {
         ui.sign_in_password("erin@example.com", PASSWORD);
@@ -396,7 +550,7 @@ async fn a_setup_link_registers_a_passkey_that_then_signs_in_from_the_sign_in_pa
         pool,
         &users::NewUser {
             name: "alice",
-            display_name: "Alice",
+            display_name: &okf_mcp::labels::DisplayName::parse("Alice").unwrap(),
         },
         &AuditActor::cli(),
         Utc::now(),
@@ -412,19 +566,21 @@ async fn a_setup_link_registers_a_passkey_that_then_signs_in_from_the_sign_in_pa
     )
     .await
     .expect("set the email");
-    ceiling::entitle(
-        pool,
-        &NewEntitlement {
-            user: "alice",
-            catalog: "main",
-            access: Access::Read,
-        },
-        &AuditActor::cli(),
-        Utc::now(),
-    )
-    .await
-    .expect("entitle");
-    server.app.poll().await.expect("poll");
+    crate::support::server::applied(&server.app, async {
+        ceiling::entitle(
+            pool,
+            &NewEntitlement {
+                user: "alice",
+                catalog: "main",
+                access: Access::Read,
+            },
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .expect("entitle");
+    })
+    .await;
     let alice = users::find_by_email(pool, "alice@example.com")
         .await
         .expect("find alice")
@@ -448,7 +604,7 @@ async fn a_setup_link_registers_a_passkey_that_then_signs_in_from_the_sign_in_pa
         ui.wait_visible("#setup-passkey[data-ready=true]");
         ui.fill("#setup-passkey-name", "Laptop");
         ui.click("#setup-passkey");
-        ui.wait_text("#whoami", "alice - read");
+        ui.wait_text("#whoami", "Alice - read");
         ui.click("#signout");
         ui.wait_visible("#login");
         assert_eq!(ui.eval(SESSION_STATUS, serde_json::json!(null)), 401);
@@ -458,7 +614,7 @@ async fn a_setup_link_registers_a_passkey_that_then_signs_in_from_the_sign_in_pa
             .expect("open the sign-in page");
         ui.wait_visible("#signin-passkey[data-ready=true]");
         ui.click("#signin-passkey");
-        ui.wait_text("#whoami", "alice - read");
+        ui.wait_text("#whoami", "Alice - read");
         assert_eq!(ui.eval(SESSION_STATUS, serde_json::json!(null)), 200);
     })
     .await;

@@ -110,7 +110,8 @@ about payment, plans or any particular operator.
   catalog (Part 4), but never read catalog contents (2026-11-13, after the
   builder check). Accepted consequence: whoever holds a provisioner key can
   take over any non-admin account (set its email, send a setup link), so
-  the key is protected like an admin key and every use is audited.
+  the key is protected like an admin key and what it does that matters is
+  audited (state changes, email lookups and refusals; see Part 4).
 - **Audit entries don't identify deleted people** (2026-11-13): entries
   refer to people through a separate people table; deleting a user
   replaces their row with "deleted user #N". Email addresses never go into
@@ -221,9 +222,13 @@ owner `NOT NULL`) is unaffected.
   any team and any catalog through the routes above.
 - One check function decides, from an explicit allow-list of route
   templates, so adding a route never widens a provisioner by accident.
-- Everything it does is audited with its key as the actor. *(Qualified,
-  issue #410, 2026-11-15: what shipped records every state change it makes,
-  not every use; see "What shipped differently" and #423.)*
+- Every state change it makes, every email lookup and every refused request
+  is audited with its key as the actor; other reads and no-op requests
+  appear in request traces and metrics. *(Reworded, issue #423,
+  2026-11-22, by the maintainer's decision: the design's "everything it
+  does is audited" shipped as state changes only (issue #410); the email
+  lookups and refusals that carry signal were then added. See "What shipped
+  differently".)*
 
 ## Part 5: the audit log
 
@@ -355,6 +360,12 @@ audit tables), so deleting one never changes or removes its entries.
   person's name.
 - `GET /api/v1/audit?team=&action=&actor=&target=&since=&until=&after=&limit=`,
   newest first, cursor-paged (`after`).
+- *(Corrected, issue #430, 2026-11-20.)* An owner sees no entry id: ids are
+  one server-wide sequence, so their gaps would show other teams' activity.
+  An owner's entries have no `id`, and its cursor is the next entry id and
+  its audit team encrypted under a server key kept in `server_keys`; a raw
+  id, an altered cursor or another team's is 400. Admins and provisioners
+  keep raw ids.
 - `GET /api/v1/audit/export?...` with the same filters: JSON Lines, for a
   customer's compliance request.
 - CLI: `okf-mcp audit list` and `okf-mcp audit export` (same filters).
@@ -613,15 +624,25 @@ are the places where what shipped is narrower, wider or more exact.
 
 ### Behaviour
 
-- **The provisioner's auditing is of state changes, not every use.** Part 4
-  says everything a provisioner does is audited. What shipped (PR #422 and
-  the recording tasks) records every administrative change it makes, in the
-  change's transaction, with its key as the actor; its metadata reads
-  (`GET /users?email=`, `GET /users/{name}`, `GET /teams/{name}`), requests
-  that change nothing and refused requests write no entry. This is a
-  partial meeting of the design, not an authorization gap; #423 tracks
-  either adding bounded request-use events or narrowing the requirement.
-  It is not claimed complete.
+- **The provisioner's auditing is of state changes, email lookups and
+  refusals, not every use.** Part 4 first said everything a provisioner does
+  is audited. What shipped says exactly this: every state change it makes,
+  every email lookup and every refused request is audited with its key as
+  the actor; other reads and no-op requests appear in request traces and
+  metrics. State changes are recorded in the change's transaction (PR #422
+  and the recording tasks). Email lookups (`user.looked_up`) and refusals
+  (`provisioner.refused`, from the API's gate, from MCP's and the archive
+  routes' refusal of a provisioner key, or a handler's 403, with the route
+  template, method and a stable reason code) are written in the background
+  with the actor fixed at admission, collapsed to one entry per key, kind
+  and clock hour with an exact count, capped at 50 entries per key per hour
+  with the rest counted in one overflow entry, and limited to 32 writes in
+  flight. They store no email (not even a hash: nothing needs to correlate
+  lookups of one address, and a keyed hash would only add a linkable value),
+  no request body, no literal path and no secret. They belong to no team, so
+  owners never see them. `GET /users/{name}`, `GET /teams`, `GET
+  /teams/{name}`, `GET /audit` and requests that change nothing record
+  nothing. (Issue #423, 2026-11-22, the maintainer's decision.)
 - **A provisioner's server-wide reach includes admins' personal teams.**
   Team and catalog operations are server-wide, as Part 4's allow-list says,
   so they may act on a team that is an admin user's personal team; what is
@@ -766,7 +787,7 @@ are the places where what shipped is narrower, wider or more exact.
     lock, so a concurrent transfer can still need a retry.
   - #423: the provisioner's every-use auditing (above).
   - #430: the owner view exposes global entry ids, which show other teams'
-    activity volume.
+    activity volume; fixed after the milestone (above).
   - #434 and #440: test flakes (the settings set/reset race test, the
     passkey journey).
   - From milestone 13: #361, #381 and #385 (console follow-ups).

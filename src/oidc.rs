@@ -21,12 +21,15 @@ use openidconnect::{
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, OidcProviderConfig};
 use crate::error::OkfError;
-use crate::http::limits::KeyedLimiter;
 use crate::keys;
-use crate::oauth::expiring::ExpiringMap;
+use crate::shared::ephemeral::{Ephemeral, Index, IndexSpace, Keyspace, Swap};
+use crate::shared::limits::KeyedLimit;
+use crate::shared::Redis;
+use crate::telemetry::metrics::Limiter;
 use crate::telemetry::subscriber::split_event;
 
 /// A client configured from a discovery document: an authorization
@@ -149,7 +152,9 @@ async fn send(client: reqwest::Client, request: HttpRequest) -> Result<HttpRespo
         .map_err(|error| HttpError(error.to_string()))
 }
 
-/// A flow's secrets: compared or sent back once, never logged.
+/// A flow's secrets: compared or sent back once, never logged. With
+/// `[redis]` they are stored there as JSON (server-side, like Postgres).
+#[derive(Serialize, Deserialize)]
 pub struct FlowSecrets {
     /// The `state` sent to the provider.
     pub state: String,
@@ -175,17 +180,35 @@ impl std::fmt::Debug for FlowSecrets {
 }
 
 /// A signed-in user linking a provider from the account page.
+#[derive(Serialize, Deserialize)]
 pub struct LinkRequest {
     /// The user's id.
     pub user_id: String,
-    /// The raw id of the session that asked: the callback must come back
-    /// with it, and it is kept when the others are ended.
-    pub session_id: String,
+    /// [`session_hash`] of the session that asked, never its raw id (spec
+    /// Decision 7): the callback finishes only when its own session cookie
+    /// hashes to it, and then keeps that request's session when the others
+    /// are ended.
+    pub session_hash: String,
     /// Keep the user's other sessions.
     pub keep_sessions: bool,
 }
 
-// Hand-written: the session id is a credential.
+/// The form a console session id is stored in by a link flow or a passkey
+/// registration (`http::passkeys`), and the key of its
+/// [`IndexSpace::OidcLink`] or `IndexSpace::PasskeySession` entry: the
+/// unpadded URL-safe base64 of its SHA-256.
+///
+/// # Arguments
+/// * `session_id` - the raw console session id (the cookie's value).
+///
+/// # Returns
+/// 43 base64 characters.
+#[tracing::instrument(level = "trace", skip_all)]
+pub fn session_hash(session_id: &str) -> String {
+    URL_SAFE_NO_PAD.encode(keys::hash(session_id))
+}
+
+// Hand-written: even the session's hash stays out of logs.
 impl std::fmt::Debug for LinkRequest {
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
@@ -198,7 +221,7 @@ impl std::fmt::Debug for LinkRequest {
         formatter
             .debug_struct("LinkRequest")
             .field("user_id", &self.user_id)
-            .field("session_id", &"<redacted>")
+            .field("session_hash", &"<redacted>")
             .field("keep_sessions", &self.keep_sessions)
             .finish()
     }
@@ -206,7 +229,7 @@ impl std::fmt::Debug for LinkRequest {
 
 /// A flow in progress, keyed by the `okf_oidc` cookie's random id. Its
 /// `Debug` shows no secret ([`FlowSecrets`] and [`LinkRequest`] redact).
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Flow {
     /// The provider it was started with.
     pub provider: String,
@@ -265,15 +288,16 @@ pub struct OidcProviders {
     http: reqwest::Client,
     providers: BTreeMap<String, Provider>,
     /// Flows in progress (ten minutes, single use), keyed by the flow
-    /// cookie's random id (chosen by the server, never by the client).
-    /// Add to it with [`Self::store_flow`], which bounds each actor's share.
-    pub flows: ExpiringMap<Flow>,
-    /// Each console session's live link flow, by the SHA-256 of the session
-    /// id: a new link flow replaces (and removes) the session's previous one.
-    link_flows: ExpiringMap<String>,
+    /// cookie's random id (chosen by the server, never by the client), in
+    /// memory or, with `[redis]`, shared by every instance. Add to it with
+    /// [`Self::store_flow`], which bounds each actor's share.
+    pub flows: Ephemeral<Flow>,
+    /// Each console session's live link flow, by [`session_hash`]: a new
+    /// link flow replaces (and removes) the session's previous one.
+    link_flows: Index,
     /// Link starts by user id: a burst of [`LINK_STARTS_PER_USER`], refilled
-    /// one per minute.
-    link_starts: KeyedLimiter,
+    /// one per minute; in Redis with `[redis]`, shared by every instance.
+    link_starts: KeyedLimit,
 }
 
 // Hand-written: the providers hold client secrets, and the flows theirs.
@@ -300,6 +324,9 @@ impl OidcProviders {
     /// * `config` - the server's settings (validated).
     /// * `secret_of` - reads an environment variable (`std::env::var` in
     ///   production; a closure in tests).
+    /// * `redis` - the shared Redis (`[redis]`): flows and link flows live
+    ///   there, so a callback may land on any instance; `None` keeps them in
+    ///   this process's memory.
     ///
     /// # Returns
     /// `None` without `public_url` or providers.
@@ -311,6 +338,7 @@ impl OidcProviders {
     pub fn new(
         config: &Config,
         secret_of: impl Fn(&str) -> Option<String>,
+        redis: Option<&Redis>,
     ) -> Result<Option<Self>, OkfError> {
         let Some(public_url) = config.public_url.as_deref() else {
             return Ok(None);
@@ -366,9 +394,15 @@ impl OidcProviders {
         Ok(Some(Self {
             http,
             providers,
-            flows: ExpiringMap::new(FLOW_TTL, MAX_FLOWS),
-            link_flows: ExpiringMap::new(FLOW_TTL, MAX_FLOWS),
-            link_starts: KeyedLimiter::new(LINK_STARTS_PER_USER, FLOW_TTL, MAX_LINKING_USERS),
+            flows: Ephemeral::new(redis, Keyspace::OidcFlow, FLOW_TTL, MAX_FLOWS),
+            link_flows: Index::new(redis, IndexSpace::OidcLink, FLOW_TTL, MAX_FLOWS),
+            link_starts: KeyedLimit::new(
+                Limiter::LinkStarts,
+                LINK_STARTS_PER_USER,
+                FLOW_TTL,
+                MAX_LINKING_USERS,
+                redis,
+            ),
         }))
     }
 
@@ -386,40 +420,53 @@ impl OidcProviders {
     /// * `now` - the current instant.
     ///
     /// # Returns
-    /// `false`, storing nothing, when the map is full.
+    /// `false`, storing nothing, when the memory map or index is full.
+    ///
+    /// # Errors
+    /// [`OkfError::Busy`] when Redis fails: the start fails closed.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn store_flow(&self, id: &str, flow: Flow, previous: Option<&str>, now: Instant) -> bool {
-        // The session the link belongs to, as the key of its index entry
-        // (a hash: the raw session id is a credential).
-        let session_key = flow
-            .link
-            .as_ref()
-            .map(|link| URL_SAFE_NO_PAD.encode(keys::hash(&link.session_id)));
+    pub async fn store_flow(
+        &self,
+        id: &str,
+        flow: Flow,
+        previous: Option<&str>,
+        now: Instant,
+    ) -> Result<bool, OkfError> {
+        // The session the link belongs to, as the key of its index entry:
+        // the flow already holds only the session's hash.
+        let session_key = flow.link.as_ref().map(|link| link.session_hash.clone());
         if let Some(previous) = previous.filter(|previous| *previous != id) {
-            self.flows.remove(previous);
+            self.flows.remove(previous).await?;
         }
-        if !self.flows.insert(id.to_string(), flow, now) {
-            return false;
+        if !self.flows.insert(id, flow, now).await? {
+            return Ok(false);
         }
         if let Some(key) = session_key {
-            // `mem::replace` swaps the session's flow id for the new one and
-            // returns the old (empty for a new entry), under the map's lock.
-            let replaced =
-                self.link_flows
-                    .update_or_insert_sliding(&key, now, String::new, |current| {
-                        std::mem::replace(current, id.to_string())
-                    });
-            match replaced {
-                Some(old) if !old.is_empty() && old != id => self.flows.remove(&old),
-                Some(_) => {}
+            // One atomic swap of the session's pointer, in memory (under the
+            // map's lock) or in Redis (`SET ... GET`).
+            let swap = match self.link_flows.replace(&key, id, now).await {
+                Ok(swap) => swap,
+                Err(error) => {
+                    // The flow just stored has no index entry and its cookie
+                    // is never sent (the start fails closed): remove it now
+                    // rather than leave it until its TTL. Best effort: a
+                    // failed removal is already counted as a Redis `remove`
+                    // error, and the swap's error is the one returned.
+                    let _ = self.flows.remove(id).await;
+                    return Err(error);
+                }
+            };
+            match swap {
+                Swap::Swapped(Some(stale)) => self.flows.remove_stale(&stale).await?,
+                Swap::Swapped(None) => {}
                 // The index is full: keep the map bounded by refusing.
-                None => {
-                    self.flows.remove(id);
-                    return false;
+                Swap::Full => {
+                    self.flows.remove(id).await?;
+                    return Ok(false);
                 }
             }
         }
-        true
+        Ok(true)
     }
 
     /// Takes one link start from the user's allowance.
@@ -438,8 +485,8 @@ impl OidcProviders {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    pub fn may_start_link(&self, user_id: &str, now: Instant) -> bool {
-        self.link_starts.try_take(user_id, now)
+    pub async fn may_start_link(&self, user_id: &str, now: Instant) -> bool {
+        self.link_starts.try_take(user_id, now).await
     }
 
     /// Every provider's id and label, by id.
@@ -687,7 +734,7 @@ mod tests {
     }
 
     fn providers(idp: &testing::MockIdp) -> OidcProviders {
-        OidcProviders::new(&config(idp), |_| Some(SECRET.to_string()))
+        OidcProviders::new(&config(idp), |_| Some(SECRET.to_string()), None)
             .expect("built")
             .expect("on")
     }
@@ -763,12 +810,12 @@ mod tests {
             ..Config::default()
         };
 
-        let refused = OidcProviders::new(&config, |_| None);
-        let empty = OidcProviders::new(&config, |_| Some(String::new()));
+        let refused = OidcProviders::new(&config, |_| None, None);
+        let empty = OidcProviders::new(&config, |_| Some(String::new()), None);
 
         assert!(matches!(refused, Err(OkfError::Config { .. })));
         assert!(matches!(empty, Err(OkfError::Config { .. })));
-        assert!(OidcProviders::new(&Config::default(), |_| None)
+        assert!(OidcProviders::new(&Config::default(), |_| None, None)
             .expect("no providers")
             .is_none());
     }
@@ -786,7 +833,7 @@ mod tests {
             return_to: "/ui/".to_string(),
             link: Some(LinkRequest {
                 user_id: "user-1".to_string(),
-                session_id: "session-value".to_string(),
+                session_hash: "session-value".to_string(),
                 keep_sessions: false,
             }),
         };
@@ -807,6 +854,7 @@ mod tests {
                 ..Config::default()
             },
             |_| Some("client-secret-value".to_string()),
+            None,
         )
         .expect("built")
         .expect("on");
@@ -860,16 +908,29 @@ mod tests {
         // A fixed starting instant; later ones are offsets from it, so the
         // test controls time exactly.
         let start = Instant::now();
+        // `&providers`: the closures below copy this reference into each
+        // future they return, instead of moving the providers.
+        let providers = &providers;
         let take = |at: Instant| providers.may_start_link("user-1", at);
+        // How many of `count` starts at `at` are allowed.
+        let starts = |at: Instant, count: u32| async move {
+            let mut allowed = 0;
+            for _ in 0..count {
+                if providers.may_start_link("user-1", at).await {
+                    allowed += 1;
+                }
+            }
+            allowed
+        };
 
-        let burst = (0..LINK_STARTS_PER_USER).filter(|_| take(start)).count();
-        let eleventh = take(start);
+        let burst = starts(start, LINK_STARTS_PER_USER).await;
+        let eleventh = take(start).await;
         let after_a_minute = start + Duration::from_secs(61);
-        let one_more = take(after_a_minute);
-        let not_two = take(after_a_minute);
+        let one_more = take(after_a_minute).await;
+        let not_two = take(after_a_minute).await;
         let refilled = after_a_minute + FLOW_TTL;
-        let again = (0..LINK_STARTS_PER_USER).filter(|_| take(refilled)).count();
-        let past_the_burst = take(refilled);
+        let again = starts(refilled, LINK_STARTS_PER_USER).await;
+        let past_the_burst = take(refilled).await;
 
         assert_eq!(burst, 10);
         assert!(!eleventh, "the eleventh start in a burst is refused");
@@ -877,7 +938,10 @@ mod tests {
         assert!(!not_two, "and only one");
         assert_eq!(again, 10, "a full refill allows a whole burst again");
         assert!(!past_the_burst);
-        assert!(providers.may_start_link("user-2", start), "users are apart");
+        assert!(
+            providers.may_start_link("user-2", start).await,
+            "users are apart"
+        );
     }
 
     #[test]

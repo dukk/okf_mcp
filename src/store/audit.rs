@@ -13,8 +13,11 @@ use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use sqlx::{PgConnection, PgPool};
 
 use crate::auth::{CatalogScope, CredentialKind, Principal};
+use crate::cache::labels::LabelLookup;
 use crate::error::OkfError;
 use crate::http::requester::Requester;
+use crate::labels::directory::{Labels, Wanted};
+use crate::labels::user_label;
 use crate::store::keys::Access;
 
 /// How many days entries are kept with no `audit_retention_days` override
@@ -261,6 +264,7 @@ actions! {
     UserCreated => "user.created",
     UserDeleted => "user.deleted",
     UserEmailChanged => "user.email_changed",
+    UserDisplayNameChanged => "user.display_name_changed",
     UserAdminChanged => "user.admin_changed",
     UserInvited => "user.invited",
     UserEntitlementSet => "user.entitlement_set",
@@ -273,11 +277,13 @@ actions! {
     TeamMemberRemoved => "team.member_removed",
     TeamSuspended => "team.suspended",
     TeamUnsuspended => "team.unsuspended",
+    TeamDisplayNameChanged => "team.display_name_changed",
     CatalogCreated => "catalog.created",
     CatalogDeleted => "catalog.deleted",
     CatalogOwnerChanged => "catalog.owner_changed",
     CatalogMemberAccessChanged => "catalog.member_access_changed",
     CatalogDescriptionChanged => "catalog.description_changed",
+    CatalogDisplayNameChanged => "catalog.display_name_changed",
     CatalogImported => "catalog.imported",
     CatalogRepaired => "catalog.repaired",
     CatalogMaintenanceChanged => "catalog.maintenance_changed",
@@ -301,6 +307,8 @@ actions! {
     CatalogMaintenanceRun => "catalog.maintenance_run",
     CatalogUnlocked => "catalog.unlocked",
     CatalogUnlockEnded => "catalog.unlock_ended",
+    UserLookedUp => "user.looked_up",
+    ProvisionerRefused => "provisioner.refused",
 }
 
 /// What an entry is about.
@@ -780,6 +788,39 @@ pub async fn team_ref(conn: &mut PgConnection, team: &str) -> Result<i64, OkfErr
         .ok_or_else(unknown)
 }
 
+/// Creates a new key's or grant's `audit_credentials` row in the
+/// transaction that inserts it (M18 spec Decision 20), labelled with its
+/// `actor` as [`record`] labels it when it acts, so caches read the audit
+/// id with the credential and never have to write one. Call it after the
+/// insert and after [`lock_people`] has locked the owner: the SQL resolver
+/// takes the owner `FOR KEY SHARE` again (a no-op under the stronger lock
+/// already held) and inserts a row no other transaction can see yet, so it
+/// waits on nothing (`migrations/0014_audit_row_locks.sql`).
+///
+/// # Arguments
+/// * `conn` - the creating transaction.
+/// * `credential_id` - the new `api_keys.id`.
+/// * `label` - its `actor`.
+///
+/// # Returns
+/// Nothing; the row lasts with the transaction.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.credential_created"))]
+pub async fn credential_created(
+    conn: &mut PgConnection,
+    credential_id: &str,
+    label: &str,
+) -> Result<(), OkfError> {
+    sqlx::query("SELECT audit_credential($1, NULL, $2)")
+        .bind(credential_id)
+        .bind(label)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 /// The `audit_teams` id of a catalog's owner team: what a catalog event
 /// belongs to.
 ///
@@ -917,6 +958,43 @@ pub async fn prune(pool: &PgPool, before: DateTime<Utc>) -> Result<u64, OkfError
         .rows_affected())
 }
 
+/// How long past the end of its hour a provisioner budget counter is kept,
+/// so a replica whose clock lags a little still finds its hour's counter.
+const BUDGET_COUNTER_GRACE_HOURS: i64 = 1;
+
+/// Deletes the hourly budget counters of provisioner entries (rows of
+/// `audit_access_counts` with no entry to cascade from) once their hour
+/// ended over an hour (a grace for a lagging replica clock) before `now`. A counter only
+/// gates the entries opened within its own hour and records nothing itself
+/// (the entries carry the counts), so it is not kept for the retention
+/// period.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `now` - the server clock.
+///
+/// # Returns
+/// How many counters went.
+///
+/// # Errors
+/// [`OkfError::Database`], which deletes nothing.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.prune_budget_counters"))]
+pub async fn prune_budget_counters(pool: &PgPool, now: DateTime<Utc>) -> Result<u64, OkfError> {
+    // A counter's third part is the start of its hour, in Unix seconds; the
+    // hour ended an hour after that. The `CASE` keeps the cast to counter
+    // rows: Postgres may evaluate `AND` terms in any order.
+    let before = now - TimeDelta::hours(1 + BUDGET_COUNTER_GRACE_HOURS);
+    Ok(sqlx::query(
+        "DELETE FROM audit_access_counts WHERE entry_id IS NULL \
+           AND CASE WHEN split_part(bucket, chr(31), 1) = 'provcap' \
+                    THEN split_part(bucket, chr(31), 3)::bigint < $1 END",
+    )
+    .bind(before.timestamp())
+    .execute(pool)
+    .await?
+    .rows_affected())
+}
+
 /// What a recorded access did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccessKind {
@@ -928,30 +1006,74 @@ pub enum AccessKind {
     Export,
 }
 
-/// One operator access, as admission saw it: every identity and scope is
-/// fixed here (audit ids from the key cache), so the background write needs
-/// no lookup by name and creates no person or credential row (plan
-/// Decisions 21 and 22).
+/// Who made a request, with every identity fixed at admission (audit ids
+/// from the key cache), so a background write needs no lookup by name and
+/// creates no person or credential row (plan Decisions 21 and 22).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AccessRecord {
+pub struct AdmittedActor {
     /// Where the request came from.
     pub source: Source,
     /// The actor's `audit_credentials` id (a key or grant).
-    pub actor_credential: Option<i64>,
+    pub credential: Option<i64>,
     /// The actor's `audit_people` id.
-    pub actor_person: Option<i64>,
+    pub person: Option<i64>,
     /// [`AuditActor::stored_label`]: never a person's name.
-    pub actor_label: String,
+    pub label: String,
     /// An admin credential or a provisioner.
     pub operator: bool,
     /// The client address.
     pub ip: Option<IpAddr>,
+    /// When it was admitted (server clock).
+    pub at: DateTime<Utc>,
+}
+
+impl AdmittedActor {
+    /// The start of the clock hour the request was admitted in: the window
+    /// every counted entry collapses repeats within.
+    ///
+    /// # Returns
+    /// The hour's start. A time chrono cannot round (a clock never gives
+    /// one) stands for itself.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
+    fn hour(&self) -> DateTime<Utc> {
+        self.at
+            .duration_trunc(TimeDelta::hours(1))
+            .unwrap_or(self.at)
+    }
+
+    /// The actor's part of a bucket name: audit ids only, so a deletion
+    /// leaves no name in the bucket key either.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
+    fn bucket_name(&self) -> String {
+        match (self.credential, self.person) {
+            (Some(credential), _) => format!("c{credential}"),
+            (None, Some(person)) => format!("p{person}"),
+            (None, None) => format!("l{}", self.label),
+        }
+    }
+}
+
+/// One operator access, as admission saw it (plan Decisions 21 and 22).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessRecord {
+    /// Who, with every identity fixed at admission.
+    pub actor: AdmittedActor,
     /// The catalog's name at admission (a display snapshot).
     pub catalog: String,
     /// The catalog's immutable id and owner team at admission.
     pub scope: CatalogScope,
-    /// When it was admitted (server clock).
-    pub at: DateTime<Utc>,
 }
 
 /// Counts one admin read in its `catalog.admin_read` entry: one entry per
@@ -972,38 +1094,19 @@ pub struct AccessRecord {
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.record_admin_read"))]
 pub async fn record_admin_read(pool: &PgPool, record: &AccessRecord) -> Result<(), OkfError> {
-    // `DurationRound::duration_trunc`: the start of the clock hour. It
-    // fails only for a time chrono cannot represent, which a clock never
-    // gives; the time itself then stands in.
-    let hour = record
-        .at
-        .duration_trunc(TimeDelta::hours(1))
-        .unwrap_or(record.at);
-    // Audit ids only: a deletion leaves no name in the bucket key either.
-    let who = match (record.actor_credential, record.actor_person) {
-        (Some(credential), _) => format!("c{credential}"),
-        (None, Some(person)) => format!("p{person}"),
-        (None, None) => format!("l{}", record.actor_label),
-    };
+    let actor = &record.actor;
+    let hour = actor.hour();
     // `0` stands for "no owner team" (audit ids start at 1). U+001F (unit
     // separator) cannot occur in the parts.
     let bucket = format!(
-        "{who}\u{1f}{}\u{1f}{}\u{1f}{}",
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        actor.bucket_name(),
         record.scope.id,
         record.scope.team.unwrap_or(0),
         hour.timestamp()
     );
     let mut tx = pool.begin().await?;
-    // The first read of the bucket inserts the row with no entry yet; a
-    // concurrent first read waits on that row, then increments it.
-    let entry_id: Option<i64> = sqlx::query_scalar(
-        "INSERT INTO audit_access_counts (bucket, requests) VALUES ($1, 1) \
-         ON CONFLICT (bucket) DO UPDATE SET requests = audit_access_counts.requests + 1 \
-         RETURNING entry_id",
-    )
-    .bind(&bucket)
-    .fetch_one(&mut *tx)
-    .await?;
+    let (entry_id, _) = count_bucket(&mut tx, &bucket).await?;
     if entry_id.is_none() {
         // The ids as admission fixed them; no `audit_person` or
         // `audit_credential` call, so nothing is created for a deleted user.
@@ -1017,14 +1120,14 @@ pub async fn record_admin_read(pool: &PgPool, record: &AccessRecord) -> Result<(
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8::inet, 'catalog', $9, $10, $11) \
              RETURNING id",
         )
-        .bind(record.at)
+        .bind(actor.at)
         .bind(Action::CatalogAdminRead.as_str())
-        .bind(record.source.as_str())
-        .bind(record.actor_credential)
-        .bind(record.actor_person)
-        .bind(&record.actor_label)
-        .bind(record.operator)
-        .bind(record.ip.map(|ip| ip.to_string()))
+        .bind(actor.source.as_str())
+        .bind(actor.credential)
+        .bind(actor.person)
+        .bind(&actor.label)
+        .bind(actor.operator)
+        .bind(actor.ip.map(|ip| ip.to_string()))
         .bind(&record.catalog)
         .bind(&teams)
         .bind(serde_json::json!({
@@ -1033,11 +1136,301 @@ pub async fn record_admin_read(pool: &PgPool, record: &AccessRecord) -> Result<(
         }))
         .fetch_one(&mut *tx)
         .await?;
-        sqlx::query("UPDATE audit_access_counts SET entry_id = $2 WHERE bucket = $1")
-            .bind(&bucket)
-            .bind(id)
+        link_bucket(&mut tx, &bucket, id).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Counts one request in a bucket, creating the bucket's row on its first.
+/// Exact under concurrency: the row is upserted, so a second first request
+/// waits for the first to commit and then increments.
+///
+/// # Arguments
+/// * `conn` - the write's transaction.
+/// * `bucket` - the bucket's name (audit ids only).
+///
+/// # Returns
+/// The bucket's entry (`None` while it has none: this request writes it)
+/// and its request count including this one.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.count_bucket"))]
+async fn count_bucket(
+    conn: &mut PgConnection,
+    bucket: &str,
+) -> Result<(Option<i64>, i64), OkfError> {
+    Ok(sqlx::query_as(
+        "INSERT INTO audit_access_counts (bucket, requests) VALUES ($1, 1) \
+         ON CONFLICT (bucket) DO UPDATE SET requests = audit_access_counts.requests + 1 \
+         RETURNING entry_id, requests",
+    )
+    .bind(bucket)
+    .fetch_one(conn)
+    .await?)
+}
+
+/// Whether a bucket has a row.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.bucket_exists"))]
+async fn bucket_exists(conn: &mut PgConnection, bucket: &str) -> Result<bool, OkfError> {
+    Ok(
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM audit_access_counts WHERE bucket = $1)")
+            .bind(bucket)
+            .fetch_one(conn)
+            .await?,
+    )
+}
+
+/// Ties a bucket to the entry that was written for it.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.link_bucket"))]
+async fn link_bucket(conn: &mut PgConnection, bucket: &str, entry: i64) -> Result<(), OkfError> {
+    sqlx::query("UPDATE audit_access_counts SET entry_id = $2 WHERE bucket = $1")
+        .bind(bucket)
+        .bind(entry)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// How many distinct entries one provisioner credential may open in a clock
+/// hour. Repeats collapse into their entry's count, so this bounds what a
+/// scripted flood of different routes, methods and users can add; every
+/// further kind that hour counts in one overflow entry per action.
+pub const PROVISIONER_ENTRIES_PER_HOUR: i64 = 50;
+
+/// Why a provisioner request was refused: a stable code, never text that
+/// could echo what the caller sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefusalReason {
+    /// The route is not in the provisioner allow-list (the gate refused it).
+    RouteNotAllowed,
+    /// The route is allowed but its handler or a store check refused the
+    /// request (a listing without `email`, an admin user as the target).
+    Forbidden,
+}
+
+impl RefusalReason {
+    /// The stored code.
+    ///
+    /// # Returns
+    /// `"route_not_allowed"` or `"forbidden"`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RefusalReason::RouteNotAllowed => "route_not_allowed",
+            RefusalReason::Forbidden => "forbidden",
+        }
+    }
+}
+
+/// A request method as an entry stores it: one of the standard methods, or
+/// `OTHER`, so a client cannot make up the text (or the number of buckets).
+///
+/// # Arguments
+/// * `method` - the request's method.
+///
+/// # Returns
+/// Its standard spelling.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: maps a value, no I/O"
+    )
+)]
+pub fn standard_method(method: &str) -> &'static str {
+    [
+        "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "CONNECT",
+    ]
+    .into_iter()
+    .find(|known| *known == method)
+    .unwrap_or("OTHER")
+}
+
+/// What a provisioner did that is worth an entry (the other reads and
+/// no-ops stay in request traces and metrics).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProvisionerEvent {
+    /// `GET /api/v1/users?email=`: stores the outcome and the matched user,
+    /// never the address.
+    Lookup {
+        /// The matched `users.id`; `None` for no user, and for an admin
+        /// user the provisioner is not shown.
+        matched: Option<String>,
+    },
+    /// A request refused after admission.
+    Refused {
+        /// A standard method ([`standard_method`]).
+        method: &'static str,
+        /// The matched route template (`MatchedPath`), never the literal
+        /// path.
+        route: String,
+        /// Why.
+        reason: RefusalReason,
+    },
+}
+
+/// One provisioner request that earns an entry, as admission saw it: the
+/// actor is fixed here, and the outcome when the handler decided it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvisionerUse {
+    /// The provisioner key, with every identity fixed at admission.
+    pub actor: AdmittedActor,
+    /// What it did.
+    pub event: ProvisionerEvent,
+}
+
+/// How a [`ProvisionerEvent`] is stored.
+struct EntryShape {
+    action: Action,
+    /// Names the bucket within an actor and hour (audit ids and codes only).
+    key: String,
+    /// The entry's route target, used when it names no matched user.
+    target_name: String,
+    matched: Option<String>,
+    details: serde_json::Value,
+}
+
+impl ProvisionerEvent {
+    /// How the event is stored.
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn shape(&self) -> EntryShape {
+        match self {
+            ProvisionerEvent::Lookup { matched } => {
+                let outcome = if matched.is_some() {
+                    "found"
+                } else {
+                    "not_found"
+                };
+                EntryShape {
+                    action: Action::UserLookedUp,
+                    key: format!("{outcome}\u{1f}{}", matched.as_deref().unwrap_or("")),
+                    target_name: "GET /api/v1/users".to_string(),
+                    matched: matched.clone(),
+                    details: serde_json::json!({ "outcome": outcome }),
+                }
+            }
+            ProvisionerEvent::Refused {
+                method,
+                route,
+                reason,
+            } => EntryShape {
+                action: Action::ProvisionerRefused,
+                key: format!(
+                    "refused\u{1f}{method}\u{1f}{route}\u{1f}{}",
+                    reason.as_str()
+                ),
+                target_name: format!("{method} {route}"),
+                matched: None,
+                details: serde_json::json!({
+                    "method": method,
+                    "route": route,
+                    "reason": reason.as_str(),
+                }),
+            },
+        }
+    }
+}
+
+/// Counts one provisioner request in its entry: one entry per key, kind of
+/// event (lookup outcome and matched user, or method, route and reason) and
+/// clock hour, with an exact request count in `audit_access_counts`, as
+/// [`record_admin_read`] does. Bounded two ways: repeats collapse, and a key
+/// opens at most [`PROVISIONER_ENTRIES_PER_HOUR`] entries an hour (the rest
+/// count in one overflow entry per action, target `*`). The entry belongs to
+/// no team, so owners never see it, and stores no request text: not the
+/// email, the literal path or the body.
+///
+/// # Arguments
+/// * `pool` - the database.
+/// * `usage` - the request, as admitted.
+///
+/// # Errors
+/// [`OkfError::Database`], which loses the count (the caller logs it).
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.record_provisioner_use"))]
+pub async fn record_provisioner_use(pool: &PgPool, usage: &ProvisionerUse) -> Result<(), OkfError> {
+    let actor = &usage.actor;
+    let hour = actor.hour();
+    let stamp = hour.timestamp();
+    let who = actor.bucket_name();
+    let mut shape = usage.event.shape();
+    let mut tx = pool.begin().await?;
+    let mut bucket = format!("prov\u{1f}{who}\u{1f}{}\u{1f}{stamp}", shape.key);
+    // A bucket that exists collapses for free. A new one counts against the
+    // key's hourly budget (a row that is only a counter, which
+    // `prune_budget_counters` clears once its hour is past) and is spent on the overflow entry once
+    // the budget is gone. The counter row's lock serialises the key's
+    // allocations, so the bucket is looked for again once it is held: a
+    // concurrent request for the same kind may have created it, and then
+    // this one collapses into it and gives its slot back.
+    if !bucket_exists(&mut tx, &bucket).await? {
+        let cap = format!("provcap\u{1f}{who}\u{1f}{stamp}");
+        let (_, used) = count_bucket(&mut tx, &cap).await?;
+        if bucket_exists(&mut tx, &bucket).await? {
+            sqlx::query(
+                "UPDATE audit_access_counts SET requests = GREATEST(requests - 1, 1) \
+                 WHERE bucket = $1",
+            )
+            .bind(&cap)
             .execute(&mut *tx)
             .await?;
+        } else if used > PROVISIONER_ENTRIES_PER_HOUR {
+            bucket = format!(
+                "provov\u{1f}{who}\u{1f}{}\u{1f}{stamp}",
+                shape.action.as_str()
+            );
+            shape.target_name = "*".to_string();
+            shape.matched = None;
+            shape.details = serde_json::json!({ "overflow": true });
+        }
+    }
+    if count_bucket(&mut tx, &bucket).await?.0.is_none() {
+        if let Some(object) = shape.details.as_object_mut() {
+            object.insert(
+                "hour".to_string(),
+                serde_json::Value::String(crate::clock::format_timestamp(hour)),
+            );
+        }
+        // A matched user is the entry's target person (an admin's view
+        // shows who); without one, or if the user is gone, the entry names
+        // the route. Reading `audit_people` takes no lock.
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO audit_entries (at, action, source, actor_credential_ref, \
+                 actor_person_id, actor_label, actor_operator, client_ip, target_kind, \
+                 target_name, target_person_id, details) \
+             SELECT $1, $2, $3, $4, $5, $6, true, $7::inet, \
+                    CASE WHEN p.id IS NULL THEN 'route' ELSE 'user' END, \
+                    CASE WHEN p.id IS NULL THEN $8 END, p.id, $9 \
+             FROM (SELECT $10::text AS user_id) m \
+             LEFT JOIN audit_people p ON p.user_id = m.user_id \
+             RETURNING id",
+        )
+        .bind(actor.at)
+        .bind(shape.action.as_str())
+        .bind(actor.source.as_str())
+        .bind(actor.credential)
+        .bind(actor.person)
+        .bind(&actor.label)
+        .bind(actor.ip.map(|ip| ip.to_string()))
+        .bind(&shape.target_name)
+        .bind(&shape.details)
+        .bind(&shape.matched)
+        .fetch_one(&mut *tx)
+        .await?;
+        link_bucket(&mut tx, &bucket, id).await?;
     }
     tx.commit().await?;
     Ok(())
@@ -1107,7 +1500,9 @@ pub struct AuditQuery<'a> {
     pub since: Option<DateTime<Utc>>,
     /// Before this time.
     pub until: Option<DateTime<Utc>>,
-    /// Older than this entry id (the cursor).
+    /// Older than this entry id (the cursor). A team owner's request never
+    /// sets it from the query string directly: the route opens the owner's
+    /// sealed cursor into it (`http::api::audit::cursor`, issue #430).
     pub after: Option<i64>,
     /// At most this many ([`AuditQuery::page_size`]).
     pub limit: i64,
@@ -1219,6 +1614,10 @@ pub enum ActorView {
     Known {
         /// The person, if the actor was one (`deleted user #N` once deleted).
         person: Option<String>,
+        /// The person's label from the audit snapshot of their display name:
+        /// never their slug, and `Unnamed user` once the user is deleted.
+        /// `None` when `person` is.
+        person_label: Option<String>,
         /// The key or grant id (`credential #N` once its user is deleted).
         credential: Option<String>,
         /// The credential's label, or the entry's actor label.
@@ -1237,13 +1636,30 @@ pub struct TargetView {
     pub name: Option<String>,
     /// The person it is about, if any, and if the reader may see them.
     pub person: Option<String>,
+    /// The person's label from the audit snapshot (see
+    /// [`ActorView::Known`]'s `person_label`); `None` when `person` is.
+    pub person_label: Option<String>,
+    /// The label of a catalog target that still exists, or of a shared
+    /// team target, read from the directory now; `None` otherwise (a
+    /// deleted catalog, a personal team, any other kind).
+    pub target_label: Option<String>,
 }
 
 /// One entry as a reader sees it.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct AuditRecord {
-    /// Its id (the cursor).
-    pub id: i64,
+    /// Its id, the admin's and provisioner's cursor; `None` for a team
+    /// owner, whose payload then has no `id` key at all (issue #430): ids
+    /// are one global sequence, so the gaps between an owner's entries
+    /// would show how much every other team did in between.
+    // `skip_serializing_if` leaves the key out of the JSON when it is `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+    /// Its id for the server's own use: the next page's cursor, which the
+    /// owner routes seal (`http::api::audit::cursor`) before an owner sees
+    /// it. Never serialized, in any view.
+    #[serde(skip)]
+    pub cursor: i64,
     /// When (`2026-11-13T12:00:00Z`).
     pub at: String,
     /// The action.
@@ -1280,6 +1696,7 @@ pub const OWNER_REDACTED: &[(&str, &[&str])] = &[("catalog.unlocked", &["reason"
 /// * `pool` - the database.
 /// * `viewer` - who reads.
 /// * `query` - the filters.
+/// * `labels` - the lookup that labels catalog and shared-team targets.
 ///
 /// # Returns
 /// At most [`AuditQuery::page_size`] records. A filter that cannot name
@@ -1292,6 +1709,7 @@ pub async fn list(
     pool: &PgPool,
     viewer: &Viewer,
     query: &AuditQuery<'_>,
+    labels: &LabelLookup,
 ) -> Result<Vec<AuditRecord>, OkfError> {
     // Postgres refuses a NUL in text, and no stored name holds one (team
     // names are `[a-z0-9-]+`): such a filter is "nothing", never a 500.
@@ -1330,7 +1748,21 @@ pub async fn list(
         .bind(team_name)
         .fetch_all(pool)
         .await?;
-    Ok(rows.into_iter().map(|row| row.into_record(owner)).collect())
+    // The labels of this page's catalog and team targets, read together.
+    let mut wanted = Wanted::default();
+    for row in &rows {
+        if let (true, Some(slug)) = (row.target_kind == "catalog", row.target_catalog.as_deref()) {
+            wanted.catalog(slug);
+        }
+        if let (true, Some(slug)) = (row.target_kind == "team", row.target_team.as_deref()) {
+            wanted.team(slug);
+        }
+    }
+    let labels = labels.labels_for(&wanted).await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| row.into_record(owner, &labels))
+        .collect())
 }
 
 /// Every entry a viewer may read that the filters select, as JSON Lines
@@ -1345,6 +1777,7 @@ pub async fn list(
 /// * `pool` - the database.
 /// * `viewer` - who reads ([`list`] redacts for them).
 /// * `query` - the filters.
+/// * `labels` - the lookup [`list`] labels targets with.
 ///
 /// # Returns
 /// The lines, each ending in `\n` (empty when nothing matches).
@@ -1356,6 +1789,7 @@ pub async fn export_lines(
     pool: &PgPool,
     viewer: &Viewer,
     query: &AuditQuery<'_>,
+    labels: &LabelLookup,
 ) -> Result<String, OkfError> {
     // A copy with the page size fixed; `..query.clone()` takes the other
     // fields from the caller's query, like `dataclasses.replace`.
@@ -1365,7 +1799,7 @@ pub async fn export_lines(
     };
     let mut lines = String::new();
     loop {
-        let page = list(pool, viewer, &page_query).await?;
+        let page = list(pool, viewer, &page_query, labels).await?;
         for record in &page {
             // A record holds only strings, numbers and JSON values, so
             // serializing it cannot fail.
@@ -1373,7 +1807,7 @@ pub async fn export_lines(
             lines.push('\n');
         }
         match page.last() {
-            Some(last) if page.len() as i64 == MAX_PAGE => page_query.after = Some(last.id),
+            Some(last) if page.len() as i64 == MAX_PAGE => page_query.after = Some(last.cursor),
             _ => return Ok(lines),
         }
     }
@@ -1391,10 +1825,17 @@ const LIST_SQL: &str = "\
     SELECT e.id, e.at, e.action, e.source, e.actor_operator, \
            COALESCE(ac.credential_id, 'credential #' || ac.id) AS actor_credential, \
            COALESCE(ac.label, e.actor_label) AS actor_label, \
-           ap.name AS actor_person, host(e.client_ip) AS ip, e.target_kind, \
+           ap.name AS actor_person, ap.display_name AS actor_display_name, \
+           host(e.client_ip) AS ip, e.target_kind, \
            COALESCE(e.target_name, tt.name, ttp.name, tc.credential_id, 'credential #' || tc.id) \
                AS target_name, \
-           tp.name AS target_person, e.target_operator, \
+           tp.name AS target_person, tp.display_name AS target_display_name, \
+           CASE WHEN EXISTS (SELECT 1 FROM teams lt WHERE lt.id = tt.team_id) \
+                THEN tt.name END AS target_team, \
+           CASE WHEN e.target_kind = 'catalog' AND EXISTS ( \
+                    SELECT 1 FROM catalogs lc WHERE lc.name = e.target_name AND lc.created_at <= e.at) \
+                THEN e.target_name END AS target_catalog, \
+           e.target_operator, \
            ARRAY(SELECT COALESCE(t.name, p.name) \
                  FROM unnest(e.teams) WITH ORDINALITY AS r (id, n) \
                  JOIN audit_teams t ON t.id = r.id \
@@ -1440,15 +1881,69 @@ struct ListedRow {
     actor_credential: Option<String>,
     actor_label: String,
     actor_person: Option<String>,
+    actor_display_name: Option<String>,
     ip: Option<String>,
     target_kind: String,
     target_name: Option<String>,
     target_person: Option<String>,
+    target_display_name: Option<String>,
+    // The slug of a shared team target while the same team (by `teams.id`)
+    // still exists; `None` for a personal team or a deleted one, even when a
+    // new team has taken its slug.
+    target_team: Option<String>,
+    // The name of a catalog target while that catalog still exists: the log
+    // keeps no catalog id, so a catalog created after the entry is another
+    // one reusing the name.
+    target_catalog: Option<String>,
     target_operator: bool,
     teams: Vec<String>,
     details: serde_json::Value,
     requests: Option<i64>,
     actor_in_team: bool,
+}
+
+/// A person's label from the audit snapshot of their display name. The
+/// snapshot has no email, so there is no email fallback; a deleted user's
+/// snapshot is blank, so it reads as the placeholder, never the slug.
+///
+/// # Arguments
+/// * `person` - the snapshot's person name, if the entry has one.
+/// * `display_name` - the snapshot's display name (joined with `person`).
+///
+/// # Returns
+/// The label, or `None` when there is no person.
+#[tracing::instrument(level = "trace", skip_all)]
+fn snapshot_label(person: &Option<String>, display_name: &Option<String>) -> Option<String> {
+    person
+        .as_ref()
+        .map(|_| user_label(display_name.as_deref().unwrap_or_default(), None))
+}
+
+/// The label of a target that is a catalog or a shared team, read from the
+/// directory now.
+///
+/// # Arguments
+/// * `kind` - the target's kind.
+/// * `name` - the slug of a catalog target that still exists.
+/// * `team` - the slug of a shared team target that still exists.
+/// * `labels` - the directory.
+///
+/// # Returns
+/// The label, or `None` for another kind, a deleted catalog or team, or a
+/// personal team.
+#[tracing::instrument(level = "trace", skip_all)]
+fn target_label(
+    kind: &str,
+    name: Option<&str>,
+    team: Option<&str>,
+    labels: &Labels,
+) -> Option<String> {
+    let label = match kind {
+        "catalog" => name.and_then(|slug| labels.catalog(slug)),
+        "team" => team.and_then(|slug| labels.team(slug)),
+        _ => None,
+    };
+    label.map(str::to_string)
 }
 
 impl ListedRow {
@@ -1458,14 +1953,16 @@ impl ListedRow {
     /// person who is operator staff (`target_operator`, such as the admin an
     /// unlock is for) is hidden, with a credential naming them; and `teams`
     /// holds only the owner's team (the SQL drops the others, which may be
-    /// another customer's or a staff member's personal team). The stored
+    /// another customer's or a staff member's personal team); and the record
+    /// has no `id` (issue #430), only the unserialized `cursor`. The stored
     /// entry is never changed.
     #[tracing::instrument(level = "trace", skip_all)]
-    fn into_record(self, owner: bool) -> AuditRecord {
+    fn into_record(self, owner: bool, labels: &Labels) -> AuditRecord {
         let actor = if owner && self.actor_operator {
             ActorView::Operator
         } else {
             ActorView::Known {
+                person_label: snapshot_label(&self.actor_person, &self.actor_display_name),
                 person: self.actor_person,
                 credential: self.actor_credential,
                 label: self.actor_label,
@@ -1493,18 +1990,28 @@ impl ListedRow {
             let credential = matches!(self.target_kind.as_str(), "key" | "grant" | "code");
             TargetView {
                 name: if credential { None } else { self.target_name },
+                target_label: None,
                 kind: self.target_kind,
                 person: None,
+                person_label: None,
             }
         } else {
             TargetView {
+                target_label: target_label(
+                    &self.target_kind,
+                    self.target_catalog.as_deref(),
+                    self.target_team.as_deref(),
+                    labels,
+                ),
+                person_label: snapshot_label(&self.target_person, &self.target_display_name),
                 kind: self.target_kind,
                 name: self.target_name,
                 person: self.target_person,
             }
         };
         AuditRecord {
-            id: self.id,
+            id: (!owner).then_some(self.id),
+            cursor: self.id,
             at: crate::clock::format_timestamp(self.at),
             action: self.action,
             source: self.source,
@@ -1522,6 +2029,23 @@ impl ListedRow {
 #[cfg(test)]
 pub(crate) mod testing {
     use sqlx::PgPool;
+
+    /// A credential's `audit_credentials` row as `(label, owner's user id)`,
+    /// or `None` when it has none: what the create paths must leave behind
+    /// (M18 spec Decision 20).
+    pub(crate) async fn credential_row(
+        pool: &PgPool,
+        credential_id: &str,
+    ) -> Option<(Option<String>, Option<String>)> {
+        sqlx::query_as(
+            "SELECT a.label, p.user_id FROM audit_credentials a \
+             LEFT JOIN audit_people p ON p.id = a.person_id WHERE a.credential_id = $1",
+        )
+        .bind(credential_id)
+        .fetch_optional(pool)
+        .await
+        .expect("read the credential's audit row")
+    }
 
     /// One stored entry, flattened for assertions.
     #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
@@ -1566,15 +2090,17 @@ pub(crate) mod testing {
             .await
             .expect("resolve the access");
         super::AccessRecord {
-            source: actor.source,
-            actor_credential: credential,
-            actor_person: person,
-            actor_label: actor.stored_label(),
-            operator: actor.operator,
-            ip: actor.ip,
+            actor: super::AdmittedActor {
+                source: actor.source,
+                credential,
+                person,
+                label: actor.stored_label(),
+                operator: actor.operator,
+                ip: actor.ip,
+                at,
+            },
             catalog: catalog.to_string(),
             scope: crate::auth::CatalogScope { id, team },
-            at,
         }
     }
 
@@ -1615,6 +2141,59 @@ mod tests {
     use crate::store::users::{self, NewUser};
     use chrono::TimeDelta;
     use sqlx::PgPool;
+
+    /// [`list`] with a fresh label lookup.
+    async fn list_plain(
+        pool: &PgPool,
+        viewer: &Viewer,
+        query: &AuditQuery<'_>,
+    ) -> Result<Vec<AuditRecord>, OkfError> {
+        let lookup = LabelLookup::new(pool.clone(), 100, std::time::Duration::from_secs(60));
+        list(pool, viewer, query, &lookup).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_audit_page_reads_its_target_labels_once() {
+        use crate::mcp::testing::{local_metrics, render};
+        use crate::store::catalogs::{self, NewCatalog};
+        let db = crate::db::test_db().await;
+        for n in 0..5 {
+            let display = crate::labels::DisplayName::parse(&format!("Notes {n}")).unwrap();
+            let new = NewCatalog {
+                name: &format!("notes-{n}"),
+                display_name: &display,
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            };
+            catalogs::create(&db.pool, &new, &AuditActor::cli(), now())
+                .await
+                .unwrap();
+        }
+        let (_provider, metrics, registry) = local_metrics();
+        let lookup = LabelLookup::new(db.pool.clone(), 100, std::time::Duration::from_secs(60))
+            .with_metrics(metrics);
+
+        let page = list(&db.pool, &Viewer::Admin, &AuditQuery::default(), &lookup)
+            .await
+            .unwrap();
+
+        let labelled = page
+            .iter()
+            .filter_map(|record| record.target.target_label.as_deref())
+            .filter(|label| label.starts_with("Notes "))
+            .count();
+        assert_eq!(labelled, 5, "every catalog target is labelled");
+        let loads: u64 = render(&registry)
+            .lines()
+            .find(|line| {
+                line.starts_with("okf_cache_load_duration_seconds_count")
+                    && line.contains("cache=\"labels\"")
+            })
+            .and_then(|line| line.rsplit(' ').next())
+            .and_then(|count| count.parse().ok())
+            .unwrap_or(0);
+        assert_eq!(loads, 1, "one read for the whole page");
+    }
 
     fn now() -> DateTime<Utc> {
         "2026-11-13T12:00:00Z".parse().unwrap()
@@ -1813,7 +2392,7 @@ mod tests {
         let db = test_db().await;
         let family = NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
             owner: TEST_USER,
         };
         teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -1849,7 +2428,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "Alice Example",
+            display_name: &crate::labels::DisplayName::parse("Alice Example").unwrap(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -1859,14 +2438,7 @@ mod tests {
             .unwrap()
             .unwrap();
         // A real console-session principal: its `actor` is the user's name.
-        // (M13's three arguments; Task 7b adds the gates: pass
-        // `Default::default()` once more.)
-        let principal = Principal::for_session(
-            &alice,
-            Default::default(),
-            Default::default(),
-            Default::default(),
-        );
+        let principal = Principal::for_session(&alice, Default::default());
         let requester = Requester {
             ip: None,
             source: Source::Console,
@@ -1908,7 +2480,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "Alice Example",
+            display_name: &crate::labels::DisplayName::parse("Alice Example").unwrap(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -1964,9 +2536,15 @@ mod tests {
             .await
             .unwrap();
         }
-        users::delete(&db.pool, "alice", false, &AuditActor::cli(), now())
-            .await
-            .unwrap();
+        users::delete(
+            &db.pool,
+            "alice",
+            users::DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             audit_credentials(&mut db.pool.acquire().await.unwrap()).await,
@@ -1998,7 +2576,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -2042,7 +2620,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "Alice Example",
+            display_name: &crate::labels::DisplayName::parse("Alice Example").unwrap(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -2096,7 +2674,7 @@ mod tests {
         for name in ["staff", "alice"] {
             let new = NewUser {
                 name,
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             };
             users::create(&db.pool, &new, &AuditActor::cli(), now())
                 .await
@@ -2195,7 +2773,7 @@ mod tests {
         let db = test_db().await;
         let family = NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
             owner: TEST_USER,
         };
         teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -2245,7 +2823,7 @@ mod tests {
         let db = test_db().await;
         let new = NewUser {
             name: "alice",
-            display_name: "Alice",
+            display_name: &crate::labels::DisplayName::parse("Alice").unwrap(),
         };
         users::create(&db.pool, &new, &AuditActor::cli(), now())
             .await
@@ -2553,6 +3131,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "main",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: TEST_TEAM,
             },
@@ -2598,6 +3177,283 @@ mod tests {
         assert_eq!(entries[0].details["hour"], "2026-11-13T12:00:00Z");
     }
 
+    /// A provisioner key as admission fixes it, with no audit rows (the
+    /// bucket then names the label), at `at`.
+    fn provisioner_actor(at: DateTime<Utc>) -> AdmittedActor {
+        AdmittedActor {
+            source: Source::Api,
+            credential: None,
+            person: None,
+            label: "api key".to_string(),
+            operator: true,
+            ip: Some("192.0.2.9".parse().unwrap()),
+            at,
+        }
+    }
+
+    fn refusal(route: &str, at: DateTime<Utc>) -> ProvisionerUse {
+        ProvisionerUse {
+            actor: provisioner_actor(at),
+            event: ProvisionerEvent::Refused {
+                method: "GET",
+                route: route.to_string(),
+                reason: RefusalReason::RouteNotAllowed,
+            },
+        }
+    }
+
+    /// `(target, requests)` of every entry with this action, oldest first.
+    async fn counted(pool: &PgPool, action: &str) -> Vec<(Option<String>, i64)> {
+        testing::entries(pool, action)
+            .await
+            .into_iter()
+            .map(|entry| (entry.target, entry.requests.expect("a counted entry")))
+            .collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn identical_provisioner_refusals_collapse_into_one_counted_entry_per_hour() {
+        let db = test_db().await;
+        // Twenty at once, then the next hour, then another reason.
+        let mut writes = tokio::task::JoinSet::new();
+        for _ in 0..20 {
+            let (pool, usage) = (db.pool.clone(), refusal("/api/v1/keys", now()));
+            writes.spawn(async move { record_provisioner_use(&pool, &usage).await });
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while let Some(write) = writes.join_next().await {
+                write.unwrap().unwrap();
+            }
+        })
+        .await
+        .expect("twenty concurrent refusals finish");
+        let later = now() + TimeDelta::hours(1);
+        record_provisioner_use(&db.pool, &refusal("/api/v1/keys", later))
+            .await
+            .unwrap();
+        let mut forbidden = refusal("/api/v1/users", now());
+        forbidden.event = ProvisionerEvent::Refused {
+            method: "GET",
+            route: "/api/v1/users".to_string(),
+            reason: RefusalReason::Forbidden,
+        };
+        record_provisioner_use(&db.pool, &forbidden).await.unwrap();
+
+        assert_eq!(
+            counted(&db.pool, "provisioner.refused").await,
+            [
+                (Some("GET /api/v1/keys".to_string()), 20),
+                (Some("GET /api/v1/keys".to_string()), 1),
+                (Some("GET /api/v1/users".to_string()), 1),
+            ]
+        );
+        let entries = testing::entries(&db.pool, "provisioner.refused").await;
+        assert_eq!(entries[0].target_kind, "route");
+        assert!(entries[0].actor_operator);
+        assert!(entries[0].teams.is_empty(), "owners never see it");
+        assert_eq!(
+            entries[0].details,
+            serde_json::json!({
+                "method": "GET",
+                "route": "/api/v1/keys",
+                "reason": "route_not_allowed",
+                "hour": "2026-11-13T12:00:00Z",
+            })
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_opens_a_bounded_number_of_entries_an_hour_and_the_rest_count_in_one() {
+        let db = test_db().await;
+        let extra = 7;
+        for number in 0..PROVISIONER_ENTRIES_PER_HOUR + extra {
+            let usage = refusal(&format!("/api/v1/route-{number}"), now());
+            record_provisioner_use(&db.pool, &usage).await.unwrap();
+        }
+        // A route already opened keeps counting in its own entry.
+        record_provisioner_use(&db.pool, &refusal("/api/v1/route-0", now()))
+            .await
+            .unwrap();
+        // Another kind of event has its own overflow.
+        for number in 0..3 {
+            let usage = ProvisionerUse {
+                actor: provisioner_actor(now()),
+                event: ProvisionerEvent::Lookup {
+                    matched: Some(format!("no-such-user-{number}")),
+                },
+            };
+            record_provisioner_use(&db.pool, &usage).await.unwrap();
+        }
+
+        let refused = counted(&db.pool, "provisioner.refused").await;
+        let budget = usize::try_from(PROVISIONER_ENTRIES_PER_HOUR).unwrap();
+        // The budget's worth of routes, then one overflow entry.
+        assert_eq!(refused.len(), budget + 1);
+        assert_eq!(refused[0], (Some("GET /api/v1/route-0".to_string()), 2));
+        assert_eq!(refused[budget], (Some("*".to_string()), extra));
+        let overflow = testing::entries(&db.pool, "provisioner.refused").await;
+        assert_eq!(overflow[budget].details["overflow"], true);
+        // The three lookups share the key's hourly budget, so they overflow
+        // too, into an entry of their own action.
+        let lookups = counted(&db.pool, "user.looked_up").await;
+        assert_eq!(lookups, [(Some("*".to_string()), 3)]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn two_first_requests_for_the_last_slots_kind_share_one_entry() {
+        use crate::http::api::testing::wait_for_lock_waiters;
+        let db = test_db().await;
+        let last = PROVISIONER_ENTRIES_PER_HOUR - 1;
+        for number in 0..last {
+            let usage = refusal(&format!("/api/v1/route-{number}"), now());
+            record_provisioner_use(&db.pool, &usage).await.unwrap();
+        }
+        // Hold the key's budget row, so both requests pass the first look
+        // for their bucket (absent) and queue on the budget.
+        let mut holder = db.pool.begin().await.unwrap();
+        let cap = format!("provcap\u{1f}lapi key\u{1f}{}", now().timestamp());
+        sqlx::query("SELECT 1 FROM audit_access_counts WHERE bucket = $1 FOR UPDATE")
+            .bind(&cap)
+            .fetch_one(&mut *holder)
+            .await
+            .unwrap();
+        let mut writes = tokio::task::JoinSet::new();
+        for _ in 0..2 {
+            let (pool, usage) = (db.pool.clone(), refusal("/api/v1/the-last", now()));
+            writes.spawn(async move { record_provisioner_use(&pool, &usage).await });
+        }
+        wait_for_lock_waiters(&db.pool, 2).await;
+        holder.commit().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while let Some(write) = writes.join_next().await {
+                write.unwrap().unwrap();
+            }
+        })
+        .await
+        .expect("both requests finish once the budget row is released");
+
+        let refused = counted(&db.pool, "provisioner.refused").await;
+        let budget = usize::try_from(PROVISIONER_ENTRIES_PER_HOUR).unwrap();
+        assert_eq!(refused.len(), budget, "no overflow entry");
+        assert_eq!(
+            refused[budget - 1],
+            (Some("GET /api/v1/the-last".to_string()), 2),
+            "both counted in the regular entry"
+        );
+        assert!(refused
+            .iter()
+            .all(|(target, _)| target.as_deref() != Some("*")));
+        // The loser gave its slot back: one more kind still gets an entry.
+        record_provisioner_use(&db.pool, &refusal("/api/v1/one-more", now()))
+            .await
+            .unwrap();
+        let after = counted(&db.pool, "provisioner.refused").await;
+        assert_eq!(
+            after.last(),
+            Some(&(Some("*".to_string()), 1)),
+            "the 51st kind overflows"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_lookup_names_the_matched_user_and_stores_nothing_else_about_it() {
+        let db = test_db().await;
+        let matched = user_id(&db.pool, TEST_USER).await;
+        let found = ProvisionerUse {
+            actor: provisioner_actor(now()),
+            event: ProvisionerEvent::Lookup {
+                matched: Some(matched),
+            },
+        };
+        let missing = ProvisionerUse {
+            actor: provisioner_actor(now()),
+            event: ProvisionerEvent::Lookup { matched: None },
+        };
+        record_provisioner_use(&db.pool, &found).await.unwrap();
+        record_provisioner_use(&db.pool, &found).await.unwrap();
+        record_provisioner_use(&db.pool, &missing).await.unwrap();
+
+        let entries = testing::entries(&db.pool, "user.looked_up").await;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            (
+                entries[0].target_kind.as_str(),
+                entries[0].person.as_deref(),
+                entries[0].requests
+            ),
+            ("user", Some(TEST_USER), Some(2))
+        );
+        assert_eq!(entries[0].details["outcome"], "found");
+        assert_eq!(
+            (
+                entries[1].target_kind.as_str(),
+                entries[1].target.as_deref(),
+                entries[1].requests
+            ),
+            ("route", Some("GET /api/v1/users"), Some(1))
+        );
+        assert_eq!(entries[1].details["outcome"], "not_found");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn budget_counters_go_once_their_hour_ended_over_the_grace_before() {
+        let db = test_db().await;
+        let at = |time: &str| -> DateTime<Utc> { time.parse().unwrap() };
+        let clock = at("2026-11-13T12:30:00Z");
+        // Hour 10 ended at 11:00, over the hour's grace before 12:30; hour 11
+        // ended at 12:00, within it; hour 12 is the current one.
+        for time in [
+            "2026-11-13T10:59:00Z",
+            "2026-11-13T11:10:00Z",
+            "2026-11-13T12:05:00Z",
+        ] {
+            record_provisioner_use(&db.pool, &refusal("/api/v1/keys", at(time)))
+                .await
+                .unwrap();
+        }
+        let counters = |pool: PgPool| async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT split_part(bucket, chr(31), 3) FROM audit_access_counts \
+                 WHERE entry_id IS NULL ORDER BY 1",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        assert_eq!(counters(db.pool.clone()).await.len(), 3, "one per hour");
+
+        let removed = prune_budget_counters(&db.pool, clock).await.unwrap();
+
+        assert_eq!(removed, 1);
+        let kept = [at("2026-11-13T11:00:00Z"), at("2026-11-13T12:00:00Z")]
+            .map(|hour| hour.timestamp().to_string());
+        assert_eq!(counters(db.pool.clone()).await, kept);
+        assert_eq!(
+            counted(&db.pool, "provisioner.refused").await.len(),
+            3,
+            "the entries stay for the retention period"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_retention_prune_leaves_budget_counters_alone() {
+        let db = test_db().await;
+        let old: DateTime<Utc> = "2024-01-01T12:00:00Z".parse().unwrap();
+        record_provisioner_use(&db.pool, &refusal("/api/v1/keys", old))
+            .await
+            .unwrap();
+
+        let removed = prune(&db.pool, old + TimeDelta::days(1)).await.unwrap();
+
+        assert_eq!(removed, 1);
+        let counters: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM audit_access_counts WHERE entry_id IS NULL")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(counters, 1, "prune_budget_counters owns them");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_catalog_moved_or_created_again_within_the_hour_starts_a_new_admin_read_entry() {
         use crate::store::catalogs::{self, NewCatalog};
@@ -2608,7 +3464,7 @@ mod tests {
             &db.pool,
             &NewTeam {
                 name: "family",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
                 owner: TEST_USER,
             },
             &cli,
@@ -2616,8 +3472,12 @@ mod tests {
         )
         .await
         .unwrap();
+        // A local the closure borrows: a temporary made inside it would be
+        // dropped when it returns, leaving the struct's reference dangling.
+        let unset = crate::labels::DisplayName::default();
         let main = |owner_team| NewCatalog {
             name: "main",
+            display_name: &unset,
             description: "",
             owner_team,
         };
@@ -2706,7 +3566,7 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "staff",
-                display_name: "Staff Member",
+                display_name: &crate::labels::DisplayName::parse("Staff Member").unwrap(),
             },
             &AuditActor::cli(),
             now(),
@@ -2757,7 +3617,7 @@ mod tests {
         record_one(&db.pool, &actor, &unlocked).await;
         let owner_view = owner_of(&db.pool, TEST_TEAM).await;
 
-        let owner = list(&db.pool, &owner_view, &AuditQuery::default())
+        let owner = list_plain(&db.pool, &owner_view, &AuditQuery::default())
             .await
             .unwrap();
         // Owners cannot use the filters as an identity oracle.
@@ -2772,10 +3632,20 @@ mod tests {
         let mut owner_hits = Vec::new();
         let mut admin_hits = Vec::new();
         for probe in &probes {
-            owner_hits.push(list(&db.pool, &owner_view, probe).await.unwrap().len());
-            admin_hits.push(list(&db.pool, &Viewer::Admin, probe).await.unwrap().len());
+            owner_hits.push(
+                list_plain(&db.pool, &owner_view, probe)
+                    .await
+                    .unwrap()
+                    .len(),
+            );
+            admin_hits.push(
+                list_plain(&db.pool, &Viewer::Admin, probe)
+                    .await
+                    .unwrap()
+                    .len(),
+            );
         }
-        let admin = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
+        let admin = list_plain(&db.pool, &Viewer::Admin, &AuditQuery::default())
             .await
             .unwrap();
 
@@ -2798,6 +3668,8 @@ mod tests {
             kind: kind.to_string(),
             name: None,
             person: None,
+            person_label: None,
+            target_label: None,
         };
         assert_eq!(
             hidden,
@@ -2851,7 +3723,7 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "staff",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -2886,10 +3758,10 @@ mod tests {
         record_one(&db.pool, &actor, &published).await;
         let owner_view = owner_of(&db.pool, TEST_TEAM).await;
 
-        let owner = list(&db.pool, &owner_view, &AuditQuery::default())
+        let owner = list_plain(&db.pool, &owner_view, &AuditQuery::default())
             .await
             .unwrap();
-        let probe = list(&db.pool, &owner_view, &by(Some("staff"), None))
+        let probe = list_plain(&db.pool, &owner_view, &by(Some("staff"), None))
             .await
             .unwrap();
 
@@ -2904,7 +3776,7 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "bob",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
@@ -2940,14 +3812,14 @@ mod tests {
         operator.operator = true;
         record_one(&db.pool, &operator, &moved).await;
 
-        let owner = list(
+        let owner = list_plain(
             &db.pool,
             &owner_of(&db.pool, TEST_TEAM).await,
             &AuditQuery::default(),
         )
         .await
         .unwrap();
-        let admin = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
+        let admin = list_plain(&db.pool, &Viewer::Admin, &AuditQuery::default())
             .await
             .unwrap();
 
@@ -2973,7 +3845,7 @@ mod tests {
         let db = test_db().await;
         let family = NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
             owner: TEST_USER,
         };
         teams::create(&db.pool, &family, &AuditActor::cli(), now())
@@ -2983,7 +3855,7 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "alice",
-                display_name: "Alice Example",
+                display_name: &crate::labels::DisplayName::parse("Alice Example").unwrap(),
             },
             &AuditActor::cli(),
             now(),
@@ -3016,18 +3888,24 @@ mod tests {
             ..entry(Action::KeyCreated, Target::Key("alice-laptop"))
         };
         record_one(&db.pool, &actor, &created).await;
-        let before = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
+        let before = list_plain(&db.pool, &Viewer::Admin, &AuditQuery::default())
             .await
             .unwrap();
 
-        users::delete(&db.pool, "alice", false, &AuditActor::cli(), now())
-            .await
-            .unwrap();
+        users::delete(
+            &db.pool,
+            "alice",
+            users::DeleteOptions::default(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await
+        .unwrap();
 
-        let admin = list(&db.pool, &Viewer::Admin, &AuditQuery::default())
+        let admin = list_plain(&db.pool, &Viewer::Admin, &AuditQuery::default())
             .await
             .unwrap();
-        let owner = list(
+        let owner = list_plain(
             &db.pool,
             &owner_of(&db.pool, "family").await,
             &AuditQuery::default(),
@@ -3056,16 +3934,19 @@ mod tests {
             &db.pool,
             &NewUser {
                 name: "bob",
-                display_name: "",
+                display_name: &crate::labels::DisplayName::default(),
             },
             &AuditActor::cli(),
             now(),
         )
         .await
         .unwrap();
+        // A local the closure borrows: a temporary made inside it would be
+        // dropped when it returns, leaving the struct's reference dangling.
+        let unset = crate::labels::DisplayName::default();
         let new_team = |owner: &'static str| NewTeam {
             name: "family",
-            display_name: "",
+            display_name: &unset,
             owner,
         };
         teams::create(&db.pool, &new_team(TEST_USER), &AuditActor::cli(), now())
@@ -3079,14 +3960,14 @@ mod tests {
             .await
             .unwrap();
 
-        let seen = list(
+        let seen = list_plain(
             &db.pool,
             &owner_of(&db.pool, "family").await,
             &AuditQuery::default(),
         )
         .await
         .unwrap();
-        let by_name = list(
+        let by_name = list_plain(
             &db.pool,
             &Viewer::Admin,
             &AuditQuery {
@@ -3134,7 +4015,7 @@ mod tests {
         )
         .await;
 
-        let seen = list(
+        let seen = list_plain(
             &db.pool,
             &Viewer::Credential("k1".to_string()),
             &AuditQuery::default(),
@@ -3178,13 +4059,13 @@ mod tests {
             ..AuditQuery::default()
         };
 
-        let first = list(&db.pool, &Viewer::Admin, &query(None, None, None, 2))
+        let first = list_plain(&db.pool, &Viewer::Admin, &query(None, None, None, 2))
             .await
             .unwrap();
-        let rest = list(
+        let rest = list_plain(
             &db.pool,
             &Viewer::Admin,
-            &query(None, None, Some(first[1].id), 2),
+            &query(None, None, Some(first[1].cursor), 2),
         )
         .await
         .unwrap();
@@ -3194,7 +4075,7 @@ mod tests {
             None,
             0,
         );
-        let windowed = list(&db.pool, &Viewer::Admin, &window).await.unwrap();
+        let windowed = list_plain(&db.pool, &Viewer::Admin, &window).await.unwrap();
 
         assert_eq!(names(first), ["c", "b"]);
         assert_eq!(names(rest), ["a"]);
@@ -3228,7 +4109,7 @@ mod tests {
         ];
 
         for query in &queries {
-            let seen = list(&db.pool, &Viewer::Admin, query).await;
+            let seen = list_plain(&db.pool, &Viewer::Admin, query).await;
             assert_eq!(seen.map(|records| records.len()).ok(), Some(0), "{query:?}");
         }
     }

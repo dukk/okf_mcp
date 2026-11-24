@@ -13,22 +13,31 @@ How a session usually goes:
 - `search` for a concept, then `get_concept` to read it.
 - A concept path looks like `/infra/time-server.md`; the leading slash and the `.md` are
   optional.
-- Without `catalog`, a tool uses the catalogs your connection can see (`list_catalogs` names
-  them).
+- Without `catalog`, a tool uses your connection's selection: the catalogs the connection or
+  the key's default names, else the only catalog the key reaches (`list_catalogs` shows it). A
+  key granted every catalog has no such fallback. When `list_catalogs` shows an empty
+  selection, pass `catalog`.
 - To write, call `open_changeset` first and pass the handle it returns as `changeset` to every
   edit, `publish`, `discard`, `revert` and `pending_changes`. Reads take it too, to see the
   drafts. Nothing is visible to others until `publish`.
+- When the person asks you to remember something, save it to the catalog (under a fitting
+  folder) rather than only in the conversation; asking is their consent, so don't ask again.
+  Don't save what they didn't ask you to keep.
 
-A tool is one of four kinds:
+A tool is one of five kinds:
 
 - read-only: it changes nothing.
 - staged: it adds an entry to a changeset, which `discard` drops and `publish` applies.
 - maintenance: a step in a maintenance run (claim, renew, submit, dispose). It takes no
   changeset and is saved at once, so `discard` does not undo it; it never touches a concept.
 - destructive: it deletes, or cannot be undone from inside the server.
+- external: it sends something to a service outside the server (`send_feedback`, offered
+  only when the operator configured it). It changes no catalog.
+
 | Tool | Title | Kind |
 |---|---|---|
 | [`add_source`](#add_source) | Add Source | staged |
+| [`cited_by`](#cited_by) | Find Citations | read-only |
 | [`create_concept`](#create_concept) | Create Concept | staged |
 | [`delete_concept`](#delete_concept) | Delete Concept | destructive |
 | [`discard`](#discard) | Discard Changeset Entries | destructive |
@@ -65,17 +74,19 @@ A tool is one of four kinds:
 | [`revert`](#revert) | Revert Document | staged |
 | [`review`](#review) | Record Review | staged |
 | [`search`](#search) | Search Concepts | read-only |
+| [`send_feedback`](#send_feedback) | Send Feedback | external |
 | [`set_frontmatter`](#set_frontmatter) | Set Frontmatter | staged |
 | [`split_concept`](#split_concept) | Split Concept | staged |
 | [`sprawl`](#sprawl) | Sprawl Report | read-only |
 | [`stamp`](#stamp) | Stamp Concept | staged |
 | [`unquestion`](#unquestion) | Resolve Question | staged |
+| [`whoami`](#whoami) | Who Am I | read-only |
 
 ## `add_source`
 
 **Add Source** (staged)
 
-Append an entry (id, resource, title, author) to a concept's `sources`, refusing a duplicate id, in the changeset `changeset` names (open one with open_changeset). Write access.
+Append an entry (id, resource, title, author) to a concept's `sources`, refusing a duplicate id, in the changeset `changeset` names (open one with open_changeset); `cited_by` finds a source's citations. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -86,11 +97,25 @@ Append an entry (id, resource, title, author) to a concept's `sources`, refusing
 | `author` | string | no | Its author, e.g. `human:alice`. |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
 
+## `cited_by`
+
+**Find Citations** (read-only)
+
+List the concepts that cite a source, exactly: `source_id` (case-insensitive) and/or `resource` (case-sensitive); both must match one entry. Returns catalog, path, title and the matching `sources` entries, by catalog then path, at most `limit` (default and maximum 200; `truncated` says more exist). `catalogs` and `changeset` as in `search`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `source_id` | string | no | A source entry's `id`, matched exactly but ignoring case. Ids are unique only within a concept; use `resource` to find one source across concepts. |
+| `resource` | string | no | A source entry's `resource`, matched exactly (case-sensitive). |
+| `catalogs` | array of string | no | The catalog ids to search (default: this connection's selection). |
+| `limit` | integer | no | At most this many hits (default and maximum 200). |
+| `changeset` | string | no | Read through this changeset's drafts (its handle); its catalog must be one this call reads. |
+
 ## `create_concept`
 
 **Create Concept** (staged)
 
-Create a concept in the changeset `changeset` names (open one with open_changeset); nothing is visible to others until `publish`. `path` is the new concept's path, `.md` optional (e.g. /infra/ntp). Needs `type` in `frontmatter`; the server writes `generated: { by, at }` itself. With `index_summary`, also lists it in its folder's index.md (creating folder indexes as needed). Write access.
+Create a concept in the changeset `changeset` names (open one with open_changeset); nothing is visible to others until `publish`. `path` is the new concept's path, `.md` optional (e.g. /infra/ntp). Needs `type` in `frontmatter`; the server writes `generated: { by, at }` itself. With `index_summary`, also lists it in its folder's index.md (creating folder indexes as needed); `folder_summary` describes a new folder there. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -99,6 +124,7 @@ Create a concept in the changeset `changeset` names (open one with open_changese
 | `body` | string | yes | The markdown body after the frontmatter. |
 | `index_summary` | string | no | List the concept in its folder's index.md with this summary, creating folder indexes as needed. |
 | `index_section` | string | no | The index.md section to list it under (default: the section the server chooses for it); needs `index_summary`. |
+| `folder_summary` | string | no | With `index_summary`, the new folder's summary in its parent's index.md (default: a TODO); for nested new folders, the innermost. Refused if the folder exists. |
 | `by` | string | no | Who wrote it, for the `generated` stamp (default: the key's actor). |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
 
@@ -106,7 +132,7 @@ Create a concept in the changeset `changeset` names (open one with open_changese
 
 **Delete Concept** (destructive)
 
-Delete a concept and its listing in its folder's index.md, in the changeset `changeset` names (open one with open_changeset). Refused with StillLinked, listing each link (source, line), while any other document links to it, log.md and other index.md files included; move_concept or edit_document fixes them first. index.md files are never deleted. Write access.
+Delete a concept and its listing in its folder's index.md, in the changeset `changeset` names (open one with open_changeset). Links to it in log.md become plain text (the link text stays, the target goes), replayed at publish so concurrent log entries never conflict. Refused with StillLinked, listing each link (source, line), while any other document links to it, other index.md files included; move_concept or edit_document fixes them first. index.md files are never deleted. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -142,12 +168,12 @@ Replace exact text in a concept or an index.md, in the changeset `changeset` nam
 
 **Get Concept** (read-only)
 
-Get a concept: its frontmatter as JSON, its body and the body's size (`lines`, `chars`). A body over the server's limit (20,000 characters by default) comes back as an `outline` instead, with `truncated: true` and a `note`: each heading's text, slug, level, line and section size. `section` (a heading's slug, which wins, or its text) returns just that section with its subsections, at any size; `full: true` returns the whole body anyway. With `links`, its resolved outbound links (target, title, description, broken) and its backlinks; with `raw`, the file verbatim, but only within the limit or with `full`. Without `catalog`, the first selected catalog that has it answers. With `changeset` (a handle from open_changeset), its catalog reads through that changeset's drafts.
+Get a concept: its frontmatter as JSON, its body and the body's size (`lines`, `chars`). A body over the server's limit (20,000 characters by default) comes back as an `outline` instead, with `truncated: true` and a `note`: each heading's text, slug, level, line and section size. `section` (a heading's slug, which wins, or its text) returns just that section with its subsections, at any size; `full: true` returns the whole body anyway. A `section` that matches no heading, or several, is not an error: the result has `section_found: false`, the `outline` and a `note`. With `links`, its resolved outbound links (target, title, description, broken) and its backlinks; with `raw`, the file verbatim, but only within the limit or with `full`. Without `catalog`, the first selected catalog that has it answers. With `changeset` (a handle from open_changeset), its catalog reads through that changeset's drafts.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `path` | string | yes | The concept: `/infra/time-server.md`, `infra/time-server` or `/infra/time-server`. |
-| `catalog` | string | no | The catalog (default: the first selected catalog that has it). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `links` | boolean | no | Also return its resolved outbound links and its backlinks. |
 | `raw` | boolean | no | Also return the file verbatim, when the body is within the server's limit or with `full`. |
 | `section` | string | no | Return only this section, its subsections included: a heading's anchor slug, as the outline and a link's `#fragment` give it (an exact slug wins), or else its text (case-insensitive). Works at any size. |
@@ -163,18 +189,18 @@ A document's revisions, newest first: revision, op (create, update, delete, impo
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `path` | string | yes | The document: `/infra/time-server.md`, `infra/time-server`, `/log.md`. |
-| `catalog` | string | no | The catalog (default: the first selected catalog with any revision of it). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the first selected catalog with any revision of it; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `limit` | integer | no | At most this many revisions (default 20, at most 200; 0 counts as 1). |
 
 ## `index`
 
 **Add Index Entry** (staged)
 
-List a concept in its folder's index.md as `* [Title](name.md) - summary`, in the changeset `changeset` names (open one with open_changeset); nothing happens if it is already linked. Replayed at publish onto an index.md that changed meanwhile, unless a free edit of that index.md follows. Write access.
+List a concept in its folder's index.md as `* [Title](name.md) - summary`, in the changeset `changeset` names (open one with open_changeset); nothing happens if it is already linked (a name with a space, `)`, `#` or `:` is written percent-encoded, e.g. `a%20b.md`; an older raw bullet for it counts as linked, with a note; repair_indexes rewrites it). Replayed at publish onto an index.md that changed meanwhile, unless a free edit of that index.md follows. With a folder `path` (`/infra/`), sets the summary of its listing in the parent's index.md instead, replayed the same way. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `path` | string | yes | The concept to list, with or without `.md`, e.g. `/infra/ntp`; its folder's index.md must exist (`repair_indexes` creates missing ones). |
+| `path` | string | yes | The concept to list, with or without `.md`, e.g. `/infra/ntp`; its folder's index.md must exist (`repair_indexes` creates missing ones). Or a folder, e.g. `/infra/`, to set its listing's summary in its parent's index.md. |
 | `summary` | string | yes | The text after the link's ` - `. |
 | `section` | string | no | The heading to list it under, e.g. `Build infrastructure` (default: `Concepts`). |
 | `title` | string | no | The link text (default: the concept's frontmatter title). |
@@ -188,7 +214,7 @@ The link report: broken links and anchors, relative links, orphans, dead ends, i
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog (default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it. |
 | `mentions` | boolean | no | Also look for unlinked mentions of concept names (default true; the slowest part). |
 
@@ -200,17 +226,18 @@ Lint a catalog: errors and warnings with file, line, rule and message. Without `
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog (default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `changeset` | string | no | Lint this changeset's drafts (its handle) applied to the published catalog, instead of the published catalog; its changed paths count as uncommitted for `generated-after-commit`. |
 
 ## `list_catalogs`
 
 **List Catalogs** (read-only)
 
-List the catalogs this connection offers (name, description, file count, last change): those the API key can reach, limited to the connection's X-OKF-Catalogs list when it has one. A catalog whose team is suspended is listed with `suspended` set, and only export works on it. Also this connection's selection: the catalogs a call without a `catalog` argument reads, and the default write target.
+List the catalogs this connection offers (name, display name, label, description, file count, last change). Pass `name` (the id) in other tools and say `label` to people: those the API key can reach, limited to the connection's X-OKF-Catalogs list when it has one. A catalog whose team is suspended is listed with `suspended` set, and only export works on it. Returns up to 100 catalogs, by name; when `next` is set, call again with it as `after` for the rest. Also this connection's selection: the catalogs a call without a `catalog` argument reads, and the default write target. It comes from the X-OKF-Catalogs header or `?catalogs=`, else the key's or the server's default catalog, else the only catalog the key reaches (a key granted every catalog has no such fallback). When the selection is empty, `selection_error` says why: pass `catalog`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
+| `after` | string | no | The `next` of the previous call, for the page after it; omit it for the first page. |
 
 ## `list_changesets`
 
@@ -220,7 +247,7 @@ List the open changesets this key may use (an admin: every key's, in the catalog
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | Only this catalog (default: every catalog the connection offers: the key's, limited to the connection's list when it has one). |
+| `catalog` | string | no | Only this catalog id (the `name` from `list_catalogs`; default: every catalog the connection offers: the key's, limited to the connection's list when it has one). |
 
 ## `log`
 
@@ -242,7 +269,7 @@ Report-only: claim one bounded investigation batch (default 10, maximum 50). Req
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `idempotency_key` | string | yes | Caller-chosen retry key (1..=128 non-whitespace ASCII bytes); reuse only for identical input. |
 | `batch_size` | integer | no | One bounded batch (default 10, minimum 1, maximum 50). |
 
@@ -254,7 +281,7 @@ Report-only: close an owned run with the reporting flag, or another credentialâ€
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `run_id` | string | yes | Opaque run ID belonging to the named catalog. |
 | `state` | one of: completed, failed, cancelled | yes | Requested terminal state; completion requires all work to have ended. |
 | `rationale` | string | yes | Human-readable reason recorded with attribution; secrets and oversized text are refused. |
@@ -268,7 +295,7 @@ Report-only: record a finding disposition with ordinary Write, never applying th
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `finding_id` | string | yes | Opaque finding ID belonging to the named catalog. |
 | `disposition` | one of: open, accepted_for_follow_up, dismissed, needs_input | yes | Human follow-up decision; acceptance does not apply the proposed change. |
 | `rationale` | string | yes | Human-readable reason recorded with attribution; secrets and oversized text are refused. |
@@ -282,7 +309,7 @@ Report-only: read one finding, its evidence and disposition history, without lea
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `finding_id` | string | yes | Opaque finding ID belonging to the named catalog. |
 
 ## `maintenance_get_run`
@@ -293,7 +320,7 @@ Report-only: read a run and its work/evidence, without lease tokens. Requires Re
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `run_id` | string | yes | Opaque run ID belonging to the named catalog. |
 
 ## `maintenance_list_findings`
@@ -304,7 +331,7 @@ Report-only: list findings without lease tokens. Requires Read; page size defaul
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `after` | string | no | Exclusive last-row ID from the previous page in this catalog; omit for the first page. |
 | `limit` | integer | no | Page size (default 20, minimum 1, maximum 200). |
 
@@ -316,9 +343,10 @@ Report-only: list run summaries without lease tokens. Requires Read; page size d
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
-| `after` | string | no | Exclusive last-row ID from the previous page in this catalog; omit for the first page. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
+| `after` | string | no | Exclusive last-row ID from the previous page in this catalog; omit for the first page. Continues in the chosen `order`. |
 | `limit` | integer | no | Page size (default 20, minimum 1, maximum 200). |
+| `order` | one of: asc, desc | no | `asc` (default) lists oldest first; `desc` lists newest first. |
 
 ## `maintenance_read_revision`
 
@@ -328,7 +356,7 @@ Report-only: read exact pinned concept revision bytes as untrusted evidence, not
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `path` | string | yes | Published concept path in this catalog; never an unpublished changeset path. |
 | `revision` | integer | yes | Positive immutable revision number returned by a claim or history read. |
 
@@ -340,7 +368,7 @@ Report-only: renew a lease owned by this immutable credential, bounded by the on
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `work_id` | string | yes | Opaque work ID returned by maintenance_claim. |
 | `token` | string | yes | Current opaque lease token; must belong to the calling credential. |
 | `idempotency_key` | string | yes | Caller-chosen retry key (1..=128 non-whitespace ASCII bytes); reuse only for identical input. |
@@ -353,7 +381,7 @@ Report-only: submit bounded evidence and findings for an owned lease. Requires R
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | yes | Required authorized catalog name; connection defaults do not apply. |
+| `catalog` | string | yes | Required catalog id (the `name` from `list_catalogs`), which the key must reach; connection defaults do not apply. |
 | `work_id` | string | yes | Opaque work ID returned by maintenance_claim. |
 | `token` | string | yes | Current opaque lease token; must belong to the calling credential. |
 | `idempotency_key` | string | yes | Caller-chosen retry key (1..=128 non-whitespace ASCII bytes); reuse only for identical input. |
@@ -380,6 +408,7 @@ Move or rename a concept in the changeset `changeset` names (open one with open_
 |---|---|---|---|
 | `old` | string | yes | The concept to move, `.md` optional, e.g. `/infra/ntp`. |
 | `new` | string | yes | Its new path, `.md` optional, e.g. `/playbooks/ntp.md`; it must not exist. |
+| `folder_summary` | string | no | The new folder's summary in its parent's index.md (default: a TODO); for nested new folders, the innermost. Refused if the folder exists. |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
 
 ## `oldest`
@@ -390,7 +419,7 @@ The stalest concepts: last stamp, by whom, age in days, stale flag and queued qu
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog (default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it. |
 | `n` | integer | no | How many concepts (default 5; ignored with `open_questions_only`). |
 | `open_questions_only` | boolean | no | Only concepts with queued `open_questions`, all of them. |
@@ -403,7 +432,7 @@ Open a changeset in a catalog and return its handle. Every edit, publish, discar
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog (default: this connection's write target). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: this connection's write target; when `list_catalogs` shows none, pass `catalog`). |
 
 ## `open_questions`
 
@@ -413,14 +442,14 @@ Every queued open_questions entry in a catalog, grouped by concept and numbered 
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog (default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it. |
 
 ## `pending_changes`
 
 **Show Pending Changes** (read-only)
 
-The unpublished changeset `changeset` names: each changed path (create, update or delete), the revision it was based on and the one published now, whether that base is stale, whether publish can replay it, and a unified diff against the published text.
+The unpublished changeset `changeset` names: each changed path (create, update or delete), the revision it was based on and the one published now, whether that base is stale, whether publish can replay it, and a unified diff against the published text. A stale entry publish can replay is diffed as replayed onto the published text (replayed: true), the bytes publish would write; one whose replay would fail gets replay_error and a note instead.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -430,7 +459,7 @@ The unpublished changeset `changeset` names: each changed path (create, update o
 
 **Publish Changeset** (destructive)
 
-Publish the changeset `changeset` names: its edits become the published documents, each with a new revision carrying `message`. Refused with Conflict when a document changed since this changeset read it (log.md and index.md bookkeeping is replayed onto the new text instead), or with LintFailed when a changed file has lint errors; the changeset then stays open. Lint errors elsewhere come back as warnings. When every edit already matches the published text, the changeset is closed with published: true and no revisions. Write access.
+Publish the changeset `changeset` names: its edits become the published documents, each with a new revision carrying `message`. Refused with Conflict when a document changed since this changeset read it (log.md and index.md bookkeeping, and the stamp, review, question, unquestion, add_source and remove_source edits of a concept, are replayed onto the new text instead; a replay that can no longer apply is refused with its reason), or with LintFailed when a changed file has lint errors; the changeset then stays open (an error the published file already has is a warning, not a refusal). Lint errors elsewhere come back as warnings. When every edit already matches the published text, the changeset is closed with published: true and no revisions. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -441,7 +470,7 @@ Publish the changeset `changeset` names: its edits become the published document
 
 **Add Question** (staged)
 
-Queue one question in a concept's open_questions without recording a review, in the changeset `changeset` names (open one with open_changeset). Write access.
+Queue one question in a concept's open_questions without recording a review, in the changeset `changeset` names (open one with open_changeset). Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -458,14 +487,14 @@ Read the raw text of an index.md (default /index.md), log.md or AGENTS.md. Witho
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `path` | string | no | An `index.md` (any folder's), `log.md` or `AGENTS.md`; default `/index.md`. Use `get_concept` for concepts. |
-| `catalog` | string | no | The catalog (default: the first selected catalog that has it). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the first selected catalog that has it; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); its catalog must be one this call reads. |
 
 ## `remove_source`
 
 **Remove Source** (staged)
 
-Remove the entry with `id` from a concept's `sources`, deleting the key when none are left, in the changeset `changeset` names (open one with open_changeset). Refused while a footnote in the body still cites it (its label is the id, or its definition names the id, title or resource): remove the citation first. Write access.
+Remove the entry with `id` from a concept's `sources`, deleting the key when none are left, in the changeset `changeset` names (open one with open_changeset). Refused while a footnote in the body still cites it (its label is the id, or its definition names the id, title or resource): remove the citation first. `cited_by` finds a source's citations. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -477,7 +506,7 @@ Remove the entry with `id` from a concept's `sources`, deleting the key when non
 
 **Repair Indexes** (staged)
 
-Create whatever bookkeeping the catalog is missing, in the changeset `changeset` names (open one with open_changeset): the root index.md and log.md, an index.md for every folder holding concepts, each folder's listing in its parent's # Sections, and each concept's listing in its folder's index.md (its title and description; TODO placeholders where they are missing, each named in `notes`). Only adds: existing text, listings and summaries are kept, and a second run changes nothing. A file or folder no markdown link can list (a space, `)` or `#` in its path, or a `]` in a folder name) is not listed; `notes` names it. Review the result with pending_changes before publishing. Write access.
+Create whatever bookkeeping the catalog is missing, in the changeset `changeset` names (open one with open_changeset): the root index.md and log.md, an index.md for every folder holding concepts, each folder's listing in its parent's # Sections, and each concept's listing in its folder's index.md (its title and description; TODO placeholders where they are missing, each named in `notes`). Existing text, listings and summaries are kept, except an old raw (unencoded) concept or folder listing whose link never resolves, such as `[A](a b.md)` or `[My docs](my docs/)`: its destination is percent-encoded in place, or the bullet removed beside a working one, and `notes` quotes each. A second run changes nothing. A file or folder no markdown link can list (a `]` in a folder name) is not listed; `notes` names it. Review the result with pending_changes before publishing. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -499,7 +528,7 @@ Replace a concept's body, keeping its frontmatter byte for byte, in the changese
 
 **Revert Document** (staged)
 
-Add a document's content at an earlier revision (from `history`), or its deletion for a `delete` revision, to the changeset `changeset` names, for review and publish like any other edit. Every write rule applies, so machinery cannot be reverted. Reverting a file this changeset created to a `delete` revision drops it from the changeset. Write access.
+Add a document's content at an earlier revision (from `history`), or its deletion for a `delete` revision, to the changeset `changeset` names, for review and publish like any other edit. Every write rule applies, so machinery cannot be reverted. The revert is based on the revision published now, even if this changeset edited the document before, so publish conflicts only if the document is published again after it. Reverting a file this changeset created to a `delete` revision drops it from the changeset. Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -511,7 +540,7 @@ Add a document's content at an earlier revision (from `history`), or its deletio
 
 **Record Review** (staged)
 
-Replace a concept's `reviewed` with { by, at: now, outcome, note } and queue any `questions` in open_questions, in the changeset `changeset` names (open one with open_changeset). `by` defaults to the key's actor. Write access.
+Replace a concept's `reviewed` with { by, at: now, outcome, note } and queue any `questions` in open_questions, in the changeset `changeset` names (open one with open_changeset). `by` defaults to the key's actor. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -531,12 +560,26 @@ Search concepts across this connection's catalogs (or `catalogs`). Every term of
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `query` | string | yes | Free text. Every whitespace-separated term must occur (case-insensitive substring) in a concept's title or aliases, tags, description or body; free text matches tags by substring. Empty matches every concept that passes the filters. |
-| `catalogs` | array of string | no | The catalogs to search (default: this connection's catalogs). |
+| `catalogs` | array of string | no | The catalog ids to search (the `name`s from `list_catalogs`; default: this connection's selection, which may be the only catalog the key reaches; when `list_catalogs` shows an empty selection, pass `catalogs`). At most the server's `search_fanout_max` (default 25) distinct catalogs may be named; more is refused. |
 | `type` | string | no | Only concepts of this `type` (case-insensitive). |
 | `tags` | array of string | no | Only concepts carrying every one of these tags. These match whole tags only (case-insensitive): `infra` does not match `infrastructure`, while the same text in `query` would, by substring. |
 | `status` | string | no | Only concepts with this `status` (case-insensitive; a missing status counts as `stable`). |
 | `limit` | integer | no | At most this many hits (default 20, at most 200; 0 returns none). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); its catalog must be one this call reads. |
+
+## `send_feedback`
+
+**Send Feedback** (external)
+
+Send feedback about using this server (something confusing, broken, missing or good) to this server's team. The feedback goes to this server's team through a third-party form service (Forminit). Ask the user before including catalog content, personal details or anything the user hasn't agreed to share. When the user asks you to send feedback, send the user's own words and set `from` to `user`; when you report your own experience, set `from` to `agent`. What is sent: message, kind, from, tool, rating, the server version, your MCP client's name, the credential kind (api_key or oauth), the feedback's id and your user name as the sender's userId. No email, display name, key name, token or catalog content is sent unless it is in the message. A message is at most 4,000 characters, and each credential may send a limited number per hour (10 by default). Returns the feedback's id at once; delivery happens in the background.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `message` | string | yes | The feedback, in the user's or the agent's own words (at most 4,000 characters). |
+| `kind` | string | no | What it is about: `bug`, `confusing`, `missing`, `praise` or `other` (default `other`). |
+| `from` | string | no | `user` (the person asked for it to be sent) or `agent` (the agent reports its own experience); default `agent`. |
+| `tool` | string | no | The tool the feedback is about, if any (`publish`). |
+| `rating` | integer | no | A rating from 1 to 5, if any. |
 
 ## `set_frontmatter`
 
@@ -567,6 +610,7 @@ Carve a section (and its subsections) out of a concept into a new concept, in th
 | `description` | string | no | A one-sentence description; also the index listing's summary and the default stub. Without it, a placeholder is written and a note says so. |
 | `stub` | string | no | The paragraph left under the heading in the parent; a link to the new concept is appended unless it has one. |
 | `sources` | array of string | no | Ids of the parent's sources to copy (default: those the section's footnotes cite, else all of them). |
+| `folder_summary` | string | no | The new folder's summary in its parent's index.md (default: a TODO); for nested new folders, the innermost. Refused if the folder exists. |
 | `by` | string | no | Who wrote it, for the `generated` stamp (default: the key's actor). |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
 
@@ -578,7 +622,7 @@ Sprawl scores: which concepts have grown too long or volatile, with sections and
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `catalog` | string | no | The catalog (default: the changeset's, else the first selected catalog). |
+| `catalog` | string | no | The catalog id (the `name` from `list_catalogs`; default: the changeset's, else the first selected catalog; when `list_catalogs` shows an empty selection, pass `catalog`). |
 | `changeset` | string | no | Read through this changeset's drafts (its handle); the report then runs on its catalog unless `catalog` names it. |
 | `path` | string | no | One concept to score (default: the worst `n`). |
 | `n` | integer | no | How many concepts (default 5). |
@@ -587,7 +631,7 @@ Sprawl scores: which concepts have grown too long or volatile, with sections and
 
 **Stamp Concept** (staged)
 
-Set a concept's `generated` (content written) or append to its `verified` (checked against the real system) with { by, at: now }, in the changeset `changeset` names (open one with open_changeset). `by` defaults to the key's actor. Write access.
+Set a concept's `generated` (content written) or append to its `verified` (checked against the real system) with { by, at: now }, in the changeset `changeset` names (open one with open_changeset). `by` defaults to the key's actor. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result). Write access.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -600,13 +644,22 @@ Set a concept's `generated` (content written) or append to its `verified` (check
 
 **Resolve Question** (staged)
 
-Remove one queued question, by its 1-based number in open_questions or its exact text, deleting the key when none are left, in the changeset `changeset` names (open one with open_changeset). Write access.
+Remove one queued question, by its 1-based number in open_questions or its exact text, deleting the key when none are left, in the changeset `changeset` names (open one with open_changeset). Write access. Replayed at publish onto text published meanwhile, unless a free edit of the concept follows (`pending_changes` shows the result).
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `path` | string | yes | The concept, with or without `.md`, e.g. `/infra/ntp` or `/infra/ntp.md`. |
 | `question` | [`QuestionRef`](#type-questionref) | yes | The question to remove: its 1-based number in `open_questions`, or its exact text. |
 | `changeset` | string | yes | The changeset to write to: the handle `open_changeset` returned. |
+
+## `whoami`
+
+**Who Am I** (read-only)
+
+Who this connection acts for and the server's current time: the user (id and label), the actor writes are recorded as (what `by` defaults to), the credential (`api_key`, or `oauth` with its client's name), its access, the catalogs it reaches with each level, its default catalog, and `now` (UTC, as stamps are written). For the connection's selection, see `list_catalogs`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
 
 ## Types
 

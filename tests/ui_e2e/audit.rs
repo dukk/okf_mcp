@@ -58,15 +58,24 @@ async fn an_admin_filters_the_log_by_action_and_exports_it() {
         ui.open("/users");
         ui.click("#user-new");
         ui.fill("#user-form input[name=name]", "alice");
+        ui.fill("#user-form input[name=display_name]", "Alice Example");
         ui.click("#user-form button[type=submit]");
         ui.wait_visible("[data-test=user-alice]");
         ui.open("/audit");
         ui.wait_text("#audit-table", "user.created");
         ui.select("#audit-action", "user.created");
-        ui.wait_text("#audit-table", "alice");
+        // The person column shows the label, not the slug; the link keeps
+        // the slug, which the filters match.
+        ui.wait_text("#audit-table", "Alice Example");
         ui.wait_text_gone("#audit-table", "catalog.created");
         // The user links to its drawer, which lists its sign-ins.
-        ui.click("#audit-table a[href='#/users/detail/alice']");
+        // A long label wraps in the narrow column, so the link's centre can
+        // fall between its lines: click it from the page, not by a point.
+        let clicked = ui.eval(
+            "() => { const link = document.querySelector(\"#audit-table a[href='#/users/detail/alice']\"); link?.click(); return !!link; }",
+            Value::Null,
+        );
+        assert_eq!(clicked, json!(true), "no link to alice");
         ui.wait_visible("#drawer");
         ui.wait_text("#drawer", "alice");
         ui.click("#drawer-close");
@@ -88,8 +97,9 @@ async fn an_admin_filters_the_log_by_action_and_exports_it() {
         assert!(
             entries
                 .iter()
-                .any(|entry| entry["target"]["person"] == "alice"),
-            "alice's user.created is not in the export: {text}"
+                .any(|entry| entry["target"]["person"] == "alice"
+                    && entry["target"]["person_label"] == "Alice Example"),
+            "alice's user.created is not in the export, labelled: {text}"
         );
         ui.wait_hidden("#audit-error");
     })
@@ -105,18 +115,18 @@ async fn a_user_named_unassigned_opens_its_own_drawer_from_the_log() {
         &admin,
         "POST",
         "/api/v1/users",
-        json!({"name": "unassigned"}),
+        json!({"name": "unassigned", "display_name": "Unassigned Person"}),
     )
     .await;
     drive(server.base.clone(), move |ui| {
         ui.login(&admin);
         ui.open("/audit");
         ui.select("#audit-action", "user.created");
-        ui.wait_text("#audit-table", "user unassigned");
-        // The link by its text, whatever route it names.
+        ui.wait_text("#audit-table", "user Unassigned Person");
+        // The link by its text (the label), whatever route it names.
         let clicked = ui.eval(
             "() => { const link = [...document.querySelectorAll('#audit-table a')] \
-             .find(a => a.textContent === 'unassigned'); link?.click(); return !!link; }",
+             .find(a => a.textContent === 'Unassigned Person'); link?.click(); return !!link; }",
             Value::Null,
         );
         assert_eq!(clicked, json!(true), "no link to the user unassigned");
@@ -125,6 +135,33 @@ async fn a_user_named_unassigned_opens_its_own_drawer_from_the_log() {
         ui.wait_visible("#users-table");
         // Not the view of what has no user or owner.
         assert_eq!(ui.text("#unassigned"), "");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_label_with_markup_is_drawn_as_text() {
+    let server = server().await;
+    let admin = server.key("console-admin", Access::Admin, &[], None).await;
+    let hostile = "<img src=x id=pwned>";
+    call(
+        &server,
+        &admin,
+        "POST",
+        "/api/v1/users",
+        json!({"name": "mallory", "display_name": hostile}),
+    )
+    .await;
+    drive(server.base.clone(), move |ui| {
+        ui.login(&admin);
+        ui.open("/audit");
+        ui.select("#audit-action", "user.created");
+        ui.wait_text("#audit-table", hostile);
+        let injected = ui.eval(
+            "() => document.querySelectorAll('#audit-table img, #pwned').length",
+            Value::Null,
+        );
+        assert_eq!(injected, json!(0), "the label became markup");
     })
     .await;
 }
@@ -183,6 +220,66 @@ async fn an_owner_reads_its_team_and_sees_an_operator() {
             "the export names staff: {text}"
         );
         ui.wait_hidden("#audit-error");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owner_loads_more_through_its_sealed_cursor_and_sees_no_entry_id() {
+    let server = login_server().await;
+    member(&server, Access::Read).await;
+    let root = server.key("console-admin", Access::Admin, &[], None).await;
+    call(
+        &server,
+        &root,
+        "POST",
+        "/api/v1/teams",
+        json!({"name": "family", "owner": "alice"}),
+    )
+    .await;
+    // 101 members: 102 entries of family's, more than one page (100), with
+    // each user's own creation between two of them.
+    for index in 0..101 {
+        let name = format!("kin-{index}");
+        call(
+            &server,
+            &root,
+            "POST",
+            "/api/v1/users",
+            json!({"name": name}),
+        )
+        .await;
+        call(
+            &server,
+            &root,
+            "PUT",
+            &format!("/api/v1/teams/family/members/{name}"),
+            json!({"role": "member"}),
+        )
+        .await;
+    }
+    drive(console_base(&server), move |ui| {
+        ui.sign_in_password(EMAIL, PASSWORD);
+        ui.wait_visible("[data-nav=audit]");
+        ui.open("/audit");
+        ui.select("#audit-team", "family");
+        ui.wait_visible("#audit-more");
+        assert_eq!(rows(ui), 100);
+        // The owner's cursor is a sealed string, and the server takes no
+        // other from an owner: the second page draws only if the console
+        // passed it back as it came.
+        ui.click("#audit-more");
+        ui.wait_text("#audit-table", "team.created");
+        ui.wait_hidden("#audit-more");
+        assert_eq!(rows(ui), 102);
+        ui.wait_hidden("#audit-error");
+        let (_, text) = ui.download("#audit-export");
+        let entries = json_lines(&text);
+        assert_eq!(entries.len(), 102, "{text}");
+        assert!(
+            entries.iter().all(|entry| entry.get("id").is_none()),
+            "an owner's export carries entry ids: {text}"
+        );
     })
     .await;
 }

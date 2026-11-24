@@ -26,6 +26,7 @@ pub(super) async fn setup(pool: &PgPool, paths: &[&str]) -> i64 {
         pool,
         &crate::store::catalogs::NewCatalog {
             name: "pg",
+            display_name: &crate::labels::DisplayName::default(),
             description: "",
             owner_team: crate::db::TEST_TEAM,
         },
@@ -2119,15 +2120,20 @@ async fn maintenance_renewal_and_close_replay_preserve_receipts() {
     .is_err());
 }
 
+/// Waits (up to 10 s) until maintenance is queued for a source row lock
+/// that `blocker_pid` holds.
+///
+/// Maintenance locks the catalog's `documents` rows `FOR SHARE` (`runs::claim`,
+/// `runs::renew` and `reports::submit`). Behind a row another transaction
+/// changed, that is a not-granted `transactionid` lock together with a
+/// granted `tuple` lock on `documents` (see
+/// [`crate::test_locks::wait_row_lock_waiter`]). Matching the lock rather
+/// than `pg_stat_activity.query` avoids stale text (issue #639).
+///
+/// # Panics
+/// When no such wait appears within 10 s.
 pub(super) async fn wait_for_source_lock(pool: &PgPool, blocker_pid: i32) {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        loop {
-            let blocked: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FOR SHARE%' AND $1 = ANY(pg_blocking_pids(pid)))")
-                .bind(blocker_pid).fetch_one(pool).await.unwrap();
-            if blocked { break; }
-            tokio::task::yield_now().await;
-        }
-    }).await.expect("maintenance never reached the blocked source lock");
+    crate::test_locks::expect_row_lock_waiter(pool, blocker_pid, "documents").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2296,6 +2302,7 @@ async fn maintenance_deleted_catalog_identity_cannot_replay() {
         &db.pool,
         &crate::store::catalogs::NewCatalog {
             name: "pg",
+            display_name: &crate::labels::DisplayName::default(),
             description: "",
             owner_team: crate::db::TEST_TEAM,
         },

@@ -1,14 +1,19 @@
 //! Per-key rate limits for the sign-in routes (plan Decision 8): a token
-//! bucket per client address or per email, held in an [`ExpiringMap`] so
-//! idle keys are dropped and memory stays bounded. In memory and per
-//! process, like M10's global buckets (multi-replica limits are a
-//! follow-up).
+//! bucket per client address or per email. [`KeyedLimiter`] holds them in
+//! an [`ExpiringMap`] so idle keys are dropped and memory stays bounded, in
+//! memory and per process. [`SignInLimits`] wraps each in a
+//! [`KeyedLimit`], which keeps the buckets in Redis with `[redis]`, so they
+//! hold across replicas (issue #357), and uses the in-memory limiter
+//! otherwise.
 
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 use crate::oauth::expiring::ExpiringMap;
 use crate::oauth::ratelimit::TokenBucket;
+use crate::shared::limits::KeyedLimit;
+use crate::shared::Redis;
+use crate::telemetry::metrics::Limiter;
 
 /// Password sign-in attempts per address per [`SIGN_IN_WINDOW`] (spec).
 pub const SIGN_IN_PER_IP: u32 = 30;
@@ -99,18 +104,23 @@ impl KeyedLimiter {
     }
 }
 
-/// The limits the sign-in routes share, held by `App`.
+/// The limits the sign-in routes share, held by `App`: in Redis with
+/// `[redis]`, so every replica counts against one budget.
 pub struct SignInLimits {
     /// Password and passkey sign-in attempts, by address.
-    pub sign_in_per_ip: KeyedLimiter,
+    pub sign_in_per_ip: KeyedLimit,
     /// `POST /signin/forgot`, by normalized email.
-    pub forgot_per_email: KeyedLimiter,
+    pub forgot_per_email: KeyedLimit,
     /// `POST /signin/forgot`, by address.
-    pub forgot_per_ip: KeyedLimiter,
+    pub forgot_per_ip: KeyedLimit,
 }
 
 impl SignInLimits {
     /// Empty limiters at the spec's rates.
+    ///
+    /// # Arguments
+    /// * `redis` - the shared Redis, with `[redis]`; `None` keeps the
+    ///   buckets in this process's memory.
     ///
     /// # Returns
     /// The limits.
@@ -121,25 +131,15 @@ impl SignInLimits {
             reason = "trivial constructor: builds a value from its arguments"
         )
     )]
-    pub fn new() -> Self {
+    pub fn new(redis: Option<&Redis>) -> Self {
+        let keyed = |limiter, capacity, per| {
+            KeyedLimit::new(limiter, capacity, per, MAX_LIMITED_KEYS, redis)
+        };
         Self {
-            sign_in_per_ip: KeyedLimiter::new(SIGN_IN_PER_IP, SIGN_IN_WINDOW, MAX_LIMITED_KEYS),
-            forgot_per_email: KeyedLimiter::new(FORGOT_PER_EMAIL, FORGOT_WINDOW, MAX_LIMITED_KEYS),
-            forgot_per_ip: KeyedLimiter::new(FORGOT_PER_IP, FORGOT_WINDOW, MAX_LIMITED_KEYS),
+            sign_in_per_ip: keyed(Limiter::SignInPerIp, SIGN_IN_PER_IP, SIGN_IN_WINDOW),
+            forgot_per_email: keyed(Limiter::ForgotPerEmail, FORGOT_PER_EMAIL, FORGOT_WINDOW),
+            forgot_per_ip: keyed(Limiter::ForgotPerIp, FORGOT_PER_IP, FORGOT_WINDOW),
         }
-    }
-}
-
-impl Default for SignInLimits {
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    fn default() -> Self {
-        Self::new()
     }
 }
 

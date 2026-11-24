@@ -2,7 +2,8 @@
 //! catalog's published documents, under the catalog's publish lock.
 //!
 //! The lock is two locks, taken in this order. First the in-process mutex
-//! ([`CatalogState::publish_lock`]), held until the snapshot is swapped.
+//! ([`App::publish_lock`], keyed by catalog id so every `CatalogState` of
+//! one catalog shares it), held until the snapshot is swapped.
 //! Then, in the transaction, the user rows its audit entry resolves
 //! (`lock_people`), so the publish takes users before its changeset as
 //! `users::delete` does, then the advisory lock, which a CLI import takes
@@ -24,6 +25,7 @@ use tracing::Instrument;
 use crate::app::App;
 use crate::catalog::{CatalogState, Loaded};
 use crate::error::{ConflictFile, OkfError};
+use crate::invalidate::{invalidate, Invalidation};
 use crate::mcp::blocking;
 use crate::okf::analysis::lint::LintReport;
 use crate::okf::analysis::Finding;
@@ -32,7 +34,7 @@ use crate::okf::rules;
 use crate::okf::snapshot::Snapshot;
 use crate::overlay::{build_overlay, Overlay};
 use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
-use crate::store::catalogs::{self, is_unique_violation};
+use crate::store::catalogs::{self, is_unique_violation, CatalogGeneration};
 use crate::store::changesets::{self, ChangesetRow, ChangesetState, EntryRow};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::telemetry::metrics::Outcome;
@@ -45,7 +47,8 @@ pub struct PublishReport {
     pub published: bool,
     /// The revisions written, in path order. A file whose content ended up as published gets none.
     pub revisions: Vec<PublishedRevision>,
-    /// Lint advice: errors in files this publish does not change, and warnings in those it does.
+    /// Lint advice: errors in files this publish does not change, errors in files it does change
+    /// that the published file already had, and warnings in those it changes.
     pub warnings: Vec<Finding>,
     /// `/`-prefixed paths whose bookkeeping (log, index listings) was replayed onto newer text.
     pub replayed: Vec<String>,
@@ -152,7 +155,14 @@ pub async fn publish(
     audit: &AuditActor,
 ) -> Result<PublishReport, OkfError> {
     let started = std::time::Instant::now();
+    let before = state.current().generation();
     let result = publish_locked(app, state, input, audit).await;
+    // Whatever the outcome: the publish may have refreshed the state in
+    // place, before it committed (`current_base`, even when the merge or
+    // lint then refuses) or after (step 6). The catalog cache weighs the
+    // new snapshot (M18 Decision 2), and drops one that no longer fits.
+    // An in-process cache operation only: nothing here waits on I/O.
+    app.catalog_cache().refreshed_if_moved(state, before).await;
     let outcome = if result.is_ok() {
         Outcome::Ok
     } else {
@@ -198,7 +208,7 @@ async fn publish_locked(
     // or early return) rolls back.
     let lock_started = std::time::Instant::now();
     let locks = async {
-        let publishing = state.publish_lock().lock().await;
+        let publishing = app.publish_lock(state.id()).await;
         let mut tx = app.pool().begin().await?;
         // The users the entry resolves (the actor, its key's owner and the
         // person of a personal owner team), before the changeset: the
@@ -252,7 +262,7 @@ async fn publish_locked(
         now,
     };
     // `tx` moves into the block (it is consumed by `commit`); the rest is borrowed.
-    let revisions = async {
+    let (revisions, changed) = async {
         let revisions = match write_all(&mut tx, &publication, &overlay, &current, &paths).await {
             Ok(revisions) => revisions,
             // The backstop's conflict: roll back first, so the re-read below
@@ -265,7 +275,9 @@ async fn publish_locked(
             Err(error) => return Err(error),
         };
         // A publish that wrote no revision changed no document: it is not a
-        // catalog write, so it bumps nothing and records nothing.
+        // catalog write, so it bumps nothing, records nothing and announces
+        // nothing.
+        let mut changed = None;
         if !revisions.is_empty() {
             let generation: i64 = sqlx::query_scalar(
             "UPDATE catalogs SET generation = generation + 1 WHERE id = $1 RETURNING generation",
@@ -288,27 +300,48 @@ async fn publish_locked(
                 }),
             };
             audit::record(&mut tx, audit, &entry, now).await?;
+            // Every replica's listener refreshes the catalog once this commits.
+            invalidate(
+                &mut tx,
+                &[Invalidation::Catalog {
+                    id: state.id(),
+                    generation,
+                }],
+            )
+            .await?;
+            changed = Some(CatalogGeneration {
+                catalog_id: state.id(),
+                generation,
+            });
         }
         changesets::set_state(&mut tx, locked.id, ChangesetState::Published, now).await?;
         tx.commit().await?;
-        Ok::<_, OkfError>(revisions)
+        Ok::<_, OkfError>((revisions, changed))
     }
     .instrument(tracing::info_span!("okf.publish.write"))
     .await?;
+    // Committed, so another replica that reads now sees it: announce it, on
+    // its own task (issue #659). Never before the commit, or a replica could
+    // refresh to the old generation and skip this one's announcement.
+    if let Some(change) = changed {
+        app.announce_catalog(change);
+    }
 
     // Step 6, still under the in-process lock (the advisory lock ended with
     // the transaction): the next publish of this catalog checks against
     // this one's result. A failed refresh does not undo a committed publish;
-    // the poll loop retries it, and the next publish refreshes first.
-    if let Err(error) = state.refresh(app.pool()).await {
+    // the next use retries it (it checks the snapshot against the catalog's
+    // row), and the next publish refreshes first. `publish` then has the
+    // catalog cache weigh the new snapshot.
+    if let Err(error) = state.refresh(app.pool(), app.rebuild_locks()).await {
         split_event!(
             error,
             { catalog = %state.name(), kind = error.kind(), },
             { %error, },
-            "refresh after publish failed; the poll loop retries"
+            "refresh after publish failed; the next use retries"
         );
     }
-    app.overlays().forget(locked.id);
+    app.overlays().forget(locked.id).await;
     Ok(PublishReport {
         published: true,
         revisions,
@@ -436,7 +469,7 @@ fn merge(
             merged.push(entry);
             continue;
         }
-        match replayed_text(&entry, live)? {
+        match replayed_text(&entry, live.map(|row| row.content.as_slice()))? {
             Some(text) => {
                 replayed.push(format!("/{}", entry.path));
                 entry.content = Some(text.into_bytes());
@@ -460,7 +493,14 @@ fn merge(
     }
 }
 
-/// A stale entry's content redone on the current text.
+/// A stale entry's content redone on the current text: the bytes publish
+/// writes for it. `pending_changes` diffs the same result (issue #787), so
+/// what it shows cannot drift from what publish does.
+///
+/// # Arguments
+/// * `entry` - the changeset's entry for the path.
+/// * `live` - the path's live published content now (`None`: no live
+///   document, a tombstone included).
 ///
 /// # Returns
 /// `None` when it cannot be replayed: a conflict. That is a deletion, a
@@ -471,7 +511,10 @@ fn merge(
 /// # Errors
 /// The replay's own error (text it cannot place a bullet in).
 #[tracing::instrument(level = "trace", skip_all)]
-fn replayed_text(entry: &EntryRow, live: Option<&CurrentRow>) -> Result<Option<String>, OkfError> {
+pub(crate) fn replayed_text(
+    entry: &EntryRow,
+    live: Option<&[u8]>,
+) -> Result<Option<String>, OkfError> {
     // A deletion is never replayed: whatever was published since is
     // something the changeset did not see.
     let (Some(_), Some(stored)) = (&entry.content, &entry.replay) else {
@@ -486,7 +529,7 @@ fn replayed_text(entry: &EntryRow, live: Option<&CurrentRow>) -> Result<Option<S
         (None, None) => None,
         // Deleted since the entry's base: a conflict, not a re-creation.
         (None, Some(_)) => return Ok(None),
-        (Some(row), _) => match std::str::from_utf8(&row.content) {
+        (Some(content), _) => match std::str::from_utf8(content) {
             Ok(text) => Some(text),
             Err(_) => return Ok(None),
         },
@@ -518,9 +561,9 @@ async fn check(
         .collect();
     // The secret scan is CPU work; the entries go to the blocking thread and back.
     let entries = blocking(move || check_contents(entries)).await?;
-    let overlay = build_overlay(base, changeset, entries).await?;
+    let overlay = build_overlay(Arc::clone(&base), changeset, entries).await?;
     let (overlay, findings) = blocking(move || {
-        let findings = split_lint(&overlay, &changed, &deleted, now);
+        let findings = split_lint(&base, &overlay, &changed, &deleted, now);
         (overlay, findings)
     })
     .await;
@@ -557,12 +600,16 @@ fn check_contents(entries: Vec<EntryRow>) -> Result<Vec<EntryRow>, OkfError> {
     Ok(entries)
 }
 
-/// Lint of the overlay, split for publish. Errors in changed files refuse,
-/// as do links from unchanged documents into deleted paths. Errors
-/// elsewhere become advice, beside the warnings in changed files. Warnings
-/// elsewhere are left out: they predate this publish.
+/// Lint of the overlay, split for publish. New errors in changed files
+/// refuse, as do links from unchanged documents into deleted paths. An
+/// error in a changed file that the published file already has is advice
+/// instead (see [`demote_preexisting`]), so a parser or lint change cannot
+/// strand content that predates it. Errors elsewhere become advice, beside
+/// the warnings in changed files. Warnings elsewhere are left out: they
+/// predate this publish.
 #[tracing::instrument(level = "trace", skip_all)]
 fn split_lint(
+    base: &Loaded,
     overlay: &Overlay,
     changed: &BTreeSet<String>,
     deleted: &BTreeSet<String>,
@@ -574,9 +621,65 @@ fn split_lint(
     // `partition` splits one list in two by the predicate, in one pass.
     let (mut errors, mut warnings): (Vec<Finding>, Vec<Finding>) =
         report.errors.into_iter().partition(in_changed);
+    // The published catalog is linted only when something would refuse.
+    if !errors.is_empty() {
+        let (new_errors, preexisting) = demote_preexisting(errors, || base.lint(now).errors);
+        errors = new_errors;
+        warnings.extend(preexisting);
+    }
     errors.extend(links_into_deleted(overlay.snapshot(), changed, deleted));
     warnings.extend(report.warnings.into_iter().filter(in_changed));
     LintReport { errors, warnings }
+}
+
+/// Splits errors in changed files into those the changeset introduced and
+/// those the published files already had.
+///
+/// Findings match on file, rule and message, never on line number: adding
+/// lines moves every finding below them. Matching is by count, so one
+/// published broken link plus one new identical one is one new error: each
+/// published finding excuses at most one finding of the result.
+///
+/// # Arguments
+/// * `errors` - the error findings in changed files, from the result.
+/// * `published_errors` - the published catalog's errors, computed only
+///   when `errors` is not empty.
+///
+/// # Returns
+/// `(new, preexisting)`. A pre-existing finding keeps its place but its
+/// message says it was already there.
+#[tracing::instrument(level = "trace", skip_all)]
+fn demote_preexisting(
+    errors: Vec<Finding>,
+    published_errors: impl FnOnce() -> Vec<Finding>,
+) -> (Vec<Finding>, Vec<Finding>) {
+    let mut excused: HashMap<(String, String, String), usize> = HashMap::new();
+    let changed_files: BTreeSet<&str> = errors.iter().map(|error| error.file.as_str()).collect();
+    for finding in published_errors() {
+        if changed_files.contains(finding.file.as_str()) {
+            *excused
+                .entry((finding.file, finding.rule, finding.message))
+                .or_default() += 1;
+        }
+    }
+    let mut new = Vec::with_capacity(errors.len());
+    let mut preexisting = Vec::new();
+    for mut finding in errors {
+        let key = (
+            finding.file.clone(),
+            finding.rule.clone(),
+            finding.message.clone(),
+        );
+        match excused.get_mut(&key) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                finding.message.push_str(" (already in the published file)");
+                preexisting.push(finding);
+            }
+            _ => new.push(finding),
+        }
+    }
+    (new, preexisting)
 }
 
 /// Links from documents this publish does not change into paths it deletes
@@ -752,6 +855,48 @@ mod tests {
         }
     }
 
+    fn finding(file: &str, line: usize, message: &str) -> Finding {
+        Finding {
+            file: file.to_string(),
+            line,
+            rule: "broken-link".to_string(),
+            message: message.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_published_error_excuses_the_same_error_on_a_moved_line() {
+        let published = vec![finding("log.md", 3, "link target does not exist: a b.md")];
+        let result = vec![finding("log.md", 9, "link target does not exist: a b.md")];
+
+        let (new, old) = demote_preexisting(result, || published);
+
+        assert!(new.is_empty());
+        assert_eq!(old.len(), 1);
+        assert!(old[0].message.ends_with("(already in the published file)"));
+    }
+
+    #[test]
+    fn one_published_error_excuses_only_one_of_two_identical_errors() {
+        let published = vec![finding("log.md", 3, "m")];
+        let result = vec![finding("log.md", 3, "m"), finding("log.md", 8, "m")];
+
+        let (new, old) = demote_preexisting(result, || published);
+
+        assert_eq!((new.len(), old.len()), (1, 1));
+        assert_eq!(new[0].line, 8);
+    }
+
+    #[test]
+    fn a_published_error_does_not_excuse_another_message_or_file() {
+        let published = vec![finding("a.md", 1, "m")];
+        let result = vec![finding("a.md", 1, "other"), finding("b.md", 1, "m")];
+
+        let (new, old) = demote_preexisting(result, || published);
+
+        assert_eq!((new.len(), old.len()), (2, 0));
+    }
+
     #[test]
     fn a_deletion_published_since_the_first_edit_conflicts_even_with_a_replay() {
         // `base_revision: None` on a deletion: the path was published after
@@ -824,5 +969,70 @@ mod tests {
         );
 
         assert_eq!(error.kind(), "Database");
+    }
+
+    /// One catalog loaded twice, as an evicted cache entry still in use and
+    /// its reload would be (M18 Decision 4): a publish through the second
+    /// state waits for the publish lock a publish through the first holds.
+    /// Before the locks moved to `App`, each state had its own mutex, and
+    /// the second publish ran (and committed) at once.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn publishes_of_one_catalog_serialize_across_two_states() {
+        use crate::config::Config;
+        use crate::mcp::testing::{app_with, open, pending_entry, writer, PendingEdit};
+        use std::time::Duration;
+
+        // Arrange: two states of `pg`, and a changeset with one edit.
+        const NOTE: &str = "---\ntype: Note\ntitle: B\ndescription: A note.\n---\n# B\n";
+        let test = app_with(&[("pg", &[("a.md", NOTE)])], Config::default()).await;
+        let first = test.app.catalog("pg").await.unwrap().expect("pg is loaded");
+        let second = Arc::new(
+            CatalogState::load(
+                test.app.pool(),
+                &test.app.catalog_row("pg").await.unwrap().expect("pg"),
+            )
+            .await
+            .expect("load pg again"),
+        );
+        assert!(!Arc::ptr_eq(&first, &second), "two separate states");
+        let ctx = writer(&test, "writer", "pg").await;
+        let handle = open(&ctx).await;
+        let edit = PendingEdit {
+            path: "b.md",
+            text: Some(NOTE),
+            at: Utc::now(),
+        };
+        let changeset = pending_entry(&test, &handle, &edit).await;
+        // Held as a publish through `first` holds it, for its whole length.
+        let held = test.app.publish_lock(first.id()).await;
+
+        // Act: publish through `second`, on its own task.
+        let app = Arc::clone(&test.app);
+        let publishing = tokio::spawn(async move {
+            let input = PublishInput {
+                changeset: &changeset,
+                actor: "writer",
+                message: "through the second state",
+            };
+            publish(&app, &second, &input, &AuditActor::cli()).await
+        });
+        // A publish takes well under this; one sharing the lock never ends.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let waited = !publishing.is_finished();
+        let still_open = crate::mcp::testing::changeset_row(&test, &handle)
+            .await
+            .state;
+        drop(held);
+        let published = tokio::time::timeout(Duration::from_secs(30), publishing)
+            .await
+            .expect("the publish finishes once the lock is released")
+            .expect("the publish task")
+            .expect("the publish");
+
+        // Assert: it waited, wrote nothing meanwhile, then published.
+        assert!(waited, "the publish waited for the other state's lock");
+        assert_eq!(still_open, ChangesetState::Open);
+        assert!(published.published);
+        assert_eq!(published.revisions.len(), 1);
     }
 }

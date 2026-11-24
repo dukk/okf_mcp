@@ -27,12 +27,16 @@ use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
+use crate::invalidate::{invalidate, Invalidation};
+use crate::labels::catalog_label;
 use crate::mail::queue;
 use crate::mail::templates::Template;
 use crate::store::audit::{
     self, AccessKind, Action, AuditActor, Entry, FixedPerson, People, RowLock, Target,
 };
-use crate::store::catalogs::{self, bump_admin_generation, is_valid_name};
+use crate::store::catalogs::{self, is_valid_name};
+use crate::store::decode_column;
+use crate::store::settings::Brand;
 
 /// `unlock_max_hours` with no override.
 pub const DEFAULT_MAX_HOURS: u32 = 4;
@@ -163,12 +167,27 @@ pub struct NewUnlock<'a> {
 }
 
 /// The settings an unlock follows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnlockPolicy {
     /// `unlock_max_hours`.
     pub max_hours: u32,
     /// `unlock_notify_owners`.
     pub notify_owners: bool,
+    /// The config's branding (`AuthConfig::default_brand`), which the
+    /// owners' email takes where no setting overrides it.
+    pub brand_defaults: Brand,
+}
+
+/// What the owners' email says and when it is queued.
+struct OwnerNotice<'a> {
+    /// The unlock's category.
+    category: Category,
+    /// When the unlock ends.
+    expires_at: DateTime<Utc>,
+    /// The server clock: the start of the mail's retry window.
+    now: DateTime<Utc>,
+    /// The config's branding defaults.
+    brand_defaults: &'a Brand,
 }
 
 /// A stored unlock.
@@ -308,14 +327,14 @@ impl UnlockRow {
             reason = "trivial accessor or conversion: maps a value, no I/O"
         )
     )]
-    fn into_record(self) -> UnlockRecord {
-        UnlockRecord {
+    fn into_record(self) -> Result<UnlockRecord, OkfError> {
+        Ok(UnlockRecord {
             id: self.id,
             catalog: self.catalog,
             owner_team: self.owner_team,
             user: self.user_name,
             person: self.person,
-            category: Category::parse(&self.category).expect("the schema checks unlocks.category"),
+            category: decode_column(Category::parse(&self.category), "unlocks.category")?,
             reason: self.reason,
             created_at: self.created_at,
             expires_at: self.expires_at,
@@ -323,7 +342,7 @@ impl UnlockRow {
             reads: self.reads,
             writes: self.writes,
             exports: self.exports,
-        }
+        })
     }
 }
 
@@ -503,9 +522,15 @@ pub async fn create(
     )
     .await?;
     if policy.notify_owners {
-        notify_owners(&mut tx, catalog.id, new, expires_at, now).await?;
+        let notice = OwnerNotice {
+            category: new.category,
+            expires_at,
+            now,
+            brand_defaults: &policy.brand_defaults,
+        };
+        notify_owners(&mut tx, catalog.id, &notice).await?;
     }
-    bump_admin_generation(&mut tx).await?;
+    invalidate(&mut tx, &[Invalidation::user(&user_id)]).await?;
     // Read before the commit: nothing that can fail runs after it.
     let record = find_in(&mut tx, id).await?;
     tx.commit().await?;
@@ -552,9 +577,7 @@ async fn require_staff(conn: &mut PgConnection, actor: &AuditActor) -> Result<()
 async fn notify_owners(
     conn: &mut PgConnection,
     catalog_id: i64,
-    new: &NewUnlock<'_>,
-    expires_at: DateTime<Utc>,
-    now: DateTime<Utc>,
+    notice: &OwnerNotice<'_>,
 ) -> Result<(), OkfError> {
     let owners: Vec<String> = sqlx::query_scalar(
         "SELECT u.email::text FROM catalogs c \
@@ -565,13 +588,26 @@ async fn notify_owners(
     .bind(catalog_id)
     .fetch_all(&mut *conn)
     .await?;
+    // The label, never the slug; the template field keeps its name.
+    let (display_name, description): (String, String) =
+        sqlx::query_as("SELECT display_name, description FROM catalogs WHERE id = $1")
+            .bind(catalog_id)
+            .fetch_one(&mut *conn)
+            .await?;
     let template = Template::Unlocked {
-        catalog: new.catalog.to_string(),
-        category: new.category.label().to_string(),
-        until: format_timestamp(expires_at),
+        catalog: catalog_label(&display_name, &description),
+        category: notice.category.label().to_string(),
+        until: format_timestamp(notice.expires_at),
     };
     for owner in &owners {
-        queue::enqueue_in(&mut *conn, owner, &template, now).await?;
+        queue::enqueue_in(
+            &mut *conn,
+            owner,
+            &template,
+            notice.now,
+            notice.brand_defaults,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -621,16 +657,16 @@ pub async fn end(
     };
     audit::lock_people(&mut tx, actor, &people).await?;
     // `GREATEST`: a clock behind `created_at` still ends it, at its start.
-    let ended: Option<(i64, i64)> = sqlx::query_as(
+    let ended: Option<(i64, i64, Option<String>)> = sqlx::query_as(
         "UPDATE unlocks SET ended_at = GREATEST($2, created_at) \
          WHERE id = $1 AND ended_at IS NULL AND expires_at > $2 \
-         RETURNING catalog_id, person_id",
+         RETURNING catalog_id, person_id, user_id",
     )
     .bind(id)
     .bind(now)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((catalog_id, person_id)) = ended else {
+    let Some((catalog_id, person_id, user_id)) = ended else {
         let exists: bool =
             sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM unlocks WHERE id = $1)")
                 .bind(id)
@@ -659,7 +695,13 @@ pub async fn end(
         now,
     )
     .await?;
-    bump_admin_generation(&mut tx).await?;
+    // The unlocked admin's reach; an unlock whose user was deleted
+    // (`ON DELETE SET NULL`) reaches nobody, so nothing is invalidated.
+    let invalidations: Vec<Invalidation> = user_id
+        .iter()
+        .map(|user_id| Invalidation::user(user_id))
+        .collect();
+    invalidate(&mut tx, &invalidations).await?;
     let record = find_in(&mut tx, id).await?;
     tx.commit().await?;
     Ok(record)
@@ -701,10 +743,10 @@ pub async fn find_in(conn: &mut PgConnection, id: i64) -> Result<UnlockRecord, O
         .bind(id)
         .fetch_optional(&mut *conn)
         .await?
-        .map(UnlockRow::into_record)
         .ok_or_else(|| OkfError::NotFound {
             path: format!("unlocks/{id}"),
-        })
+        })?
+        .into_record()
 }
 
 /// One unlock.
@@ -754,7 +796,7 @@ pub async fn list(pool: &PgPool, filter: &UnlockFilter<'_>) -> Result<Vec<Unlock
     .bind(filter.live_at)
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().map(UnlockRow::into_record).collect())
+    rows.into_iter().map(UnlockRow::into_record).collect()
 }
 
 /// The unlocks in force at `now`, for the key cache: neither ended nor
@@ -830,6 +872,7 @@ mod tests {
         UnlockPolicy {
             max_hours: 4,
             notify_owners: true,
+            brand_defaults: crate::store::settings::Brand::default(),
         }
     }
 
@@ -837,7 +880,7 @@ mod tests {
     async fn admin(pool: &PgPool, name: &str) {
         let user = NewUser {
             name,
-            display_name: "",
+            display_name: &crate::labels::DisplayName::default(),
         };
         users::create(pool, &user, &AuditActor::cli(), now())
             .await
@@ -861,6 +904,7 @@ mod tests {
             .unwrap();
         let main = NewCatalog {
             name: "main",
+            display_name: &crate::labels::DisplayName::default(),
             description: "",
             owner_team: TEST_TEAM,
         };
@@ -925,6 +969,63 @@ mod tests {
         }
         assert_eq!(Category::parse("audit"), None);
         assert_eq!(Category::DeletionRequest.label(), "a deletion request");
+    }
+
+    /// Sets `main`'s display name and description, makes an unlock, and
+    /// returns the queued mail's (subject, text, html).
+    async fn unlock_mail_for(display_name: &str, description: &str) -> (String, String, String) {
+        let db = test_db().await;
+        staff_and_main(&db.pool).await;
+        sqlx::query("UPDATE catalogs SET display_name = $1, description = $2 WHERE name = 'main'")
+            .bind(display_name)
+            .bind(description)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        create(&db.pool, &new(2), &policy(), &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        sqlx::query_as(
+            "SELECT convert_from(job, 'UTF8')::jsonb -> 'mail' ->> 'subject', \
+                    convert_from(job, 'UTF8')::jsonb -> 'mail' ->> 'text', \
+                    convert_from(job, 'UTF8')::jsonb -> 'mail' ->> 'html' \
+             FROM apalis.jobs",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_unlock_email_names_the_catalog_by_label_never_by_slug() {
+        let (subject, text, html) = unlock_mail_for("Acme Handbook", "").await;
+        assert!(subject.contains("opened Acme Handbook in"), "{subject}");
+        assert!(text.contains("catalog Acme Handbook for"), "{text}");
+        assert!(html.contains("Acme Handbook"), "{html}");
+
+        // Neither display name nor description: "Untitled catalog", not "main".
+        let (subject, text, _) = unlock_mail_for("", "").await;
+        assert!(subject.contains("opened Untitled catalog in"), "{subject}");
+        assert!(!text.contains("catalog main"), "{text}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hostile_catalog_label_cannot_break_the_unlock_emails_markup_or_subject() {
+        let (_, _, html) = unlock_mail_for("<script>x</script>", "").await;
+        assert!(!html.contains("<script>x"), "{html}");
+        assert!(html.contains("&lt;script&gt;x&lt;/script&gt;"), "{html}");
+
+        // A line break in a description (the label's fallback) collapses
+        // before it reaches the subject header.
+        let (subject, _, _) = unlock_mail_for("", "Line one\r\nBcc: evil@example.com").await;
+        assert!(
+            !subject.contains('\r') && !subject.contains('\n'),
+            "{subject:?}"
+        );
+        assert!(
+            subject.contains("Line one Bcc: evil@example.com"),
+            "{subject:?}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1036,9 +1137,15 @@ mod tests {
                     .unwrap();
             }
             Meanwhile::Deleted => {
-                users::delete(pool, "staff", true, &AuditActor::cli(), now())
-                    .await
-                    .unwrap();
+                users::delete(
+                    pool,
+                    "staff",
+                    users::DeleteOptions::OPERATOR,
+                    &AuditActor::cli(),
+                    now(),
+                )
+                .await
+                .unwrap();
             }
         }
         let ended = end(
@@ -1423,5 +1530,27 @@ mod tests {
         // the demotion then went through.
         assert!(unlocked.is_ok(), "{unlocked:?}");
         assert!(demoted.unwrap(), "staff was an admin before the demotion");
+    }
+
+    /// Issue #642: a stored category that is not a known spelling is a
+    /// database error from the readers, not a panic.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_corrupt_category_is_a_database_error() {
+        let db = test_db().await;
+        staff_and_main(&db.pool).await;
+        let made = create(&db.pool, &new(2), &policy(), &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        crate::store::drop_check_constraints(&db.pool, "unlocks").await;
+        sqlx::query("UPDATE unlocks SET category = 'bogus-category'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let found = find(&db.pool, made.id).await;
+        let listed = list(&db.pool, &UnlockFilter::default()).await;
+
+        crate::store::assert_decode_error(found, "unlocks.category", "bogus-category");
+        crate::store::assert_decode_error(listed, "unlocks.category", "bogus-category");
     }
 }

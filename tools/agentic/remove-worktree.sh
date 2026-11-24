@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# remove-worktree.sh <worktree> [--branch] [--force-branch]
+# remove-worktree.sh <worktree> [--branch] [--force-branch] [--base <ref>]
 #
 # Removes a worktree after its PR has merged, and frees its Cargo build output,
 # which `git worktree remove` leaves behind: with `build-dir` set outside the
@@ -9,8 +9,10 @@
 #      checkout;
 #   2. no process has its working directory inside it (a clean would break a
 #      running build or test; the same /proc check watchdog.sh uses);
-#   3. with --branch, the worktree's branch is merged into $AGENTIC_BASE_REF
-#      (default origin/main), unless --force-branch is also given.
+#   3. with --branch, the worktree's branch is merged into the base: --base
+#      <ref> (for example origin/milestone/<epic>-<slug>, for a PR merged into a
+#      milestone branch), else $AGENTIC_BASE_REF, else origin/main; unless
+#      --force-branch is also given.
 # Then, in order: `cargo clean` in the worktree when it has a Cargo.toml,
 # bounded by $AGENTIC_CLEAN_TIMEOUT (default 600 s); a failed or timed-out
 # clean stops here and keeps the worktree. Then `git worktree remove` (never
@@ -22,17 +24,22 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 source "$here/lib.sh"
 
-usage="usage: remove-worktree.sh <worktree> [--branch] [--force-branch]"
+usage="usage: remove-worktree.sh <worktree> [--branch] [--force-branch] [--base <ref>]"
 target=""
 delete_branch=0
 force_branch=0
-for arg in "$@"; do
-    case "$arg" in
+base=${AGENTIC_BASE_REF:-origin/main}
+while [ $# -gt 0 ]; do
+    case "$1" in
         --branch) delete_branch=1 ;;
         --force-branch) delete_branch=1 force_branch=1 ;;
+        --base)
+            [ $# -ge 2 ] && [ -n "$2" ] || { echo "$usage" >&2; exit 2; }
+            base=$2; shift ;;
         -*) echo "$usage" >&2; exit 2 ;;
-        *) [ -z "$target" ] || { echo "$usage" >&2; exit 2; }; target=$arg ;;
+        *) [ -z "$target" ] || { echo "$usage" >&2; exit 2; }; target=$1 ;;
     esac
+    shift
 done
 [ -n "$target" ] || { echo "$usage" >&2; exit 2; }
 
@@ -63,7 +70,6 @@ done <<<"$listing"
 busy=$(agentic_procs_inside "$wt")
 [ -z "$busy" ] || refuse "processes are running inside $wt (pid, cwd, command):"$'\n'"$busy"
 
-base=${AGENTIC_BASE_REF:-origin/main}
 if [ "$delete_branch" = 1 ]; then
     [ -n "$branch" ] || refuse "$wt has no branch (detached HEAD) to delete"
     if [ "$force_branch" = 0 ]; then

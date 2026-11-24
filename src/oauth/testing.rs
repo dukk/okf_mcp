@@ -10,10 +10,13 @@ use chrono::{TimeDelta, Utc};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
+use crate::app::App;
+use crate::config::Config;
+use crate::db::redis_support::TestRedis;
 use crate::http::api::testing::{Browser, MAIN};
 use crate::http::console_session::COOKIE;
 use crate::http::router;
-use crate::mcp::testing::{app_with, app_with_metrics, TestApp};
+use crate::mcp::testing::{app_with, app_with_metrics, replica_pair_on, TestApp};
 use crate::store::keys::{Access, Grants};
 use crate::store::oauth::clients::ClientKind;
 use crate::store::oauth::codes::{self as code_rows, insert_test_client, NewSignInCode};
@@ -48,9 +51,24 @@ pub(crate) const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
 /// # Panics
 /// If the database or the insert fails: a broken test setup.
 pub(crate) async fn oauth_app() -> TestApp {
+    oauth_app_with(oauth_config(PUBLIC_URL)).await
+}
+
+/// [`oauth_app`] on `config` instead of [`oauth_config`]'s defaults, for a
+/// test that needs another OAuth setting (no refresh reuse grace window).
+///
+/// # Arguments
+/// * `config` - the settings; start from `oauth_config(PUBLIC_URL)`.
+///
+/// # Returns
+/// The app and its database.
+///
+/// # Panics
+/// As [`oauth_app`].
+pub(crate) async fn oauth_app_with(config: Config) -> TestApp {
     let test = app_with(
         &[("main", MAIN), ("other", &[("index.md", "# Other\n")])],
-        oauth_config(PUBLIC_URL),
+        config,
     )
     .await;
     // Corrected (issue #247): `insert_dcr` lets Postgres pick a UUID, so the
@@ -123,6 +141,162 @@ pub(crate) async fn sign_in_code(test: &TestApp, access: Access) -> String {
     .await
     .expect("create a sign-in code")
     .code
+}
+
+/// Runs authorize and consent on the sign-in code path (code, then Approve
+/// from the summary), as the DCR client [`CLIENT_ID`].
+///
+/// # Arguments
+/// * `test` - the app ([`oauth_app`] or [`oauth_replica_pair`]'s first).
+///
+/// # Returns
+/// The `okfac_` code.
+///
+/// # Panics
+/// If a step does not answer as expected.
+pub(crate) async fn authorization_code(test: &TestApp) -> String {
+    authorization_code_for(test, &authorize_query()).await
+}
+
+/// [`authorization_code`] for the authorize request `query`.
+///
+/// # Arguments
+/// * `test` - the app.
+/// * `query` - the authorize request's query string, without the `?`.
+///
+/// # Returns
+/// The `okfac_` code.
+///
+/// # Panics
+/// If a step does not answer as expected.
+pub(crate) async fn authorization_code_for(test: &TestApp, query: &str) -> String {
+    let (status, headers, page) = approve(test, query).await;
+    forwarded(status, &headers, &page)
+        .query_pairs()
+        .find(|(key, _)| key == "code")
+        .map(|(_, value)| value.into_owned())
+        .expect("a code")
+}
+
+/// Runs authorize and consent on the sign-in code path up to Approve, and
+/// returns Approve's answer unread (a forwarding page with the code, or an
+/// error page).
+///
+/// # Arguments
+/// * `test` - the app.
+/// * `query` - the authorize request's query string, without the `?`.
+///
+/// # Returns
+/// Approve's status, headers and body.
+///
+/// # Panics
+/// If a step before Approve does not answer as expected.
+pub(crate) async fn approve(test: &TestApp, query: &str) -> (StatusCode, HeaderMap, String) {
+    let approval = approval_form(test, query).await;
+    send(test, "POST", "/oauth/authorize", Some(approval)).await
+}
+
+/// Runs authorize and the sign-in code step, and returns the summary
+/// page's Approve form, unsent (to post it later, or on another replica).
+///
+/// # Arguments
+/// * `test` - the app.
+/// * `query` - the authorize request's query string, without the `?`.
+///
+/// # Returns
+/// The form body.
+///
+/// # Panics
+/// If a step does not answer as expected.
+pub(crate) async fn approval_form(test: &TestApp, query: &str) -> String {
+    let code = sign_in_code(test, Access::Read).await;
+    let (_, _, page) = send(test, "GET", &format!("/oauth/authorize?{query}"), None).await;
+    let (pending, csrf) = (hidden(&page, "pending"), hidden(&page, "csrf"));
+    let (_, _, summary) = send(
+        test,
+        "POST",
+        "/oauth/authorize",
+        Some(form(&[
+            ("pending", &pending),
+            ("csrf", &csrf),
+            ("action", "code"),
+            ("sign_in_code", &code),
+        ])),
+    )
+    .await;
+    form(&[
+        ("pending", &pending),
+        ("csrf", &csrf),
+        ("summary", &hidden(&summary, "summary")),
+        ("action", "approve"),
+    ])
+}
+
+/// [`oauth_app`] as two replicas over one database and one Redis
+/// (`mcp::testing::replica_pair`; no change-feed listener in a lib test). The client is
+/// registered after both loaded, which needs no key cache.
+///
+/// # Returns
+/// The first replica (it owns the database), the second, and their Redis.
+///
+/// # Panics
+/// If the database, Redis or the insert fails: a broken test setup.
+pub(crate) async fn oauth_replica_pair() -> (TestApp, Arc<App>, TestRedis) {
+    oauth_replica_pair_on(TestRedis::start().await).await
+}
+
+/// [`oauth_replica_pair`] over a Redis the test already started (a
+/// cluster, for one).
+///
+/// # Arguments
+/// * `redis` - the server both replicas connect to.
+///
+/// # Returns
+/// As [`oauth_replica_pair`].
+///
+/// # Panics
+/// As [`oauth_replica_pair`].
+pub(crate) async fn oauth_replica_pair_on(redis: TestRedis) -> (TestApp, Arc<App>, TestRedis) {
+    let (first, second, redis) = replica_pair_on(
+        &[("main", MAIN), ("other", &[("index.md", "# Other\n")])],
+        oauth_config(PUBLIC_URL),
+        redis,
+    )
+    .await;
+    insert_test_client(first.app.pool(), CLIENT_ID, ClientKind::Dcr, REDIRECT_URI).await;
+    (first, second, redis)
+}
+
+/// Exchanges `code` (from [`authorization_code`]) on `test` for tokens.
+///
+/// # Arguments
+/// * `test` - the app that issued the code.
+/// * `code` - the `okfac_` code.
+///
+/// # Returns
+/// The access token and the refresh token.
+///
+/// # Panics
+/// If the exchange does not answer 200 with both tokens.
+pub(crate) async fn exchange_for_tokens(test: &TestApp, code: &str) -> (String, String) {
+    let body = form(&[
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("client_id", CLIENT_ID),
+        ("redirect_uri", REDIRECT_URI),
+        ("code_verifier", VERIFIER),
+        ("resource", RESOURCE),
+    ]);
+    let (status, _, text) = send(test, "POST", "/oauth/token", Some(body)).await;
+    assert_eq!(status, StatusCode::OK, "the exchange answers 200: {text}");
+    let tokens: serde_json::Value = serde_json::from_str(&text).expect("a JSON token response");
+    let field = |name: &str| {
+        tokens[name]
+            .as_str()
+            .unwrap_or_else(|| panic!("the response has {name}"))
+            .to_string()
+    };
+    (field("access_token"), field("refresh_token"))
 }
 
 /// A valid authorization request's query string on the sign-in code path
@@ -236,6 +410,31 @@ pub(crate) async fn send_as(
     body: Option<String>,
     session: Option<&Browser>,
 ) -> (StatusCode, HeaderMap, String) {
+    send_on(&test.app, method, uri, body, session).await
+}
+
+/// As [`send_as`], to any app (the second of [`oauth_replica_pair`], for
+/// one).
+///
+/// # Arguments
+/// * `app` - the app whose router answers.
+/// * `method` - `GET` or `POST`.
+/// * `uri` - the path and query.
+/// * `body` - a form body, if any.
+/// * `session` - a signed-in browser whose session cookie to send, if any.
+///
+/// # Returns
+/// The status, the headers and the body as text.
+///
+/// # Panics
+/// If the request cannot be built or the body cannot be read.
+pub(crate) async fn send_on(
+    app: &Arc<App>,
+    method: &str,
+    uri: &str,
+    body: Option<String>,
+    session: Option<&Browser>,
+) -> (StatusCode, HeaderMap, String) {
     let mut request = Request::builder().method(method).uri(uri);
     if body.is_some() {
         request = request.header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
@@ -248,7 +447,7 @@ pub(crate) async fn send_as(
     let request = request
         .body(body.map_or_else(Body::empty, Body::from))
         .expect("request");
-    let response = router(Arc::clone(&test.app), &CancellationToken::new())
+    let response = router(Arc::clone(app), &CancellationToken::new())
         .oneshot(request)
         .await
         .expect("response");

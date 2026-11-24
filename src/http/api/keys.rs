@@ -25,7 +25,7 @@ use crate::app::App;
 use crate::auth::{Principal, Reach};
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
-use crate::http::api::{require_admin, settle};
+use crate::http::api::require_admin;
 use crate::http::AppError;
 use crate::store::keys::{self as key_rows, Access, Grants, KeyRecord, NewKey};
 
@@ -67,6 +67,9 @@ pub(crate) struct KeyView {
     pub self_issued: bool,
     /// The user it belongs to (`None`: unassigned, from before users existed).
     pub user: Option<String>,
+    /// A grant's last token activity: when its newest token on record was
+    /// issued (`None` for a key, or a grant with none on record).
+    pub last_activity: Option<String>,
 }
 
 impl From<KeyRecord> for KeyView {
@@ -104,6 +107,7 @@ impl From<KeyRecord> for KeyView {
             // The API names users; their ids stay internal.
             user_id: _,
             self_issued,
+            last_activity,
         } = record;
         Self {
             id,
@@ -127,6 +131,7 @@ impl From<KeyRecord> for KeyView {
             expires_at: expires_at.map(format_timestamp),
             self_issued,
             user,
+            last_activity: last_activity.map(format_timestamp),
         }
     }
 }
@@ -255,6 +260,10 @@ pub(crate) fn manages_grants(
         Reach::Catalogs(_) => {
             !all_catalogs && catalogs.iter().all(|catalog| principal.reaches(catalog))
         }
+        // Only admin credentials manage others' (every caller checks
+        // `require_admin` first), and a console session's ceiling is never
+        // admin: it manages nothing here.
+        Reach::Ceiling => false,
     }
 }
 
@@ -315,13 +324,15 @@ pub(crate) fn requested_grants<'a>(
         }
         Grants::All
     } else {
+        // The caller is an admin credential, which suspension never
+        // refuses: reach and level are the whole check.
         for catalog in catalogs {
-            principal.require(Access::Admin, catalog)?;
+            principal.require_level(Access::Admin, catalog)?;
         }
         Grants::Catalogs(catalogs)
     };
     if let Some(name) = default_catalog {
-        principal.require(Access::Admin, name)?;
+        principal.require_level(Access::Admin, name)?;
     }
     Ok(grants)
 }
@@ -368,15 +379,17 @@ async fn managed(app: &App, principal: &Principal, id: &str) -> Result<KeyRecord
         })
 }
 
-/// Reloads the key cache at once (plan Decision 12), then answers with the
-/// key as it now is. The change is already committed, so a failed reload is
-/// logged, not returned: the background poll retries within `poll_interval`.
+/// Answers with the key as it now is, once the change has committed: this
+/// replica's caches take the write's own change messages before the answer
+/// goes out (`invalidate::capturing`), and every other replica's through
+/// the change feed.
 ///
 /// # Errors
 /// As [`managed`].
 #[tracing::instrument(level = "debug", skip_all)]
 async fn changed(app: &App, principal: &Principal, id: &str) -> Result<Json<KeyView>, AppError> {
-    settle(app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(managed(app, principal, id).await?.into()))
 }
 
@@ -583,7 +596,8 @@ async fn grant_catalog(
     Path((id, catalog)): Path<(String, String)>,
 ) -> Result<Json<KeyView>, AppError> {
     require_admin(&principal)?;
-    principal.require(Access::Admin, &catalog)?;
+    // An admin credential: suspension never refuses it.
+    principal.require_level(Access::Admin, &catalog)?;
     let target = managed(&app, &principal, &id).await?;
     key_rows::grant_by_id(app.pool(), &target.id, &catalog, &audit, app.clock().now()).await?;
     changed(&app, &principal, &target.id).await
@@ -602,7 +616,8 @@ async fn ungrant_catalog(
     Path((id, catalog)): Path<(String, String)>,
 ) -> Result<Json<KeyView>, AppError> {
     require_admin(&principal)?;
-    principal.require(Access::Admin, &catalog)?;
+    // An admin credential: suspension never refuses it.
+    principal.require_level(Access::Admin, &catalog)?;
     let target = managed(&app, &principal, &id).await?;
     key_rows::ungrant_by_id(app.pool(), &target.id, &catalog, &audit, app.clock().now()).await?;
     changed(&app, &principal, &target.id).await
@@ -617,8 +632,8 @@ mod tests {
     use crate::mcp::testing::TestApp;
     use crate::store::keys::{self as key_rows, Access, CreatedKey, Grants, NewKey};
 
-    /// Creates a key straight in the store, as `okf-mcp key create` would,
-    /// and polls so the server knows it.
+    /// Creates a key straight in the store, as `okf-mcp key create` would
+    /// (keys load on their first use).
     async fn stored(test: &TestApp, name: &str, access: Access, grants: Grants<'_>) -> CreatedKey {
         let new = NewKey {
             name,
@@ -640,7 +655,6 @@ mod tests {
         )
         .await
         .expect("create a key");
-        test.app.poll().await.expect("poll the key in");
         created
     }
 
@@ -1088,7 +1102,6 @@ mod tests {
         )
         .await
         .expect("create the newer key");
-        test.app.poll().await.expect("poll the keys in");
         let state = |listed: &serde_json::Value, id: &str| -> serde_json::Value {
             listed["keys"]
                 .as_array()
@@ -1129,7 +1142,6 @@ mod tests {
         )
         .await
         .expect("create the replacement");
-        test.app.poll().await.expect("poll the keys in");
         let (status, _) = send(
             &test,
             "POST",
@@ -1144,6 +1156,130 @@ mod tests {
             state(&listed, &replacement.id).is_null(),
             "the replacement stays live"
         );
+    }
+
+    /// The other three by-id changes (report flag, grant, ungrant) sent to a
+    /// legacy id (one derived from its name) while a newer live key shares
+    /// that name. Each handler maps its path id to the store separately, so
+    /// each is checked: only the legacy key changes, its same-name
+    /// replacement does not. (`POST .../revoke` is covered above.)
+    #[tokio::test]
+    async fn a_legacy_id_reaches_only_its_own_key_on_flag_grant_and_ungrant() {
+        let test = app().await;
+        let root = stored(&test, "root", Access::Admin, Grants::All).await;
+
+        // (legacy id and name, method, uri suffix, body, the field it changes,
+        // the legacy key's expected value afterwards).
+        type Case = (
+            &'static str,
+            &'static str,
+            &'static str,
+            Option<serde_json::Value>,
+            &'static str,
+            serde_json::Value,
+        );
+        let cases: [Case; 3] = [
+            (
+                "legacy-flag",
+                "PATCH",
+                "",
+                Some(json!({"maintenance_report": true})),
+                "maintenance_report",
+                json!(true),
+            ),
+            (
+                "legacy-grant",
+                "PUT",
+                "/catalogs/other",
+                None,
+                "catalogs",
+                json!(["main", "other"]),
+            ),
+            (
+                "legacy-ungrant",
+                "DELETE",
+                "/catalogs/main",
+                None,
+                "catalogs",
+                json!([]),
+            ),
+        ];
+
+        for (name, method, suffix, body, field, expected) in cases {
+            // A pre-0005 row (id == name), narrowed to the catalog `main`
+            // (the helper makes an every-catalog key, which grants refuse).
+            key_rows::insert_legacy_test_key(
+                test.app.pool(),
+                name,
+                Access::Write,
+                "terminal",
+                Utc::now(),
+            )
+            .await;
+            sqlx::query("UPDATE api_keys SET all_catalogs = false WHERE id = $1")
+                .bind(name)
+                .execute(test.app.pool())
+                .await
+                .expect("narrow the legacy key");
+            sqlx::query(
+                "INSERT INTO key_catalogs (key_id, catalog_id) \
+                 SELECT $1, id FROM catalogs WHERE name = 'main'",
+            )
+            .bind(name)
+            .execute(test.app.pool())
+            .await
+            .expect("grant the legacy key main");
+            // A newer live key with the same name and the same starting state.
+            let new = NewKey {
+                name,
+                access: Access::Write,
+                maintenance_report: false,
+                grants: Grants::Catalogs(&main_only()),
+                default_catalog: None,
+                actor: "web",
+                user: crate::db::TEST_USER,
+                self_issued: false,
+                expires_at: None,
+                levels: &[],
+            };
+            let replacement = key_rows::create_with_id(
+                test.app.pool(),
+                &new,
+                &crate::store::audit::AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("create the newer key");
+
+            let key_view = |listed: &serde_json::Value, id: &str| -> serde_json::Value {
+                listed["keys"]
+                    .as_array()
+                    .expect("a list")
+                    .iter()
+                    .find(|key| key["id"] == id)
+                    .cloned()
+                    .expect("the key is listed")
+            };
+            let (_, before) = send(&test, "GET", "/api/v1/keys", Some(&root.key), None).await;
+            let untouched = key_view(&before, &replacement.id);
+
+            let uri = format!("/api/v1/keys/{name}{suffix}");
+            let (status, answer) = send(&test, method, &uri, Some(&root.key), body).await;
+            assert_eq!(status.as_u16(), 200, "{method} {uri}: {answer}");
+            assert_eq!(answer["id"], name, "{method} {uri}");
+
+            let (_, after) = send(&test, "GET", "/api/v1/keys", Some(&root.key), None).await;
+            assert_eq!(
+                key_view(&after, name)[field],
+                expected,
+                "{method} {uri}: the legacy key changed"
+            );
+            assert_eq!(
+                key_view(&after, &replacement.id),
+                untouched,
+                "{method} {uri}: the same-name replacement is unchanged"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1282,7 +1418,6 @@ mod tests {
         )
         .await
         .expect("create a self-issued key");
-        test.app.poll().await.expect("poll the key in");
 
         let (status, refused) = send(
             &test,

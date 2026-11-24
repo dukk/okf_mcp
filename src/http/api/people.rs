@@ -31,8 +31,9 @@
 //! admin. No answer or log line holds a session id, token or hash: a
 //! session is shown by its id prefix only.
 //!
-//! Every write bumps the administrative generation; the handlers poll after
-//! it, so the next request sees the change.
+//! Every write sends its change messages (`invalidate`); this replica applies
+//! them before the answer goes out (`invalidate::capturing`), so the next
+//! request sees the change, and the change feed carries them to the others.
 
 use std::sync::Arc;
 
@@ -43,19 +44,22 @@ use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::app::App;
-use crate::auth::Principal;
+use crate::auth::{CredentialKind, Principal};
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::api::keys::{manages, manages_grants, parse_access, KeyView};
 use crate::http::api::me::{SessionList, SessionView, SignInList, SignInView, RECENT_SIGN_INS};
 use crate::http::api::oauth::SignInCodeView;
 use crate::http::api::{
-    require_admin, require_every_catalog, require_manager, require_reader, settle,
+    owner_session, require_admin, require_every_catalog, require_manager, require_reader,
 };
+use crate::http::requester::Requester;
 use crate::http::AppError;
+use crate::labels::directory::{Labels, Wanted};
+use crate::labels::{team_label, user_label, DisplayName};
 use crate::mail::invite;
-use crate::store::audit::AuditActor;
-use crate::store::ceiling::{self, Entitlement, NewEntitlement};
+use crate::store::audit::{AuditActor, ProvisionerEvent, ProvisionerUse};
+use crate::store::ceiling::{self, Entitlement, EntitlementRef, NewEntitlement};
 use crate::store::keys::{self as key_rows, Access};
 use crate::store::oauth::codes;
 use crate::store::teams::{self, MemberChange, Membership, NewTeam, Role, TeamRecord};
@@ -71,6 +75,9 @@ pub(crate) struct UserView {
     pub name: String,
     /// Free text, possibly empty.
     pub display_name: String,
+    /// What people are shown for it: its display name, else its email's
+    /// local part (see [`user_label`]).
+    pub label: String,
     /// When it was created (`2026-11-11T12:00:00Z`).
     pub created_at: String,
     /// How many keys, grants (live and revoked) and sign-in codes name it,
@@ -98,6 +105,7 @@ impl From<UserRecord> for UserView {
         // Destructuring names every field, so one added to the record later
         // fails to compile here until someone decides whether to show it.
         let UserRecord {
+            id: _,
             name,
             display_name,
             created_at,
@@ -109,6 +117,7 @@ impl From<UserRecord> for UserView {
         } = record;
         Self {
             name,
+            label: user_label(&display_name, email.as_deref()),
             display_name,
             created_at: format_timestamp(created_at),
             credentials,
@@ -127,6 +136,17 @@ impl From<UserRecord> for UserView {
 struct UserQuery {
     /// Only the user with this email address (any letter case).
     email: Option<String>,
+}
+
+/// `DELETE /users/{name}`'s query.
+#[derive(Debug, Default, Deserialize)]
+// An unknown parameter (a typo of the precondition) is a 400, never a
+// deletion that skipped the check.
+#[serde(deny_unknown_fields)]
+struct DeleteUserQuery {
+    /// Refuses (409) while the user is a member of any shared team.
+    #[serde(default)]
+    unless_shared_member: bool,
 }
 
 /// `GET /users`' answer.
@@ -227,6 +247,8 @@ pub(crate) struct MemberView {
     pub user: String,
     /// `owner` or `member`.
     pub role: &'static str,
+    /// The user's label, as `GET /labels` gives it.
+    pub label: String,
 }
 
 /// One team as the API shows it.
@@ -236,6 +258,9 @@ pub(crate) struct TeamView {
     pub name: String,
     /// Free text, possibly empty.
     pub display_name: String,
+    /// What people are shown for it: "{user label}'s team" for a personal
+    /// team, else its display name (see [`team_label`]).
+    pub label: String,
     /// The user whose personal team this is (`None` for a shared team).
     pub personal_of: Option<String>,
     /// When it was created.
@@ -250,7 +275,62 @@ pub(crate) struct TeamView {
     pub suspension_notice: Option<String>,
 }
 
-impl From<TeamRecord> for TeamView {
+impl TeamView {
+    /// The views of team records, with the labels of every user they show
+    /// read together (members and personal owners).
+    ///
+    /// # Arguments
+    /// * `app` - the application, for its label lookup.
+    /// * `records` - the teams.
+    ///
+    /// # Returns
+    /// One view per record, in order.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn many(app: &App, records: Vec<TeamRecord>) -> Result<Vec<Self>, OkfError> {
+        let mut wanted = Wanted::default();
+        for record in &records {
+            if let Some(user) = record.personal_of.as_deref() {
+                wanted.user(user);
+            }
+            for member in &record.members {
+                wanted.user(&member.user);
+            }
+        }
+        let labels = app.labels().labels_for(&wanted).await?;
+        Ok(records
+            .into_iter()
+            .map(|record| Self::of(record, &labels))
+            .collect())
+    }
+
+    /// [`TeamView::many`] for one record.
+    ///
+    /// # Arguments
+    /// * `app` - the application, for its label lookup.
+    /// * `record` - the team.
+    ///
+    /// # Returns
+    /// Its view.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn one(app: &App, record: TeamRecord) -> Result<Self, OkfError> {
+        let mut views = Self::many(app, vec![record]).await?;
+        Ok(views.remove(0))
+    }
+
+    /// The view of a team record.
+    ///
+    /// The record cannot see the user a personal team is named after, so
+    /// the labels come from the lookup ([`TeamView::many`] reads them).
+    ///
+    /// # Arguments
+    /// * `record` - the team.
+    /// * `labels` - the labels of the users the record shows.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -258,7 +338,7 @@ impl From<TeamRecord> for TeamView {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    fn from(record: TeamRecord) -> Self {
+    fn of(record: TeamRecord, labels: &Labels) -> Self {
         let TeamRecord {
             name,
             display_name,
@@ -270,12 +350,22 @@ impl From<TeamRecord> for TeamView {
         } = record;
         Self {
             name,
+            label: team_label(
+                &display_name,
+                personal_of.as_deref().and_then(|user| labels.user(user)),
+            ),
             display_name,
             personal_of,
             created_at: format_timestamp(created_at),
             members: members
                 .into_iter()
                 .map(|member| MemberView {
+                    // A user created since the last load has no label yet:
+                    // show the slug rather than nothing.
+                    label: labels
+                        .user(&member.user)
+                        .unwrap_or(&member.user)
+                        .to_string(),
                     user: member.user,
                     role: member.role.as_str(),
                 })
@@ -326,7 +416,8 @@ pub(crate) struct UnassignedView {
 struct CreateUserBody {
     /// `[a-z0-9-]+`, not taken by a user or team.
     name: String,
-    /// Free text; empty when left out.
+    /// Its display name, checked by [`DisplayName::parse`]; empty when left
+    /// out.
     #[serde(default)]
     display_name: String,
 }
@@ -337,7 +428,8 @@ struct CreateUserBody {
 struct CreateTeamBody {
     /// `[a-z0-9-]+`, not taken by a user or team.
     name: String,
-    /// Free text; empty when left out.
+    /// Its display name, checked by [`DisplayName::parse`]; empty when left
+    /// out.
     #[serde(default)]
     display_name: String,
     /// The user who is its first owner (required; must exist).
@@ -404,7 +496,10 @@ struct EntitlementBody {
 pub(crate) fn routes() -> Router<Arc<App>> {
     Router::new()
         .route("/users", get(list_users).post(create_user))
-        .route("/users/{name}", get(user_detail).delete(delete_user))
+        .route(
+            "/users/{name}",
+            get(user_detail).patch(update_user).delete(delete_user),
+        )
         .route("/users/{name}/admin", put(set_admin))
         .route("/users/{name}/email", put(set_email))
         .route("/users/{name}/invite", post(invite_user))
@@ -419,7 +514,10 @@ pub(crate) fn routes() -> Router<Arc<App>> {
         .route("/users/{name}/sessions/{id_prefix}", delete(revoke_session))
         .route("/users/{name}/sign-ins", get(list_sign_ins))
         .route("/teams", get(list_teams).post(create_team))
-        .route("/teams/{name}", get(team_detail).delete(delete_team))
+        .route(
+            "/teams/{name}",
+            get(team_detail).patch(update_team).delete(delete_team),
+        )
         .route(
             "/teams/{name}/members/{user}",
             put(set_member).delete(remove_member),
@@ -451,6 +549,7 @@ fn change_name(change: MemberChange) -> &'static str {
 async fn list_users(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
+    requester: Requester,
     Query(query): Query<UserQuery>,
 ) -> Result<Json<UserList>, AppError> {
     require_reader(&principal)?;
@@ -462,6 +561,7 @@ async fn list_users(
         }
         .into());
     }
+    let looked_up = query.email.is_some();
     let records = match query.email {
         Some(email) => users::find_record_by_email(app.pool(), &email)
             .await?
@@ -469,11 +569,22 @@ async fn list_users(
             .collect(),
         None => users::list(app.pool()).await?,
     };
-    let users = records
+    // An admin user is left out for a provisioner, so it counts as not found.
+    let records: Vec<UserRecord> = records
         .into_iter()
         .filter(|user| !(principal.provisioner && user.is_admin))
-        .map(UserView::from)
         .collect();
+    if principal.provisioner && looked_up {
+        // The outcome and the matched user, never the address: the entry
+        // is recorded in the background, from what this answer shows.
+        app.note_provisioner_use(ProvisionerUse {
+            actor: principal.admitted_actor(&requester, app.clock().now()),
+            event: ProvisionerEvent::Lookup {
+                matched: records.first().map(|user| user.id.clone()),
+            },
+        });
+    }
+    let users = records.into_iter().map(UserView::from).collect();
     Ok(Json(UserList { users }))
 }
 
@@ -484,7 +595,9 @@ async fn list_users(
 ///
 /// # Errors
 /// 403 unless the key is an admin reaching every catalog; 409 for an invalid
-/// or taken name; 422 for a body without `name`; 500 for a database failure.
+/// or taken name; 422 for a body without `name` or a refused `display_name`
+/// (over 80 characters, or holding a control character or line break); 500
+/// for a database failure.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn create_user(
     State(app): State<Arc<App>>,
@@ -493,12 +606,16 @@ async fn create_user(
     Json(body): Json<CreateUserBody>,
 ) -> Result<(StatusCode, Json<UserView>), AppError> {
     require_manager(&principal)?;
+    // Validated before the store sees it: a refused name is a 422 that
+    // writes nothing.
+    let display_name = DisplayName::parse(&body.display_name)?;
     let new = NewUser {
         name: &body.name,
-        display_name: &body.display_name,
+        display_name: &display_name,
     };
     let created = users::create(app.pool(), &new, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok((StatusCode::CREATED, Json(created.into())))
 }
 
@@ -615,7 +732,8 @@ async fn set_admin(
         { user = %name, key = %principal.key_id, actor = %principal.actor, },
         "admin flag set"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(AdminChanged {
         name,
         previous,
@@ -647,7 +765,8 @@ async fn set_email(
         { user = %name, key = %principal.key_id, actor = %principal.actor, },
         "email set"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(users::find(app.pool(), &name).await?.into()))
 }
 
@@ -678,13 +797,52 @@ async fn invite_user(
     Ok((StatusCode::ACCEPTED, Json(Invited { name, email })))
 }
 
-/// `PUT /users/{name}/entitlements/{catalog}`: lets the user reach the
-/// catalog at `access`, beyond its teams' catalogs.
+/// The entitlement routes' caller: an every-catalog admin (`None`, the
+/// answers as they have always been), or an owner of the catalog's shared
+/// team signed in to the console (`Some(users.id)`, issue #352), which the
+/// store checks under its locks. Keys and OAuth grants, an owner's
+/// included, get the admin refusal.
 ///
 /// # Errors
-/// 403 unless the caller is an admin reaching every catalog; 400 for an
-/// access other than `read` or `write`; 404 for an unknown user or catalog;
-/// 422 without `access`.
+/// [`OkfError::Forbidden`] for anyone else.
+#[tracing::instrument(level = "debug", skip_all)]
+fn entitlement_caller(principal: &Principal) -> Result<Option<&str>, OkfError> {
+    owner_session(principal, require_every_catalog(principal))
+}
+
+/// What an entitlement route answers: an admin gets the user's entitlements
+/// on every catalog, as before; an owner only the one on the catalog it
+/// acted on, so nothing about the user's other catalogs leaks across
+/// tenants.
+///
+/// # Errors
+/// [`OkfError::Database`], or an unknown user (a race with its deletion).
+#[tracing::instrument(level = "debug", skip_all)]
+async fn entitlements_answer(
+    app: &App,
+    name: String,
+    catalog: &str,
+    owner: Option<&str>,
+) -> Result<Json<Entitlements>, OkfError> {
+    let mut entitlements = entitlement_views(app, &name).await?;
+    if owner.is_some() {
+        entitlements.retain(|entitlement| entitlement.catalog == catalog);
+    }
+    Ok(Json(Entitlements { name, entitlements }))
+}
+
+/// `PUT /users/{name}/entitlements/{catalog}`: lets the user reach the
+/// catalog at `access`, beyond its teams' catalogs. An every-catalog admin
+/// may entitle any user; an owner of the catalog's shared team, signed in to
+/// the console, only a member of that team, at `read` or `write`, and gets
+/// only that catalog's entitlement back (issue #352).
+///
+/// # Errors
+/// 403 unless the caller is an admin reaching every catalog, or such an
+/// owner; for an owner, 403 with one body for an unknown user and a user
+/// outside the team alike; 400 for an access other than `read` or `write`;
+/// 404 for an unknown user or catalog asked by an admin; 422 without
+/// `access`.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn entitle(
     State(app): State<Arc<App>>,
@@ -693,7 +851,7 @@ async fn entitle(
     Path((name, catalog)): Path<(String, String)>,
     Json(body): Json<EntitlementBody>,
 ) -> Result<Json<Entitlements>, AppError> {
-    require_every_catalog(&principal)?;
+    let owner = entitlement_caller(&principal)?;
     let access = parse_access(&body.access)?;
     if access == Access::Admin {
         return Err(OkfError::InvalidPath {
@@ -707,24 +865,31 @@ async fn entitle(
         catalog: &catalog,
         access,
     };
-    ceiling::entitle(app.pool(), &new, &actor, app.clock().now()).await?;
+    match owner {
+        None => ceiling::entitle(app.pool(), &new, &actor, app.clock().now()).await?,
+        Some(owner) => {
+            ceiling::entitle_as_owner(app.pool(), owner, &new, &actor, app.clock().now()).await?
+        }
+    }
     split_event!(
         info,
         { %catalog, access = access.as_str(), },
         { user = %name, key = %principal.key_id, actor = %principal.actor, },
         "entitlement set"
     );
-    settle(&app).await;
-    let entitlements = entitlement_views(&app, &name).await?;
-    Ok(Json(Entitlements { name, entitlements }))
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
+    Ok(entitlements_answer(&app, name, &catalog, owner).await?)
 }
 
 /// `DELETE /users/{name}/entitlements/{catalog}`: removes an entitlement
-/// (none given: no change).
+/// (none given: no change), with the callers, refusals and answer of
+/// `PUT`.
 ///
 /// # Errors
-/// 403 unless the caller is an admin reaching every catalog; 404 for an
-/// unknown user or catalog.
+/// 403 unless the caller is an admin reaching every catalog, or such an
+/// owner (one body for an unknown user and a user outside the team); 404 for
+/// an unknown user or catalog asked by an admin.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn unentitle(
     State(app): State<Arc<App>>,
@@ -732,18 +897,27 @@ async fn unentitle(
     actor: AuditActor,
     Path((name, catalog)): Path<(String, String)>,
 ) -> Result<Json<Entitlements>, AppError> {
-    require_every_catalog(&principal)?;
+    let owner = entitlement_caller(&principal)?;
     let now = app.clock().now();
-    ceiling::unentitle(app.pool(), &name, &catalog, &actor, now).await?;
+    match owner {
+        None => ceiling::unentitle(app.pool(), &name, &catalog, &actor, now).await?,
+        Some(owner) => {
+            let target = EntitlementRef {
+                user: &name,
+                catalog: &catalog,
+            };
+            ceiling::unentitle_as_owner(app.pool(), owner, &target, &actor, now).await?
+        }
+    }
     split_event!(
         info,
         { %catalog, },
         { user = %name, key = %principal.key_id, actor = %principal.actor, },
         "entitlement removed"
     );
-    settle(&app).await;
-    let entitlements = entitlement_views(&app, &name).await?;
-    Ok(Json(Entitlements { name, entitlements }))
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
+    Ok(entitlements_answer(&app, name, &catalog, owner).await?)
 }
 
 /// `GET /users/{name}/sessions`: the user's console sessions, by id prefix
@@ -842,26 +1016,37 @@ async fn list_sign_ins(
 
 /// `DELETE /users/{name}`: deletes a user with its keys, grants, sign-in
 /// codes, sessions, memberships and personal team; its open changesets are
-/// discarded. Catalogs and their history stay (`users::delete`).
+/// discarded. Catalogs and their history stay (`users::delete`). With
+/// `?unless_shared_member=true` it deletes nothing while the user is a member
+/// of a shared team, decided under the delete's own locks (issue #535).
 ///
 /// # Returns
 /// 204.
 ///
 /// # Errors
-/// 403 unless the key is an admin reaching every catalog; 404 for an unknown
-/// user; 409 for a personal team that owns catalogs, the last owner of a
-/// shared team, or the last admin user; 500 for a database failure.
+/// 400 for an unknown query parameter or a non-boolean value; 403 unless
+/// the key is an admin reaching every catalog; 404 for an unknown user; 409
+/// for a shared-team membership (with the parameter), a personal team that
+/// owns catalogs, the last owner of a shared team, or the last admin user;
+/// 500 for a database failure.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn delete_user(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
     actor: AuditActor,
     Path(name): Path<String>,
+    Query(query): Query<DeleteUserQuery>,
 ) -> Result<StatusCode, AppError> {
     require_manager(&principal)?;
-    // `false`: the API never deletes the last admin user (the CLI may).
-    users::delete(app.pool(), &name, false, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // `allow_last_admin` stays off: the API never deletes the last admin
+    // user (the CLI may).
+    let options = users::DeleteOptions {
+        unless_shared_member: query.unless_shared_member,
+        ..users::DeleteOptions::default()
+    };
+    users::delete(app.pool(), &name, options, &actor, app.clock().now()).await?;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -877,11 +1062,7 @@ async fn list_teams(
     Extension(principal): Extension<Arc<Principal>>,
 ) -> Result<Json<TeamList>, AppError> {
     require_reader(&principal)?;
-    let teams = teams::list(app.pool())
-        .await?
-        .into_iter()
-        .map(TeamView::from)
-        .collect();
+    let teams = TeamView::many(&app, teams::list(app.pool()).await?).await?;
     Ok(Json(TeamList { teams }))
 }
 
@@ -893,7 +1074,7 @@ async fn list_teams(
 /// # Errors
 /// 403 unless the key is an admin reaching every catalog; 404 for an unknown
 /// owner; 409 for an invalid or taken name; 422 for a body without `name` or
-/// `owner`; 500 for a database failure.
+/// `owner`, or a refused `display_name`; 500 for a database failure.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn create_team(
     State(app): State<Arc<App>>,
@@ -902,14 +1083,19 @@ async fn create_team(
     Json(body): Json<CreateTeamBody>,
 ) -> Result<(StatusCode, Json<TeamView>), AppError> {
     require_manager(&principal)?;
+    let display_name = DisplayName::parse(&body.display_name)?;
     let new = NewTeam {
         name: &body.name,
-        display_name: &body.display_name,
+        display_name: &display_name,
         owner: &body.owner,
     };
     let created = teams::create(app.pool(), &new, &actor, app.clock().now()).await?;
-    settle(&app).await;
-    Ok((StatusCode::CREATED, Json(created.into())))
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
+    Ok((
+        StatusCode::CREATED,
+        Json(TeamView::one(&app, created).await?),
+    ))
 }
 
 /// `GET /teams/{name}`: one team, with its members and catalogs.
@@ -923,7 +1109,8 @@ async fn team_detail(
     Path(name): Path<String>,
 ) -> Result<Json<TeamView>, AppError> {
     require_reader(&principal)?;
-    Ok(Json(teams::find(app.pool(), &name).await?.into()))
+    let record = teams::find(app.pool(), &name).await?;
+    Ok(Json(TeamView::one(&app, record).await?))
 }
 
 /// `DELETE /teams/{name}`: deletes a shared team that owns no catalog.
@@ -944,7 +1131,8 @@ async fn delete_team(
 ) -> Result<StatusCode, AppError> {
     require_manager(&principal)?;
     teams::delete(app.pool(), &name, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -971,10 +1159,11 @@ async fn set_member(
         role: body.role,
     };
     let change = teams::set_member(app.pool(), &membership, &actor, app.clock().now()).await?;
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(MembershipChanged {
         change: change_name(change),
-        team: teams::find(app.pool(), &team).await?.into(),
+        team: TeamView::one(&app, teams::find(app.pool(), &team).await?).await?,
     }))
 }
 
@@ -996,16 +1185,18 @@ async fn remove_member(
 ) -> Result<Json<TeamView>, AppError> {
     require_manager(&principal)?;
     teams::remove_member(app.pool(), &team, &user, &actor, app.clock().now()).await?;
-    settle(&app).await;
-    Ok(Json(teams::find(app.pool(), &team).await?.into()))
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
+    let record = teams::find(app.pool(), &team).await?;
+    Ok(Json(TeamView::one(&app, record).await?))
 }
 
 /// `PUT /teams/{name}/suspension`: suspends the team (or replaces its
 /// notice, keeping the first suspension time), or lifts its suspension.
-/// Polls before answering, so when that poll succeeds the next request is
-/// refused (or served again). A failed poll is logged, not returned (see
-/// `settle`): the committed change then takes effect at the poll loop's next
-/// successful pass.
+/// The write's own change messages are applied before the answer, so the
+/// next request on this replica is refused (or served again); the others
+/// follow through the change feed, or within `catalog_ttl` should a message
+/// be lost.
 ///
 /// # Returns
 /// The team as it now is.
@@ -1030,8 +1221,88 @@ async fn set_suspension(
     } else {
         teams::unsuspend(app.pool(), &name, &actor, now).await?
     };
-    settle(&app).await;
-    Ok(Json(team.into()))
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
+    Ok(Json(TeamView::one(&app, team).await?))
+}
+
+/// `PATCH /users/{name}`'s and `PATCH /me`'s body: the new display name.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DisplayNameBody {
+    /// The new display name, checked by [`DisplayName::parse`]; empty
+    /// clears it.
+    pub display_name: String,
+}
+
+/// `PATCH /users/{name}`: sets the user's display name; the labels show it
+/// at once.
+///
+/// # Returns
+/// The user as it now is.
+///
+/// # Errors
+/// 403 unless the key is an admin reaching every catalog or a provisioner
+/// (which is also refused an admin user); 404 for an unknown user; 422 for
+/// a refused display name or a body that is not exactly `display_name`;
+/// 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn update_user(
+    State(app): State<Arc<App>>,
+    Extension(principal): Extension<Arc<Principal>>,
+    actor: AuditActor,
+    Path(name): Path<String>,
+    Json(body): Json<DisplayNameBody>,
+) -> Result<Json<UserView>, AppError> {
+    require_manager(&principal)?;
+    let display_name = DisplayName::parse(&body.display_name)?;
+    users::set_display_name(app.pool(), &name, &display_name, &actor, app.clock().now()).await?;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
+    Ok(Json(users::find(app.pool(), &name).await?.into()))
+}
+
+/// `PATCH /teams/{name}`: sets a shared team's display name; the labels show
+/// it at once. A manager (an admin reaching every catalog,
+/// or a provisioner) may rename any shared team; a console session may
+/// rename one it owns, which the store checks under its locks.
+///
+/// # Returns
+/// The team as it now is.
+///
+/// # Errors
+/// 403 for anyone else (a member who is not an owner, another user's team,
+/// a key); 404 for an unknown team asked by a manager; 409 for a personal
+/// team; 422 for a refused display name or a body that is not exactly
+/// `display_name`; 500 for a database failure.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn update_team(
+    State(app): State<Arc<App>>,
+    Extension(principal): Extension<Arc<Principal>>,
+    actor: AuditActor,
+    Path(name): Path<String>,
+    Json(body): Json<DisplayNameBody>,
+) -> Result<Json<TeamView>, AppError> {
+    // A tuple match decides on both at once: a manager passes; a console
+    // session may still be an owner; any other credential gets the refusal.
+    let owner = match (require_manager(&principal), &principal.kind) {
+        (Ok(()), _) => None,
+        (Err(_), CredentialKind::Session { user_id }) => Some(user_id.as_str()),
+        (Err(refusal), CredentialKind::ApiKey | CredentialKind::OAuth { .. }) => {
+            return Err(refusal.into())
+        }
+    };
+    let display_name = DisplayName::parse(&body.display_name)?;
+    let change = teams::TeamDisplayNameChange {
+        team: &name,
+        display_name: &display_name,
+        owner,
+    };
+    teams::set_display_name(app.pool(), &change, &actor, app.clock().now()).await?;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
+    let record = teams::find(app.pool(), &name).await?;
+    Ok(Json(TeamView::one(&app, record).await?))
 }
 
 /// `GET /unassigned`: every key, grant, code and catalog without a user or
@@ -1611,7 +1882,21 @@ mod tests {
         let ceiling_now = ceiling::ceiling_of(test.app.pool(), "alice")
             .await
             .expect("ceiling");
-        let cached = test.app.keys().ceiling_of(&detail_id(&test, "alice").await);
+        // Her session's ceiling on `main`, resolved from the cached gates
+        // and the catalog's row (issue #728).
+        let main_row = test
+            .app
+            .directory()
+            .resolve("main")
+            .await
+            .unwrap()
+            .expect("main");
+        let cached = test
+            .app
+            .session_principal(&detail_id(&test, "alice").await)
+            .await
+            .unwrap()
+            .and_then(|session| session.level_at(&main_row));
         let (admin, _) = put("main", "admin").await;
         let (bogus, _) = put("main", "owner").await;
         let (unknown_catalog, _) = put("nowhere", "read").await;
@@ -1631,7 +1916,11 @@ mod tests {
         assert!(body["entitlements"][0]["created_at"].is_string());
         assert_eq!(detail["entitlements"], body["entitlements"]);
         assert_eq!(ceiling_now.get("main"), Some(&Access::Read));
-        assert_eq!(cached.get("main"), Some(&Access::Read), "the route polls");
+        assert_eq!(
+            cached,
+            Some(Access::Read),
+            "the route's messages reach the cache"
+        );
         assert_eq!(admin.as_u16(), 400, "an entitlement is read or write");
         assert_eq!(bogus.as_u16(), 400);
         assert_eq!(unknown_catalog.as_u16(), 404);
@@ -1957,6 +2246,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn user_and_team_creates_parse_the_display_name() {
+        // Arrange
+        let test = app().await;
+        let root = every_catalog_admin(&test).await;
+        let too_long = "x".repeat(81);
+
+        // Act: a name the rule trims, then one too long for each create.
+        let (created, user) = send(
+            &test,
+            "POST",
+            "/api/v1/users",
+            Some(&root),
+            Some(json!({"name": "alice", "display_name": " Alice Example\t"})),
+        )
+        .await;
+        let (user_refused, user_error) = send(
+            &test,
+            "POST",
+            "/api/v1/users",
+            Some(&root),
+            Some(json!({"name": "bob", "display_name": too_long})),
+        )
+        .await;
+        let (team_refused, team_error) = send(
+            &test,
+            "POST",
+            "/api/v1/teams",
+            Some(&root),
+            Some(json!({"name": "family", "display_name": too_long, "owner": "alice"})),
+        )
+        .await;
+        let (no_bob, _) = send(&test, "GET", "/api/v1/users/bob", Some(&root), None).await;
+        let (no_family, _) = send(&test, "GET", "/api/v1/teams/family", Some(&root), None).await;
+
+        // Assert: stored trimmed; each refusal is a 422 that wrote nothing.
+        assert_eq!(created.as_u16(), 201, "{user}");
+        assert_eq!(user["display_name"], "Alice Example");
+        assert_eq!(user_refused.as_u16(), 422, "{user_error}");
+        assert_eq!(team_refused.as_u16(), 422, "{team_error}");
+        assert_eq!(no_bob.as_u16(), 404);
+        assert_eq!(no_family.as_u16(), 404);
+    }
+
+    #[tokio::test]
     async fn an_admin_creates_lists_and_deletes_a_user() {
         let test = app().await;
         let root = every_catalog_admin(&test).await;
@@ -1991,7 +2324,7 @@ mod tests {
         assert_eq!(personal["personal_of"], "alice");
         assert_eq!(
             personal["members"],
-            json!([{"user": "alice", "role": "owner"}])
+            json!([{"user": "alice", "role": "owner", "label": "Alice Example"}])
         );
         assert_eq!(deleted.as_u16(), 204);
         assert_eq!(gone.as_u16(), 404);
@@ -2120,6 +2453,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deleting_a_user_unless_a_shared_team_member_refuses_a_member() {
+        let test = app().await;
+        let root = every_catalog_admin(&test).await;
+        let admin = Some(root.as_str());
+        user(&test, &root, "alice").await;
+        user(&test, &root, "bob").await;
+        user(&test, &root, "carol").await;
+        send(
+            &test,
+            "POST",
+            "/api/v1/teams",
+            admin,
+            Some(json!({"name": "family", "owner": "alice"})),
+        )
+        .await;
+        send(
+            &test,
+            "PUT",
+            "/api/v1/teams/family/members/bob",
+            admin,
+            Some(json!({"role": "member"})),
+        )
+        .await;
+
+        let (refused, error) = send(
+            &test,
+            "DELETE",
+            "/api/v1/users/bob?unless_shared_member=true",
+            admin,
+            None,
+        )
+        .await;
+        let (still, _) = send(&test, "GET", "/api/v1/users/bob", admin, None).await;
+        let (typo, _) = send(
+            &test,
+            "DELETE",
+            "/api/v1/users/bob?unless_shared_memberr=true",
+            admin,
+            None,
+        )
+        .await;
+        let (maybe, _) = send(
+            &test,
+            "DELETE",
+            "/api/v1/users/bob?unless_shared_member=maybe",
+            admin,
+            None,
+        )
+        .await;
+        let (off, _) = send(
+            &test,
+            "DELETE",
+            "/api/v1/users/bob?unless_shared_member=false",
+            admin,
+            None,
+        )
+        .await;
+        let (unshared, _) = send(
+            &test,
+            "DELETE",
+            "/api/v1/users/carol?unless_shared_member=true",
+            admin,
+            None,
+        )
+        .await;
+
+        assert_eq!(refused.as_u16(), 409, "{error}");
+        assert_eq!(error["error"], "Refused");
+        assert!(
+            error["message"]
+                .as_str()
+                .is_some_and(|m| m == "the user is a member of shared team(s): \"family\""),
+            "{error}"
+        );
+        assert_eq!(still.as_u16(), 200, "the user stays");
+        assert_eq!(typo.as_u16(), 400, "a misspelled parameter deletes nothing");
+        assert_eq!(maybe.as_u16(), 400, "a non-boolean value deletes nothing");
+        assert_eq!(off.as_u16(), 204, "false is the unchanged behaviour");
+        assert_eq!(unshared.as_u16(), 204, "no shared team: deleted as before");
+    }
+
+    #[tokio::test]
     async fn membership_routes_and_their_refusals() {
         let test = app().await;
         let root = every_catalog_admin(&test).await;
@@ -2196,15 +2611,15 @@ mod tests {
         assert_eq!(
             detail["members"],
             json!([
-                {"user": "alice", "role": "owner"},
-                {"user": "test-user", "role": "member"},
+                {"user": "alice", "role": "owner", "label": "Unnamed user"},
+                {"user": "test-user", "role": "member", "label": "Unnamed user"},
             ])
         );
         assert_eq!(detail["personal_of"], serde_json::Value::Null);
         assert_eq!(removed.as_u16(), 200);
         assert_eq!(
             after["members"],
-            json!([{"user": "alice", "role": "owner"}])
+            json!([{"user": "alice", "role": "owner", "label": "Unnamed user"}])
         );
         assert_eq!(personal.as_u16(), 409, "a personal team goes with its user");
         assert_eq!(deleted.as_u16(), 204);
@@ -2305,7 +2720,15 @@ mod tests {
         // The legacy insert bumps no generation, so the admin key is created
         // after it: its create bumps, and its poll loads both.
         let root = every_catalog_admin(&test).await;
-        assert_eq!(test.app.keys().find(&legacy).expect("cached").user, None);
+        assert_eq!(
+            test.app
+                .find_key(&legacy)
+                .await
+                .unwrap()
+                .expect("cached")
+                .user,
+            None
+        );
 
         let (status, _) = send(
             &test,
@@ -2320,8 +2743,9 @@ mod tests {
         assert_eq!(status.as_u16(), 200);
         assert_eq!(
             test.app
-                .keys()
-                .find(&legacy)
+                .find_key(&legacy)
+                .await
+                .unwrap()
                 .expect("cached")
                 .user
                 .as_deref(),

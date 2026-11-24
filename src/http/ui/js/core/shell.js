@@ -5,31 +5,44 @@
 import { $, h } from './dom.js';
 import { store } from './store.js';
 import { api } from './api.js';
+import { catalogLabel, setLabels } from './labels.js';
+import { openFeedback } from '../components/feedback.js';
 
 export async function refreshIdentity() {
-    // Signed in with an account, the session (admin flag, ceiling, CSRF
-    // token) is read again beside whoami: an admin may have changed it.
-    const [session, me] = await Promise.all([
+    // Signed in with an account, the session (admin flag, CSRF token) is
+    // read again beside whoami, whose `levels` give a member's level on
+    // each catalog: an admin may have changed either.
+    // The labels are read beside them: a failed read leaves slugs showing
+    // rather than failing the whole identity.
+    const [session, me, labels] = await Promise.all([
         store.session ? api.get('/session') : null,
-        api.get('/whoami'),
+        // Every page: the switcher offers every catalog, and the labels
+        // table names every catalog the key reaches.
+        api.pages('/whoami', 'catalogs'),
+        api.pages('/labels', 'catalogs', { quiet: true }).catch(() => null),
     ]);
     if (session) {
         store.session = session;
         store.csrf = session.csrf;
     }
     store.whoami = me;
+    setLabels(labels);
     // A console session is its user; a key shows its user and its name.
+    const who = me.user_label ?? me.user;
     $('#whoami').textContent = me.kind === 'session'
-        ? `${me.user} - ${me.access}`
-        : `${me.user ? `${me.user} / ` : ''}${me.name ?? me.key_id} - ${me.access}`;
+        ? `${who} - ${me.access}`
+        : `${me.user ? `${who} / ` : ''}${me.name ?? me.key_id} - ${me.access}`;
     if (!me.catalogs.includes(store.catalog)) {
         store.catalog = me.catalogs.includes(me.default_catalog) ? me.default_catalog : (me.catalogs[0] ?? null);
     }
     // After the catalog is settled: a member's level depends on it.
     document.querySelectorAll('[data-need]').forEach(el => { el.hidden = !shows(el.dataset.need); });
     const select = $('#catalog-select');
-    select.replaceChildren(...me.catalogs.map(name => h('option', { value: name }, name)));
+    select.replaceChildren(...me.catalogs.map(name => h('option', { value: name }, catalogLabel(name))));
     select.value = store.catalog ?? '';
+    // The feedback form needs an account's session: drawn again now the
+    // credential is known.
+    drawHelp();
 }
 
 // Whether an element marked data-need="<need>" shows: "session" for the
@@ -60,18 +73,13 @@ export function requireSession(main, id) {
     return false;
 }
 
-// GET /api/v1/me, fresh on every load of an account page: the ceiling and
-// everything else it shows come from this answer, never from the sign-in
-// snapshot, since an admin may have changed them since. Its ceiling
-// ([{catalog, access}]) replaces the session's ({catalog: level}, as GET
-// /api/v1/session spells it), so the cap notes and `store.can` follow too.
-// Rejects as api.get does (already toasted).
+// GET /api/v1/me, fresh on every load of an account page: everything it
+// shows comes from this answer, never from the sign-in snapshot, since an
+// admin may have changed it since. It names the ceiling's highest level
+// only (`ceiling_access`); the ceiling itself is paged (GET /me/ceiling,
+// components/ceiling.js). Rejects as api.get does (already toasted).
 export async function freshAccount() {
-    const account = await api.get('/me');
-    if (store.session) {
-        store.session.ceiling = Object.fromEntries(account.ceiling.map(({ catalog, access }) => [catalog, access]));
-    }
-    return account;
+    return api.get('/me');
 }
 
 // How the console leaves a session it ended itself: main.js installs it
@@ -79,7 +87,7 @@ export async function freshAccount() {
 // signedOut() after signing this browser's own session out.
 let leave = () => {};
 export function setSignedOutHandler(handler) { leave = handler; }
-export function signedOut() { leave(); }
+export function signedOut(message) { leave(message); }
 
 // After a key's user changed: when it is the signed-in key, its user is
 // shell state (#whoami, the Users page's "you" marker), so reload whoami.
@@ -114,21 +122,60 @@ export async function refreshUnassigned() {
 }
 
 let brandTicket = 0;
+// The newest /ui/brand.json answer, for drawHelp().
+let brand = null;
+
+// The sidebar's help entries, from the last brand.json answer: the
+// "Documentation" link (Settings: docs_url), shown to everyone, and one
+// feedback entry. The in-console form (#feedback-open, brand.json's
+// `feedback_form`, there with a `[feedback]` table) needs an account's
+// session, so for someone signed in that way it wins over the external
+// "Send feedback" link (Settings: feedback_url); otherwise the link shows
+// when set. With neither, no feedback entry shows. The server validated
+// the URLs (https only); they are set as properties, never built into HTML.
+function drawHelp() {
+    const docs = document.getElementById('docs-link');
+    const link = document.getElementById('feedback-link');
+    const open = document.getElementById('feedback-open');
+    const url = value => (typeof value === 'string' && value ? value : null);
+    const docsUrl = url(brand?.docs_url);
+    if (docsUrl) docs.href = docsUrl; else docs.removeAttribute('href');
+    docs.hidden = !docsUrl;
+    const form = store.session && brand?.feedback_form ? brand.feedback_form : null;
+    open.hidden = !form;
+    const feedbackUrl = form ? null : url(brand?.feedback_url);
+    if (feedbackUrl) link.href = feedbackUrl; else link.removeAttribute('href');
+    link.hidden = !feedbackUrl;
+    // For the browser tests: the entries above now follow a brand.json
+    // answer (until then every one is hidden, as index.html draws them).
+    if (brand) document.getElementById('app').dataset.brandLoaded = 'true';
+}
+
+// The feedback button opens the form drawn from the brand it was shown for.
+document.getElementById('feedback-open')?.addEventListener('click', () => {
+    if (brand?.feedback_form) openFeedback(brand.feedback_form);
+});
 
 // The operator's product name (Settings: product_name) on the login card, in
-// the sidebar and in the tab title, from the public /ui/brand.json. Called at
+// the sidebar and in the tab title, and the help entries (drawHelp) in the
+// sidebar, from the public /ui/brand.json. Called at
 // boot (before anyone signs in) and after the setting is saved or reset.
 // textContent only. Only the newest call writes: a boot read answering late
 // never draws over a newer save's. On any failure the page keeps what it
-// shows (index.html's "okf" until the first answer).
+// shows; index.html names no product, so a deployment's brand never flashes
+// another name before the first answer.
 export async function applyBrand() {
     const mine = ++brandTicket;
-    let brand = null;
+    let answer = null;
     try {
         const response = await fetch('/ui/brand.json', { cache: 'no-store' });
-        if (response.ok) brand = await response.json();
+        if (response.ok) answer = await response.json();
     } catch { /* keep the current name */ }
-    if (mine !== brandTicket || !brand?.product_name) return;
+    if (mine !== brandTicket || !answer) return;
+    brand = answer;
+    // Hidden when unset, also after a reset.
+    drawHelp();
+    if (!brand.product_name) return;
     document.title = `${brand.product_name} console`;
     for (const el of document.querySelectorAll('.brand')) el.textContent = brand.product_name;
 }

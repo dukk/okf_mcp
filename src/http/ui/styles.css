@@ -26,8 +26,11 @@
     --error: #f87171; --error-soft: #450a0a;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.4);
 }
-/* Map the tokens onto Pico's variables, so its form controls follow the theme. */
-:root, [data-theme="dark"] {
+/* Map the tokens onto Pico's variables, so its form controls follow the theme.
+ * Pico sets its light values on `:root:not([data-theme=dark])` (two
+ * selectors' worth of specificity), which a plain `:root` loses to; the
+ * same selector, later in the cascade, wins (issue #270). */
+:root, :root:not([data-theme="dark"]), [data-theme="light"], [data-theme="dark"] {
     --pico-font-family: var(--font-body);
     --pico-font-size: 14px;
     --pico-background-color: var(--bg);
@@ -71,13 +74,17 @@ code, .mono { font-family: var(--font-mono); font-size: .9em; }
 .catalog-switch select { margin: .25rem 0 0; padding: .3rem .5rem; font-family: var(--font-mono); font-size: .85rem; }
 .nav-group { display: flex; flex-direction: column; gap: 2px; margin-top: 1rem; }
 .nav-group-label { padding: 0 .5rem .25rem; font-size: .65rem; letter-spacing: .1em; text-transform: uppercase; color: var(--fg-muted); }
-.nav-link { display: flex; justify-content: space-between; align-items: center; padding: .4rem .5rem;
+/* .help-link (the Documentation link) looks like a .nav-link but is not
+   one: the router hides every .nav-link whose page is not in the manifest. */
+.nav-link, .help-link { display: flex; justify-content: space-between; align-items: center; padding: .4rem .5rem;
     border-radius: var(--radius-sm); color: var(--fg); text-decoration: none; }
-.nav-link:hover { background: var(--surface-2); }
+.nav-link:hover, .help-link:hover { background: var(--surface-2); }
 .nav-link.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .nav-badge { background: var(--error); color: #fff; border-radius: 999px; padding: 0 .45rem; font-size: .7rem; font-weight: 700; }
 .sidebar-footer { margin-top: auto; padding: .75rem .5rem 0; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: .4rem; }
 .footer-actions { display: flex; gap: .5rem; }
+.feedback-open { width: 100%; margin: 0; padding: .35rem .6rem; font-size: .85rem; }
+#feedback-form textarea { font-size: .9rem; }
 .text-btn { background: none; border: 1px solid var(--border); color: var(--fg-muted); padding: .2rem .6rem; font-size: .8rem; width: auto; margin: 0; }
 main { padding: 1.75rem 2.25rem; min-width: 0; }
 .page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 1.25rem; }
@@ -117,6 +124,8 @@ main { padding: 1.75rem 2.25rem; min-width: 0; }
 .notice { background: var(--warn-soft); border-left: 3px solid var(--warn); border-radius: var(--radius-sm);
     padding: .75rem 1rem; }
 .notice h2 { font-size: 1.05rem; margin-bottom: .5rem; }
+/* Import's controls, which a suspended catalog disables as one */
+.import-controls { border: 0; margin: 0; padding: 0; }
 
 /* drawer, dialogs, toasts */
 .drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.25); z-index: 20; }
@@ -234,3 +243,7 @@ pre.diff .del { color: var(--error); }
 /* Settings (M12 Task 15): a setting's value control, and inputs in an inline form */
 .settings-input { width: auto; margin: 0; padding: .25rem .5rem; font-family: var(--font-mono); font-size: .85rem; }
 .inline-form input { margin: 0; }
+
+/* Display names (M17 Task 10a): a label with its id beneath */
+.named { display: flex; flex-direction: column; }
+.id-line { font-size: 0.8em; font-family: var(--pico-font-family-monospace); }

@@ -12,17 +12,19 @@ use axum::routing::{get, patch, put};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 
-use super::{require_every_catalog, settle};
+use super::{owner_session, reachable_page, require_every_catalog, PageQuery};
 use crate::app::App;
 use crate::auth::{CredentialKind, Principal};
 use crate::catalog::CatalogState;
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
 use crate::http::{archives, AppError};
+use crate::labels::directory::{Labels, Wanted};
+use crate::labels::{catalog_label, DisplayName};
 use crate::mcp::catalogs::SuspensionInfo;
 use crate::okf::ops::STARTER_FILE_COUNT;
 use crate::store::audit::AuditActor;
-use crate::store::catalogs::{self as catalog_rows, MaintenanceChange, Switch};
+use crate::store::catalogs::{self as catalog_rows, CatalogRow, MaintenanceChange, Switch};
 use crate::store::ceiling::{self, MemberAccess};
 use crate::store::keys::Access;
 use crate::telemetry::subscriber::split_event;
@@ -56,6 +58,7 @@ pub(crate) fn routes(app: &App) -> Router<Arc<App>> {
             "/catalogs/{catalog}/member-access",
             get(member_access).put(set_member_access),
         )
+        .route("/catalogs/{catalog}/entitlements", get(team_entitlements))
         .route("/catalogs/{catalog}/export", archives::export_route())
         .route("/catalogs/{catalog}/import", archives::import_route(app))
 }
@@ -65,11 +68,18 @@ pub(crate) fn routes(app: &App) -> Router<Arc<App>> {
 pub(crate) struct CatalogSummary {
     /// Its name.
     pub name: String,
+    /// Its stored display name; empty when unset.
+    pub display_name: String,
+    /// What people are shown for it: its display name, else its
+    /// description (see [`catalog_label`]).
+    pub label: String,
     /// Its description.
     pub description: String,
     /// The name of the team that owns it; null for a catalog from before
     /// users and teams not yet assigned.
     pub owner_team: Option<String>,
+    /// The owner team's label; null when it has no owner team.
+    pub owner_team_label: Option<String>,
     /// How many files it holds (every stored file).
     pub files: usize,
     /// How many of them are concepts.
@@ -88,13 +98,15 @@ pub(crate) struct CatalogSummary {
 }
 
 impl CatalogSummary {
-    /// The summary of one loaded catalog, as `principal` sees it.
+    /// The summary of one listed catalog, as `principal` sees it.
     ///
     /// # Arguments
-    /// * `name` - its name.
-    /// * `state` - its state.
+    /// * `row` - its directory row: name, display name, description, owner.
+    /// * `state` - its loaded state, of the same incarnation as `row`: the
+    ///   file and concept counts, generation and last change.
     /// * `principal` - the caller, which must reach the catalog (its
     ///   suspension is shown only to those who do).
+    /// * `labels` - the label directory, for the owner team's label.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -102,21 +114,29 @@ impl CatalogSummary {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    fn of(name: &str, state: &CatalogState, principal: &Principal) -> Self {
+    fn of(row: &CatalogRow, state: &CatalogState, principal: &Principal, labels: &Labels) -> Self {
         // `current()` is an `Arc` of the loaded snapshot: one consistent
         // generation, file count and concept count.
         let loaded = state.current();
         Self {
-            name: name.to_string(),
-            description: state.description().to_string(),
-            // `as_deref` borrows the `Arc<str>` inside as a `&str`.
-            owner_team: state.owner_team().as_deref().map(str::to_string),
+            name: row.name.clone(),
+            label: catalog_label(&row.display_name, &row.description),
+            display_name: row.display_name.clone(),
+            description: row.description.clone(),
+            owner_team_label: row
+                .owner_team
+                .as_deref()
+                .and_then(|team| labels.team(team))
+                .map(str::to_string),
+            owner_team: row.owner_team.clone(),
             files: loaded.files(),
             concepts: loaded.snapshot().concepts().count(),
             generation: loaded.generation(),
             last_change: loaded.last_change().map(format_timestamp),
-            suspended: principal.suspension(name).map(SuspensionInfo::from),
-            maintenance: Switch::from(!principal.gates.maintenance_off.contains(name)),
+            // Suspension and maintenance come from the catalog's row, as
+            // every admission decision does.
+            suspended: principal.suspension(row).map(SuspensionInfo::from),
+            maintenance: Switch::from(!row.maintenance_off),
         }
     }
 }
@@ -124,8 +144,11 @@ impl CatalogSummary {
 /// `GET /catalogs`' answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CatalogListing {
-    /// The catalogs the key reaches, by name.
+    /// One page of the catalogs the key reaches, by name.
     pub catalogs: Vec<CatalogSummary>,
+    /// The `after` of the next page; absent on the last page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 /// `POST /catalogs`' body.
@@ -134,6 +157,10 @@ pub(crate) struct CatalogListing {
 struct NewCatalog {
     /// `[a-z0-9-]+`.
     name: String,
+    /// Its display name, checked by [`DisplayName::parse`]; empty when left
+    /// out.
+    #[serde(default)]
+    display_name: String,
     /// Free text; empty when left out, as with the CLI.
     #[serde(default)]
     description: String,
@@ -141,23 +168,34 @@ struct NewCatalog {
     owner: String,
 }
 
-/// `PATCH /catalogs/{catalog}`'s body.
+/// `PATCH /catalogs/{catalog}`'s body: the fields to change, at least one.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DescriptionChange {
-    /// The new description (empty is allowed).
-    description: String,
+struct DetailsBody {
+    /// The new display name, checked by [`DisplayName::parse`] (empty
+    /// clears it); left as it is when absent.
+    display_name: Option<String>,
+    /// The new description (empty is allowed); left as it is when absent.
+    description: Option<String>,
 }
 
-/// `PATCH /catalogs/{catalog}`'s answer, as `okf-mcp catalog update` prints it.
+/// `PATCH /catalogs/{catalog}`'s answer: a strict superset of the one this
+/// route gave when it changed only the description, so a client that reads
+/// `name`, `previous` and `description` is unaffected.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct DescriptionChanged {
+pub(crate) struct DetailsChanged {
     /// The catalog.
     pub name: String,
-    /// The description it had.
+    /// The description it had (always a string, whichever field changed).
     pub previous: String,
     /// The description it has now.
     pub description: String,
+    /// The display name it had; empty when unset.
+    pub previous_display_name: String,
+    /// The display name it has now; empty when unset.
+    pub display_name: String,
+    /// What people are shown for it now.
+    pub label: String,
 }
 
 /// `PUT /catalogs/{catalog}/owner`'s body.
@@ -195,28 +233,46 @@ pub(crate) struct CatalogDeleted {
     pub name: String,
 }
 
-/// `GET /catalogs`: every loaded catalog the key reaches, any access level.
+/// `GET /catalogs?after=&limit=`: one page of the catalogs the key reaches,
+/// any access level (M18 spec Decision 7).
 ///
 /// # Returns
-/// The listing, by name (`Catalogs` is a `BTreeMap`, so it iterates sorted).
+/// The page, by name, with `next` while more follow. Each listed catalog's
+/// snapshot fields (files, concepts, last change) come from the catalog
+/// cache, so a page loads at most its own catalogs. A catalog whose stored
+/// data does not build (or deleted since the page was read) is left out of
+/// its page, as it was left out of the list.
+///
+/// # Errors
+/// 400 for a malformed `after`; 500 if the directory read or a load fails.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn list_catalogs(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Json<CatalogListing>, AppError> {
-    // Held in a local so the map outlives the iteration that borrows it.
-    let loaded = app.catalogs();
-    let catalogs = loaded
-        .iter()
-        .filter(|(name, _)| principal.reaches(name))
-        .map(|(name, state)| CatalogSummary::of(name, state, &principal))
-        .collect();
-    Ok(Json(CatalogListing { catalogs }))
+    let page = reachable_page(&app, &principal, &query).await?;
+    let mut wanted = Wanted::default();
+    for row in &page.items {
+        if let Some(team) = row.owner_team.as_deref() {
+            wanted.team(team);
+        }
+    }
+    let labels = app.labels().labels_for(&wanted).await?;
+    let mut catalogs = Vec::with_capacity(page.items.len());
+    for row in &page.items {
+        if let Some(state) = app.listed_state(row).await? {
+            catalogs.push(CatalogSummary::of(row, &state, &principal, &labels));
+        }
+    }
+    Ok(Json(CatalogListing {
+        catalogs,
+        next: page.next,
+    }))
 }
 
 /// `POST /catalogs`: creates a catalog holding only its starter files (a
-/// root `index.md` and a `log.md`), then polls so it is served at
-/// once. It needs an admin key that reaches every catalog: a key granted
+/// root `index.md` and a `log.md`); it is served at once. It needs an admin key that reaches every catalog: a key granted
 /// named catalogs would not reach the new one, and grants are made with the
 /// keys routes.
 ///
@@ -226,7 +282,8 @@ async fn list_catalogs(
 /// # Errors
 /// 403 for any other key; 404 ([`OkfError::UnknownName`]) for an unknown
 /// owner; 409 ([`OkfError::Refused`]) for an invalid or taken name; 422 for a
-/// body without `owner`; 500 for a database failure.
+/// body without `owner`, or a refused `display_name` ([`OkfError::LimitExceeded`]);
+/// 500 for a database failure.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn create_catalog(
     State(app): State<Arc<App>>,
@@ -236,10 +293,14 @@ async fn create_catalog(
     Json(new): Json<NewCatalog>,
 ) -> Result<(StatusCode, Json<CatalogSummary>), AppError> {
     crate::http::api::require_manager(&principal)?;
+    // Validated before the store sees it: a refused name is a 422 that
+    // writes nothing.
+    let display_name = DisplayName::parse(&new.display_name)?;
     let row = catalog_rows::create(
         app.pool(),
         &catalog_rows::NewCatalog {
             name: &new.name,
+            display_name: &display_name,
             description: &new.description,
             owner_team: &new.owner,
         },
@@ -254,22 +315,33 @@ async fn create_catalog(
         { key = %principal.key_id, actor = %principal.actor, },
         "catalog created"
     );
-    settle(&app).await;
-    // The owner may be a suspended team. Creating bumps the admin generation,
-    // so the poll `settle` ran reloaded the cache's suspension map; if that
-    // poll failed, this reads null until the next one, as for every team write.
-    let suspended = app
-        .keys()
-        .suspensions()
-        .get(&row.name)
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
+    // The owner may be a suspended team: read the new row's access facts
+    // from the database (one query), not from the directory, which may
+    // still remember the name as absent until the create's message lands.
+    let suspended = catalog_rows::row_by_name(app.pool(), &row.name)
+        .await?
+        .and_then(|created| principal.suspension(&created))
         .map(SuspensionInfo::from);
     // Built from the row, not the loaded state: a new catalog holds only its
     // starter files (a root index.md and a log.md, no concepts), written
-    // when it was created, and the answer must not depend on the poll
-    // having loaded it.
+    // when it was created, and the answer must not depend on the catalog
+    // cache having loaded it.
+    let mut wanted = Wanted::default();
+    if let Some(team) = row.owner_team.as_deref() {
+        wanted.team(team);
+    }
+    let labels = app.labels().labels_for(&wanted).await?;
     let summary = CatalogSummary {
         name: row.name,
+        label: catalog_label(&row.display_name, &row.description),
+        display_name: row.display_name,
         description: row.description,
+        owner_team_label: row
+            .owner_team
+            .as_deref()
+            .and_then(|team| labels.team(team).map(str::to_string)),
         owner_team: row.owner_team,
         files: STARTER_FILE_COUNT,
         concepts: 0,
@@ -282,45 +354,136 @@ async fn create_catalog(
     Ok((StatusCode::CREATED, Json(summary)))
 }
 
-/// `PATCH /catalogs/{catalog}`: replaces the description (`admin` on the
-/// catalog), then polls so the listing shows it at once.
+/// Whether `principal`, a console session, may edit `catalog` as an owner
+/// of its team: refused while the team is suspended (plan Decision 6; the
+/// store does not check suspension).
+///
+/// The suspension is told only to a session that reaches the catalog or
+/// belongs to its team, so a session cannot probe which other catalogs are
+/// suspended. Anyone else goes on to the store, which refuses a non-owner.
+///
+/// # Arguments
+/// * `app` - the application, for the catalog's row and the team labels.
+/// * `principal` - the caller.
+/// * `catalog` - the catalog to edit.
 ///
 /// # Errors
-/// 404 for a catalog the key does not reach or that does not exist; 403
-/// below `admin`; 500 for a database failure.
+/// [`OkfError::Suspended`]; [`OkfError::Database`] when the row's read fails.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn refuse_suspended_owner(
+    app: &App,
+    principal: &Principal,
+    catalog: &str,
+) -> Result<(), OkfError> {
+    // An unknown catalog is not suspended: the store refuses it.
+    let Some(row) = app.directory().resolve(catalog).await? else {
+        return Ok(());
+    };
+    let Some(suspended) = principal.suspension(&row) else {
+        return Ok(());
+    };
+    let in_team = match principal.user.as_deref() {
+        Some(user) => app.labels().teams_of(user).await?.contains(&suspended.team),
+        None => false,
+    };
+    if in_team || principal.reaches_row(&row) {
+        principal.check_not_suspended(&row)
+    } else {
+        Ok(())
+    }
+}
+
+/// `PATCH /catalogs/{catalog}`: replaces the display name, the description
+/// or both; the listing shows them at once (the write's own change
+/// messages are applied before the answer).
+///
+/// Who may: a provisioner (it reaches no catalog content; this touches only
+/// the row), a key or session with `admin` on the catalog, or a console
+/// session of an owner of the catalog's owner team, refused while that team
+/// is suspended. The store checks the owner under its locks.
+///
+/// # Errors
+/// 403 for anyone else (a member who is not an owner, a key below `admin`,
+/// and for a session an unknown catalog too); 404 for a catalog a key does
+/// not reach or that does not exist; 403 with `Suspended` for an owner of a
+/// suspended team; 422 for a refused display name, an unknown field or a
+/// body with neither field; 500 for a database failure.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn update_catalog(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
     actor: AuditActor,
     Path(catalog): Path<String>,
-    Json(change): Json<DescriptionChange>,
-) -> Result<Json<DescriptionChanged>, AppError> {
-    principal.require(Access::Admin, &catalog)?;
-    let previous = catalog_rows::update_description(
-        app.pool(),
-        &catalog,
-        &change.description,
-        &actor,
-        app.clock().now(),
-    )
-    .await?;
+    Json(change): Json<DetailsBody>,
+) -> Result<Json<DetailsChanged>, AppError> {
+    if change.display_name.is_none() && change.description.is_none() {
+        return Err(OkfError::LimitExceeded {
+            limit: "body",
+            reason: "give display_name, description or both".to_string(),
+        }
+        .into());
+    }
+    let display_name = change
+        .display_name
+        .as_deref()
+        .map(DisplayName::parse)
+        .transpose()?;
+    // Who is asking decides whether the store checks an owner. A tuple match
+    // lists every combination: a provisioner and an admin pass as they are;
+    // a console session may still be an owner; any other credential gets
+    // the admin refusal.
+    let admin = principal
+        .require_in(app.directory(), Access::Admin, &catalog)
+        .await;
+    let owner = match (principal.provisioner, admin, &principal.kind) {
+        (true, _, _) | (false, Ok(()), _) => None,
+        // A failed read of the catalog's row is not a refusal.
+        (false, Err(error @ (OkfError::Database { .. } | OkfError::Busy { .. })), _) => {
+            return Err(error.into())
+        }
+        (false, Err(_), CredentialKind::Session { user_id }) => {
+            refuse_suspended_owner(&app, &principal, &catalog).await?;
+            Some(user_id.as_str())
+        }
+        (false, Err(refusal), CredentialKind::ApiKey | CredentialKind::OAuth { .. }) => {
+            return Err(refusal.into())
+        }
+    };
+    let details = catalog_rows::DetailsChange {
+        catalog: &catalog,
+        display_name: display_name.as_ref(),
+        description: change.description.as_deref(),
+        owner,
+    };
+    let previous =
+        catalog_rows::update_details(app.pool(), &details, &actor, app.clock().now()).await?;
     split_event!(
         info,
         { %catalog, },
         { key = %principal.key_id, actor = %principal.actor, },
-        "catalog description changed"
+        "catalog details changed"
     );
-    settle(&app).await;
-    Ok(Json(DescriptionChanged {
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
+    let description = change
+        .description
+        .unwrap_or_else(|| previous.description.clone());
+    let display_name = display_name.map_or_else(
+        || previous.display_name.clone(),
+        |parsed| parsed.as_str().to_string(),
+    );
+    Ok(Json(DetailsChanged {
         name: catalog,
-        previous,
-        description: change.description,
+        previous: previous.description,
+        label: catalog_label(&display_name, &description),
+        description,
+        previous_display_name: previous.display_name,
+        display_name,
     }))
 }
 
-/// `PUT /catalogs/{catalog}/owner`: makes `team` the catalog's owner, then
-/// polls so the listing shows it at once. Ownership grants no access, so it
+/// `PUT /catalogs/{catalog}/owner`: makes `team` the catalog's owner; the
+/// listing shows it at once. Ownership grants no access, so it
 /// needs an admin key that reaches every catalog, like the users and teams
 /// routes (plan Decision 3), not `admin` on the catalog.
 ///
@@ -350,7 +513,8 @@ async fn set_owner(
         { key = %principal.key_id, actor = %principal.actor, },
         "catalog owner changed"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(OwnerChanged {
         name: catalog,
         previous,
@@ -379,8 +543,8 @@ pub(crate) struct MaintenanceChanged {
 }
 
 /// `PUT /catalogs/{catalog}/maintenance`: lets the maintenance runner in, or
-/// keeps it out (spec Part 6), then polls so the key cache refuses or admits
-/// the runner at once. An admin that reaches every catalog, or an owner of
+/// keeps it out (spec Part 6); the catalog directory refuses or admits the
+/// runner at once. An admin that reaches every catalog, or an owner of
 /// the catalog's owner team signed in to the console: the one
 /// owner-managed control of this milestone. The store checks the owner
 /// under its locks.
@@ -420,7 +584,8 @@ async fn set_maintenance(
         { key = %principal.key_id, actor = %principal.actor, },
         "catalog maintenance set"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(MaintenanceChanged {
         name: catalog,
         previous,
@@ -456,34 +621,93 @@ pub(crate) struct MemberAccessChanged {
     pub member_access: &'static str,
 }
 
+/// The refusal of a member-access or entitlement control for a key or an
+/// OAuth grant, as it has always been.
+const ADMIN_ONLY: &str = "this needs an admin key that reaches every catalog";
+
+/// Whether an admin check refused because the caller does not reach the
+/// catalog (the 404 these reads have always answered), as opposed to
+/// reaching it below `admin` (403).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: checks a value, no I/O"
+    )
+)]
+fn is_unreached(admin: &Result<(), OkfError>) -> bool {
+    matches!(admin, Err(OkfError::CatalogNotSelected { .. }))
+}
+
+/// An owner check's refusal for a session that does not reach the catalog
+/// stays the 404 the admin check gave, so a session cannot tell an unknown
+/// catalog from one it merely does not reach; any other error is kept.
+///
+/// # Arguments
+/// * `error` - what the store answered.
+/// * `unreached` - [`is_unreached`] of the admin check.
+/// * `catalog` - the catalog asked about.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(
+        uninstrumented_fn,
+        reason = "trivial accessor or conversion: maps a value, no I/O"
+    )
+)]
+fn keep_not_found(error: OkfError, unreached: bool, catalog: &str) -> OkfError {
+    match error {
+        OkfError::Forbidden { .. } if unreached => OkfError::CatalogNotSelected {
+            catalog: catalog.to_string(),
+        },
+        other => other,
+    }
+}
+
 /// `GET /catalogs/{catalog}/member-access`: what the owning team's members
-/// may reach through their self-issued credentials.
+/// may reach through their self-issued credentials. For `admin` on the
+/// catalog, or an owner of its shared team signed in to the console (issue
+/// #352); the store checks the owner under its locks.
 ///
 /// # Errors
 /// 404 for a catalog the caller does not reach or that does not exist; 403
-/// below `admin` on it.
+/// below `admin` on it, for a key or grant that is not an admin, and for a
+/// session that reaches the catalog but does not own its shared team (a
+/// personal team's catalog included).
 #[tracing::instrument(level = "debug", skip_all)]
 async fn member_access(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
     Path(catalog): Path<String>,
 ) -> Result<Json<MemberAccessView>, AppError> {
-    principal.require(Access::Admin, &catalog)?;
-    let access = ceiling::member_access(app.pool(), &catalog).await?;
+    let admin = principal
+        .require_in(app.directory(), Access::Admin, &catalog)
+        .await;
+    let unreached = is_unreached(&admin);
+    let access = match owner_session(&principal, admin)? {
+        None => ceiling::member_access(app.pool(), &catalog).await?,
+        // The scalar only: no member or entitlement list is read for it.
+        Some(owner) => ceiling::member_access_as_owner(app.pool(), &catalog, owner)
+            .await
+            .map_err(|refusal| keep_not_found(refusal, unreached, &catalog))?,
+    };
     Ok(Json(MemberAccessView {
         name: catalog,
         member_access: access.as_str(),
     }))
 }
 
-/// `PUT /catalogs/{catalog}/member-access`: sets it, then polls so every
-/// member's self-issued credentials are re-capped at once. The permission
-/// is `ceiling::may_set_member_access`, the one hook team owners will
-/// later share (spec "Admin surface").
+/// `PUT /catalogs/{catalog}/member-access`: sets it; every member's
+/// self-issued credentials are re-capped at once. The permission is
+/// `ceiling::may_set_member_access` (a provisioner or an every-catalog
+/// admin), or an owner of the catalog's shared team signed in to the
+/// console (issue #352), which the store checks under its locks. Keys and
+/// OAuth grants, an owner's included, get the admin refusal.
 ///
 /// # Errors
-/// 403 for a caller `may_set_member_access` refuses; 400 for an unknown
-/// level; 404 for an unknown catalog; 422 without `access`.
+/// 403 for a caller `may_set_member_access` refuses that is not such an
+/// owner (a non-owner's session, an unknown catalog and a personal team's
+/// catalog included); 400 for an unknown level; 404 for an unknown catalog
+/// asked by an admin; 422 without `access`.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn set_member_access(
     State(app): State<Arc<App>>,
@@ -492,25 +716,33 @@ async fn set_member_access(
     Path(catalog): Path<String>,
     Json(body): Json<MemberAccessBody>,
 ) -> Result<Json<MemberAccessChanged>, AppError> {
-    if !ceiling::may_set_member_access(&principal, &catalog) {
-        return Err(OkfError::Forbidden {
-            reason: "this needs an admin key that reaches every catalog".to_string(),
-        }
-        .into());
-    }
+    let admin = if ceiling::may_set_member_access(&principal, &catalog) {
+        Ok(())
+    } else {
+        Err(OkfError::Forbidden {
+            reason: ADMIN_ONLY.to_string(),
+        })
+    };
+    let owner = owner_session(&principal, admin)?;
     let access = MemberAccess::parse(&body.access).ok_or_else(|| OkfError::InvalidPath {
         path: "access".to_string(),
         reason: format!("must be none, read or write, not {:?}", body.access),
     })?;
+    let change = ceiling::MemberAccessChange {
+        catalog: &catalog,
+        access,
+        owner,
+    };
     let previous =
-        ceiling::set_member_access(app.pool(), &catalog, access, &actor, app.clock().now()).await?;
+        ceiling::change_member_access(app.pool(), &change, &actor, app.clock().now()).await?;
     split_event!(
         info,
         { %catalog, previous = previous.as_str(), access = access.as_str(), },
         { key = %principal.key_id, actor = %principal.actor, },
         "member access set"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(MemberAccessChanged {
         name: catalog,
         previous: previous.as_str(),
@@ -518,9 +750,140 @@ async fn set_member_access(
     }))
 }
 
+/// One member of a catalog's owning team, as the drawer picks entitlement
+/// targets from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct TeamMemberView {
+    /// The user's name.
+    pub user: String,
+    /// The user's label, as `GET /labels` gives it.
+    pub label: String,
+    /// `owner` or `member`.
+    pub role: String,
+}
+
+/// One entitlement to the catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct CatalogEntitlementView {
+    /// The user's name.
+    pub user: String,
+    /// The user's label.
+    pub label: String,
+    /// `read` or `write`.
+    pub access: &'static str,
+}
+
+/// `GET /catalogs/{catalog}/entitlements`' answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct TeamEntitlementsView {
+    /// The catalog.
+    pub name: String,
+    /// The owning team's members, the only users an owner may entitle.
+    pub members: Vec<TeamMemberView>,
+    /// The last member of this page when more follow: send it back as
+    /// `members_after`; `null` on the last page.
+    pub members_next: Option<String>,
+    /// The entitlements to the catalog (an owner sees its members' only).
+    pub entitlements: Vec<CatalogEntitlementView>,
+    /// As `members_next`, for `entitlements_after`.
+    pub entitlements_next: Option<String>,
+}
+
+/// `GET /catalogs/{catalog}/entitlements`' query: the cursors of the two
+/// lists, the page size and which list to read.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TeamEntitlementsQuery {
+    /// The `members_next` of the previous page; absent for the first.
+    members_after: Option<String>,
+    /// The `entitlements_next` of the previous page; absent for the first.
+    entitlements_after: Option<String>,
+    /// The page size of each list: default 100, at most 1000 (a larger one
+    /// is cut).
+    limit: Option<u32>,
+    /// `members` or `entitlements` to read only that list (a continuation);
+    /// absent for both.
+    list: Option<String>,
+}
+
+/// `GET /catalogs/{catalog}/entitlements`: the owning team's members and the
+/// catalog's entitlements, for the catalog drawer's entitlement section
+/// (issue #352). The same callers and refusals as
+/// `GET /catalogs/{catalog}/member-access`.
+///
+/// # Errors
+/// As `GET /catalogs/{catalog}/member-access`.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn team_entitlements(
+    State(app): State<Arc<App>>,
+    Extension(principal): Extension<Arc<Principal>>,
+    Path(catalog): Path<String>,
+    Query(query): Query<TeamEntitlementsQuery>,
+) -> Result<Json<TeamEntitlementsView>, AppError> {
+    let lists = match query.list.as_deref() {
+        None => ceiling::TeamLists::Both,
+        Some("members") => ceiling::TeamLists::Members,
+        Some("entitlements") => ceiling::TeamLists::Entitlements,
+        Some(other) => {
+            return Err(OkfError::InvalidPath {
+                path: "list".to_string(),
+                reason: format!("must be members or entitlements, not {other:?}"),
+            }
+            .into())
+        }
+    };
+    let page = ceiling::TeamPage {
+        members_after: query.members_after.as_deref().unwrap_or(""),
+        entitlements_after: query.entitlements_after.as_deref().unwrap_or(""),
+        limit: i64::from(query.limit.filter(|limit| *limit > 0).unwrap_or(100)),
+        lists,
+    };
+    let admin = principal
+        .require_in(app.directory(), Access::Admin, &catalog)
+        .await;
+    let unreached = is_unreached(&admin);
+    let owner = owner_session(&principal, admin)?;
+    let access = ceiling::team_access(app.pool(), &catalog, owner, &page)
+        .await
+        .map_err(|refusal| keep_not_found(refusal, unreached, &catalog))?;
+    let mut wanted = Wanted::default();
+    for member in &access.members {
+        wanted.user(&member.user);
+    }
+    for entitlement in &access.entitlements {
+        wanted.user(&entitlement.user);
+    }
+    let labels = app.labels().labels_for(&wanted).await?;
+    // A user created since the last load has no label yet: show the slug.
+    let label_of = |user: &str| labels.user(user).unwrap_or(user).to_string();
+    Ok(Json(TeamEntitlementsView {
+        name: catalog,
+        members: access
+            .members
+            .into_iter()
+            .map(|member| TeamMemberView {
+                label: label_of(&member.user),
+                user: member.user,
+                role: member.role,
+            })
+            .collect(),
+        entitlements: access
+            .entitlements
+            .into_iter()
+            .map(|entitlement| CatalogEntitlementView {
+                label: label_of(&entitlement.user),
+                user: entitlement.user,
+                access: entitlement.access.as_str(),
+            })
+            .collect(),
+        members_next: access.members_next,
+        entitlements_next: access.entitlements_next,
+    }))
+}
+
 /// `DELETE /catalogs/{catalog}[?force=true]`: deletes the catalog with its
-/// documents, history, changesets and grants (`admin` on the catalog), then
-/// polls so it is gone at once.
+/// documents, history, changesets and grants (`admin` on the catalog); it is
+/// gone at once.
 ///
 /// # Errors
 /// 404 for a catalog the key does not reach or that does not exist; 403
@@ -535,7 +898,9 @@ async fn delete_catalog(
     Query(query): Query<DeleteQuery>,
 ) -> Result<Json<CatalogDeleted>, AppError> {
     if !principal.provisioner {
-        principal.require(Access::Admin, &catalog)?;
+        principal
+            .require_in(app.directory(), Access::Admin, &catalog)
+            .await?;
     }
     catalog_rows::delete(app.pool(), &catalog, query.force, &actor, app.clock().now())
         .await
@@ -552,7 +917,8 @@ async fn delete_catalog(
         { key = %principal.key_id, actor = %principal.actor, },
         "catalog deleted"
     );
-    settle(&app).await;
+    // M16 bridge (spec Decision 14): remove in the release after 0.23.
+    app.bridge_to_m16();
     Ok(Json(CatalogDeleted { name: catalog }))
 }
 
@@ -726,18 +1092,21 @@ mod tests {
             )
             .await
             .parts();
-        crate::store::users::set_admin(
-            test.app.pool(),
-            "alice",
-            AdminChange {
-                on: true,
-                allow_last: false,
-            },
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .expect("make alice an admin");
+        crate::invalidate::testing::applied(&test.app, async {
+            crate::store::users::set_admin(
+                test.app.pool(),
+                "alice",
+                AdminChange {
+                    on: true,
+                    allow_last: false,
+                },
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .expect("make alice an admin");
+        })
+        .await;
         let mut admin = Browser::session_for(&test, "alice").await;
         let (write_admin, answer) = admin
             .send(
@@ -786,13 +1155,14 @@ mod tests {
                     admin: 200,
                     stranger: 404,
                 },
-                // `{}` is not gzip: an admin gets past the key check to 400.
+                // `{}` is not gzip: a writer or an admin gets past the key
+                // check to 400 (import needs `write`, issue #260).
                 Row {
                     method: "POST",
                     uri: "/api/v1/catalogs/main/import".into(),
                     body: Some(json!({})),
                     read: 403,
-                    write: 403,
+                    write: 400,
                     admin: 400,
                     stranger: 404,
                 },
@@ -881,7 +1251,8 @@ mod tests {
                 .cloned()
                 .unwrap_or_else(|| panic!("{name} in {body}"))
         };
-        let marked = json!({ "team": SUSPENDED_TEAM, "notice": SUSPENSION_NOTICE });
+        let marked =
+            json!({ "team": SUSPENDED_TEAM, "team_label": "Family", "notice": SUSPENSION_NOTICE });
 
         let (_, readers) = send(&test, "GET", "/api/v1/catalogs", Some(&keys.read), None).await;
         let (_, roots) = send(&test, "GET", "/api/v1/catalogs", Some(&root), None).await;
@@ -924,6 +1295,41 @@ mod tests {
         assert_eq!(created, StatusCode::CREATED, "{in_suspended}");
         assert_eq!(in_suspended["suspended"]["team"], SUSPENDED_TEAM);
         assert_eq!(in_active.get("suspended"), Some(&serde_json::Value::Null));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_stores_a_parsed_display_name_and_refuses_a_bad_one() {
+        // Arrange
+        let test = app().await;
+        let root = every_catalog_admin(&test).await;
+
+        // Act: one name the rule trims, one it refuses.
+        let (created, body) = send(
+            &test,
+            "POST",
+            "/api/v1/catalogs",
+            Some(&root),
+            Some(json!({ "name": "work", "display_name": "  Work notes ", "owner": TEST_TEAM })),
+        )
+        .await;
+        let (refused, error) = send(
+            &test,
+            "POST",
+            "/api/v1/catalogs",
+            Some(&root),
+            Some(json!({ "name": "bad", "display_name": "a\nb", "owner": TEST_TEAM })),
+        )
+        .await;
+
+        // Assert: stored trimmed; the refusal is a 422 that wrote nothing.
+        assert_eq!(created, StatusCode::CREATED, "{body}");
+        let row = catalog_rows::find(test.app.pool(), "work").await.unwrap();
+        assert_eq!(row.display_name, "Work notes");
+        assert_eq!(refused, StatusCode::UNPROCESSABLE_ENTITY, "{error}");
+        assert!(matches!(
+            catalog_rows::find(test.app.pool(), "bad").await,
+            Err(OkfError::CatalogNotSelected { .. })
+        ));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -983,11 +1389,16 @@ mod tests {
         assert_eq!(created["files"], 2);
         assert_eq!(created["concepts"], 0);
         assert!(created["last_change"].is_string(), "{created}");
-        let served = test.app.catalog("scratch").expect("loaded at once");
+        let served = test
+            .app
+            .catalog("scratch")
+            .await
+            .unwrap()
+            .expect("loaded at once");
         assert_eq!(served.current().files(), 2);
         assert!(served.current().snapshot().get("index.md").is_some());
         // Polled at once: loaded, and listed for a key that reaches it.
-        assert!(test.app.catalog("scratch").is_some());
+        assert!(test.app.catalog("scratch").await.unwrap().is_some());
         assert_eq!(names(&test, &root).await, ["main", "other", "scratch"]);
         assert_eq!(names(&test, &keys.read).await, ["main"]);
         assert_eq!(again, StatusCode::CONFLICT);
@@ -1029,7 +1440,9 @@ mod tests {
         assert_eq!(
             changed,
             json!({ "name": "main", "previous": "",
-                                    "description": "The main catalog" })
+                                    "description": "The main catalog",
+                                    "previous_display_name": "", "display_name": "",
+                                    "label": "The main catalog" })
         );
         assert_eq!(listed["catalogs"][0]["description"], "The main catalog");
     }
@@ -1055,7 +1468,7 @@ mod tests {
             None,
         )
         .await;
-        let still_there = test.app.catalog("main").is_some();
+        let still_there = test.app.catalog("main").await.unwrap().is_some();
         let (forced, deleted) = send(
             &test,
             "DELETE",
@@ -1076,8 +1489,61 @@ mod tests {
         assert!(still_there);
         assert_eq!(forced, StatusCode::OK);
         assert_eq!(deleted, json!({ "name": "main" }));
-        assert!(test.app.catalog("main").is_none());
+        // No listener runs here: the route applied its own write.
+        assert!(test.app.catalog("main").await.unwrap().is_none());
         assert!(names(&test, &keys.read).await.is_empty());
+    }
+
+    /// Read-your-writes on the replica that made a write: with no change
+    /// feed listener running (none does in a unit test), a REST write's own
+    /// invalidations reach this replica's directory before it answers, so
+    /// the very next read sees the cached row replaced.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rest_admin_write_is_seen_by_the_next_read_on_this_replica() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        // Cached before the write, as a catalog in use is.
+        let before = test.app.catalog_row("main").await.unwrap().expect("main");
+        assert_ne!(before.description, "Changed through the API.");
+
+        let (status, _) = send(
+            &test,
+            "PATCH",
+            "/api/v1/catalogs/main",
+            Some(&keys.admin),
+            Some(json!({ "description": "Changed through the API." })),
+        )
+        .await;
+        let after = test.app.catalog_row("main").await.unwrap().expect("main");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(after.description, "Changed through the API.");
+    }
+
+    /// As above, for labels: a REST rename reaches this replica's label
+    /// cache before the route answers, so the next labels read shows it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rest_rename_is_seen_by_the_next_labels_read_on_this_replica() {
+        let test = app().await;
+        let keys = keys(&test).await;
+        let mut wanted = crate::labels::directory::Wanted::default();
+        wanted.catalog("main");
+        // Cached before the write.
+        let before = test.app.labels().labels_for(&wanted).await.unwrap();
+        assert_ne!(before.catalog("main"), Some("Renamed Main"));
+
+        let (status, _) = send(
+            &test,
+            "PATCH",
+            "/api/v1/catalogs/main",
+            Some(&keys.admin),
+            Some(json!({ "display_name": "Renamed Main" })),
+        )
+        .await;
+        let after = test.app.labels().labels_for(&wanted).await.unwrap();
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(after.catalog("main"), Some("Renamed Main"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1122,7 +1588,8 @@ mod tests {
             "/api/v1/catalogs/main/import?replace=true&expect_generation={}",
             generation + 1
         );
-        let (status, _, body) = raw(&test, "POST", &stale, &keys.admin, archive()).await;
+        // A `write` key imports (issue #260); the admin key did above.
+        let (status, _, body) = raw(&test, "POST", &stale, &keys.write, archive()).await;
         let refused: serde_json::Value = serde_json::from_slice(&body).expect("an error");
         assert_eq!(status, StatusCode::CONFLICT);
         assert!(
@@ -1135,7 +1602,7 @@ mod tests {
 
         let current =
             format!("/api/v1/catalogs/main/import?replace=true&expect_generation={generation}");
-        let (status, _, body) = raw(&test, "POST", &current, &keys.admin, archive()).await;
+        let (status, _, body) = raw(&test, "POST", &current, &keys.write, archive()).await;
         let report: serde_json::Value = serde_json::from_slice(&body).expect("a report");
         assert_eq!(status, StatusCode::OK, "{report}");
         assert_eq!(report["updated"], json!(["index.md"]));

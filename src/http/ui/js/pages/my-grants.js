@@ -2,15 +2,19 @@
 // act as the signed-in person: those from consent signed in with the
 // account, capped at the ceiling, and those from an admin's sign-in code.
 // Each grant's drawer revokes it; the client is refused from its next
-// request. The ceiling the cap notes compare with is the one /me gives on
-// this load, never the sign-in snapshot.
+// request. Last active is when the grant's newest token was issued (each
+// sign-in and refresh issues one); the server revokes a grant idle for
+// oauth.idle_grant_revoke_after (30 days by default). The ceiling the cap
+// notes compare with is the one /me/grants gives on this load, for the
+// grants' catalogs only (never the whole ceiling, issue #736).
 import { h, pill, fact } from '../core/dom.js';
 import { api, enc } from '../core/api.js';
-import { store } from '../core/store.js';
+import { catalogLabel } from '../core/labels.js';
 import { toast } from '../core/toast.js';
 import { drawerTicket } from '../core/drawer.js';
+import { latest } from '../core/latest.js';
 import { when } from '../core/format.js';
-import { freshAccount, requireSession } from '../core/shell.js';
+import { requireSession } from '../core/shell.js';
 import { listTable } from '../components/list-table.js';
 import { confirmDialog } from '../components/confirm.js';
 import { levelsCell } from '../components/levels.js';
@@ -21,13 +25,19 @@ const ORIGIN = grant => grant.self_issued ? 'your consent' : "an admin's sign-in
 // A grant's client, as the page names it.
 const CLIENT = grant => grant.client_name ?? 'unknown client';
 
+// The account's ceiling on the catalogs of its live self-issued grants,
+// as the last GET /me/grants gave it ({catalog: level}).
+let grantsCeiling = {};
+
 const COLUMNS = [
     { key: 'client_name', label: 'Client', sort: grant => grant.client_name ?? '',
       render: grant => h('span', { class: 'key-name', dataset: { test: `my-grant-${grant.name}` } }, CLIENT(grant)) },
-    { key: 'catalogs', label: 'Catalogs', render: grant => levelsCell(grant, store.session?.ceiling) },
-    { key: 'default_catalog', label: 'Default', class: 'mono' },
+    { key: 'catalogs', label: 'Catalogs', render: grant => levelsCell(grant, grantsCeiling) },
+    { key: 'default_catalog', label: 'Default', render: row => (row.default_catalog ? catalogLabel(row.default_catalog) : '-') },
     { key: 'self_issued', label: 'From', render: ORIGIN },
     { key: 'created_at', label: 'Approved', sort: grant => grant.created_at, render: grant => when(grant.created_at) },
+    { key: 'last_activity', label: 'Last active', sort: grant => grant.last_activity ?? '',
+      render: grant => h('span', { dataset: { test: `my-grant-active-${grant.name}` } }, when(grant.last_activity)) },
 ];
 
 export async function render(main) {
@@ -42,14 +52,21 @@ export async function render(main) {
     table.setFilter(grant => !grant.revoked_at);
     main.append(table);
 
+    // Numbers the list's reads: a slower older read never draws over a
+    // newer one, and none draws once the page was left (core/latest.js).
+    const reads = latest(main);
     async function load() {
+        const current = reads();
         let grants;
+        let ceiling;
         try {
-            // freshAccount() makes the session's ceiling the one /me gives
+            // `ceiling` is the account's ceiling on these grants' catalogs
             // now, which the cap notes read.
-            [, { grants }] = await Promise.all([freshAccount(), api.get('/me/grants')]);
+            ({ grants, ceiling } = await api.get('/me/grants'));
         } catch { return; /* toasted */ }
-        if (main.isConnected) table.redraw(grants);
+        if (!current()) return;
+        grantsCeiling = ceiling ?? {};
+        table.redraw(grants);
     }
     await load();
 }
@@ -74,10 +91,11 @@ function showGrant(main, grant, reload) {
     ticket.open(CLIENT(grant), 'OAuth grant',
         h('dl', { class: 'facts' },
             fact('Id', h('code', {}, grant.id)),
-            fact('Catalogs', levelsCell(grant, store.session?.ceiling)),
-            fact('Default', grant.default_catalog ?? '-'),
+            fact('Catalogs', levelsCell(grant, grantsCeiling)),
+            fact('Default', grant.default_catalog ? catalogLabel(grant.default_catalog) : '-'),
             fact('From', ORIGIN(grant)),
             fact('Approved', when(grant.created_at)),
+            fact('Last active', when(grant.last_activity)),
             fact('State', pill('active', 'ok'))),
         h('div', { class: 'drawer-actions' }, revoke));
 }

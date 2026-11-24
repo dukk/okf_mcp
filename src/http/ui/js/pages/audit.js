@@ -30,13 +30,14 @@ const DENIED = 'The audit log is for an admin key that reaches every catalog, '
 // staff's entries), else the person and what they acted through (the key's
 // or grant's label, or "console session"), or the label alone (the CLI, the
 // system); the key or grant id is the tooltip, and the address shows when
-// the reader may see it.
+// the reader may see it. A person shows by their label (a user's own text,
+// drawn as text by `h`, never as HTML); the filters still match slugs.
 function actorCell(entry) {
     const actor = entry.actor;
     if (actor.kind === 'operator') return h('span', { class: 'muted' }, 'an operator');
-    const who = actor.person ?? actor.label;
+    const who = actor.person_label ?? actor.person ?? actor.label;
     const via = actor.person ? actor.label : null;
-    return h('span', { title: actor.credential ?? null }, who,
+    return h('span', { title: actor.credential ?? actor.person ?? null }, who,
         via ? [' ', h('span', { class: 'mono small muted' }, via)] : null,
         entry.ip ? [' ', h('span', { class: 'mono small muted' }, entry.ip)] : null);
 }
@@ -46,22 +47,28 @@ function actorCell(entry) {
 // For an admin, a user target links to that user's drawer on the Users page,
 // whose Recent sign-ins lists what the audit log does not.
 function targetCell(entry, admin) {
-    const { kind, name, person } = entry.target;
+    const { kind, name, person, person_label: personLabel, target_label: targetLabel } = entry.target;
     if (kind === 'user') {
         if (!person) return 'user an operator';
         const linked = admin && !person.startsWith('deleted user');
+        const shown = personLabel ?? person;
         return h('span', {}, 'user ',
-            linked ? h('a', { href: userHash(person) }, person) : person);
+            linked ? h('a', { href: userHash(person), title: person }, shown) : shown);
     }
-    const label = name ?? person ?? 'an operator';
-    return h('span', {}, `${kind} `, h('code', {}, label),
-        name && person ? [' ', h('span', { class: 'muted small' }, person)] : null);
+    const label = targetLabel ?? name ?? personLabel ?? person ?? 'an operator';
+    // A labelled target keeps its slug as the tooltip, since the filters match it.
+    return h('span', {}, `${kind} `, h('code', { title: targetLabel ? name : null }, label),
+        name && person ? [' ', h('span', { class: 'muted small' }, personLabel ?? person)] : null);
 }
 
-// The details: a count for an admin read, a word for a maintenance run, then
-// the stored JSON (already redacted for owners), or "-" when there is none.
+// Actions whose repeats collapse into one entry per hour, with the request
+// count beside it.
+const COUNTED = ['catalog.admin_read', 'user.looked_up', 'provisioner.refused'];
+
+// The details: a count for a collapsed entry, a word for a maintenance run,
+// then the stored JSON (already redacted for owners), or "-" when there is none.
 function detailsCell(entry) {
-    const summary = entry.action === 'catalog.admin_read' ? count(entry.requests ?? 0, 'request')
+    const summary = COUNTED.includes(entry.action) ? count(entry.requests ?? 0, 'request')
         : entry.action === 'catalog.maintenance_run' ? 'maintenance ran'
             : null;
     const details = entry.details && Object.keys(entry.details).length

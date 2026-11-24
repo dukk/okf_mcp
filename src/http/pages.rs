@@ -108,6 +108,37 @@ pub(crate) fn document(title: &str, body: &str, scripts: &[&str], brand: &Brand)
     )
 }
 
+/// A forwarding page's body: a heading, a zero-delay refresh to `target`
+/// and a link to it for a browser that does not follow refreshes.
+///
+/// A form's answer uses this in place of a 303 when the destination is (or
+/// may redirect to) another origin: browsers apply `form-action` to every
+/// redirect that follows a form POST, but a refresh is not a form
+/// submission, so neither it nor any redirect after it is subject to
+/// `form-action` (issue #435).
+///
+/// # Arguments
+/// * `heading` - the page's heading (escaped here).
+/// * `link_id` - the link's `id`, for tests and styling (trusted).
+/// * `target` - where to send the browser (escaped here).
+///
+/// # Returns
+/// The page body (no form).
+#[tracing::instrument(level = "debug", skip_all)]
+pub(crate) fn forward_body(heading: &str, link_id: &str, target: &str) -> String {
+    // A `<meta>` in the body is still processed: the HTML parser applies a
+    // refresh wherever the element appears. The URL is unquoted after
+    // `url=`; it starts with its scheme or a `/`, so it never begins with
+    // a quote.
+    format!(
+        r#"        <meta http-equiv="refresh" content="0;url={target}">
+        <h1>{heading}</h1>
+        <p class="muted">If nothing happens, <a id="{link_id}" href="{target}">continue</a>.</p>"#,
+        heading = escape(heading),
+        target = escape(target)
+    )
+}
+
 /// A page that runs no script: [`respond`] with a [`document`] that loads
 /// no script.
 ///
@@ -175,8 +206,8 @@ pub(crate) fn respond(status: StatusCode, document: String, csp: &str) -> Respon
         .into_response()
 }
 
-/// Where a sign-in may send the browser next: a console path or an OAuth
-/// authorize URL on this origin, or else [`DEFAULT_RETURN_TO`].
+/// Where a sign-in may send the browser next: a console path, a reader path
+/// or an OAuth authorize URL on this origin, or else [`DEFAULT_RETURN_TO`].
 ///
 /// # Arguments
 /// * `raw` - the `return_to` a page or form carried, if any.
@@ -192,21 +223,40 @@ pub(crate) fn safe_return_to(raw: Option<&str>) -> String {
     }
 }
 
-/// Whether `path` is a same-origin console or authorize path.
+/// Whether `path` is a same-origin console, reader or authorize path.
 #[tracing::instrument(level = "trace", skip_all)]
 fn is_safe_return_to(path: &str) -> bool {
     // Visible ASCII only: no spaces, no control characters (a header
     // injection) and no `\`, which some browsers read as `/` (so `/\host`
-    // would leave the origin). Both prefixes start with one `/` followed by
+    // would leave the origin). Every prefix starts with one `/` followed by
     // a path segment, so the result can never be `//host`.
     path.bytes()
         .all(|byte| byte.is_ascii_graphic() && byte != b'\\')
-        && (path.starts_with("/ui/") || path.starts_with("/oauth/authorize?"))
+        && (path.starts_with("/ui/")
+            || path.starts_with("/read/")
+            || path.starts_with("/oauth/authorize?"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_forward_body_refreshes_and_links_to_the_escaped_target() {
+        let html = forward_body(
+            "A <b> heading",
+            "the-link",
+            "https://d.example/x?a=1&b=\"2\"",
+        );
+
+        let escaped = "https://d.example/x?a=1&amp;b=&quot;2&quot;";
+        assert!(html.contains(&format!(
+            r#"<meta http-equiv="refresh" content="0;url={escaped}">"#
+        )));
+        assert!(html.contains(&format!(r#"id="the-link" href="{escaped}""#)));
+        assert!(html.contains("<h1>A &lt;b&gt; heading</h1>"));
+        assert!(!html.contains("<form"));
+    }
 
     #[test]
     fn escape_covers_the_five_html_specials() {
@@ -243,10 +293,14 @@ mod tests {
         let brand = Brand {
             product_name: "Acme <Notes>".to_string(),
             support_contact: Some("https://example.com/help?a=1&b=\"2\"".to_string()),
+            feedback_url: None,
+            docs_url: None,
         };
         let mail = Brand {
             product_name: "Acme Notes".to_string(),
             support_contact: Some("help@example.com".to_string()),
+            feedback_url: None,
+            docs_url: None,
         };
 
         let html = document("Sign in", "<p>x</p>", &[], &brand);
@@ -313,7 +367,13 @@ mod tests {
 
     #[test]
     fn return_to_keeps_same_origin_console_and_authorize_paths() {
-        for kept in ["/ui/", "/ui/#/keys", "/oauth/authorize?client_id=x&state=y"] {
+        for kept in [
+            "/ui/",
+            "/ui/#/keys",
+            "/oauth/authorize?client_id=x&state=y",
+            "/read/",
+            "/read/#/v/main/systems/alpha.md",
+        ] {
             assert_eq!(safe_return_to(Some(kept)), kept);
         }
     }
@@ -332,6 +392,10 @@ mod tests {
             Some("/oauth/authorize"),
             Some("/oauth/authorizex?y"),
             Some("/ui"),
+            Some("/read"),
+            Some("/readx/"),
+            Some("/read/\\evil"),
+            Some("/read/ x"),
         ] {
             assert_eq!(safe_return_to(refused), DEFAULT_RETURN_TO, "{refused:?}");
         }

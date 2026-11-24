@@ -14,11 +14,13 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor, PgPool};
 
 use crate::error::OkfError;
+use crate::keyed_lock::KeyedLocks;
 use crate::okf::analysis::lint::{lint, CommitTimes, LintReport};
 use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
+use crate::store::catalogs::CatalogRow;
+use crate::store::documents;
 use crate::store::documents::DocumentRow;
-use crate::store::{catalogs, documents};
 
 /// The catalog's current generation, or `None` if the row is gone.
 const GENERATION: &str = "SELECT generation FROM catalogs WHERE id = $1";
@@ -36,6 +38,9 @@ pub struct Loaded {
     workspace: MemWorkspace,
     // Each live path's current revision: a new changeset entry's base.
     revisions: HashMap<String, i32>,
+    // The stored files' total size in bytes: what the catalog cache weighs
+    // a snapshot by (M18 spec Decision 2).
+    stored_bytes: u64,
 }
 
 impl Loaded {
@@ -100,6 +105,19 @@ impl Loaded {
         self.last_change
     }
 
+    /// The total size of the stored files this was built from, in bytes:
+    /// the base of the catalog cache's weight estimate (M18 spec Decision 2).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    pub fn stored_bytes(&self) -> u64 {
+        self.stored_bytes
+    }
+
     /// The published files, as the snapshot was built from them.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
@@ -155,31 +173,19 @@ impl Loaded {
 pub struct CatalogState {
     id: i64,
     name: String,
-    // Not part of the snapshot: `catalog update` changes it without a
-    // publish, and the poll loop copies it in from the catalog row
-    // ([`CatalogState::set_description`]). `Arc<str>` is a shared, immutable
-    // string, so a reader takes a pointer copy, not a copy of the text.
-    description: RwLock<Arc<str>>,
-    // The owning team's name, outside the snapshot for the same reason
-    // (`catalogs::set_owner`, [`CatalogState::set_owner_team`]); `None` for a
-    // catalog from before migration 0009 not yet assigned.
-    owner_team: RwLock<Option<Arc<str>>>,
+    // The description and owner are not held here: they change without a
+    // publish, so readers take them from the catalog's directory row
+    // (`CatalogRow`, M18 spec Decision 6).
+    //
     // `RwLock<Arc<_>>`: the lock is held only to clone or replace the `Arc`
     // (a pointer copy plus a reference count), never while a snapshot is read
     // or built. It is `std`'s lock, not tokio's: it is never held across an
     // `.await`, so it never blocks an async thread for longer than that copy.
     current: RwLock<Arc<Loaded>>,
-    // Held for the length of one rebuild, so refreshes of this catalog build
-    // one at a time instead of each building the same snapshot. tokio's
-    // `Mutex`, unlike `std`'s, may be held across an `.await`: waiting for it
-    // suspends the task instead of blocking the thread.
-    rebuilding: tokio::sync::Mutex<()>,
-    // The in-process half of the publish lock (design "Publish"): one
-    // publish of this catalog at a time in this server, held through the
-    // snapshot refresh after commit, so the next publish checks against the
-    // new snapshot. The other half is the advisory lock in the publish
-    // transaction, which also serializes against a CLI import.
-    publishing: tokio::sync::Mutex<()>,
+    // No mutex lives here (spec M18 Decision 4): the rebuild lock and the
+    // in-process half of the publish lock are keyed by catalog id on `App`
+    // (`App::rebuild_locks`, `App::publish_lock`), so two states of one
+    // catalog (an entry evicted and loaded again) still share them.
 }
 
 impl CatalogState {
@@ -187,29 +193,24 @@ impl CatalogState {
     ///
     /// # Arguments
     /// * `pool` - the database.
-    /// * `name` - the catalog's name.
+    /// * `row` - the catalog's directory row; the load reads by its
+    ///   `catalogs.id`, so a catalog deleted and created again under the
+    ///   name since the row was read is not loaded in its place.
     ///
     /// # Returns
     /// The state, holding the snapshot of the catalog's live documents.
     ///
     /// # Errors
-    /// [`OkfError::CatalogNotSelected`] if there is no such catalog;
+    /// [`OkfError::CatalogNotSelected`] if that catalog no longer exists;
     /// [`OkfError::InvalidPath`] or another workspace error if the stored
     /// rows cannot form a workspace; [`OkfError::Database`].
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn load(pool: &PgPool, name: &str) -> Result<Self, OkfError> {
-        let catalog = catalogs::find(pool, name).await?;
-        let loaded = build(pool, catalog.id, &catalog.name).await?;
+    pub async fn load(pool: &PgPool, row: &CatalogRow) -> Result<Self, OkfError> {
+        let loaded = build(pool, row.id, &row.name).await?;
         Ok(Self {
-            id: catalog.id,
-            name: catalog.name,
-            description: RwLock::new(Arc::from(catalog.description)),
-            // `Option::map(Arc::from)` turns `Some(String)` into
-            // `Some(Arc<str>)`, leaving `None` alone.
-            owner_team: RwLock::new(catalog.owner_team.map(Arc::from)),
+            id: row.id,
+            name: row.name.clone(),
             current: RwLock::new(Arc::new(loaded)),
-            rebuilding: tokio::sync::Mutex::new(()),
-            publishing: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -237,65 +238,6 @@ impl CatalogState {
         &self.name
     }
 
-    /// The catalog's description (`catalog create` or `catalog update`
-    /// `--description`), as of the last load or poll.
-    ///
-    /// # Returns
-    /// A shared handle to the text (cheap to clone; derefs to `&str`).
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn description(&self) -> Arc<str> {
-        Arc::clone(&self.description.read().expect("description lock poisoned"))
-    }
-
-    /// Replaces the description held in memory, leaving the snapshot alone.
-    /// The poll loop calls it with each catalog row's description.
-    ///
-    /// # Arguments
-    /// * `description` - the catalog row's description.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn set_description(&self, description: &str) {
-        // The read lock first: on almost every pass nothing changed, and
-        // then no write lock (and no allocation) is taken.
-        if *self.description() == *description {
-            return;
-        }
-        *self.description.write().expect("description lock poisoned") = Arc::from(description);
-    }
-
-    /// The name of the team that owns the catalog, as of the last load or
-    /// poll.
-    ///
-    /// # Returns
-    /// A shared handle to the name (cheap to clone; derefs to `&str`), or
-    /// `None` for a catalog not yet assigned an owner.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn owner_team(&self) -> Option<Arc<str>> {
-        // `.clone()` on an `Option<Arc<str>>` copies the pointer and bumps
-        // the reference count; the name itself is not copied.
-        self.owner_team.read().expect("owner lock poisoned").clone()
-    }
-
-    /// Replaces the owner held in memory, leaving the snapshot alone. The
-    /// poll loop calls it with each catalog row's owner.
-    ///
-    /// # Arguments
-    /// * `owner_team` - the catalog row's owner.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn set_owner_team(&self, owner_team: Option<&str>) {
-        // As in `set_description`: compare under the read lock first, so an
-        // unchanged owner takes no write lock and allocates nothing.
-        if self.owner_team().as_deref() == owner_team {
-            return;
-        }
-        *self.owner_team.write().expect("owner lock poisoned") = owner_team.map(Arc::from);
-    }
-
     /// The current loaded state. Cheap: it clones an `Arc` (bumps a
     /// reference count), and the caller may keep it as long as it likes.
     #[tracing::instrument(level = "debug", skip_all)]
@@ -305,31 +247,20 @@ impl CatalogState {
         Arc::clone(&self.current.read().expect("catalog state lock poisoned"))
     }
 
-    /// The in-process publish lock (design "Publish"). `store::publish`
-    /// holds it for a whole publish, refresh included.
-    ///
-    /// # Returns
-    /// The mutex; lock it with `.lock().await`.
-    #[cfg_attr(
-        dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
-    )]
-    pub fn publish_lock(&self) -> &tokio::sync::Mutex<()> {
-        &self.publishing
-    }
-
     /// Rebuilds and swaps in the snapshot if the catalog changed since it was
     /// loaded.
     ///
     /// Concurrent refreshes of one catalog are safe and build at most once
     /// per change: a refresh that waited for another's rebuild returns `false`
-    /// if that rebuild already reached the generation it saw.
+    /// if that rebuild already reached the generation it saw. Rebuilds of one
+    /// catalog run one at a time under its key in `rebuilds`, which every
+    /// state of the catalog shares. The lock is taken before the build's
+    /// pooled connection, so a caller already holding a connection (a
+    /// publish) must not wait for it: see `refresh_locked`.
     ///
     /// # Arguments
     /// * `pool` - the database.
+    /// * `rebuilds` - the rebuild locks, by catalog id (`App::rebuild_locks`).
     ///
     /// # Returns
     /// Whether a new snapshot was swapped in.
@@ -338,17 +269,69 @@ impl CatalogState {
     /// [`OkfError::CatalogNotSelected`] if the catalog was deleted;
     /// [`OkfError::Database`]; a workspace error as for [`CatalogState::load`].
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn refresh(&self, pool: &PgPool) -> Result<bool, OkfError> {
+    pub async fn refresh(&self, pool: &PgPool, rebuilds: &KeyedLocks) -> Result<bool, OkfError> {
         let generation = self.generation_in(pool).await?;
-        self.refresh_to(generation, || build(pool, self.id, &self.name))
+        self.refresh_to(rebuilds, generation, || build(pool, self.id, &self.name))
             .await
     }
 
+    /// The current loaded state, refreshed first if it is older than a
+    /// changeset's entries: when any entry's base revision is newer than the
+    /// snapshot's revision of its path (or the snapshot lacks the path). An
+    /// entry's base is the revision it was made on, possibly on another
+    /// replica whose snapshot had already moved on, so a snapshot behind it
+    /// is simply out of date (issue #659). An entry with no base (a create)
+    /// never triggers a refresh.
+    ///
+    /// The refresh is [`CatalogState::refresh`]: a read of the generation,
+    /// and a rebuild only if it moved.
+    ///
+    /// # Arguments
+    /// * `pool` - the database.
+    /// * `rebuilds` - the rebuild locks, by catalog id (`App::rebuild_locks`).
+    /// * `bases` - each entry's normalized path and base revision.
+    ///
+    /// # Returns
+    /// The loaded state to diff or overlay against.
+    ///
+    /// # Errors
+    /// As [`CatalogState::refresh`].
+    // `impl IntoIterator<Item = ...>` takes any sequence of pairs (a `Vec`,
+    // or a lazy `map` over the entries) without collecting it first.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn current_covering<'a>(
+        &self,
+        pool: &PgPool,
+        rebuilds: &KeyedLocks,
+        bases: impl IntoIterator<Item = (&'a str, Option<i32>)>,
+    ) -> Result<Arc<Loaded>, OkfError> {
+        let loaded = self.current();
+        let behind = bases.into_iter().any(|(path, base)| match base {
+            // `is_none_or`: a path missing from the snapshot counts as
+            // behind too; the refresh then finds out whether it was deleted.
+            Some(base) => loaded.revision(path).is_none_or(|current| current < base),
+            None => false,
+        });
+        if !behind {
+            return Ok(loaded);
+        }
+        self.refresh(pool, rebuilds).await?;
+        Ok(self.current())
+    }
+
     /// [`CatalogState::refresh`] on the caller's connection, for a caller
-    /// that holds the catalog's advisory lock ([`catalogs::lock`]) in its
+    /// that holds the catalog's advisory lock ([`crate::store::catalogs::lock`]) in its
     /// transaction, so no import or publish can change the catalog while
     /// this reads it: a publish refreshing a stale snapshot needs no second
     /// pooled connection.
+    ///
+    /// It never takes the rebuild lock (issue #671). Its caller holds a
+    /// pooled connection, and a refresh that holds the rebuild lock waits for
+    /// a connection of its own (`build`), so waiting for the lock here could
+    /// stall both until the pool's acquire timeout. The caller's own write is
+    /// still visible when this returns: it builds the generation it read on
+    /// its connection and swaps it in unless a newer one is already there
+    /// ([`CatalogState::swap_if_newer`]).
     ///
     /// # Arguments
     /// * `conn` - the lock holder's transaction (`&mut tx`).
@@ -361,12 +344,36 @@ impl CatalogState {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn refresh_locked(&self, conn: &mut PgConnection) -> Result<bool, OkfError> {
         let generation = self.generation_in(&mut *conn).await?;
-        let id = self.id;
-        self.refresh_to(generation, || async move {
-            let rows = documents::published(&mut *conn, id).await?;
-            assemble(generation, rows).await
-        })
-        .await
+        if generation <= self.current().generation {
+            return Ok(false);
+        }
+        let rows = documents::published(&mut *conn, self.id).await?;
+        let loaded = assemble(generation, rows).await?;
+        Ok(self.swap_if_newer(loaded))
+    }
+
+    /// Swaps `loaded` in unless the current snapshot is already as new.
+    /// Generations only grow, so a snapshot never moves back, whichever
+    /// builder finishes first.
+    ///
+    /// # Returns
+    /// Whether `loaded` was swapped in.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    fn swap_if_newer(&self, loaded: Loaded) -> bool {
+        // A statement-long write lock with no `.await` inside: the `std`
+        // lock is never held across one.
+        let mut current = self.current.write().expect("catalog state lock poisoned");
+        if loaded.generation <= current.generation {
+            return false;
+        }
+        *current = Arc::new(loaded);
+        true
     }
 
     /// The catalog's generation in the database.
@@ -390,8 +397,13 @@ impl CatalogState {
     /// reached `generation` (before or after waiting for another rebuild).
     ///
     /// # Arguments
+    /// * `rebuilds` - the rebuild locks; this catalog's id is held for the
+    ///   rebuild.
     /// * `generation` - the database's generation, as just read.
-    /// * `load` - builds the snapshot; called at most once.
+    /// * `load` - builds the snapshot; called at most once. It may wait for
+    ///   a pooled connection while the lock is held, which is why a caller
+    ///   already holding a connection must not take the lock
+    ///   ([`CatalogState::refresh_locked`], issue #671).
     ///
     /// # Returns
     /// Whether a new snapshot was swapped in.
@@ -401,7 +413,12 @@ impl CatalogState {
     // `F: FnOnce() -> Fut` with `Fut: Future`: `load` is an async closure,
     // like passing a coroutine function in Python, called only if needed.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn refresh_to<F, Fut>(&self, generation: i64, load: F) -> Result<bool, OkfError>
+    async fn refresh_to<F, Fut>(
+        &self,
+        rebuilds: &KeyedLocks,
+        generation: i64,
+        load: F,
+    ) -> Result<bool, OkfError>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Loaded, OkfError>>,
@@ -411,19 +428,18 @@ impl CatalogState {
             return Ok(false);
         }
         // The guard (`_` prefix: kept only for its lifetime) releases the
-        // mutex when it goes out of scope at the end of the function.
-        let _rebuilding = self.rebuilding.lock().await;
+        // lock when it goes out of scope at the end of the function. Keyed
+        // by id, not held in `self`: another state of this catalog (an
+        // evicted entry still in use, and its reload) waits here too.
+        let _rebuilding = rebuilds.lock(self.id).await;
         // Another refresh may have swapped in this generation while we waited.
         if generation <= self.current().generation {
             return Ok(false);
         }
-        // Swaps happen only under `rebuilding`, so this build, which read a
-        // generation at least as new as `generation`, is newer than `current`.
+        // A publish's `refresh_locked` swaps without this lock, so a newer
+        // snapshot may land during the build: `swap_if_newer` keeps it.
         let loaded = load().await?;
-        // A statement-long write lock, taken after the last `.await`: the
-        // `std` lock is never held across one.
-        *self.current.write().expect("catalog state lock poisoned") = Arc::new(loaded);
-        Ok(true)
+        Ok(self.swap_if_newer(loaded))
     }
 }
 
@@ -471,6 +487,12 @@ async fn assemble(generation: i64, rows: Vec<DocumentRow>) -> Result<Loaded, Okf
         .iter()
         .map(|row| (row.path.clone(), row.revision))
         .collect();
+    // `usize` to `u64` never loses anything on the 64-bit targets this
+    // builds for; `try_from` says so without a silent cast.
+    let stored_bytes = rows
+        .iter()
+        .map(|row| u64::try_from(row.content.len()).unwrap_or(u64::MAX))
+        .fold(0_u64, u64::saturating_add);
     // `max()` over an empty iterator is `None`, so an empty catalog has no
     // last change.
     let last_change = rows.iter().map(|row| row.updated_at).max();
@@ -503,6 +525,7 @@ async fn assemble(generation: i64, rows: Vec<DocumentRow>) -> Result<Loaded, Okf
         last_change,
         workspace,
         revisions,
+        stored_bytes,
     })
 }
 
@@ -529,6 +552,14 @@ mod tests {
             .collect()
     }
 
+    /// The directory row of catalog `name`, as the catalog cache passes it.
+    async fn row(pool: &PgPool, name: &str) -> CatalogRow {
+        catalogs::row_by_name(pool, name)
+            .await
+            .unwrap()
+            .expect("the catalog exists")
+    }
+
     async fn import_into(pool: &PgPool, entries: &[(&str, &[u8])], replace: bool) {
         let options = ImportOptions {
             replace,
@@ -542,6 +573,138 @@ mod tests {
         import(pool, "pg", files(entries), &options).await.unwrap();
     }
 
+    /// A refresh and a publish's refresh (`refresh_locked`) racing on a full
+    /// pool must both finish at once (issue #671). The publish holds one
+    /// connection, the test holds the other, and the refresh (a request's or
+    /// an announcement's) holds the rebuild lock and is queued for a
+    /// connection. The publish's refresh used to wait for that lock, whose
+    /// holder waited for the publish's connection, until the acquire timeout.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_refresh_waiting_for_a_connection_does_not_hold_up_a_publish_refresh() {
+        use sqlx::postgres::PgPoolOptions;
+        use std::time::Duration;
+
+        // Arrange: a state one generation behind, and a pool of two whose
+        // acquire timeout is long next to the deadline below but short
+        // enough that a regression fails the test quickly.
+        let db = test_db().await;
+        catalogs::create(
+            &db.pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let state = Arc::new(
+            CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+                .await
+                .unwrap(),
+        );
+        import_into(&db.pool, &[("a.md", b"# A\n")], false).await;
+        let behind = state.current().generation();
+        let small = PgPoolOptions::new()
+            .max_connections(2)
+            .acquire_timeout(Duration::from_secs(8))
+            .connect_with((*db.pool.connect_options()).clone())
+            .await
+            .unwrap();
+        let rebuilds = Arc::new(KeyedLocks::new());
+        let mut publish_conn = small.acquire().await.unwrap();
+        let other = small.acquire().await.unwrap();
+        let generation = behind + 1;
+
+        // Act: the refresh takes the rebuild lock (`refresh_to`, called with
+        // its own load step so the test can signal), tells the test, and only
+        // then asks the pool for a connection, which has none free. The
+        // publish refreshes on the connection it holds once the lock is held.
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let refresher = {
+            let (state, small, rebuilds) =
+                (Arc::clone(&state), small.clone(), Arc::clone(&rebuilds));
+            tokio::spawn(async move {
+                let (id, name) = (state.id(), state.name().to_string());
+                state
+                    .refresh_to(&rebuilds, generation, || async {
+                        // Runs under the lock, before the build's connection.
+                        locked_tx.send(()).expect("the test waits for the signal");
+                        build(&small, id, &name).await
+                    })
+                    .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(4), locked_rx)
+            .await
+            .expect("the refresh takes the rebuild lock")
+            .expect("the refresh signals");
+        assert!(
+            !refresher.is_finished(),
+            "the refresh waits for a connection of the exhausted pool"
+        );
+        let published = tokio::time::timeout(
+            Duration::from_secs(4),
+            state.refresh_locked(&mut publish_conn),
+        )
+        .await;
+        drop(publish_conn);
+        drop(other);
+        let refreshed = tokio::time::timeout(Duration::from_secs(4), refresher).await;
+
+        // Assert: the publish did not wait out the acquire timeout, and the
+        // queued refresh finished once a connection came free.
+        let swapped = published
+            .expect("the publish's refresh is not held up by the queued refresh")
+            .unwrap();
+        assert!(
+            swapped,
+            "the publish's refresh swapped in the new generation"
+        );
+        refreshed
+            .expect("the queued refresh finishes once a connection is free")
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.current().generation(), generation);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_swap_never_moves_the_snapshot_back() {
+        // Arrange: a state at generation 2, and a build of generation 1.
+        let db = test_db().await;
+        catalogs::create(
+            &db.pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
+        let older = build(&db.pool, state.id(), "pg").await.unwrap();
+        import_into(&db.pool, &[("a.md", b"# A\n")], false).await;
+        let mut conn = db.pool.acquire().await.unwrap();
+        assert!(state.refresh_locked(&mut conn).await.unwrap());
+        let newer = state.current().generation();
+
+        // Act: an older build finishes after the newer one was swapped in.
+        let swapped = state.swap_if_newer(older);
+
+        // Assert
+        assert!(!swapped);
+        assert_eq!(state.current().generation(), newer);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn load_builds_the_snapshot_of_the_live_documents() {
         let db = test_db().await;
@@ -549,6 +712,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -564,7 +728,9 @@ mod tests {
         ];
         import_into(&db.pool, entries, false).await;
 
-        let state = CatalogState::load(&db.pool, "pg").await.unwrap();
+        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
 
         let loaded = state.current();
         assert_eq!((state.name(), loaded.generation()), ("pg", 1));
@@ -574,13 +740,15 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn load_records_the_description_file_count_and_last_change() {
+    async fn load_records_the_file_count_size_and_last_change() {
         let db = test_db().await;
+        let rebuilds = KeyedLocks::new();
         let created = Utc.with_ymd_and_hms(2026, 11, 1, 12, 0, 0).unwrap();
         catalogs::create(
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "pgrace's world",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -589,9 +757,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let empty = CatalogState::load(&db.pool, "pg").await.unwrap();
-        assert_eq!(&*empty.description(), "pgrace's world");
-        assert_eq!(empty.owner_team().as_deref(), Some(crate::db::TEST_TEAM));
+        let empty = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
         // A new catalog holds its starter files (index.md and log.md).
         assert_eq!(empty.current().files(), crate::okf::ops::STARTER_FILE_COUNT);
         assert_eq!(empty.current().last_change(), Some(created));
@@ -608,10 +776,12 @@ mod tests {
         let entries = files(&[("a.md", b"# A\n"), ("b.txt", b"b\n")]);
         import(&db.pool, "pg", entries, &options).await.unwrap();
 
-        empty.refresh(&db.pool).await.unwrap();
+        empty.refresh(&db.pool, &rebuilds).await.unwrap();
 
         let loaded = empty.current();
         assert_eq!(loaded.files(), 2);
+        // `# A\n` and `b\n`: the stored bytes the cache weighs by.
+        assert_eq!(loaded.stored_bytes(), 6);
         assert_eq!(loaded.last_change(), Some(imported));
     }
 
@@ -622,6 +792,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -636,7 +807,10 @@ mod tests {
         import_into(&db.pool, first, false).await;
         import_into(&db.pool, second, true).await;
 
-        let loaded = CatalogState::load(&db.pool, "pg").await.unwrap().current();
+        let loaded = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap()
+            .current();
 
         assert_eq!(loaded.workspace().read_to_string("a.md").unwrap(), "# A2\n");
         assert!(loaded.workspace().is_file("logo.png"));
@@ -646,10 +820,33 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn load_refuses_an_unknown_catalog() {
+    async fn load_refuses_a_row_whose_catalog_was_deleted() {
         let db = test_db().await;
+        catalogs::create(
+            &db.pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let stale = row(&db.pool, "pg").await;
+        catalogs::delete(
+            &db.pool,
+            "pg",
+            false,
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
 
-        let result = CatalogState::load(&db.pool, "nope").await;
+        let result = CatalogState::load(&db.pool, &stale).await;
 
         assert!(matches!(result, Err(OkfError::CatalogNotSelected { .. })));
     }
@@ -657,10 +854,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn refresh_swaps_in_a_new_snapshot_only_when_the_catalog_changed() {
         let db = test_db().await;
+        let rebuilds = KeyedLocks::new();
         catalogs::create(
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -670,31 +869,35 @@ mod tests {
         .await
         .unwrap();
         import_into(&db.pool, &[("a.md", b"# Old\n")], false).await;
-        let state = CatalogState::load(&db.pool, "pg").await.unwrap();
+        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
         let before = state.current();
 
         assert!(
-            !state.refresh(&db.pool).await.unwrap(),
+            !state.refresh(&db.pool, &rebuilds).await.unwrap(),
             "nothing changed yet"
         );
         import_into(&db.pool, &[("a.md", b"# New\n")], true).await;
-        assert!(state.refresh(&db.pool).await.unwrap());
+        assert!(state.refresh(&db.pool, &rebuilds).await.unwrap());
 
         let after = state.current();
         assert_eq!(after.generation(), 2);
         assert_eq!(after.snapshot().get("a.md").unwrap().text(), "# New\n");
         // A reader that took the old snapshot still sees it, whole.
         assert_eq!(before.snapshot().get("a.md").unwrap().text(), "# Old\n");
-        assert!(!state.refresh(&db.pool).await.unwrap());
+        assert!(!state.refresh(&db.pool, &rebuilds).await.unwrap());
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_refreshes_build_and_swap_once() {
         let db = test_db().await;
+        let rebuilds = KeyedLocks::new();
         catalogs::create(
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -703,11 +906,16 @@ mod tests {
         )
         .await
         .unwrap();
-        let state = CatalogState::load(&db.pool, "pg").await.unwrap();
+        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
         import_into(&db.pool, &[("a.md", b"# New\n")], false).await;
 
         // `tokio::join!` runs both futures at once on this task.
-        let (first, second) = tokio::join!(state.refresh(&db.pool), state.refresh(&db.pool));
+        let (first, second) = tokio::join!(
+            state.refresh(&db.pool, &rebuilds),
+            state.refresh(&db.pool, &rebuilds)
+        );
 
         assert_eq!(
             [first.unwrap(), second.unwrap()]
@@ -719,13 +927,20 @@ mod tests {
         assert_eq!(state.current().generation(), 1);
     }
 
+    /// Two states of one catalog (an evicted entry still in use and its
+    /// reload, M18 Decision 4) rebuild under one lock: a refresh of either
+    /// waits while the catalog's rebuild lock is held.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_deleted_catalog_cannot_be_refreshed() {
+    async fn refreshes_of_two_states_share_the_rebuild_lock() {
+        use std::time::Duration;
+
         let db = test_db().await;
-        let catalog = catalogs::create(
+        let rebuilds = Arc::new(KeyedLocks::new());
+        catalogs::create(
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -734,7 +949,58 @@ mod tests {
         )
         .await
         .unwrap();
-        let state = CatalogState::load(&db.pool, "pg").await.unwrap();
+        let first = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
+        let second = Arc::new(
+            CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+                .await
+                .unwrap(),
+        );
+        import_into(&db.pool, &[("a.md", b"# New\n")], false).await;
+        // Held as `first`'s rebuild would hold it.
+        let held = rebuilds.lock(first.id()).await;
+
+        let refreshing = {
+            let (pool, rebuilds, second) =
+                (db.pool.clone(), Arc::clone(&rebuilds), Arc::clone(&second));
+            tokio::spawn(async move { second.refresh(&pool, &rebuilds).await })
+        };
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let waited = !refreshing.is_finished();
+        drop(held);
+        let swapped = tokio::time::timeout(Duration::from_secs(30), refreshing)
+            .await
+            .expect("the refresh finishes once the lock is released")
+            .unwrap()
+            .unwrap();
+
+        assert!(waited, "the second state's refresh waited for the lock");
+        assert!(swapped);
+        assert_eq!(second.current().generation(), 1);
+        assert_eq!(first.current().generation(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_deleted_catalog_cannot_be_refreshed() {
+        let db = test_db().await;
+        let rebuilds = KeyedLocks::new();
+        let catalog = catalogs::create(
+            &db.pool,
+            &crate::store::catalogs::NewCatalog {
+                name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
+                description: "",
+                owner_team: crate::db::TEST_TEAM,
+            },
+            &crate::store::audit::AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
         catalogs::delete(
             &db.pool,
             "pg",
@@ -745,7 +1011,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result = state.refresh(&db.pool).await;
+        let result = state.refresh(&db.pool, &rebuilds).await;
 
         assert_eq!(state.id(), catalog.id);
         assert!(matches!(result, Err(OkfError::CatalogNotSelected { .. })));
@@ -758,6 +1024,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -792,6 +1059,7 @@ mod tests {
             &db.pool,
             &crate::store::catalogs::NewCatalog {
                 name: "pg",
+                display_name: &crate::labels::DisplayName::default(),
                 description: "",
                 owner_team: crate::db::TEST_TEAM,
             },
@@ -817,7 +1085,9 @@ mod tests {
             ("earlier.md", earlier.as_bytes()),
         ]);
         import(&db.pool, "pg", entries, &options).await.unwrap();
-        let state = CatalogState::load(&db.pool, "pg").await.unwrap();
+        let state = CatalogState::load(&db.pool, &row(&db.pool, "pg").await)
+            .await
+            .unwrap();
 
         let report = state.current().lint(imported + TimeDelta::minutes(30));
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Stub `gh` for tools/agentic/tests. Answers from files in $GH_FIXTURES and logs
 # every call to $GH_FIXTURES/calls.log.
-#   pr view               pr-view.json (fails if pr-view.fail exists)
+#   pr view               pr-view.json (fails if pr-view.fail exists, or if
+#                         merge-state.fail exists and mergeStateStatus is asked)
 #   pr merge              fails if --match-head-commit differs from merge-head
 #                         (the head at merge time; default: pr-view.json's);
 #                         on success writes the merged SHA to merged
@@ -43,6 +44,9 @@ emit() {
 case "$1 ${2:-}" in
     "pr view")
         [ -e "$fixtures/pr-view.fail" ] && { echo "stub gh: pr view failed" >&2; exit 1; }
+        if [ -e "$fixtures/merge-state.fail" ] && [[ " ${args[*]} " == *mergeStateStatus* ]]; then
+            echo "stub gh: merge state lookup failed" >&2; exit 1
+        fi
         emit "$fixtures/pr-view.json"
         ;;
     "pr merge")
