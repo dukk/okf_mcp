@@ -34,14 +34,14 @@ async fn admin_reads(test: &TestApp) -> Vec<(Vec<i64>, serde_json::Value, String
         "SELECT teams, details, target_name FROM audit_entries \
          WHERE action = 'catalog.admin_read' ORDER BY id",
     )
-    .fetch_all(test.app.pool())
+    .fetch_all(test.app.accounts().executor())
     .await
     .unwrap()
 }
 
 /// A team's `audit_teams` id.
 async fn audit_team(test: &TestApp, team: &str) -> i64 {
-    let mut conn = test.app.pool().acquire().await.unwrap();
+    let mut conn = test.app.accounts().executor().acquire().await.unwrap();
     audit::team_ref(&mut conn, team).await.unwrap()
 }
 
@@ -49,7 +49,7 @@ async fn audit_team(test: &TestApp, team: &str) -> i64 {
 async fn catalog_id(test: &TestApp, name: &str) -> i64 {
     sqlx::query_scalar("SELECT id FROM catalogs WHERE name = $1")
         .bind(name)
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .unwrap()
 }
@@ -61,9 +61,14 @@ async fn family(test: &TestApp) {
         display_name: &crate::labels::DisplayName::default(),
         owner: TEST_USER,
     };
-    teams::create(test.app.pool(), &team, &AuditActor::cli(), Utc::now())
-        .await
-        .unwrap();
+    teams::create(
+        test.app.accounts().executor(),
+        &team,
+        &AuditActor::cli(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -102,7 +107,8 @@ async fn an_operator_read_is_bucketed_and_a_members_read_is_not() {
     .await;
     settle_access(&test).await;
 
-    let entries = audit::testing::entries(test.app.pool(), "catalog.admin_read").await;
+    let entries =
+        audit::testing::entries(test.app.accounts().executor(), "catalog.admin_read").await;
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(entries[0].requests, Some(2), "one request, one count");
     assert_eq!(entries[0].target.as_deref(), Some("main"));
@@ -120,7 +126,7 @@ async fn a_write_delayed_past_the_users_deletion_stores_nothing_that_identifies_
     let hold = held_read(&test, &staff).await;
 
     crate::store::users::delete(
-        test.app.pool(),
+        test.app.accounts().executor(),
         "staff",
         crate::store::users::DeleteOptions::OPERATOR,
         &AuditActor::cli(),
@@ -139,7 +145,7 @@ async fn a_write_delayed_past_the_users_deletion_stores_nothing_that_identifies_
              || coalesce((SELECT string_agg(row_to_json(p)::text, '') FROM audit_people p), '') \
              || coalesce((SELECT string_agg(bucket, '') FROM audit_access_counts), '')",
     )
-    .fetch_one(test.app.pool())
+    .fetch_one(test.app.accounts().executor())
     .await
     .unwrap();
     assert_eq!(
@@ -162,7 +168,7 @@ async fn a_read_admitted_before_a_transfer_stays_with_the_old_owner() {
     let hold = held_read(&test, &staff).await;
 
     catalogs::set_owner(
-        test.app.pool(),
+        test.app.accounts().executor(),
         "main",
         "family",
         &AuditActor::cli(),
@@ -188,8 +194,8 @@ async fn a_read_of_a_catalog_deleted_or_replaced_before_it_is_written_keeps_its_
     let hold = held_read(&test, &staff).await;
 
     // Deleted, then a new `main` for another team, before the write runs.
-    catalogs::delete(
-        test.app.pool(),
+    catalogs::delete_settled(
+        test.app.accounts().executor(),
         "main",
         true,
         &AuditActor::cli(),
@@ -204,7 +210,7 @@ async fn a_read_of_a_catalog_deleted_or_replaced_before_it_is_written_keeps_its_
         owner_team: "family",
     };
     catalogs::create(
-        test.app.pool(),
+        test.app.accounts().executor(),
         &replacement,
         &AuditActor::cli(),
         Utc::now(),
@@ -267,7 +273,7 @@ async fn every_export_is_recorded_whoever_asks() {
     .await;
 
     assert_eq!((member, operator), (StatusCode::OK, StatusCode::OK));
-    let entries = audit::testing::entries(test.app.pool(), "catalog.exported").await;
+    let entries = audit::testing::entries(test.app.accounts().executor(), "catalog.exported").await;
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].source, "api");
     assert_eq!(entries[0].actor_person.as_deref(), Some(TEST_USER));
@@ -279,7 +285,7 @@ async fn every_export_is_recorded_whoever_asks() {
     // An export is its own entry, not an admin read.
     settle_access(&test).await;
     assert!(
-        audit::testing::entries(test.app.pool(), "catalog.admin_read")
+        audit::testing::entries(test.app.accounts().executor(), "catalog.admin_read")
             .await
             .is_empty()
     );
@@ -298,7 +304,7 @@ async fn tell_directory(test: &TestApp, catalog: &str) {
 /// Deletes `main` and creates it again for a new team `acme` of a new user
 /// `bob` (so the test user is not a member of the replacement).
 async fn replace_main_for_acme(test: &TestApp) {
-    let pool = test.app.pool();
+    let pool = test.app.accounts().executor();
     let cli = AuditActor::cli();
     let bob = crate::store::users::NewUser {
         name: "bob",
@@ -313,7 +319,7 @@ async fn replace_main_for_acme(test: &TestApp) {
         owner: "bob",
     };
     teams::create(pool, &acme, &cli, Utc::now()).await.unwrap();
-    catalogs::delete(pool, "main", true, &cli, Utc::now())
+    catalogs::delete_settled(pool, "main", true, &cli, Utc::now())
         .await
         .unwrap();
     let main = NewCatalog {
@@ -404,7 +410,7 @@ async fn an_export_whose_entry_cannot_be_written_answers_500_without_an_archive(
     let test = app().await;
     let scoped = keys(&test).await;
     crate::http::api::testing::fail_on(
-        test.app.pool(),
+        test.app.accounts().executor(),
         "BEFORE INSERT ON audit_entries FOR EACH ROW",
     )
     .await;
@@ -418,7 +424,7 @@ async fn an_export_whose_entry_cannot_be_written_answers_500_without_an_archive(
     )
     .await;
 
-    crate::http::api::testing::allow(test.app.pool(), "audit_entries").await;
+    crate::http::api::testing::allow(test.app.accounts().executor(), "audit_entries").await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body["error"], "Database", "an error body, not an archive");
 }
@@ -470,7 +476,8 @@ async fn a_read_that_answers_from_the_first_catalog_records_only_that_one() {
 
     assert_eq!(found.catalog, "main");
     assert!(concept.is_ok(), "{concept:?}");
-    let entries = audit::testing::entries(test.app.pool(), "catalog.admin_read").await;
+    let entries =
+        audit::testing::entries(test.app.accounts().executor(), "catalog.admin_read").await;
     assert_eq!(
         entries.len(),
         1,
@@ -490,16 +497,22 @@ async fn a_search_refused_after_one_catalog_passes_queues_no_read() {
     let ctx = on_main_and_other(&test, &staff).await;
     ctx.state("other").await.unwrap();
     let cli = AuditActor::cli();
-    catalogs::delete(test.app.pool(), "other", true, &cli, Utc::now())
-        .await
-        .unwrap();
+    catalogs::delete_settled(
+        test.app.accounts().executor(),
+        "other",
+        true,
+        &cli,
+        Utc::now(),
+    )
+    .await
+    .unwrap();
     let other = NewCatalog {
         name: "other",
         display_name: &crate::labels::DisplayName::default(),
         description: "",
         owner_team: TEST_TEAM,
     };
-    catalogs::create(test.app.pool(), &other, &cli, Utc::now())
+    catalogs::create(test.app.accounts().executor(), &other, &cli, Utc::now())
         .await
         .unwrap();
     tell_directory(&test, "other").await;
@@ -597,7 +610,7 @@ async fn make_staff_admin(test: &TestApp) {
         allow_last: false,
     };
     crate::store::users::set_admin(
-        test.app.pool(),
+        test.app.accounts().executor(),
         "staff",
         change,
         &AuditActor::cli(),
@@ -631,7 +644,7 @@ async fn create_unlock(test: &TestApp, catalog: &str) -> i64 {
         brand_defaults: crate::store::settings::Brand::default(),
     };
     let created = unlocks::create(
-        test.app.pool(),
+        test.app.accounts().executor(),
         &new,
         &policy,
         &AuditActor::cli(),
@@ -644,7 +657,7 @@ async fn create_unlock(test: &TestApp, catalog: &str) -> i64 {
 
 /// An unlock's (reads, writes, exports).
 async fn tallies(test: &TestApp, id: i64) -> (i64, i64, i64) {
-    let found = crate::store::unlocks::find(test.app.pool(), id)
+    let found = crate::store::unlocks::find(test.app.accounts().executor(), id)
         .await
         .unwrap();
     (found.reads, found.writes, found.exports)
@@ -715,7 +728,8 @@ async fn with_require_unlock_staff_need_an_unlock_for_reads_writes_and_exports()
     let (member_export, _) = send(&test, "GET", export, Some(&scoped.read), None).await;
     let (listing, _) = send(&test, "GET", "/api/v1/catalogs", Some(&staff), None).await;
     let (users, _) = send(&test, "GET", "/api/v1/users", Some(&staff), None).await;
-    let exported_before = audit::testing::entries(test.app.pool(), "catalog.exported").await;
+    let exported_before =
+        audit::testing::entries(test.app.accounts().executor(), "catalog.exported").await;
 
     assert_eq!(locked, StatusCode::FORBIDDEN);
     assert_eq!(refused["error"], "UnlockRequired");
@@ -777,9 +791,14 @@ async fn with_require_unlock_staff_need_an_unlock_for_reads_writes_and_exports()
 
     // Ended, the unlock lets nothing in, an open changeset included.
     crate::invalidate::testing::applied(&test.app, async {
-        crate::store::unlocks::end(test.app.pool(), id, &AuditActor::cli(), Utc::now())
-            .await
-            .unwrap();
+        crate::store::unlocks::end(
+            test.app.accounts().executor(),
+            id,
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
     })
     .await;
     let (ended, _) = send(&test, "GET", tree, Some(&staff), None).await;
@@ -876,7 +895,7 @@ async fn the_maintenance_runner_reads_without_an_unlock_until_the_catalog_opts_o
     let (writer_reads, _) = send(&test, "GET", tree, Some(&writing_runner), None).await;
     let writer_opens = open_main(&staff_context(&test, &writing_runner).await).await;
     crate::invalidate::testing::applied(&test.app, async {
-        let mut tx = test.app.pool().begin().await.unwrap();
+        let mut tx = test.app.accounts().executor().begin().await.unwrap();
         let id: i64 = sqlx::query_scalar(
             "UPDATE catalogs SET maintenance = false WHERE name = 'main' RETURNING id",
         )
@@ -990,9 +1009,14 @@ async fn a_changeset_list_leaves_out_a_catalog_whose_unlock_ended() {
             .unwrap();
     }
     crate::invalidate::testing::applied(&test.app, async {
-        crate::store::unlocks::end(test.app.pool(), other, &AuditActor::cli(), Utc::now())
-            .await
-            .unwrap();
+        crate::store::unlocks::end(
+            test.app.accounts().executor(),
+            other,
+            &AuditActor::cli(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
     })
     .await;
     let listed = async |catalog: Option<&str>| {
@@ -1043,17 +1067,18 @@ async fn stale_unlock_of_a_replaced_main(test: &TestApp) -> (String, i64, i64) {
 
 /// The replacement's (generation, live document paths and contents).
 async fn replacement_contents(test: &TestApp, id: i64) -> (i64, Vec<(String, Vec<u8>)>) {
-    let generation = sqlx::query_scalar("SELECT generation FROM catalogs WHERE id = $1")
-        .bind(id)
-        .fetch_one(test.app.pool())
-        .await
-        .unwrap();
+    let generation =
+        sqlx::query_scalar("SELECT generation FROM catalog.catalog_state WHERE id = $1")
+            .bind(id)
+            .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
+            .await
+            .unwrap();
     let documents = sqlx::query_as(
-        "SELECT path, content FROM documents \
+        "SELECT path, content FROM catalog.documents \
          WHERE catalog_id = $1 AND deleted_at IS NULL ORDER BY path",
     )
     .bind(id)
-    .fetch_all(test.app.pool())
+    .fetch_all(&crate::db::store_pool(test.app.accounts().executor()))
     .await
     .unwrap();
     (generation, documents)
@@ -1079,7 +1104,8 @@ async fn a_stale_unlock_exports_nothing_of_the_catalog_that_replaced_its_own() {
 
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["error"], "Busy");
-    let exported = audit::testing::entries(test.app.pool(), "catalog.exported").await;
+    let exported =
+        audit::testing::entries(test.app.accounts().executor(), "catalog.exported").await;
     assert!(
         exported.is_empty(),
         "nothing of the replacement left: {exported:?}"
@@ -1113,7 +1139,7 @@ async fn a_stale_unlock_cannot_import_over_the_catalog_that_replaced_its_own() {
 async fn tallies_or_gone(test: &TestApp, id: i64) -> Option<(i64, i64, i64)> {
     sqlx::query_as("SELECT reads, writes, exports FROM unlocks WHERE id = $1")
         .bind(id)
-        .fetch_optional(test.app.pool())
+        .fetch_optional(test.app.accounts().executor())
         .await
         .unwrap()
 }
@@ -1139,7 +1165,7 @@ async fn old_unlock_against_a_new_map(
     import_private_index(test).await;
     let replacement = catalog_id(test, "main").await;
     crate::mcp::testing::store_key(test, "acme-writer").await;
-    let mut conn = test.app.pool().acquire().await.unwrap();
+    let mut conn = test.app.main_db().await.executor().acquire().await.unwrap();
     let opened = crate::store::changesets::open(
         &mut conn,
         replacement,
@@ -1169,10 +1195,10 @@ async fn an_old_unlocked_principal_opens_no_changeset_in_the_replacement() {
 
     let refused = open_main(&ctx).await;
     let opened: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM changesets WHERE catalog_id = $1 AND key_id <> 'acme-writer'",
+        "SELECT count(*) FROM catalog.changesets WHERE catalog_id = $1 AND key_id <> 'acme-writer'",
     )
     .bind(replacement)
-    .fetch_one(test.app.pool())
+    .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
     .await
     .unwrap();
 
@@ -1281,7 +1307,7 @@ async fn import_private_index(test: &TestApp) {
         now: Utc::now(),
     };
     let files = crate::archive::read_tarball(archive.as_slice(), 1 << 20).unwrap();
-    crate::store::import::import(test.app.pool(), "main", files, &options)
+    crate::store::import::import(&test.app.main_db().await, "main", files, &options)
         .await
         .unwrap();
 }

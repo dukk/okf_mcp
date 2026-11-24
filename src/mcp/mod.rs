@@ -20,12 +20,16 @@ pub(crate) mod history;
 mod labels_tests;
 pub(crate) mod maintenance;
 #[cfg(test)]
+mod overlay_stores_tests;
+#[cfg(test)]
 mod reference;
 pub(crate) mod reports;
 mod restructure;
 pub(crate) mod search;
 #[cfg(test)]
 pub(crate) mod testing;
+#[cfg(test)]
+mod unavailable_tests;
 pub(crate) mod whoami;
 pub(crate) mod writes;
 
@@ -575,7 +579,7 @@ mod tests {
         // A Settings override retitles the next session; the name stays.
         crate::invalidate::testing::applied(&test.app, async {
             settings::set(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 SettingKey::ProductName,
                 "Other",
                 &AuditActor::cli(),

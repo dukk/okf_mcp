@@ -1,5 +1,7 @@
 //! Catalog rows, the per-catalog lock, and the administrative generation.
 
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 // `PgExecutor` is "anything a query can run on": a pool, a connection or a
 // transaction. Functions generic over it work inside or outside a transaction.
@@ -14,8 +16,12 @@ use crate::okf::snapshot::Snapshot;
 use crate::okf::workspace::{MemWorkspace, StoredFile};
 use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
 use crate::store::ceiling::MemberAccess;
+use crate::store::changesets;
+use crate::store::cleanups;
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
 use crate::store::teams;
+use crate::stores::bounded::{account_tx, store_tx};
+use crate::stores::{placement, CatalogDb, StoreName, Stores};
 
 /// The `revisions.message` of a new catalog's [`starter_files`].
 pub const STARTER_MESSAGE: &str = "create catalog";
@@ -62,7 +68,7 @@ pub struct Catalog {
 // each query's tail at compile time; see `select_users!` in users.rs).
 macro_rules! select_catalogs {
     () => {
-        "SELECT c.id, c.name, c.display_name, c.description, c.generation, c.created_at, \
+        "SELECT c.store, c.id, c.name, c.display_name, c.description, 0::bigint AS generation, c.created_at, \
                 (SELECT t.name FROM teams t WHERE t.id = c.owner_team_id) AS owner_team \
          FROM catalogs c"
     };
@@ -83,7 +89,7 @@ pub fn is_valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// A catalog to create: [`create`]'s input.
+/// A catalog to create: `create`'s input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NewCatalog<'a> {
     /// The new catalog's name, `[a-z0-9-]+`.
@@ -99,10 +105,30 @@ pub struct NewCatalog<'a> {
 
 /// Creates a catalog holding only its [`starter_files`] (a root
 /// `index.md` and a `log.md`, revision 1 each, `create` revisions with the
-/// message [`STARTER_MESSAGE`]), records `catalog.created`, and bumps the
-/// administrative generation, in one transaction. The catalog's own
-/// generation stays 0: an import into it before any publish or import
+/// message [`STARTER_MESSAGE`]) and records `catalog.created`. The catalog's
+/// own generation stays 0: an import into it before any publish or import
 /// replaces the starter files as if the catalog were empty.
+///
+/// Creation takes three steps, so the registry (the account database) and
+/// the store holding the catalog's data are never written in one
+/// transaction (plan Task 10b, decision P9):
+///
+/// 1. `register`: one account transaction chooses the store, inserts the
+///    registry row with `provisioned_at` NULL (a row every lookup and
+///    listing treats as absent), and records `catalog.created`.
+/// 2. `provision_store_side`: one store transaction takes the catalog's
+///    lock on the store, checks that the registry row is still there and
+///    still unprovisioned, and writes the starter files.
+/// 3. `mark_provisioned`: one account transaction sets `provisioned_at`
+///    and announces the catalog to the other replicas.
+///
+/// A create that stops after step 1 or 2 leaves a half-created row, which
+/// the `provision_catalogs` housekeeping task finishes or removes ([`recover`]).
+/// This form is for the tests, which hold only the account pool: the store
+/// is the `main` store inside the account database, opened on a pool of its
+/// own with the store's `search_path` ([`CatalogDb::main_in`]). The server
+/// and the command line use [`create_in`], with the registry's handle for
+/// whichever store the catalog is placed on.
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -115,15 +141,102 @@ pub struct NewCatalog<'a> {
 ///
 /// # Errors
 /// [`OkfError::Refused`] for an invalid or taken name;
-/// [`OkfError::UnknownName`] for an unknown team; [`OkfError::Database`]
-/// otherwise, a failed audit write included.
+/// [`OkfError::UnknownName`] for an unknown team; [`OkfError::Busy`] if the
+/// recovery task removed the half-created row first (nothing was written:
+/// retry); [`OkfError::Database`] otherwise, a failed audit write included.
+#[cfg(test)]
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.create"))]
-pub async fn create(
+pub(crate) async fn create(
     pool: &PgPool,
     new: &NewCatalog<'_>,
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<Catalog, OkfError> {
+    let (catalog, store) = register(pool, new, actor, now).await?;
+    // This test-only form opens `main` alone. Stop, leaving the half-created
+    // row for the recovery task, rather than write a catalog's files to the
+    // wrong store.
+    if store != StoreName::main() {
+        return Err(OkfError::Refused {
+            reason: format!(
+                "catalog {:?} was placed on a store this form cannot open",
+                new.name
+            ),
+        });
+    }
+    let db = CatalogDb::main_in(pool);
+    finish_create(&db, catalog, actor, now).await
+}
+
+/// Creates a catalog on the store the registry holds for its placement:
+/// what the server's handlers and the command line call.
+///
+/// # Arguments
+/// * `stores` - the registry of stores (its account database holds the
+///   registry row).
+/// * `new` - the catalog to create.
+/// * `actor` - who, for the audit log.
+/// * `now` - the creation time (server clock).
+///
+/// # Returns
+/// The new row.
+///
+/// # Errors
+/// As `create`; also [`OkfError::StoreUnavailable`] when the placed
+/// store cannot be opened (the half-created row is left for the recovery
+/// task).
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.create_in"))]
+pub async fn create_in(
+    stores: &Stores,
+    new: &NewCatalog<'_>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<Catalog, OkfError> {
+    let accounts = stores.accounts();
+    let (catalog, store) = register(accounts.executor(), new, actor, now).await?;
+    let db = stores.get(&store).await?;
+    finish_create(&db, catalog, actor, now).await
+}
+
+/// Steps 2 and 3 of `create` on the store handle `db`.
+///
+/// # Errors
+/// As `create`.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.finish_create", catalog_id = catalog.id))]
+async fn finish_create(
+    db: &CatalogDb,
+    catalog: Catalog,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<Catalog, OkfError> {
+    provision_store_side(db, &catalog, &actor.label, now, std::future::ready(())).await?;
+    mark_provisioned(db.accounts().executor(), catalog.id, now).await?;
+    Ok(catalog)
+}
+
+/// Step 1 of `create`: inserts the registry row, unprovisioned, with the
+/// store placement chose for the owner team, and records `catalog.created`,
+/// in one account transaction. `placement::choose` runs in this
+/// transaction so the choice and the insert read one snapshot.
+///
+/// # Arguments
+/// * `pool` - the account database.
+/// * `new` - the catalog to create.
+/// * `actor` - who, for the audit log.
+/// * `now` - the creation time (`created_at`).
+///
+/// # Returns
+/// The new row and the store it was placed on.
+///
+/// # Errors
+/// As `create`, less the abort of step 2.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.register"))]
+pub(crate) async fn register(
+    pool: &PgPool,
+    new: &NewCatalog<'_>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(Catalog, StoreName), OkfError> {
     let NewCatalog {
         name,
         display_name,
@@ -149,13 +262,19 @@ pub async fn create(
     )
     .await?;
     let team_id = teams::id_of(&mut tx, owner_team).await?;
+    // Where the catalog lives is decided once, here, and recorded on its
+    // row: a later change of the default or of a pin moves no catalog.
+    let store = placement::choose(&mut tx, owner_team).await?;
     // `RETURNING` cannot run the owner subquery of `select_catalogs!` on the
     // new row, but the owner's name is the one just resolved: hand it back
-    // as `$5`.
+    // as `$5`. `provisioned_at` is written as NULL (not left to its column
+    // default, which is `now()` for release-1 replicas): this row is not a
+    // catalog until step 3.
     let inserted = sqlx::query_as::<_, Catalog>(
-        "INSERT INTO catalogs (name, description, created_at, owner_team_id, display_name) \
-         VALUES ($1, $2, $3, $4, $6) \
-         RETURNING id, name, display_name, description, generation, created_at, \
+        "INSERT INTO catalogs (name, description, created_at, owner_team_id, display_name, \
+                               store, provisioned_at) \
+         VALUES ($1, $2, $3, $4, $6, $7, NULL) \
+         RETURNING id, name, display_name, description, 0::bigint AS generation, created_at, \
                    $5::text AS owner_team",
     )
     .bind(name)
@@ -164,6 +283,7 @@ pub async fn create(
     .bind(&team_id)
     .bind(owner_team)
     .bind(display_name.as_str())
+    .bind(store.as_str())
     // `&mut *tx` borrows the transaction's connection: the query runs inside it.
     .fetch_one(&mut *tx)
     .await;
@@ -176,7 +296,6 @@ pub async fn create(
         }
         Err(error) => return Err(error.into()),
     };
-    write_starter_files(&mut tx, &catalog, &actor.label, now).await?;
     record_catalog(
         &mut tx,
         actor,
@@ -189,22 +308,380 @@ pub async fn create(
         now,
     )
     .await?;
-    invalidate(
-        &mut tx,
-        &[
-            Invalidation::CatalogMeta {
-                id: catalog.id,
-                name: catalog.name.clone(),
-            },
-            Invalidation::Team { id: team_id },
-        ],
-    )
-    .await?;
     tx.commit().await?;
-    Ok(catalog)
+    Ok((catalog, store))
 }
 
-/// Writes a new catalog's [`starter_files`] as revision 1 of each path.
+/// What the registry says about a catalog, read by [`registration`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Registration {
+    /// No row: the recovery task removed it.
+    Gone,
+    /// `provisioned_at` is set: the catalog is whole.
+    Provisioned,
+    /// Half-created: the row's name and owner team, for finishing it.
+    Unprovisioned {
+        name: String,
+        owner_team_id: Option<String>,
+    },
+}
+
+/// Reads the registry row of catalog `id` and locks it (`FOR UPDATE`).
+///
+/// # Arguments
+/// * `conn` - a connection on the account database (an account
+///   transaction: the row stays locked until it ends).
+/// * `id` - the catalog's id.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.registration", catalog_id = id))]
+async fn registration(conn: &mut PgConnection, id: i64) -> Result<Registration, OkfError> {
+    let row: Option<(String, Option<String>, bool)> = sqlx::query_as(
+        "SELECT name, owner_team_id, provisioned_at IS NOT NULL \
+         FROM catalogs WHERE id = $1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(conn)
+    .await?;
+    Ok(match row {
+        None => Registration::Gone,
+        Some((_, _, true)) => Registration::Provisioned,
+        Some((name, owner_team_id, false)) => Registration::Unprovisioned {
+            name,
+            owner_team_id,
+        },
+    })
+}
+
+/// Whether catalog `id` has its store side: the data `create` writes
+/// under the catalog's lock: its `catalog.catalog_state` row, which
+/// [`write_starter_files`] writes first, in the same transaction as the
+/// starter files, so the row says the whole store side is there. This is the
+/// only place the check lives.
+///
+/// # Arguments
+/// * `catalog_db` - a connection on the store's database (the transaction
+///   that holds the catalog's lock passes its own).
+/// * `id` - the catalog's id.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.store_side_exists", catalog_id = id))]
+pub(crate) async fn store_side_exists(
+    catalog_db: &mut PgConnection,
+    id: i64,
+) -> Result<bool, OkfError> {
+    Ok(
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM catalog_state WHERE id = $1)")
+            .bind(id)
+            .fetch_one(catalog_db)
+            .await?,
+    )
+}
+
+/// Step 2 of `create` (decision P9): in one store transaction, takes the
+/// catalog's lock, checks that the registry row still exists and is still
+/// unprovisioned, writes the starter files, and commits.
+///
+/// # Arguments
+/// * `db` - the store the catalog was placed on.
+/// * `catalog` - the registered row.
+/// * `actor` - the label recorded on the starter revisions.
+/// * `now` - the creation time.
+/// * `hold` - awaited after the files are written and before the commit,
+///   with the lock held: the tests' way to stall a create without a sleep.
+///   Production passes an already-ready future.
+///
+/// # Errors
+/// [`OkfError::Busy`] if the row is gone (the recovery task removed it
+/// while this waited for the lock): nothing was written. Otherwise
+/// [`OkfError::Database`] or [`OkfError::StoreUnavailable`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.provision_store_side", catalog_id = catalog.id))]
+async fn provision_store_side(
+    db: &CatalogDb,
+    catalog: &Catalog,
+    actor: &str,
+    now: DateTime<Utc>,
+    hold: impl std::future::Future<Output = ()>,
+) -> Result<(), OkfError> {
+    // The account connection first, then the store's, as every change that
+    // uses both takes them; the database locks go the other way, the
+    // catalog's advisory lock before the registry row (as `recover` does).
+    let mut account_tx = db.accounts().begin().await?;
+    let mut tx = db.begin().await?;
+    lock(&mut tx, catalog.id).await?;
+    match registration(&mut account_tx, catalog.id).await? {
+        Registration::Unprovisioned { .. } => {}
+        Registration::Gone => {
+            return Err(OkfError::Busy {
+                reason: format!("catalog {:?} was not finished in time", catalog.name),
+            })
+        }
+        // Only this create writes the store side, and it has not yet.
+        Registration::Provisioned => return Ok(()),
+    }
+    write_starter_files(&mut tx, catalog, actor, now).await?;
+    hold.await;
+    tx.commit().await?;
+    // Nothing was written on the account side; the transaction only held the
+    // registry row against a concurrent finish.
+    account_tx.commit().await?;
+    Ok(())
+}
+
+/// Sets `provisioned_at` on an unprovisioned row and announces the catalog
+/// and its owner team to the other replicas, in one account transaction.
+/// A row that is already provisioned (the recovery task finished it first)
+/// is left as it is.
+///
+/// # Arguments
+/// * `conn` - a connection on the account database.
+/// * `id` - the catalog's id.
+/// * `now` - the time to record.
+///
+/// # Errors
+/// [`OkfError::Busy`] if the row is gone; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.mark_provisioned", catalog_id = id))]
+async fn mark_provisioned_in(
+    conn: &mut PgConnection,
+    id: i64,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    match registration(conn, id).await? {
+        Registration::Gone => Err(OkfError::Busy {
+            reason: "the catalog was not finished in time".to_string(),
+        }),
+        Registration::Provisioned => Ok(()),
+        Registration::Unprovisioned {
+            name,
+            owner_team_id,
+        } => {
+            sqlx::query("UPDATE catalogs SET provisioned_at = $2 WHERE id = $1")
+                .bind(id)
+                .bind(now)
+                .execute(&mut *conn)
+                .await?;
+            // The catalog, and its owner's list of catalogs.
+            let mut invalidations = vec![Invalidation::CatalogMeta { id, name }];
+            invalidations.extend(owner_team_id.map(|id| Invalidation::Team { id }));
+            invalidate(conn, &invalidations).await
+        }
+    }
+}
+
+/// Step 3 of `create`: [`mark_provisioned_in`] in its own transaction.
+///
+/// # Arguments
+/// * `pool` - the account database.
+/// * `id` - the catalog's id.
+/// * `now` - the time to record.
+///
+/// # Errors
+/// As [`mark_provisioned_in`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.mark_provisioned_tx", catalog_id = id))]
+async fn mark_provisioned(pool: &PgPool, id: i64, now: DateTime<Utc>) -> Result<(), OkfError> {
+    let mut tx = pool.begin().await?;
+    mark_provisioned_in(&mut tx, id, now).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// A half-created catalog the recovery task looks at.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct Pending {
+    /// The catalog's id.
+    pub id: i64,
+    /// Its name.
+    pub name: String,
+    /// The store it was placed on.
+    pub store: String,
+    /// When its registry row was written; with `id`, its place in the
+    /// recovery order ([`PendingCursor`]).
+    pub created_at: DateTime<Utc>,
+}
+
+/// How many half-created catalogs one query returns: a bound on a query's
+/// size. A recovery run pages through the rest ([`pending`]).
+pub const PENDING_BATCH: i64 = 100;
+
+/// Where the last page of [`pending`] ended, in `(created_at, id)` order.
+pub type PendingCursor = (DateTime<Utc>, i64);
+
+impl Pending {
+    /// This row's place in the recovery order: the cursor that makes the next
+    /// page start after it.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn cursor(&self) -> PendingCursor {
+        (self.created_at, self.id)
+    }
+}
+
+/// The half-created catalogs created before `created_before`, oldest first
+/// (an index scan of `catalogs_unprovisioned`, migration 0040). The age is
+/// an efficiency filter only: it keeps the task off creates still running.
+/// Safety is the catalog's lock ([`recover`]), not this.
+///
+/// One page is at most [`PENDING_BATCH`] rows. A recovery run pages with
+/// `after` and leaves out a store it found unreachable (`skip_stores`), so
+/// rows on a lost store neither fill the page nor hide the rows behind them
+/// (a lost store costs only its own catalogs).
+///
+/// # Arguments
+/// * `executor` - the account database.
+/// * `created_before` - the newest `created_at` to include.
+/// * `after` - the last row of the previous page, or `None` for the first.
+/// * `skip_stores` - stores whose rows are left out.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.pending"))]
+pub async fn pending<'e>(
+    executor: impl PgExecutor<'e>,
+    created_before: DateTime<Utc>,
+    after: Option<PendingCursor>,
+    skip_stores: &[String],
+) -> Result<Vec<Pending>, OkfError> {
+    let (after_at, after_id) = after.unzip();
+    Ok(sqlx::query_as::<_, Pending>(
+        "SELECT id, name, store, created_at FROM catalogs \
+         WHERE provisioned_at IS NULL AND created_at < $1 \
+           AND ($2::timestamptz IS NULL OR (created_at, id) > ($2, $3)) \
+           AND NOT (store = ANY($4)) \
+         ORDER BY created_at, id LIMIT $5",
+    )
+    .bind(created_before)
+    .bind(after_at)
+    .bind(after_id)
+    .bind(skip_stores)
+    .bind(PENDING_BATCH)
+    .fetch_all(executor)
+    .await?)
+}
+
+/// What [`recover`] did with a half-created catalog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recovery {
+    /// The create finished, or someone else did, or the row is gone: nothing to do.
+    Settled,
+    /// The store side existed: `provisioned_at` was set.
+    Finished,
+    /// The store side never happened: the registry row was removed.
+    Removed,
+}
+
+/// Finishes or removes one half-created catalog (decision P9). In one
+/// store transaction it takes the catalog's lock, checks the registry row,
+/// and checks the store side (`store_side_exists`). If the store side is
+/// there it sets `provisioned_at`. If not it records the failed create in
+/// the audit log and deletes the registry row, and commits that before the
+/// lock is released. A create that stalled therefore either committed first
+/// (and this finds its data) or waits behind this, finds its row gone and
+/// writes nothing. No age is checked here.
+///
+/// # Arguments
+/// * `db` - the store the catalog was placed on (its handle also holds the
+///   account database).
+/// * `catalog` - the half-created catalog.
+/// * `now` - the server clock.
+/// * `wait` - the database-side bound on every lock wait and statement of
+///   the account and store transactions (`lock_timeout` and
+///   `statement_timeout`, as `stores::bounded` sets them), so a catalog lock
+///   another connection holds, or a store that stops answering, fails the
+///   recovery instead of waiting on (issue #1028).
+///
+/// # Returns
+/// What was done.
+///
+/// # Errors
+/// [`OkfError::Database`] or [`OkfError::StoreUnavailable`] (a wait past
+/// `wait` is a `Database` error, SQLSTATE `55P03` or `57014`); nothing is
+/// changed, and the next run tries again.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.recover", catalog_id = catalog.id))]
+pub async fn recover(
+    db: &CatalogDb,
+    catalog: &Pending,
+    now: DateTime<Utc>,
+    wait: Duration,
+) -> Result<Recovery, OkfError> {
+    recover_holding(db, catalog, now, wait, std::future::ready(())).await
+}
+
+/// [`recover`] with `hold` awaited before the commit, with the lock held:
+/// the tests' way to stall a recovery without a sleep.
+///
+/// # Errors
+/// As [`recover`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.recover_holding", catalog_id = catalog.id))]
+async fn recover_holding(
+    db: &CatalogDb,
+    catalog: &Pending,
+    now: DateTime<Utc>,
+    wait: Duration,
+    hold: impl std::future::Future<Output = ()>,
+) -> Result<Recovery, OkfError> {
+    let actor = AuditActor::system("provision-catalogs");
+    // The account transaction wraps the store's; the store commits first.
+    let mut account_tx = account_tx(db.accounts(), wait).await?;
+    // The people the audit entry belongs to, locked before the store's
+    // connection and the catalog's lock, as `delete` does.
+    audit::lock_people(
+        &mut account_tx,
+        &actor,
+        &People {
+            catalogs: &[catalog.name.as_str()],
+            ..People::default()
+        },
+    )
+    .await?;
+    // Acquisition order (plan Task 11, issue #970): the account transaction
+    // and every account row lock (`lock_people`) come BEFORE the store
+    // connection. A change that held the store's connection while it waited
+    // for a user row would block a user deletion (which holds those rows and
+    // then needs a store connection) in a cycle PostgreSQL cannot see,
+    // because one edge is a pool wait.
+    let mut tx = store_tx(db, wait).await?;
+    lock(&mut tx, catalog.id).await?;
+    let Registration::Unprovisioned { .. } = registration(&mut account_tx, catalog.id).await?
+    else {
+        return Ok(Recovery::Settled);
+    };
+    let outcome = if store_side_exists(&mut tx, catalog.id).await? {
+        mark_provisioned_in(&mut account_tx, catalog.id, now).await?;
+        Recovery::Finished
+    } else {
+        record_catalog(
+            &mut account_tx,
+            &actor,
+            CatalogEvent {
+                action: Action::CatalogDeleted,
+                catalog_id: catalog.id,
+                catalog: &catalog.name,
+                // The create never wrote its store side: this is the
+                // failed create, not a delete anyone asked for.
+                details: serde_json::json!({
+                    "forced": false,
+                    "generation": 0,
+                    "failed_create": true,
+                }),
+            },
+            now,
+        )
+        .await?;
+        sqlx::query("DELETE FROM catalogs WHERE id = $1")
+            .bind(catalog.id)
+            .execute(&mut *account_tx)
+            .await?;
+        Recovery::Removed
+    };
+    hold.await;
+    tx.commit().await?;
+    account_tx.commit().await?;
+    Ok(outcome)
+}
+
+/// Writes a new catalog's `catalog_state` row and its [`starter_files`] as
+/// revision 1 of each path.
 ///
 /// # Arguments
 /// * `conn` - the creating transaction's connection.
@@ -233,6 +710,12 @@ async fn write_starter_files(
     let workspace =
         MemWorkspace::from_files(files.iter().map(|(path, text)| (*path, text.as_str())));
     let snapshot = Snapshot::build(&workspace)?;
+    // First: the documents' foreign key, and the row `store_side_exists`
+    // looks for.
+    sqlx::query("INSERT INTO catalog_state (id) VALUES ($1)")
+        .bind(catalog.id)
+        .execute(&mut *conn)
+        .await?;
     for (path, text) in &files {
         let file = StoredFile {
             content: text.clone().into_bytes(),
@@ -309,7 +792,8 @@ pub async fn set_owner(
     // had none.
     let previous: Option<(i64, Option<String>, Option<String>)> = sqlx::query_as(
         "UPDATE catalogs c SET owner_team_id = $2 \
-         FROM (SELECT id, owner_team_id FROM catalogs WHERE name = $1 FOR UPDATE) old \
+         FROM (SELECT id, owner_team_id FROM catalogs \
+               WHERE name = $1 AND provisioned_at IS NOT NULL AND deleted_at IS NULL FOR UPDATE) old \
          WHERE c.id = old.id \
          RETURNING c.id, old.owner_team_id, \
                    (SELECT t.name FROM teams t WHERE t.id = old.owner_team_id)",
@@ -467,7 +951,7 @@ pub async fn update_details(
         "UPDATE catalogs c SET display_name = COALESCE($2, c.display_name), \
                                description = COALESCE($3, c.description) \
          FROM (SELECT id, owner_team_id, display_name, description FROM catalogs \
-               WHERE name = $1 FOR NO KEY UPDATE) old \
+               WHERE name = $1 AND provisioned_at IS NOT NULL AND deleted_at IS NULL FOR NO KEY UPDATE) old \
          WHERE c.id = old.id \
          RETURNING c.id, old.owner_team_id, old.display_name, old.description",
     )
@@ -766,8 +1250,8 @@ pub async fn set_maintenance(
     // checks (`FOR KEY SHARE`) on the catalog need not wait for it.
     let row: Option<(i64, bool, Option<String>)> = sqlx::query_as(
         "UPDATE catalogs c SET maintenance = $2 \
-         FROM (SELECT id, maintenance, owner_team_id FROM catalogs WHERE name = $1 \
-               FOR NO KEY UPDATE) old \
+         FROM (SELECT id, maintenance, owner_team_id FROM catalogs \
+               WHERE name = $1 AND provisioned_at IS NOT NULL AND deleted_at IS NULL FOR NO KEY UPDATE) old \
          WHERE c.id = old.id RETURNING c.id, old.maintenance, old.owner_team_id",
     )
     .bind(name)
@@ -816,7 +1300,8 @@ pub async fn set_maintenance(
     Ok(previous)
 }
 
-/// Every catalog, by name.
+/// Every catalog, by name. A half-created catalog (`provisioned_at` NULL,
+/// plan Task 10b) is not one yet and is left out.
 ///
 /// # Arguments
 /// * `pool` - the database.
@@ -828,13 +1313,81 @@ pub async fn set_maintenance(
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.list"))]
 pub async fn list(pool: &PgPool) -> Result<Vec<Catalog>, OkfError> {
-    let catalogs = sqlx::query_as::<_, Catalog>(concat!(select_catalogs!(), " ORDER BY c.name"))
-        .fetch_all(pool)
-        .await?;
+    let catalogs = sqlx::query_as::<_, Catalog>(concat!(
+        select_catalogs!(),
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL ORDER BY c.name"
+    ))
+    .fetch_all(pool)
+    .await?;
     Ok(catalogs)
 }
 
-/// The catalog called `name`.
+/// The generation of the catalog called `name`, read from its store's state
+/// row: what the tests assert on now that the registry row carries none.
+///
+/// # Panics
+/// If the catalog or its state row is missing, or the query fails.
+#[cfg(test)]
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "a test helper")
+)]
+pub(crate) async fn test_generation(pool: &PgPool, name: &str) -> i64 {
+    // Two databases in `separate` store mode: the id from the registry, the
+    // generation from the store.
+    let id: i64 = sqlx::query_scalar("SELECT id FROM catalogs WHERE name = $1")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .expect("the catalog is registered");
+    sqlx::query_scalar("SELECT generation FROM catalog.catalog_state WHERE id = $1")
+        .bind(id)
+        .fetch_one(CatalogDb::main_of(pool).executor())
+        .await
+        .expect("the catalog has a state row")
+}
+
+/// [`list`] with each catalog's generation, read from its store's
+/// `catalog_state` (the registry rows do not carry it): what the command
+/// line prints.
+///
+/// # Arguments
+/// * `stores` - the registry of stores.
+///
+/// # Returns
+/// The rows, ordered by name.
+///
+/// # Errors
+/// [`OkfError::Database`]; [`OkfError::StoreUnavailable`] if a store cannot
+/// be opened.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.list_in"))]
+pub async fn list_in(stores: &Stores) -> Result<Vec<Catalog>, OkfError> {
+    let accounts = stores.accounts();
+    let mut catalogs = list(accounts.executor()).await?;
+    let placed: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, store FROM catalogs WHERE provisioned_at IS NOT NULL AND deleted_at IS NULL",
+    )
+    .fetch_all(accounts.executor())
+    .await?;
+    let mut by_store: std::collections::HashMap<String, Vec<i64>> =
+        std::collections::HashMap::new();
+    for (id, store) in placed {
+        by_store.entry(store).or_default().push(id);
+    }
+    let mut generation_of: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    for (store, ids) in by_store {
+        let db = stores.get(&StoreName::parse(&store)?).await?;
+        generation_of.extend(generations(db.executor(), &ids).await?);
+    }
+    for catalog in &mut catalogs {
+        catalog.generation = generation_of.get(&catalog.id).copied().unwrap_or(0);
+    }
+    Ok(catalogs)
+}
+
+/// The catalog called `name`. A half-created catalog (`provisioned_at`
+/// NULL, plan Task 10b) is not one yet: it is unknown here, so nothing that
+/// finds a catalog by name can read, change or delete it.
 ///
 /// # Arguments
 /// * `executor` - a pool, connection or transaction (`&mut *tx`).
@@ -850,13 +1403,16 @@ pub async fn list(pool: &PgPool) -> Result<Vec<Catalog>, OkfError> {
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.find"))]
 pub async fn find<'e>(executor: impl PgExecutor<'e>, name: &str) -> Result<Catalog, OkfError> {
     check_name(name)?;
-    sqlx::query_as::<_, Catalog>(concat!(select_catalogs!(), " WHERE c.name = $1"))
-        .bind(name)
-        .fetch_optional(executor)
-        .await?
-        .ok_or_else(|| OkfError::CatalogNotSelected {
-            catalog: name.to_string(),
-        })
+    sqlx::query_as::<_, Catalog>(concat!(
+        select_catalogs!(),
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL AND c.name = $1"
+    ))
+    .bind(name)
+    .fetch_optional(executor)
+    .await?
+    .ok_or_else(|| OkfError::CatalogNotSelected {
+        catalog: name.to_string(),
+    })
 }
 
 /// An owner team's suspension, as the directory holds it.
@@ -900,11 +1456,15 @@ pub struct CatalogRow {
     /// and console sessions: one half of every user's ceiling on this
     /// catalog ([`crate::store::ceiling::level_on`], issue #728).
     pub member_access: MemberAccess,
+    /// The store holding its documents, history and changesets
+    /// (`catalogs.store`).
+    pub store: StoreName,
 }
 
 /// [`CatalogRow`] as the query returns it: the suspension as two columns.
 #[derive(sqlx::FromRow)]
 struct CatalogRowColumns {
+    store: String,
     id: i64,
     name: String,
     display_name: String,
@@ -923,7 +1483,9 @@ struct CatalogRowColumns {
     member_access: String,
 }
 
-impl From<CatalogRowColumns> for CatalogRow {
+impl TryFrom<CatalogRowColumns> for CatalogRow {
+    type Error = OkfError;
+
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -931,7 +1493,7 @@ impl From<CatalogRowColumns> for CatalogRow {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    fn from(columns: CatalogRowColumns) -> Self {
+    fn try_from(columns: CatalogRowColumns) -> Result<Self, Self::Error> {
         // A catalog is suspended when its owner team is.
         let suspended = columns
             .suspended
@@ -956,7 +1518,12 @@ impl From<CatalogRowColumns> for CatalogRow {
                     notice: columns.suspension_notice,
                 }
             });
-        Self {
+        // The foreign key and the stores' CHECK keep the name valid; a
+        // hand-edited row is an error, not a guess.
+        let store =
+            crate::store::decode_column(StoreName::parse(&columns.store).ok(), "catalogs.store")?;
+        Ok(Self {
+            store,
             id: columns.id,
             name: columns.name,
             display_name: columns.display_name,
@@ -971,7 +1538,7 @@ impl From<CatalogRowColumns> for CatalogRow {
             // else would reach nothing through the team, never more.
             member_access: MemberAccess::parse(&columns.member_access)
                 .unwrap_or(MemberAccess::None),
-        }
+        })
     }
 }
 
@@ -980,7 +1547,7 @@ impl From<CatalogRowColumns> for CatalogRow {
 // check reads about the catalog it acts on (M18 spec Decision 9).
 macro_rules! select_catalog_rows {
     () => {
-        "SELECT c.id, c.name, c.display_name, c.description, c.generation, \
+        "SELECT c.store, c.id, c.name, c.display_name, c.description, 0::bigint AS generation, \
                 t.name AS owner_team, c.owner_team_id, \
                 (t.suspended_at IS NOT NULL) AS suspended, t.suspension_notice, \
                 t.display_name AS team_display_name, \
@@ -1018,12 +1585,12 @@ pub async fn row_by_name<'e>(
     }
     let row = sqlx::query_as::<_, CatalogRowColumns>(concat!(
         select_catalog_rows!(),
-        " WHERE c.name = $1"
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL AND c.name = $1"
     ))
     .bind(name)
     .fetch_optional(executor)
     .await?;
-    Ok(row.map(CatalogRow::from))
+    row.map(CatalogRow::try_from).transpose()
 }
 
 /// The row of the catalog with this `catalogs.id`, with its access facts:
@@ -1044,12 +1611,14 @@ pub async fn row_by_id<'e>(
     executor: impl PgExecutor<'e>,
     id: i64,
 ) -> Result<Option<CatalogRow>, OkfError> {
-    let row =
-        sqlx::query_as::<_, CatalogRowColumns>(concat!(select_catalog_rows!(), " WHERE c.id = $1"))
-            .bind(id)
-            .fetch_optional(executor)
-            .await?;
-    Ok(row.map(CatalogRow::from))
+    let row = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL AND c.id = $1"
+    ))
+    .bind(id)
+    .fetch_optional(executor)
+    .await?;
+    row.map(CatalogRow::try_from).transpose()
 }
 
 /// The rows of the catalogs called `names`, in one query.
@@ -1080,12 +1649,66 @@ pub async fn rows_by_names<'e>(
     }
     let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
         select_catalog_rows!(),
-        " WHERE c.name = ANY($1) ORDER BY c.name"
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL AND c.name = ANY($1) ORDER BY c.name"
     ))
     .bind(valid)
     .fetch_all(executor)
     .await?;
-    Ok(rows.into_iter().map(CatalogRow::from).collect())
+    rows.into_iter().map(CatalogRow::try_from).collect()
+}
+
+/// Every catalog placed on `store`, by name: what a read that cannot reach the
+/// store names as unavailable. Read from the account database, so it works
+/// while the store is down.
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction on the account database.
+/// * `store` - the store's name.
+///
+/// # Returns
+/// The store's catalogs, ordered by name, with generation 0 (the store holds
+/// the real one).
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.rows_on_store"))]
+pub async fn rows_on_store<'e>(
+    executor: impl PgExecutor<'e>,
+    store: &StoreName,
+) -> Result<Vec<CatalogRow>, OkfError> {
+    let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
+        select_catalog_rows!(),
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL AND c.store = $1 ORDER BY c.name"
+    ))
+    .bind(store.as_str())
+    .fetch_all(executor)
+    .await?;
+    rows.into_iter().map(CatalogRow::try_from).collect()
+}
+
+/// The generations of catalogs `ids`, read from a store's `catalog_state`
+/// (the registry rows do not carry them).
+///
+/// # Arguments
+/// * `executor` - a pool, connection or transaction on the store.
+/// * `ids` - catalog ids.
+///
+/// # Returns
+/// The generation of each of `ids` that has a state row on this store.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.generations"))]
+pub async fn generations<'e>(
+    executor: impl PgExecutor<'e>,
+    ids: &[i64],
+) -> Result<Vec<(i64, i64)>, OkfError> {
+    Ok(
+        sqlx::query_as("SELECT id, generation FROM catalog_state WHERE id = ANY($1)")
+            .bind(ids)
+            .fetch_all(executor)
+            .await?,
+    )
 }
 
 /// One page of catalog rows, ordered by name.
@@ -1114,13 +1737,14 @@ pub async fn page<'e>(
     }
     let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
         select_catalog_rows!(),
-        " WHERE ($1::text IS NULL OR c.name > $1) ORDER BY c.name LIMIT $2"
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL AND ($1::text IS NULL OR c.name > $1) \
+         ORDER BY c.name LIMIT $2"
     ))
     .bind(after)
     .bind(limit)
     .fetch_all(executor)
     .await?;
-    Ok(rows.into_iter().map(CatalogRow::from).collect())
+    rows.into_iter().map(CatalogRow::try_from).collect()
 }
 
 /// One page of the catalogs a user's ceiling reaches, ordered by name
@@ -1159,16 +1783,18 @@ pub async fn ceiling_page<'e>(
     // `unnest`), each an index range scan stopping after `limit` rows.
     let rows = sqlx::query_as::<_, CatalogRowColumns>(concat!(
         select_catalog_rows!(),
-        " WHERE c.id IN ( \
+        " WHERE c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL AND c.id IN ( \
               SELECT owned.id FROM unnest($1::text[]) AS team (id) \
               CROSS JOIN LATERAL ( \
                   SELECT i.id FROM catalogs i \
                   WHERE i.owner_team_id = team.id AND i.member_access <> 'none' \
+                    AND i.provisioned_at IS NOT NULL AND i.deleted_at IS NULL \
                     AND ($3::text IS NULL OR i.name > $3) \
                   ORDER BY i.name LIMIT $4) owned \
               UNION \
               (SELECT i.id FROM catalogs i \
-               WHERE i.id = ANY($2) AND ($3::text IS NULL OR i.name > $3) \
+               WHERE i.id = ANY($2) AND i.provisioned_at IS NOT NULL AND i.deleted_at IS NULL \
+                 AND ($3::text IS NULL OR i.name > $3) \
                ORDER BY i.name LIMIT $4)) \
           ORDER BY c.name LIMIT $4"
     ))
@@ -1178,34 +1804,238 @@ pub async fn ceiling_page<'e>(
     .bind(limit)
     .fetch_all(executor)
     .await?;
-    Ok(rows.into_iter().map(CatalogRow::from).collect())
+    rows.into_iter().map(CatalogRow::try_from).collect()
 }
 
 // Its own file: the directory's queries are tested away from `tests` below.
 #[cfg(test)]
 #[path = "catalogs_rows_tests.rs"]
 mod rows_tests;
+#[cfg(test)]
+#[path = "catalogs_unprovisioned_tests.rs"]
+mod unprovisioned_tests;
+
+/// A pause inside [`delete_on`], between its store steps and its account
+/// writes, for the race tests: a catalog id (in a named account database,
+/// since tests run side by side and every database counts ids from 1) with
+/// a pair of barriers makes the delete of that catalog stop there until the
+/// test lets it go.
+#[cfg(test)]
+pub(crate) mod delete_pause {
+    use std::collections::HashMap;
+    use std::sync::{Arc, LazyLock, Mutex};
+
+    use tokio::sync::Barrier;
+
+    /// The longest either side waits at a barrier.
+    pub(crate) const LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+    impl Pause {
+        /// The test's meeting with the delete at `barrier`, bounded.
+        ///
+        /// # Panics
+        /// When the delete does not arrive within [`LIMIT`].
+        pub(crate) async fn meet(barrier: &Barrier) {
+            tokio::time::timeout(LIMIT, barrier.wait())
+                .await
+                .expect("the delete met the barrier in time");
+        }
+    }
+
+    /// The two barriers one catalog's delete meets: it arrives at `reached`
+    /// and then waits at `resume`; the test waits at `reached`, does its
+    /// work, and waits at `resume`.
+    #[derive(Clone)]
+    pub(crate) struct Pause {
+        /// Met when the delete has taken its store locks.
+        pub reached: Arc<Barrier>,
+        /// Met when the test lets the delete go on.
+        pub resume: Arc<Barrier>,
+    }
+
+    static PAUSES: LazyLock<Mutex<HashMap<(String, i64), Pause>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    /// Names one account database of one server: tests run side by side,
+    /// each in a database (and often a server) of its own that counts catalog
+    /// ids from 1, and the database name alone can repeat between servers.
+    pub(crate) const SERVER_IDENTITY: &str =
+        "SELECT current_database() || '@' || pg_postmaster_start_time()::text";
+
+    /// Makes the next delete of catalog `id` in the account database named
+    /// `database` (a [`SERVER_IDENTITY`]) pause.
+    ///
+    /// # Returns
+    /// The barriers the test meets.
+    pub(crate) fn set(database: &str, id: i64) -> Pause {
+        let pause = Pause {
+            reached: Arc::new(Barrier::new(2)),
+            resume: Arc::new(Barrier::new(2)),
+        };
+        PAUSES
+            .lock()
+            .expect("the pauses lock")
+            .insert((database.to_string(), id), pause.clone());
+        pause
+    }
+
+    /// Called by the delete: meets the barriers if a test set them.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`] reading the database's name.
+    pub(super) async fn wait(
+        conn: &mut sqlx::PgConnection,
+        id: i64,
+    ) -> Result<(), crate::error::OkfError> {
+        let database: String = sqlx::query_scalar(SERVER_IDENTITY)
+            .fetch_one(&mut *conn)
+            .await?;
+        let pause = PAUSES
+            .lock()
+            .expect("the pauses lock")
+            .remove(&(database, id));
+        if let Some(pause) = pause {
+            // Bounded: a test that failed before it met the barriers must
+            // not leave this delete (and the runtime) waiting for ever.
+            let _ = tokio::time::timeout(LIMIT, pause.reached.wait()).await;
+            let _ = tokio::time::timeout(LIMIT, pause.resume.wait()).await;
+        }
+        Ok(())
+    }
+}
+
+// Two-step creation and its recovery, tested away from `tests` below.
+#[cfg(test)]
+#[path = "catalogs_provision_tests.rs"]
+mod provision_tests;
+
+// Two-step deletion, tested away from `tests` below.
+#[cfg(test)]
+#[path = "catalogs_delete_tests.rs"]
+mod delete_tests;
 
 /// Deletes a catalog with its documents, history, changesets and grants
 /// (cascading foreign keys), under the catalog's lock, and bumps the
-/// administrative generation, in one transaction.
-///
-/// After the lock it locks the catalog row and its open changesets
-/// (`FOR UPDATE`) before looking for unpublished work. A foreign-key check
-/// takes `FOR KEY SHARE` on the row it references, which conflicts with
-/// `FOR UPDATE`, so a changeset or entry being written concurrently is either
-/// committed first (and seen) or held off until the delete ends (and then
-/// fails its foreign-key check): the refusal cannot be raced. Writers take the
-/// catalog row (`FOR KEY SHARE`, `changesets::lock_catalog`) before any
-/// changeset or entry, the same order as here, so a write and a delete wait
-/// for each other rather than deadlock: a write that waited finds the
-/// catalog gone.
-///
-/// It records `catalog.deleted` before deleting the row (the entry's teams
-/// are read from it).
+/// administrative generation. This form is for the tests, which hold only
+/// the account pool (see `create`): the catalog's store is the `main`
+/// store inside the account database. The server and the command line use
+/// [`delete_in`].
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `pool` - the account database.
+/// * `name` - the catalog's name.
+/// * `force` - delete even with unpublished changes in an open changeset.
+/// * `actor` - who, for the audit log.
+/// * `now` - the server clock.
+///
+/// # Errors
+/// As [`delete_on`]; also [`OkfError::Refused`] if the catalog is not on the
+/// `main` store.
+#[cfg(test)]
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.delete"))]
+pub(crate) async fn delete(
+    pool: &PgPool,
+    name: &str,
+    force: bool,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    delete_on(&CatalogDb::main_in(pool), name, force, actor, now).await
+}
+
+/// [`delete`], then the store cleanup that frees the catalog's name and
+/// removes its registry row, for tests that only need the catalog gone (and
+/// its name free again) and do not look at the window in between.
+///
+/// # Arguments
+/// As [`delete`].
+///
+/// # Errors
+/// As [`delete`].
+#[cfg(test)]
+pub(crate) async fn delete_settled(
+    pool: &PgPool,
+    name: &str,
+    force: bool,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    delete(pool, name, force, actor, now).await?;
+    crate::store::cleanups::settle_for_tests(pool).await;
+    Ok(())
+}
+
+/// [`delete_on`] on the store the registry holds for the catalog: what the
+/// server's handlers and the command line call.
+///
+/// # Arguments
+/// * `stores` - the registry of stores.
+/// * `name` - the catalog's name.
+/// * `force` - delete even with unpublished changes in an open changeset.
+/// * `actor` - who, for the audit log.
+/// * `now` - the server clock.
+///
+/// # Errors
+/// As [`delete_on`]; also [`OkfError::StoreUnavailable`] when the catalog's
+/// store cannot be opened.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.delete_in"))]
+pub async fn delete_in(
+    stores: &Stores,
+    name: &str,
+    force: bool,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    check_name(name)?;
+    let accounts = stores.accounts();
+    let store: Option<String> = sqlx::query_scalar("SELECT store FROM catalogs WHERE name = $1")
+        .bind(name)
+        .fetch_optional(accounts.executor())
+        .await?;
+    let store = store.ok_or_else(|| OkfError::CatalogNotSelected {
+        catalog: name.to_string(),
+    })?;
+    let db = stores.get(&StoreName::parse(&store)?).await?;
+    delete_on(&db, name, force, actor, now).await
+}
+
+/// Deletes catalog `name`, whose data is on the store `db`, in two steps
+/// (plan decisions P12 and P13, issue #972): this marks it deleted, and the
+/// housekeeping task `CleanupStores` removes its data and then its registry
+/// row ([`crate::store::cleanups`]).
+///
+/// # The order, and why it cannot deadlock
+/// Every lock and connection is taken in the one global order of
+/// [`CatalogDb::begin`]: the account connection; the account row locks (the
+/// people the entry resolves, [`audit::lock_people`]; the keys naming the
+/// catalog as their default; the catalog's registry row `FOR UPDATE`; the
+/// `stores` row `FOR KEY SHARE`, which the cleanup row's foreign key would
+/// take); the account audit ids the entry names ([`audit::resolve_actor`]),
+/// created or waited for now; and only then the store connection, whose
+/// locks are the catalog's advisory lock, its `catalog_state` row
+/// `FOR UPDATE` and its open changesets. Everything after that on the
+/// account connection (the entry, `deleted_at`, the cleanup row, the
+/// invalidation) is an insert or an update of a row this transaction
+/// holds, which waits for nobody. So a transaction that holds the store's
+/// connection or locks never waits for an account row: the edge that would
+/// close a cross-database cycle, which PostgreSQL cannot see when the
+/// store is a separate database (or has one connection), does not exist.
+///
+/// # What it guarantees
+/// Writers take `catalog_state` `FOR KEY SHARE` first
+/// ([`changesets::lock_catalog`]), so under the `FOR UPDATE` here an edit
+/// either committed before (a delete without `force` then sees its entries
+/// and refuses), or waits, and finds the catalog marked deleted once this
+/// ends, and fails. With `force`, the open changesets are discarded in this
+/// transaction. The account transaction commits first: the catalog is gone
+/// from every lookup (`catalogs.deleted_at`; its name stays reserved, P6)
+/// and the cleanup is owed (`store_cleanups`, written in the same
+/// transaction, P13). If that commit fails, the store transaction, still
+/// open, rolls back and nothing has changed. If the store commit fails
+/// after it, the data is only unmarked: the cleanup removes it anyway.
+///
+/// # Arguments
+/// * `db` - the store the catalog is on.
 /// * `name` - the catalog's name.
 /// * `force` - delete even with unpublished changes in an open changeset.
 /// * `actor` - who, for the audit log.
@@ -1213,20 +2043,21 @@ mod rows_tests;
 ///
 /// # Errors
 /// [`OkfError::CatalogNotSelected`] if there is no such catalog (a
-/// malformed name included); [`OkfError::Refused`] if it has unpublished
-/// changes and `force` is false; [`OkfError::Database`] otherwise, a failed
-/// audit write included.
-#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.delete"))]
-pub async fn delete(
-    pool: &PgPool,
+/// malformed name included) or it is not on `db`; [`OkfError::Refused`] if
+/// it has unpublished changes and `force` is false; [`OkfError::Database`]
+/// otherwise, a failed audit write included.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.delete_on"))]
+pub async fn delete_on(
+    db: &CatalogDb,
     name: &str,
     force: bool,
     actor: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<(), OkfError> {
-    let mut tx = pool.begin().await?;
+    // 1. The account connection, and every account row lock.
+    let mut account_tx = db.accounts().begin().await?;
     audit::lock_people(
-        &mut tx,
+        &mut account_tx,
         actor,
         &People {
             catalogs: &[name],
@@ -1234,28 +2065,54 @@ pub async fn delete(
         },
     )
     .await?;
-    let catalog = find(&mut *tx, name).await?;
-    lock(&mut tx, catalog.id).await?;
-    // A delete that waited on the lock may find the row already gone. The
-    // generation is the one no publish can move any more.
-    let still_there: Option<(i64, Option<String>)> =
-        sqlx::query_as("SELECT generation, owner_team_id FROM catalogs WHERE id = $1 FOR UPDATE")
-            .bind(catalog.id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let Some((generation, owner_team_id)) = still_there else {
+    let catalog = find(&mut *account_tx, name).await?;
+    // The keys whose default this catalog is, which the cleanup clears
+    // (`ON DELETE SET NULL`), in id order.
+    sqlx::query("SELECT id FROM api_keys WHERE default_catalog_id = $1 ORDER BY id FOR UPDATE")
+        .bind(catalog.id)
+        .execute(&mut *account_tx)
+        .await?;
+    let registered: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT store, owner_team_id FROM catalogs \
+         WHERE id = $1 AND provisioned_at IS NOT NULL AND deleted_at IS NULL FOR UPDATE",
+    )
+    .bind(catalog.id)
+    .fetch_optional(&mut *account_tx)
+    .await?;
+    // A delete that waited on the row may find it already deleted.
+    let Some((store, owner_team_id)) = registered.filter(|(store, _)| store == db.store().as_str())
+    else {
         return Err(OkfError::CatalogNotSelected {
             catalog: name.to_string(),
         });
     };
+    sqlx::query("SELECT 1 FROM stores WHERE name = $1 FOR KEY SHARE")
+        .bind(&store)
+        .execute(&mut *account_tx)
+        .await?;
+    // The entry's account ids, resolved (and any row another transaction
+    // is still creating waited for) before the store's connection.
+    audit::resolve_actor(&mut account_tx, actor, catalog.id).await?;
+
+    // 2. The store: its locks, then its checks.
+    let mut tx = db.begin().await?;
+    lock(&mut tx, catalog.id).await?;
+    // The generation no publish can move any more. A half-created catalog
+    // has no row yet: nothing was published to it.
+    let generation: i64 =
+        sqlx::query_scalar("SELECT generation FROM catalog_state WHERE id = $1 FOR UPDATE")
+            .bind(catalog.id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .unwrap_or(0);
     // In id order, so two transactions locking several changesets cannot
     // take them in opposite orders.
-    sqlx::query(
+    let open: Vec<i64> = sqlx::query_scalar(
         "SELECT id FROM changesets WHERE catalog_id = $1 AND state = 'open' \
          ORDER BY id FOR UPDATE",
     )
     .bind(catalog.id)
-    .execute(&mut *tx)
+    .fetch_all(&mut *tx)
     .await?;
     // An open changeset with no entries holds no work, so it does not block.
     let unpublished: bool = sqlx::query_scalar(
@@ -1273,8 +2130,23 @@ pub async fn delete(
             ),
         });
     }
+    for id in open {
+        changesets::set_state(&mut tx, id, changesets::ChangesetState::Discarded, now).await?;
+    }
+    // What a writer that waited on the lock reads when it gets the row.
+    sqlx::query("UPDATE catalog_state SET deleted_at = $2 WHERE id = $1")
+        .bind(catalog.id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+    // A test stops here to start an edit that queues behind the lock.
+    #[cfg(test)]
+    delete_pause::wait(&mut account_tx, catalog.id).await?;
+
+    // 3. The account writes, on the transaction that already holds its rows.
     record_catalog(
-        &mut tx,
+        &mut account_tx,
         actor,
         CatalogEvent {
             action: Action::CatalogDeleted,
@@ -1286,18 +2158,32 @@ pub async fn delete(
         now,
     )
     .await?;
-    sqlx::query("DELETE FROM catalogs WHERE id = $1")
+    sqlx::query("UPDATE catalogs SET deleted_at = $2 WHERE id = $1")
         .bind(catalog.id)
-        .execute(&mut *tx)
+        .bind(now)
+        .execute(&mut *account_tx)
         .await?;
+    cleanups::owe_catalog(&mut account_tx, db.store(), catalog.id, now).await?;
     // The catalog, and its owner's list of catalogs.
     let mut invalidations = vec![Invalidation::CatalogMeta {
         id: catalog.id,
         name: catalog.name,
     }];
     invalidations.extend(owner_team_id.map(|id| Invalidation::Team { id }));
-    invalidate(&mut tx, &invalidations).await?;
-    tx.commit().await?;
+    invalidate(&mut account_tx, &invalidations).await?;
+
+    // 4. Account first: the catalog is gone from lookups. A failure here
+    // drops `tx`, which rolls the store back.
+    account_tx.commit().await?;
+    // The delete has happened. A store commit that fails now only leaves
+    // the data unmarked, which the owed cleanup removes all the same, so
+    // the caller is not told the delete failed.
+    if let Err(error) = tx.commit().await {
+        tracing::warn!(
+            kind = db.classify(error).kind(),
+            "the store side of a catalog deletion did not commit; the cleanup removes it"
+        );
+    }
     Ok(())
 }
 
@@ -1389,31 +2275,73 @@ pub(crate) async fn lock(conn: &mut PgConnection, catalog_id: i64) -> Result<(),
     Ok(())
 }
 
-/// Finds catalog `name` and takes its lock ([`lock`]), then reads it again:
-/// a delete holding the lock may have removed (or replaced) the catalog
-/// while this waited. The second read is also the generation no publish or
-/// import can move until the transaction ends.
+/// Bumps the catalog's generation on its store and returns the new value.
+/// The row is `catalog.catalog_state`, so `conn` is a store transaction
+/// that already holds the catalog's lock.
 ///
 /// # Arguments
-/// * `conn` - the transaction's connection.
+/// * `conn` - the store transaction's connection.
+/// * `catalog_id` - the catalog.
+///
+/// # Returns
+/// The generation after the bump.
+///
+/// # Errors
+/// [`OkfError::Database`]; a missing row is `RowNotFound` (the catalog has no
+/// store side).
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.bump_generation", catalog_id = catalog_id))]
+pub(crate) async fn bump_generation(
+    conn: &mut PgConnection,
+    catalog_id: i64,
+) -> Result<i64, OkfError> {
+    Ok(sqlx::query_scalar(
+        "UPDATE catalog_state SET generation = generation + 1 WHERE id = $1 RETURNING generation",
+    )
+    .bind(catalog_id)
+    .fetch_one(&mut *conn)
+    .await?)
+}
+
+/// Finds catalog `name` on the account database and takes its lock
+/// ([`lock`], on the store), then reads it again: a delete holding the lock
+/// may have removed (or replaced) the catalog while this waited. The
+/// catalog's `generation` is read from the store's `catalog_state` under the
+/// lock, so no publish or import can move it until the transaction ends.
+///
+/// # Arguments
+/// * `account` - the account transaction's connection.
+/// * `store` - the store transaction's connection.
 /// * `name` - the catalog's name.
 ///
 /// # Returns
-/// The catalog's row, read under its lock.
+/// The catalog's row, read under its lock, with its generation.
 ///
 /// # Errors
 /// [`OkfError::CatalogNotSelected`] for an unknown (or malformed) catalog,
 /// or one deleted or replaced while this waited; [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "catalogs.lock_by_name"))]
-pub(crate) async fn lock_by_name(conn: &mut PgConnection, name: &str) -> Result<Catalog, OkfError> {
-    let found = find(&mut *conn, name).await?;
-    lock(conn, found.id).await?;
-    let locked = find(&mut *conn, name).await?;
+pub(crate) async fn lock_by_name(
+    account: &mut PgConnection,
+    store: &mut PgConnection,
+    name: &str,
+) -> Result<Catalog, OkfError> {
+    let found = find(&mut *account, name).await?;
+    lock(&mut *store, found.id).await?;
+    let mut locked = find(&mut *account, name).await?;
     if locked.id != found.id {
         return Err(OkfError::CatalogNotSelected {
             catalog: name.to_string(),
         });
     }
+    let generation: Option<i64> =
+        sqlx::query_scalar("SELECT generation FROM catalog_state WHERE id = $1")
+            .bind(locked.id)
+            .fetch_optional(&mut *store)
+            .await?;
+    // No state row: a delete of the store side committed first.
+    locked.generation = generation.ok_or_else(|| OkfError::CatalogNotSelected {
+        catalog: name.to_string(),
+    })?;
     Ok(locked)
 }
 
@@ -1665,7 +2593,7 @@ pub(crate) mod tests {
             )
             .await
             .unwrap();
-            let rows = documents::published(&db.pool, catalog.id).await.unwrap();
+            let rows = documents::published(&db.store(), catalog.id).await.unwrap();
             let index = rows.iter().find(|row| row.path == "index.md").unwrap();
             headings.push(String::from_utf8(index.content.clone()).unwrap());
         }
@@ -1700,7 +2628,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        let rows = documents::published(&db.pool, pg.id).await.unwrap();
+        let rows = documents::published(&db.store(), pg.id).await.unwrap();
         let stored: Vec<(&str, &[u8], i32)> = rows
             .iter()
             .map(|row| (row.path.as_str(), row.content.as_slice(), row.revision))
@@ -1716,19 +2644,20 @@ pub(crate) mod tests {
         assert!(starter[0].1.contains("# Catalog\n\npgrace's catalog\n"));
         assert_eq!(pg.generation, 0);
         // The derived columns are filled in, as an import's are.
-        let kinds: Vec<(String, Option<String>)> =
-            sqlx::query_as("SELECT kind, title FROM documents WHERE catalog_id = $1 ORDER BY path")
-                .bind(pg.id)
-                .fetch_all(&db.pool)
-                .await
-                .unwrap();
+        let kinds: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT kind, title FROM catalog.documents WHERE catalog_id = $1 ORDER BY path",
+        )
+        .bind(pg.id)
+        .fetch_all(&crate::db::store_pool(&db.pool))
+        .await
+        .unwrap();
         assert_eq!(kinds[0].0, "index");
         assert_eq!(kinds[1].0, "log");
         let revisions: Vec<(String, String, String)> = sqlx::query_as(
-            "SELECT path, op, message FROM revisions WHERE catalog_id = $1 ORDER BY path",
+            "SELECT path, op, message FROM catalog.revisions WHERE catalog_id = $1 ORDER BY path",
         )
         .bind(pg.id)
-        .fetch_all(&db.pool)
+        .fetch_all(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         let create_catalog = |path: &str| {
@@ -2081,20 +3010,20 @@ pub(crate) mod tests {
         .await
         .unwrap();
         let changeset: i64 = sqlx::query_scalar(
-            "INSERT INTO changesets (catalog_id, actor, state, created_at, updated_at) \
+            "INSERT INTO catalog.changesets (catalog_id, actor, state, created_at, updated_at) \
              VALUES ($1, 'a', 'open', $2, $2) RETURNING id",
         )
         .bind(pg.id)
         .bind(now())
-        .fetch_one(&db.pool)
+        .fetch_one(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO changeset_entries (changeset_id, path, content) VALUES ($1, 'a.md', $2)",
+            "INSERT INTO catalog.changeset_entries (changeset_id, path, content) VALUES ($1, 'a.md', $2)",
         )
         .bind(changeset)
         .bind(b"x".to_vec())
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
 
@@ -2106,8 +3035,10 @@ pub(crate) mod tests {
             .unwrap();
 
         assert!(list(&db.pool).await.unwrap().is_empty());
-        let entries: i64 = sqlx::query_scalar("SELECT count(*) FROM changeset_entries")
-            .fetch_one(&db.pool)
+        // The data goes with the cleanup the delete owes.
+        crate::store::cleanups::settle_for_tests(&db.pool).await;
+        let entries: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.changeset_entries")
+            .fetch_one(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
         assert_eq!(entries, 0);
@@ -2131,12 +3062,12 @@ pub(crate) mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO changesets (catalog_id, actor, state, created_at, updated_at) \
+            "INSERT INTO catalog.changesets (catalog_id, actor, state, created_at, updated_at) \
              VALUES ($1, 'a', 'open', $2, $2)",
         )
         .bind(pg.id)
         .bind(now())
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
 
@@ -2192,12 +3123,12 @@ pub(crate) mod tests {
     pub(crate) async fn drop_starter_files(pool: &PgPool, catalog_id: i64) {
         // Two static statements: sqlx refuses SQL built at run time.
         for statement in [
-            "DELETE FROM revisions WHERE catalog_id = $1",
-            "DELETE FROM documents WHERE catalog_id = $1",
+            "DELETE FROM catalog.revisions WHERE catalog_id = $1",
+            "DELETE FROM catalog.documents WHERE catalog_id = $1",
         ] {
             sqlx::query(statement)
                 .bind(catalog_id)
-                .execute(pool)
+                .execute(CatalogDb::main_of(pool).executor())
                 .await
                 .expect("drop the starter files");
         }
@@ -2205,9 +3136,13 @@ pub(crate) mod tests {
 
     /// Counts the lock requests blocked in this test's own database: the
     /// test server may be shared by other tests, whose waits are not ours.
-    pub(crate) const AWAITED_LOCKS: &str = "SELECT count(*) FROM pg_locks l \
-         JOIN pg_stat_activity a ON a.pid = l.pid \
-         WHERE NOT l.granted AND a.datname = current_database()";
+    /// In `separate` store mode the store is a database named after this
+    /// one, so the match is on the name's start.
+    pub(crate) const AWAITED_LOCKS: &str = concat!(
+        "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
+         WHERE NOT l.granted AND ",
+        crate::test_locks::own_databases!("a.datname")
+    );
 
     /// Waits until some backend is blocked on a lock, so a test knows the
     /// spawned delete (or import) has reached the point it should wait at.
@@ -2296,17 +3231,23 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
+        // Another delete's account side: the registry row, held until it
+        // commits (a delete takes it before it takes the store).
         let mut first = db.pool.begin().await.unwrap();
-        lock(&mut first, pg.id).await.unwrap();
+        sqlx::query("SELECT id FROM catalogs WHERE id = $1 FOR UPDATE")
+            .bind(pg.id)
+            .execute(&mut *first)
+            .await
+            .unwrap();
         // `tokio::spawn` runs the second delete concurrently, like a thread;
-        // it blocks on the lock `first` holds.
+        // it blocks on the row `first` holds.
         let pool = db.pool.clone();
         let second = tokio::spawn(async move {
             delete(&pool, "pg", false, &AuditActor::cli(), Utc::now()).await
         });
         until_a_lock_is_awaited(&db.pool).await;
 
-        sqlx::query("DELETE FROM catalogs WHERE id = $1")
+        sqlx::query("UPDATE catalogs SET deleted_at = now() WHERE id = $1")
             .bind(pg.id)
             .execute(&mut *first)
             .await
@@ -2338,18 +3279,18 @@ pub(crate) mod tests {
         .await
         .unwrap();
         let changeset: i64 = sqlx::query_scalar(
-            "INSERT INTO changesets (catalog_id, actor, state, created_at, updated_at) \
+            "INSERT INTO catalog.changesets (catalog_id, actor, state, created_at, updated_at) \
              VALUES ($1, 'a', 'open', $2, $2) RETURNING id",
         )
         .bind(pg.id)
         .bind(now())
-        .fetch_one(&db.pool)
+        .fetch_one(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         // A session's write, not yet committed when the delete starts.
-        let mut writer = db.pool.begin().await.unwrap();
+        let mut writer = crate::db::store_pool(&db.pool).begin().await.unwrap();
         sqlx::query(
-            "INSERT INTO changeset_entries (changeset_id, path, content) VALUES ($1, 'a.md', $2)",
+            "INSERT INTO catalog.changeset_entries (changeset_id, path, content) VALUES ($1, 'a.md', $2)",
         )
         .bind(changeset)
         .bind(b"x".to_vec())
@@ -2410,19 +3351,19 @@ pub(crate) mod tests {
     /// Gives catalog `catalog_id` an open changeset with one entry.
     async fn unpublished_work(pool: &PgPool, catalog_id: i64) {
         let changeset: i64 = sqlx::query_scalar(
-            "INSERT INTO changesets (catalog_id, actor, state, created_at, updated_at) \
+            "INSERT INTO catalog.changesets (catalog_id, actor, state, created_at, updated_at) \
              VALUES ($1, 'a', 'open', $2, $2) RETURNING id",
         )
         .bind(catalog_id)
         .bind(now())
-        .fetch_one(pool)
+        .fetch_one(&crate::db::store_pool(pool))
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO changeset_entries (changeset_id, path, content) VALUES ($1, 'a.md', 'x')",
+            "INSERT INTO catalog.changeset_entries (changeset_id, path, content) VALUES ($1, 'a.md', 'x')",
         )
         .bind(changeset)
-        .execute(pool)
+        .execute(&crate::db::store_pool(pool))
         .await
         .unwrap();
     }
@@ -2567,11 +3508,12 @@ pub(crate) mod tests {
 
         assert!(created.is_err() && moved.is_err() && described.is_err() && deleted.is_err());
         // The starter files went with the rolled-back row: only pg's remain.
-        let starters: i64 = sqlx::query_scalar("SELECT count(*) FROM revisions WHERE message = $1")
-            .bind(STARTER_MESSAGE)
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
+        let starters: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM catalog.revisions WHERE message = $1")
+                .bind(STARTER_MESSAGE)
+                .fetch_one(&crate::db::store_pool(&db.pool))
+                .await
+                .unwrap();
         assert_eq!(starters, 2);
         let pg = find(&db.pool, "pg").await.unwrap();
         assert_eq!(pg.owner_team.as_deref(), Some(TEST_TEAM));

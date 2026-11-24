@@ -1805,9 +1805,14 @@ async fn publish(
         now: Utc::now(),
     };
     crate::support::server::applied(app, async {
-        import(pool, catalog, entries, &options)
-            .await
-            .expect("import");
+        import(
+            &crate::support::stores::main_store(pool),
+            catalog,
+            entries,
+            &options,
+        )
+        .await
+        .expect("import");
     })
     .await;
 }
@@ -2512,8 +2517,8 @@ async fn serve_a_sample_catalog_for_the_visual_check() {
         .collect();
     publish_as(&server, "alex", files(&kept)).await;
     let actors: Vec<String> =
-        sqlx::query_scalar("SELECT DISTINCT actor FROM revisions ORDER BY actor")
-            .fetch_all(&server.db.pool)
+        sqlx::query_scalar("SELECT DISTINCT actor FROM catalog.revisions ORDER BY actor")
+            .fetch_all(&server.db.store())
             .await
             .expect("read the actors");
     assert_eq!(
@@ -2541,11 +2546,11 @@ async fn serve_a_sample_catalog_for_the_visual_check() {
 /// If the update fails.
 async fn pin_the_seed_actor(server: &TestServer) {
     for statement in [
-        "UPDATE documents SET updated_by = 'owner' WHERE updated_by NOT IN ('tester', 'sam', 'alex')",
-        "UPDATE revisions SET actor = 'owner' WHERE actor NOT IN ('tester', 'sam', 'alex')",
+        "UPDATE catalog.documents SET updated_by = 'owner' WHERE updated_by NOT IN ('tester', 'sam', 'alex')",
+        "UPDATE catalog.revisions SET actor = 'owner' WHERE actor NOT IN ('tester', 'sam', 'alex')",
     ] {
         sqlx::query(statement)
-            .execute(&server.db.pool)
+            .execute(&server.db.store())
             .await
             .expect("pin the seed actor");
     }
@@ -2563,9 +2568,14 @@ async fn publish_as(server: &TestServer, actor: &str, entries: okf_mcp::archive:
         now: Utc::now(),
     };
     crate::support::server::applied(&server.app, async {
-        import(&server.db.pool, "notes", entries, &options)
-            .await
-            .expect("import");
+        import(
+            &crate::support::stores::main_store(&server.db.pool),
+            "notes",
+            entries,
+            &options,
+        )
+        .await
+        .expect("import");
     })
     .await;
 }

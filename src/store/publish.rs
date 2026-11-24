@@ -19,7 +19,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::Serialize;
-use sqlx::{PgConnection, PgPool};
+use sqlx::PgConnection;
 use tracing::Instrument;
 
 use crate::app::App;
@@ -33,10 +33,11 @@ use crate::okf::ops::replay::{replay, ReplayOp};
 use crate::okf::rules;
 use crate::okf::snapshot::Snapshot;
 use crate::overlay::{build_overlay, Overlay};
-use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
+use crate::store::audit::{self, Action, AuditActor, CatalogEntry, People};
 use crate::store::catalogs::{self, is_unique_violation, CatalogGeneration};
 use crate::store::changesets::{self, ChangesetRow, ChangesetState, EntryRow};
 use crate::store::documents::{self, Derived, DocumentWrite, RevisionOp, RevisionRecord};
+use crate::stores::CatalogDb;
 use crate::telemetry::metrics::Outcome;
 use crate::telemetry::subscriber::split_event;
 
@@ -156,7 +157,7 @@ pub async fn publish(
 ) -> Result<PublishReport, OkfError> {
     let started = std::time::Instant::now();
     let before = state.current().generation();
-    let result = publish_locked(app, state, input, audit).await;
+    let result = Box::pin(publish_locked(app, state, input, audit)).await;
     // Whatever the outcome: the publish may have refreshed the state in
     // place, before it committed (`current_base`, even when the merge or
     // lint then refuses) or after (step 6). The catalog cache weighs the
@@ -195,8 +196,10 @@ async fn publish_locked(
         actor,
         message,
     } = *input;
+    // The catalog's store: every read and write of the publish goes to it.
+    let db = app.store_db(state.store()).await?;
     // Step 1, before any lock: an empty changeset never waits for one.
-    if changesets::entries(app.pool(), changeset.id)
+    if changesets::entries(db.executor(), changeset.id)
         .await?
         .is_empty()
     {
@@ -209,12 +212,19 @@ async fn publish_locked(
     let lock_started = std::time::Instant::now();
     let locks = async {
         let publishing = app.publish_lock(state.id()).await;
-        let mut tx = app.pool().begin().await?;
+        // The account transaction (the audit entry's rows, the invalidation
+        // notice) wraps the store transaction; the store commits first, then
+        // this. The entry itself is written in the store transaction, from
+        // ids resolved here (plan Task 12).
+        let mut account_tx = app.accounts().begin().await?;
         // The users the entry resolves (the actor, its key's owner and the
         // person of a personal owner team), before the changeset: the
         // order `users::delete` takes them in (issue #418). After the
         // mutex, so no waiter on it holds a row lock.
-        lock_people(&mut tx, audit, state.name()).await?;
+        lock_people(&mut account_tx, audit, state.name()).await?;
+        // Still before the store connection: the entry's account ids.
+        let resolved = audit::resolve_actor(&mut account_tx, audit, state.id()).await?;
+        let mut tx = db.begin().await?;
         catalogs::lock(&mut tx, state.id()).await?;
         changesets::lock_catalog(&mut tx, state.id()).await?;
         let locked = changesets::lock(&mut tx, changeset.id)
@@ -223,14 +233,14 @@ async fn publish_locked(
             .ok_or_else(|| OkfError::Refused {
                 reason: format!("changeset {} is no longer open", changeset.handle),
             })?;
-        Ok::<_, OkfError>((publishing, tx, locked))
+        Ok::<_, OkfError>((publishing, account_tx, tx, locked, resolved))
     }
     .instrument(tracing::info_span!("okf.publish.lock"))
     .await;
     // A refusal waited too, so the wait is recorded before `?` returns it.
     app.metrics()
         .publish_lock_wait(state.name(), lock_started.elapsed());
-    let (_publishing, mut tx, locked) = locks?;
+    let (_publishing, account_tx, mut tx, locked, resolved) = locks?;
     let now = app.clock().now();
     // Again under the lock: a discard may have emptied it meanwhile.
     let entries = changesets::entries(&mut *tx, locked.id).await?;
@@ -269,7 +279,8 @@ async fn publish_locked(
             // sees only what is committed, and report the revision there now.
             Err(OkfError::Conflict { files }) => {
                 tx.rollback().await?;
-                let files = with_current_revisions(app.pool(), state.id(), files).await?;
+                account_tx.rollback().await?;
+                let files = with_current_revisions(&db, state.id(), files).await?;
                 return Err(OkfError::Conflict { files });
             }
             Err(error) => return Err(error),
@@ -279,18 +290,11 @@ async fn publish_locked(
         // nothing.
         let mut changed = None;
         if !revisions.is_empty() {
-            let generation: i64 = sqlx::query_scalar(
-            "UPDATE catalogs SET generation = generation + 1 WHERE id = $1 RETURNING generation",
-        )
-        .bind(state.id())
-        .fetch_one(&mut *tx)
-        .await?;
-            let teams = audit::catalog_teams(&mut tx, state.id()).await?;
-            let entry = Entry {
+            let generation = catalogs::bump_generation(&mut tx, state.id()).await?;
+            let entry = CatalogEntry {
                 action: Action::CatalogPublished,
-                target: Target::Catalog(state.name()),
-                person: None,
-                teams: &teams,
+                catalog_id: state.id(),
+                catalog: state.name(),
                 // The diff stays in the catalog's history, found by the handle.
                 details: serde_json::json!({
                     "changeset": locked.handle,
@@ -299,8 +303,10 @@ async fn publish_locked(
                     "generation_to": generation,
                 }),
             };
-            audit::record(&mut tx, audit, &entry, now).await?;
-            // Every replica's listener refreshes the catalog once this commits.
+            // In the store transaction: it commits with the revisions it records.
+            audit::record_catalog(&mut tx, &resolved, &entry, now).await?;
+            // In the store transaction too: the message is sent when the generation
+            // commits, on the store's own change feed (Task 17), and only then.
             invalidate(
                 &mut tx,
                 &[Invalidation::Catalog {
@@ -316,6 +322,7 @@ async fn publish_locked(
         }
         changesets::set_state(&mut tx, locked.id, ChangesetState::Published, now).await?;
         tx.commit().await?;
+        account_tx.commit().await?;
         Ok::<_, OkfError>((revisions, changed))
     }
     .instrument(tracing::info_span!("okf.publish.write"))
@@ -333,7 +340,7 @@ async fn publish_locked(
     // the next use retries it (it checks the snapshot against the catalog's
     // row), and the next publish refreshes first. `publish` then has the
     // catalog cache weigh the new snapshot.
-    if let Err(error) = state.refresh(app.pool(), app.rebuild_locks()).await {
+    if let Err(error) = state.refresh(&db, app.rebuild_locks()).await {
         split_event!(
             error,
             { catalog = %state.name(), kind = error.kind(), },
@@ -341,7 +348,7 @@ async fn publish_locked(
             "refresh after publish failed; the next use retries"
         );
     }
-    app.overlays().forget(locked.id).await;
+    app.overlays().forget(locked.key()).await;
     Ok(PublishReport {
         published: true,
         revisions,
@@ -390,7 +397,7 @@ async fn current_base(
     state: &CatalogState,
     conn: &mut PgConnection,
 ) -> Result<Arc<Loaded>, OkfError> {
-    let generation: i64 = sqlx::query_scalar("SELECT generation FROM catalogs WHERE id = $1")
+    let generation: i64 = sqlx::query_scalar("SELECT generation FROM catalog_state WHERE id = $1")
         .bind(state.id())
         .fetch_one(&mut *conn)
         .await?;
@@ -808,13 +815,18 @@ fn as_conflict(error: OkfError, path: &str, expected: Option<i32>) -> OkfError {
 }
 
 /// Fills in each conflicting file's live revision as committed now, for the
-/// backstop's conflict (read on the pool, after the publish rolled back).
+/// backstop's conflict (read on the store's pool, after the publish rolled back).
+///
+/// # Arguments
+/// * `db` - the catalog's store.
+/// * `catalog_id` - the catalog.
+/// * `files` - the conflicting files.
 ///
 /// # Errors
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "publish.with_current_revisions", catalog_id = catalog_id))]
 async fn with_current_revisions(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     mut files: Vec<ConflictFile>,
 ) -> Result<Vec<ConflictFile>, OkfError> {
@@ -826,7 +838,7 @@ async fn with_current_revisions(
         )
         .bind(catalog_id)
         .bind(file.path.trim_start_matches('/'))
-        .fetch_optional(pool)
+        .fetch_optional(db.executor())
         .await?;
     }
     Ok(files)
@@ -988,7 +1000,7 @@ mod tests {
         let first = test.app.catalog("pg").await.unwrap().expect("pg is loaded");
         let second = Arc::new(
             CatalogState::load(
-                test.app.pool(),
+                &test.app.main_db().await,
                 &test.app.catalog_row("pg").await.unwrap().expect("pg"),
             )
             .await

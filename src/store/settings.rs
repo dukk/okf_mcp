@@ -28,7 +28,7 @@
 //! (`check_branding_defaults`). `audit_retention_days` has no config key
 //! (default [`audit::DEFAULT_RETENTION_DAYS`]), since the audit log's
 //! append-only trigger reads it from the same row
-//! (`migrations/0012_audit.sql`), and neither have the three unlock
+//! (`migrations/accounts/0012_audit.sql`), and neither have the three unlock
 //! settings (spec Part 6; defaults off, [`unlocks::DEFAULT_MAX_HOURS`] and
 //! on).
 //!
@@ -851,7 +851,7 @@ pub async fn load(
         reason = "trivial conversion: pure arithmetic or formatting on its arguments, no I/O"
     )
 )]
-fn updated_by(actor: &AuditActor) -> String {
+pub(crate) fn updated_by(actor: &AuditActor) -> String {
     match actor.via {
         Via::Cli | Via::System => actor.stored_label(),
         Via::Session | Via::Key | Via::Grant => actor.label.clone(),

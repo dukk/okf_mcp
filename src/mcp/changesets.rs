@@ -31,10 +31,12 @@ use crate::okf::paths::{escapes_root, normpath};
 use crate::okf::rules;
 use crate::okf::workspace::Workspace;
 use crate::store::audit::Action;
+use crate::store::catalogs;
 use crate::store::keys::Access;
 // `as publishing`: the module's `publish` would clash with this file's
 // `publish` function.
 use crate::store::publish as publishing;
+use crate::stores::{StoreName, READ_CONCURRENCY};
 use crate::write::{apply_audited, OpAudit, WriteReport};
 
 /// `list_changesets`' arguments.
@@ -79,6 +81,13 @@ pub struct ListedChangeset {
 pub struct Listed {
     /// By catalog, oldest change first.
     pub changesets: Vec<ListedChangeset>,
+    /// The ids of catalogs this call offers whose store could not be reached
+    /// (sorted, each once), so their changesets are not listed: retry. Only
+    /// set without `catalog`; absent when every store answered.
+    // Left out of the JSON when empty, as the other optional fields are.
+    // `default` keeps the key optional in the output schema, as it is in the JSON.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable: Vec<String>,
 }
 
 /// The time before which an open changeset's last change makes it idle.
@@ -130,14 +139,16 @@ pub(crate) async fn list_changesets(
     // The database narrows by key (unless admin) and catalog, so other
     // keys' changesets and paths never leave it.
     let key_filter = (!admin).then_some(principal.key_id.as_str());
-    let pool = ctx.app().pool();
+    let accounts = ctx.app().accounts();
+    let mut unavailable = Vec::new();
     let rows = match params.catalog.as_deref() {
         // `one` refuses a catalog the key does not reach; it checks the name
         // and the incarnation whose changesets are listed, and admits
         // nothing: a list of changesets reads no catalog's contents.
         Some(name) => {
-            let id = ctx.one(Some(name)).await?.id();
-            changesets::list_open(pool, &[id], key_filter).await?
+            let state = ctx.one(Some(name)).await?;
+            let store = ctx.app().store_db(state.store()).await?;
+            changesets::list_open(accounts, &store, &[state.id()], key_filter).await?
         }
         None => {
             // A list naming a bad catalog fails here as it does elsewhere.
@@ -153,7 +164,11 @@ pub(crate) async fn list_changesets(
                 // rows, and each is checked against its row below.
                 (_, Reach::All | Reach::Ceiling) => None,
             };
-            let rows = changesets::open_for_catalogs(pool, names.as_deref(), key_filter).await?;
+            // Across catalogs: every store in turn, `main` first, each at
+            // most `READ_CONCURRENCY` at a time; a store that cannot be
+            // reached is left out and its catalogs are named below.
+            let (rows, down) = open_in_every_store(ctx, names.as_deref(), key_filter).await?;
+            unavailable = unreachable_catalogs(ctx, names.as_deref(), &down).await?;
             // A closed catalog shows no changesets: its handles and paths are
             // part of what suspension (M13) and a lock (M14) withhold.
             // `offers` (reach) is checked first; the lock is checked against
@@ -214,7 +229,124 @@ pub(crate) async fn list_changesets(
             paths: row.paths.iter().map(|path| format!("/{path}")).collect(),
         })
         .collect();
-    Ok(Listed { changesets })
+    Ok(Listed {
+        changesets,
+        unavailable,
+    })
+}
+
+/// The open changesets of the catalogs `names` (every catalog for `None`) in
+/// every store, read together (at most [`READ_CONCURRENCY`] stores at once)
+/// and each store within its connect timeout.
+///
+/// # Arguments
+/// * `ctx` - the call's context.
+/// * `names` - as for [`crate::store::changesets::open_for_catalogs`].
+/// * `key_filter` - as for it.
+///
+/// # Returns
+/// The rows, by catalog name then last change (as one store gives them) and
+/// the stores that could not be reached.
+///
+/// # Errors
+/// [`OkfError::Database`] for a reachable store's failed read.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn open_in_every_store(
+    ctx: &ToolContext,
+    names: Option<&[String]>,
+    key_filter: Option<&str>,
+) -> Result<(Vec<crate::store::changesets::ListedRow>, Vec<StoreName>), OkfError> {
+    use crate::store::changesets;
+
+    let accounts = ctx.app().accounts();
+    let bound = ctx.app().stores().connect_timeout();
+    let stores = ctx.stores_main_first().await?;
+    // A chunk's reads run together; chunks of `READ_CONCURRENCY` bound how
+    // many stores are asked at once, and the stores' order is kept.
+    let mut answers: Vec<Result<Vec<changesets::ListedRow>, OkfError>> =
+        Vec::with_capacity(stores.len());
+    for chunk in stores.chunks(READ_CONCURRENCY) {
+        answers.extend(
+            futures_util::future::join_all(chunk.iter().map(|store| async move {
+                let read = async {
+                    let db = ctx.app().store_db(store).await?;
+                    changesets::open_for_catalogs(accounts, &db, names, key_filter)
+                        .await
+                        .map_err(|error| match error {
+                            // A connection that fails mid-query is the store
+                            // being unreachable, as for a connect.
+                            OkfError::Database { source } => db.classify(source),
+                            other => other,
+                        })
+                };
+                tokio::time::timeout(bound, read)
+                    .await
+                    .unwrap_or_else(|_| Err(OkfError::store_unavailable(store)))
+            }))
+            .await,
+        );
+    }
+    let mut rows = Vec::new();
+    let mut down = Vec::new();
+    let mut contributing = 0;
+    for (store, answer) in stores.into_iter().zip(answers) {
+        match answer {
+            Ok(found) => {
+                contributing += usize::from(!found.is_empty());
+                rows.extend(found);
+            }
+            Err(OkfError::StoreUnavailable { .. }) => down.push(store),
+            Err(error) => return Err(error),
+        }
+    }
+    // One store's own order stands (it is the database's collation); stores
+    // merge by catalog name, and a stable sort keeps each catalog's changesets
+    // in the order its store gave them.
+    if contributing > 1 {
+        rows.sort_by(|left, right| left.catalog.cmp(&right.catalog));
+    }
+    Ok((rows, down))
+}
+
+/// The ids of the catalogs this call offers that sit on the `down` stores:
+/// what a list names as unavailable. Read from the account database, and
+/// only catalogs the key reaches and the connection offers.
+///
+/// # Arguments
+/// * `ctx` - the call's context.
+/// * `names` - the catalogs the key reaches by name, or `None` for any.
+/// * `down` - the stores that could not be reached.
+///
+/// # Returns
+/// The ids, sorted, each once.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn unreachable_catalogs(
+    ctx: &ToolContext,
+    names: Option<&[String]>,
+    down: &[StoreName],
+) -> Result<Vec<String>, OkfError> {
+    let mut unavailable = Vec::new();
+    for store in down {
+        let rows = match names {
+            Some(names) => catalogs::rows_by_names(ctx.app().accounts().executor(), names)
+                .await?
+                .into_iter()
+                .filter(|row| row.store == *store)
+                .collect(),
+            None => catalogs::rows_on_store(ctx.app().accounts().executor(), store).await?,
+        };
+        unavailable.extend(
+            rows.iter()
+                .filter(|row| ctx.offers(row))
+                .map(|row| row.name.clone()),
+        );
+    }
+    unavailable.sort();
+    unavailable.dedup();
+    Ok(unavailable)
 }
 
 // As in the read tool modules: the macro turns this block's `#[tool]`
@@ -229,7 +361,8 @@ impl OkfServer {
                        means nothing changed within the idle timeout. Empty changesets are \
                        listed too, but one with no write within 24 hours is discarded and no \
                        longer listed: open a new one then. Use it to find a handle again after a \
-                       reconnect or a lost context. Read access.",
+                       reconnect or a lost context. Read access. A catalog whose store cannot be \
+                       reached is listed in `unavailable`.",
         annotations(
             title = "List Changesets",
             read_only_hint = true,
@@ -311,9 +444,28 @@ pub(crate) async fn open_changeset(
     // catalog incarnation, and one of a catalog created again under its
     // name must not open a changeset in the replacement (PR #442).
     ctx.require_contents(Access::Write, &state).await?;
+    let db = ctx.app().store_db(state.store()).await?;
+    // The interlock with a deletion of the key (a user's, issue #972): its
+    // row `FOR KEY SHARE` on the account connection, taken BEFORE the
+    // store's connection (`CatalogDb::begin`'s order) and kept until after
+    // the store commits. `changesets.key_id` has no foreign key now, so
+    // this is what makes the deletion (which locks the key `FOR UPDATE`)
+    // wait for the open, and the cleanup it owes then find the changeset;
+    // an open that comes after the deletion finds no key and is refused.
+    let mut account_tx = db.accounts().begin().await?;
+    let held: Option<String> =
+        sqlx::query_scalar("SELECT id FROM api_keys WHERE id = $1 FOR KEY SHARE")
+            .bind(&principal.key_id)
+            .fetch_optional(&mut *account_tx)
+            .await?;
+    if held.is_none() {
+        return Err(OkfError::Forbidden {
+            reason: "this key no longer exists".to_string(),
+        });
+    }
     // The lock order of every changeset write: the catalog row first, so a
     // concurrent `catalog delete` either waits for this or is seen here.
-    let mut tx = ctx.app().pool().begin().await?;
+    let mut tx = db.begin().await?;
     changesets::lock_catalog(&mut tx, state.id()).await?;
     let opened = changesets::open(
         &mut tx,
@@ -323,7 +475,8 @@ pub(crate) async fn open_changeset(
         now,
     )
     .await?;
-    tx.commit().await?;
+    tx.commit().await.map_err(|error| db.classify(error))?;
+    account_tx.commit().await?;
     Ok(Opened {
         changeset: opened.handle,
         catalog: state.name().to_string(),
@@ -598,7 +751,7 @@ pub(crate) async fn discard(
     ctx: &ToolContext,
     params: DiscardParams,
 ) -> Result<Discarded, OkfError> {
-    use crate::store::audit::{self, Entry, Target};
+    use crate::store::audit::{self, CatalogEntry};
     use crate::store::catalogs;
     use crate::store::changesets::{self, ChangesetState};
 
@@ -641,11 +794,27 @@ pub(crate) async fn discard(
     let recorded =
         paths.is_none() && changeset.key_id.as_deref() != Some(principal.key_id.as_str());
     // Dropping `tx` without `commit()` (any `?`) rolls back.
-    let mut tx = app.pool().begin().await?;
-    if recorded {
+    // A recorded close wraps the store transaction in an account one (the
+    // entry's account ids); the store commits first. The entry itself is
+    // written in the store transaction.
+    let mut account_tx = match recorded {
+        true => Some(app.accounts().begin().await?),
+        false => None,
+    };
+    let mut resolved = None;
+    if let Some(account_tx) = account_tx.as_mut() {
         // The entry's users before the changeset, as publish (issue #418).
-        crate::store::publish::lock_people(&mut tx, &ctx.audit_actor(), state.name()).await?;
+        crate::store::publish::lock_people(account_tx, &ctx.audit_actor(), state.name()).await?;
+        // Still before the store connection: the entry's account ids.
+        resolved = Some(audit::resolve_actor(account_tx, &ctx.audit_actor(), state.id()).await?);
     }
+    // Acquisition order (plan Task 11, issue #970): the account transaction
+    // and every account row lock (`lock_people`) come BEFORE the store
+    // connection. A change that held the store's connection while it waited
+    // for a user row would block a user deletion (which holds those rows and
+    // then needs a store connection) in a cycle PostgreSQL cannot see,
+    // because one edge is a pool wait.
+    let mut tx = app.store_db(state.store()).await?.begin().await?;
     catalogs::lock(&mut tx, state.id()).await?;
     changesets::lock_catalog(&mut tx, state.id()).await?;
     changesets::lock(&mut tx, changeset.id)
@@ -662,24 +831,25 @@ pub(crate) async fn discard(
     discarded.closed = paths.is_none();
     if discarded.closed {
         changesets::set_state(&mut tx, changeset.id, ChangesetState::Discarded, now).await?;
-        if recorded {
-            let teams = audit::catalog_teams(&mut tx, state.id()).await?;
-            let entry = Entry {
+        if let Some(resolved) = resolved.as_ref() {
+            let entry = CatalogEntry {
                 action: Action::CatalogChangesetDiscarded,
-                target: Target::Catalog(state.name()),
-                person: None,
-                teams: &teams,
+                catalog_id: state.id(),
+                catalog: state.name(),
                 details: serde_json::json!({
                     "changeset": changeset.handle,
                     "files": discarded.removed,
                     "reason": "admin",
                 }),
             };
-            audit::record(&mut tx, &ctx.audit_actor(), &entry, now).await?;
+            audit::record_catalog(&mut tx, resolved, &entry, now).await?;
         }
     }
     tx.commit().await?;
-    app.overlays().forget(changeset.id).await;
+    if let Some(account_tx) = account_tx {
+        account_tx.commit().await?;
+    }
+    app.overlays().forget(changeset.key()).await;
     Ok(discarded)
 }
 
@@ -727,11 +897,16 @@ pub(crate) async fn revert(
     // The history is the changeset's catalog's; `apply` resolves the handle
     // again under its locks.
     let state = ctx.changeset(&changeset, Access::Write).await?.state;
-    let stored = history::content_at(ctx.app().pool(), state.id(), &path, revision)
-        .await?
-        .ok_or_else(|| OkfError::NotFound {
-            path: format!("/{path} (revision {revision})"),
-        })?;
+    let stored = history::content_at(
+        &ctx.app().store_db(state.store()).await?,
+        state.id(),
+        &path,
+        revision,
+    )
+    .await?
+    .ok_or_else(|| OkfError::NotFound {
+        path: format!("/{path} (revision {revision})"),
+    })?;
     // `transpose` again: `Option<Result<String, _>>` to `Result<Option<..>>`.
     let content = stored
         .content
@@ -805,8 +980,8 @@ pub(crate) async fn pending_changes(
     use crate::store::changesets;
 
     let Pinned { state, row } = ctx.changeset(&params.changeset, Access::Read).await?;
-    let pool = ctx.app().pool();
-    let entries = changesets::entries(pool, row.id).await?;
+    let store = ctx.app().store_db(state.store()).await?;
+    let entries = changesets::entries(store.executor(), row.id).await?;
     // An entry made on another replica (or before this one's snapshot moved)
     // can have a base newer than the snapshot here: refresh before diffing,
     // or the diff would be against older text (issue #659).
@@ -817,7 +992,7 @@ pub(crate) async fn pending_changes(
     // diff is against what the entries were made on.
     let before = state.current().generation();
     let loaded = state
-        .current_covering(pool, ctx.app().rebuild_locks(), bases)
+        .current_covering(&store, ctx.app().rebuild_locks(), bases)
         .await?;
     ctx.app()
         .catalog_cache()
@@ -1187,8 +1362,11 @@ mod open_tests {
         list_changesets(&ctx, named("other")).await.unwrap();
         settle_access(&test).await;
 
-        let reads =
-            crate::store::audit::testing::entries(test.app.pool(), "catalog.admin_read").await;
+        let reads = crate::store::audit::testing::entries(
+            test.app.accounts().executor(),
+            "catalog.admin_read",
+        )
+        .await;
         assert_eq!(
             reads.len(),
             1,
@@ -1522,6 +1700,14 @@ mod publish_tests {
         // Counted by the `cluster_stats` housekeeping job, read into the
         // gauge by the ticker (issue #693): one cluster-wide series.
         let count = || async {
+            // The store's count, then the cluster's sum (plan Task 16).
+            crate::housekeeping::run_on_store(
+                crate::housekeeping::Task::ClusterStats,
+                &crate::stores::StoreName::main(),
+                &test.app,
+            )
+            .await
+            .unwrap();
             crate::housekeeping::run(crate::housekeeping::Task::ClusterStats, &test.app)
                 .await
                 .unwrap();
@@ -1547,7 +1733,7 @@ mod publish_tests {
         // loads the settings.
         crate::invalidate::testing::applied(&test.app, async {
             crate::store::settings::set(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 crate::store::settings::SettingKey::MaxKeysPerUser,
                 "5",
                 &crate::store::audit::AuditActor::cli(),
@@ -1627,7 +1813,7 @@ mod publish_tests {
     async fn insert_entry(test: &TestApp, handle: &str, entry: EntryRow) {
         let state = test.app.catalog("pg").await.unwrap().unwrap();
         let row = changeset_row(test, handle).await;
-        let mut tx = test.app.pool().begin().await.unwrap();
+        let mut tx = test.app.main_db().await.begin().await.unwrap();
         changesets::lock_catalog(&mut tx, state.id()).await.unwrap();
         changesets::upsert_entry(&mut tx, row.id, &entry, Utc::now())
             .await
@@ -1638,11 +1824,12 @@ mod publish_tests {
     /// Waits until `count` backends of this database wait on a lock.
     async fn lock_waiters(test: &TestApp, count: i64) {
         for _ in 0..500 {
-            let waiting: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM pg_stat_activity \
-                 WHERE datname = current_database() AND wait_event_type = 'Lock'",
-            )
-            .fetch_one(test.app.pool())
+            let waiting: i64 = sqlx::query_scalar(concat!(
+                "SELECT count(*) FROM pg_stat_activity WHERE ",
+                crate::test_locks::own_databases!("datname"),
+                " AND wait_event_type = 'Lock'"
+            ))
+            .fetch_one(test.app.accounts().executor())
             .await
             .unwrap();
             if waiting >= count {
@@ -1693,7 +1880,7 @@ mod publish_tests {
         use crate::invalidate::{testing::invalidations_of, Invalidation};
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         let catalog = catalogs::find(pool, "pg").await.unwrap();
         let admin_before = catalogs::admin_generation(pool).await.unwrap();
         let handle = open(&ctx).await;
@@ -1713,7 +1900,7 @@ mod publish_tests {
             got,
             [Invalidation::Catalog {
                 id: catalog.id,
-                generation: catalog.generation + 1,
+                generation: catalogs::test_generation(pool, "pg").await,
             }]
         );
         assert_eq!(nothing, []);
@@ -1724,16 +1911,46 @@ mod publish_tests {
         );
     }
 
+    /// Issue #970: the counter a publish bumps is the store's
+    /// `catalog_state` row, read on the store's own pool; the registry row
+    /// has no generation any more.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn publish_bumps_generation_in_catalog_state() {
+        let test = pg().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let state = test.app.catalog("pg").await.unwrap().unwrap();
+        let on_store = || async {
+            sqlx::query_scalar::<_, i64>("SELECT generation FROM catalog_state WHERE id = $1")
+                .bind(state.id())
+                .fetch_one(test.app.main_db().await.executor())
+                .await
+                .unwrap()
+        };
+        let before = on_store().await;
+        let handle = open(&ctx).await;
+        body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
+
+        publish_as(&ctx, &handle, "edit a").await.unwrap();
+
+        assert_eq!(on_store().await, before + 1);
+        let registry_columns: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM information_schema.columns \
+             WHERE table_schema = 'public' AND table_name = 'catalogs' \
+               AND column_name = 'generation'",
+        )
+        .fetch_one(test.app.accounts().executor())
+        .await
+        .unwrap();
+        assert_eq!(registry_columns, 0);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn publish_writes_revisions_bumps_the_generation_and_swaps_the_snapshot() {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
         let state = test.app.catalog("pg").await.unwrap().unwrap();
-        let before = catalogs::find(test.app.pool(), "pg")
-            .await
-            .unwrap()
-            .generation;
+        let before = catalogs::test_generation(test.app.accounts().executor(), "pg").await;
         let written = body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
 
         let published = publish_as(&ctx, &handle, "edit a").await.unwrap();
@@ -1749,16 +1966,13 @@ mod publish_tests {
             }]
         );
         assert!(published.report.replayed.is_empty());
-        let after = catalogs::find(test.app.pool(), "pg")
-            .await
-            .unwrap()
-            .generation;
+        let after = catalogs::test_generation(test.app.accounts().executor(), "pg").await;
         assert_eq!(after, before + 1);
         assert_eq!(state.current().generation(), after);
         assert!(published_text(&test, "a.md")
             .await
             .ends_with("# A\n\nNew.\n"));
-        let rows = history::revisions(test.app.pool(), state.id(), "a.md", 5)
+        let rows = history::revisions(&test.app.main_db().await, state.id(), "a.md", 5)
             .await
             .unwrap();
         assert_eq!(
@@ -1771,15 +1985,15 @@ mod publish_tests {
             (2, "update", "writer-a", "edit a")
         );
         let changeset_id: Option<i64> = sqlx::query_scalar(
-            "SELECT changeset_id FROM revisions WHERE path = 'a.md' AND revision = 2",
+            "SELECT changeset_id FROM catalog.revisions WHERE path = 'a.md' AND revision = 2",
         )
-        .fetch_one(test.app.pool())
+        .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
         assert_eq!(changeset_id, Some(changeset_row(&test, &handle).await.id));
         let updated_by: String =
-            sqlx::query_scalar("SELECT updated_by FROM documents WHERE path = 'a.md'")
-                .fetch_one(test.app.pool())
+            sqlx::query_scalar("SELECT updated_by FROM catalog.documents WHERE path = 'a.md'")
+                .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
                 .await
                 .unwrap();
         assert_eq!(updated_by, "writer-a");
@@ -1812,7 +2026,7 @@ mod publish_tests {
         let noop = publish_as(&ctx, &unchanged, "nothing").await.unwrap();
 
         assert!(noop.report.revisions.is_empty(), "{noop:?}");
-        let recorded = entries(test.app.pool(), "catalog.published").await;
+        let recorded = entries(test.app.accounts().executor(), "catalog.published").await;
         assert_eq!(recorded.len(), 1, "{recorded:?}");
         let entry = &recorded[0];
         assert_eq!(entry.target.as_deref(), Some("pg"));
@@ -1820,10 +2034,7 @@ mod publish_tests {
         assert_eq!(entry.details["changeset"], handle.as_str());
         assert_eq!(entry.details["files"], 2);
         let generation: i64 =
-            sqlx::query_scalar("SELECT generation FROM catalogs WHERE name = 'pg'")
-                .fetch_one(test.app.pool())
-                .await
-                .unwrap();
+            crate::store::catalogs::test_generation(test.app.accounts().executor(), "pg").await;
         assert_eq!(entry.details["generation_to"], generation);
         assert_eq!(entry.details["generation_from"], generation - 1);
         assert_eq!(
@@ -1841,8 +2052,8 @@ mod publish_tests {
         let handle = open(&ctx).await;
         body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
         fail_on(
-            test.app.pool(),
-            "BEFORE INSERT ON audit_entries FOR EACH ROW",
+            test.app.accounts().executor(),
+            "BEFORE INSERT ON catalog.catalog_audit_entries FOR EACH ROW",
         )
         .await;
 
@@ -1856,10 +2067,67 @@ mod publish_tests {
             "the publish rolled back"
         );
         let state = test.app.catalog("pg").await.unwrap().unwrap();
-        let rows = history::revisions(test.app.pool(), state.id(), "a.md", 5)
+        let rows = history::revisions(&test.app.main_db().await, state.id(), "a.md", 5)
             .await
             .unwrap();
         assert_eq!(rows.len(), 1, "no revision was written");
+    }
+
+    /// The count of rows in the account's and the store's audit tables for
+    /// `catalog.published`.
+    async fn published_entries(test: &TestApp) -> (i64, i64) {
+        let pool = test.app.accounts().executor();
+        let account = sqlx::query_scalar(
+            "SELECT count(*) FROM audit_entries WHERE action = 'catalog.published'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let store = sqlx::query_scalar(
+            "SELECT count(*) FROM catalog.catalog_audit_entries WHERE action = 'catalog.published'",
+        )
+        .fetch_one(&crate::db::store_pool(pool))
+        .await
+        .unwrap();
+        (account, store)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_publish_writes_its_audit_entry_on_the_store() {
+        let test = pg().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
+
+        publish_as(&ctx, &handle, "edit a").await.unwrap();
+
+        assert_eq!(
+            published_entries(&test).await,
+            (0, 1),
+            "the entry is on the store and none is written to the account database"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_publish_writes_no_audit_entry() {
+        use crate::http::api::testing::fail_on;
+        let test = pg().await;
+        let ctx = writer(&test, "writer-a", "pg").await;
+        let handle = open(&ctx).await;
+        body(&ctx, &handle, "/a.md", "# A\n\nNew.\n").await;
+        // The entry is written before the changeset is marked published, so
+        // a failure there rolls the entry back with the revisions.
+        fail_on(
+            test.app.accounts().executor(),
+            "BEFORE UPDATE ON catalog.changesets FOR EACH ROW",
+        )
+        .await;
+
+        let refused = publish_as(&ctx, &handle, "edit a").await;
+
+        assert!(refused.is_err(), "{refused:?}");
+        assert_eq!(published_entries(&test).await, (0, 0));
+        assert_eq!(state_of(&test, &handle).await, ChangesetState::Open);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1880,7 +2148,7 @@ mod publish_tests {
         assert!(published.report.published);
         assert_eq!(state_of(&test, &handle).await, ChangesetState::Published);
         let state = test.app.catalog("pg").await.unwrap().unwrap();
-        let rows = history::revisions(test.app.pool(), state.id(), "a.md", 5)
+        let rows = history::revisions(&test.app.main_db().await, state.id(), "a.md", 5)
             .await
             .unwrap();
         // The publishing key's actor, not the opener's.
@@ -1923,10 +2191,7 @@ mod publish_tests {
         let test = pg().await;
         let ctx = writer(&test, "writer-a", "pg").await;
         let handle = open(&ctx).await;
-        let before = catalogs::find(test.app.pool(), "pg")
-            .await
-            .unwrap()
-            .generation;
+        let before = catalogs::test_generation(test.app.accounts().executor(), "pg").await;
 
         let nothing = publish_as(&ctx, &handle, "nothing").await.unwrap();
         let blank = publish_as(&ctx, &handle, "  ").await.unwrap_err();
@@ -1940,10 +2205,7 @@ mod publish_tests {
         assert_eq!(blank_unknown.kind(), "Refused");
         assert_eq!(unknown.kind(), "UnknownChangeset");
         assert_eq!(blank.kind(), "Refused");
-        let after = catalogs::find(test.app.pool(), "pg")
-            .await
-            .unwrap()
-            .generation;
+        let after = catalogs::test_generation(test.app.accounts().executor(), "pg").await;
         assert_eq!(after, before);
     }
 
@@ -1973,15 +2235,20 @@ mod publish_tests {
             ("log.md", "# Log\n"),
             ("z.md", "# Z\n"),
         ]);
-        import(test.app.pool(), "pg", republished, &options)
+        import(&test.app.main_db().await, "pg", republished, &options)
             .await
             .unwrap();
         let state = test.app.catalog("pg").await.unwrap().unwrap();
         let stale = state.current().generation();
-        let size = test.app.pool().options().get_max_connections();
+        let size = test
+            .app
+            .accounts()
+            .executor()
+            .options()
+            .get_max_connections();
         let mut held = Vec::with_capacity(size as usize);
         for _ in 1..size {
-            held.push(test.app.pool().acquire().await.unwrap());
+            held.push(test.app.accounts().executor().acquire().await.unwrap());
         }
 
         // Act: well inside sqlx's 30 s acquire timeout, which a publish
@@ -2022,9 +2289,12 @@ mod publish_tests {
             }]
         ));
         assert_eq!(state_of(&test, &mine).await, ChangesetState::Open);
-        let entries = changesets::entries(test.app.pool(), changeset_row(&test, &mine).await.id)
-            .await
-            .unwrap();
+        let entries = changesets::entries(
+            test.app.main_db().await.executor(),
+            changeset_row(&test, &mine).await.id,
+        )
+        .await
+        .unwrap();
         assert_eq!(entries.len(), 1);
         assert!(published_text(&test, "a.md").await.ends_with("From a.\n"));
     }
@@ -2194,7 +2464,9 @@ mod publish_tests {
     /// The entry `handle` holds for `path` (`path` without its `/`).
     async fn entry_for(test: &TestApp, handle: &str, path: &str) -> Option<EntryRow> {
         let row = changeset_row(test, handle).await;
-        let entries = changesets::entries(test.app.pool(), row.id).await.unwrap();
+        let entries = changesets::entries(test.app.main_db().await.executor(), row.id)
+            .await
+            .unwrap();
         entries.into_iter().find(|entry| entry.path == path)
     }
 
@@ -2405,7 +2677,7 @@ mod publish_tests {
             ("infra/y.md", Y),
             ("log.md", "# Log\n"),
         ]);
-        import(test.app.pool(), "pg", incoming, &options)
+        import(&test.app.main_db().await, "pg", incoming, &options)
             .await
             .unwrap();
         // The import wrote revision 3; this server's snapshot still has 2
@@ -2435,7 +2707,9 @@ mod publish_tests {
         log_entry(&ctx, &handle, "from a").await;
         let published = published_text(&test, "log.md").await;
         let row = changeset_row(&test, &handle).await;
-        let entries = changesets::entries(test.app.pool(), row.id).await.unwrap();
+        let entries = changesets::entries(test.app.main_db().await.executor(), row.id)
+            .await
+            .unwrap();
 
         let pending = shown(&ctx, &handle).await;
 
@@ -2650,7 +2924,7 @@ mod publish_tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
         };
-        import(test.app.pool(), "pg", files(&incoming), &options)
+        import(&test.app.main_db().await, "pg", files(&incoming), &options)
             .await
             .unwrap();
         let state = test.app.catalog("pg").await.unwrap().unwrap();
@@ -2693,10 +2967,10 @@ mod publish_tests {
     /// `(revision, deleted, content)` of a document row.
     async fn document_row(test: &TestApp, path: &str) -> (i32, bool, Vec<u8>) {
         sqlx::query_as(
-            "SELECT revision, deleted_at IS NOT NULL, content FROM documents WHERE path = $1",
+            "SELECT revision, deleted_at IS NOT NULL, content FROM catalog.documents WHERE path = $1",
         )
         .bind(path)
-        .fetch_one(test.app.pool())
+        .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap()
     }
@@ -2769,9 +3043,9 @@ mod publish_tests {
         );
         // The deletion's history row: no content, and the changeset that made it.
         let deleted: (Option<Vec<u8>>, Option<i64>) = sqlx::query_as(
-            "SELECT content, changeset_id FROM revisions WHERE path = 'infra/y.md' AND revision = 2",
+            "SELECT content, changeset_id FROM catalog.revisions WHERE path = 'infra/y.md' AND revision = 2",
         )
-        .fetch_one(test.app.pool())
+        .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
         assert_eq!(
@@ -2790,12 +3064,12 @@ mod publish_tests {
         // A revision 2 of a.md that the publish lock should have ruled out
         // (a hand edit of the database): the backstop must report it.
         sqlx::query(
-            "INSERT INTO revisions (catalog_id, path, revision, op, content, executable, actor, \
+            "INSERT INTO catalog.revisions (catalog_id, path, revision, op, content, executable, actor, \
                                     message, created_at) \
              VALUES ($1, 'a.md', 2, 'update', 'x'::bytea, false, 'intruder', 'x', now())",
         )
         .bind(state.id())
-        .execute(test.app.pool())
+        .execute(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
 
@@ -2825,7 +3099,7 @@ mod publish_tests {
         body(&ctx, &handle, "/a.md", "# A\n\nFirst.\n").await;
         // Hold the changeset's row lock, so the publish and then the write
         // queue on it in that order.
-        let mut holder = test.app.pool().begin().await.unwrap();
+        let mut holder = test.app.main_db().await.begin().await.unwrap();
         changesets::lock_catalog(&mut holder, state.id())
             .await
             .unwrap();
@@ -2879,11 +3153,12 @@ mod publish_tests {
         let message = refused.to_string();
         assert!(message.contains("while this write waited"), "{message}");
         assert_eq!(published_text(&test, "infra/y.md").await, Y);
-        let entries: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM changeset_entries WHERE path = 'infra/y.md'")
-                .fetch_one(test.app.pool())
-                .await
-                .unwrap();
+        let entries: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM catalog.changeset_entries WHERE path = 'infra/y.md'",
+        )
+        .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
+        .await
+        .unwrap();
         assert_eq!(entries, 0);
     }
 }
@@ -2930,7 +3205,7 @@ mod changes_tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
         };
-        import(test.app.pool(), "pg", files(entries), &options)
+        import(&test.app.main_db().await, "pg", files(entries), &options)
             .await
             .unwrap();
         test.app
@@ -2938,7 +3213,7 @@ mod changes_tests {
             .await
             .unwrap()
             .unwrap()
-            .refresh(test.app.pool(), test.app.rebuild_locks())
+            .refresh(&test.app.main_db().await, test.app.rebuild_locks())
             .await
             .unwrap();
     }
@@ -3006,7 +3281,7 @@ mod changes_tests {
     /// The paths of the changeset `handle` names, in order.
     async fn entry_paths(test: &TestApp, handle: &str) -> Vec<String> {
         let row = changeset_row(test, handle).await;
-        changesets::entries(test.app.pool(), row.id)
+        changesets::entries(test.app.main_db().await.executor(), row.id)
             .await
             .unwrap()
             .into_iter()
@@ -3026,11 +3301,12 @@ mod changes_tests {
     /// Waits until `count` backends wait on a lock (as `publish_tests` does).
     async fn lock_waiters(test: &TestApp, count: i64) {
         for _ in 0..500 {
-            let waiting: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM pg_stat_activity \
-                 WHERE datname = current_database() AND wait_event_type = 'Lock'",
-            )
-            .fetch_one(test.app.pool())
+            let waiting: i64 = sqlx::query_scalar(concat!(
+                "SELECT count(*) FROM pg_stat_activity WHERE ",
+                crate::test_locks::own_databases!("datname"),
+                " AND wait_event_type = 'Lock'"
+            ))
+            .fetch_one(test.app.accounts().executor())
             .await
             .unwrap();
             if waiting >= count {
@@ -3133,7 +3409,7 @@ mod changes_tests {
         body(&ctx, &handle, "/a.md", "First.\n").await;
         // Hold the changeset's row lock, so the discard and then the write
         // queue on it in that order.
-        let mut holder = test.app.pool().begin().await.unwrap();
+        let mut holder = test.app.main_db().await.begin().await.unwrap();
         changesets::lock_catalog(&mut holder, state.id())
             .await
             .unwrap();
@@ -3216,9 +3492,12 @@ mod changes_tests {
 
         assert_eq!(reverted.touched, ["/a.md"]);
         assert_eq!(reverted.message, "a.md: reverted to revision 1");
-        let entries = changesets::entries(test.app.pool(), changeset_row(&test, &handle).await.id)
-            .await
-            .unwrap();
+        let entries = changesets::entries(
+            test.app.main_db().await.executor(),
+            changeset_row(&test, &handle).await.id,
+        )
+        .await
+        .unwrap();
         assert_eq!(entries[0].content.as_deref(), Some(NOTE.as_bytes()));
         // Based on what is published now (revision 2), with no replay.
         assert_eq!(
@@ -3276,8 +3555,12 @@ mod changes_tests {
         discard(&owner, discard_paths(&kept, None)).await.unwrap();
         let closed = discard(&admin, discard_paths(&handle, None)).await.unwrap();
 
-        let reverted = entries(test.app.pool(), "catalog.reverted").await;
-        let discarded = entries(test.app.pool(), "catalog.changeset_discarded").await;
+        let reverted = entries(test.app.accounts().executor(), "catalog.reverted").await;
+        let discarded = entries(
+            test.app.accounts().executor(),
+            "catalog.changeset_discarded",
+        )
+        .await;
         assert_eq!(reverted.len(), 1, "{reverted:?}");
         assert_eq!(reverted[0].target.as_deref(), Some("pg"));
         assert_eq!(reverted[0].teams, [crate::db::TEST_TEAM]);
@@ -3312,8 +3595,8 @@ mod changes_tests {
             None,
         );
         fail_on(
-            test.app.pool(),
-            "BEFORE INSERT ON audit_entries FOR EACH ROW",
+            test.app.accounts().executor(),
+            "BEFORE INSERT ON catalog.catalog_audit_entries FOR EACH ROW",
         )
         .await;
 
@@ -3358,8 +3641,8 @@ mod changes_tests {
             .await
             .unwrap_err();
         // A revision whose bytes are not UTF-8 (no write tool stores one).
-        sqlx::query("UPDATE revisions SET content = '\\xff'::bytea WHERE path = 'a.md'")
-            .execute(test.app.pool())
+        sqlx::query("UPDATE catalog.revisions SET content = '\\xff'::bytea WHERE path = 'a.md'")
+            .execute(&crate::db::store_pool(test.app.accounts().executor()))
             .await
             .unwrap();
         let binary = revert(&ctx, revert_to(&handle, "/a.md", 1))
@@ -3370,9 +3653,12 @@ mod changes_tests {
             .unwrap_err();
 
         assert_eq!(deleted.touched, ["/b.md"]);
-        let entries = changesets::entries(test.app.pool(), changeset_row(&test, &handle).await.id)
-            .await
-            .unwrap();
+        let entries = changesets::entries(
+            test.app.main_db().await.executor(),
+            changeset_row(&test, &handle).await.id,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             (entries[0].path.as_str(), entries[0].content.as_ref()),
             ("b.md", None)
@@ -3690,9 +3976,9 @@ mod restructure_publish_tests {
     /// Whether `path`'s `documents` row is a tombstone (`deleted_at` set).
     async fn tombstoned(test: &TestApp, path: &str) -> bool {
         // `$1` is a bind parameter; `documents` stores paths without the `/`.
-        sqlx::query_scalar("SELECT deleted_at IS NOT NULL FROM documents WHERE path = $1")
+        sqlx::query_scalar("SELECT deleted_at IS NOT NULL FROM catalog.documents WHERE path = $1")
             .bind(path)
-            .fetch_one(test.app.pool())
+            .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
             .await
             .unwrap()
     }
@@ -3730,10 +4016,10 @@ mod restructure_publish_tests {
             ]
         );
         assert!(published.report.replayed.is_empty());
-        let old = history::revisions(test.app.pool(), state.id(), "infra/x.md", 5)
+        let old = history::revisions(&test.app.main_db().await, state.id(), "infra/x.md", 5)
             .await
             .unwrap();
-        let new = history::revisions(test.app.pool(), state.id(), "infra/z.md", 5)
+        let new = history::revisions(&test.app.main_db().await, state.id(), "infra/z.md", 5)
             .await
             .unwrap();
         // Each path keeps its own history (plan Decision 16).

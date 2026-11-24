@@ -1364,7 +1364,7 @@ mod tests {
         .await
         .unwrap();
 
-        catalogs::delete(
+        catalogs::delete_settled(
             &db.pool,
             "main",
             true,

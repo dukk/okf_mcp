@@ -459,16 +459,26 @@ async fn revision(
     .await?;
     let state = ctx.one(Some(&found.catalog)).await?;
     let stored = found.path.trim_start_matches('/');
-    let current = content_at(app.pool(), state.id(), stored, revision)
-        .await?
-        .ok_or_else(|| OkfError::NotFound {
-            path: format!("{} (revision {revision})", found.path),
-        })?;
+    let current = content_at(
+        &app.store_db(state.store()).await?,
+        state.id(),
+        stored,
+        revision,
+    )
+    .await?
+    .ok_or_else(|| OkfError::NotFound {
+        path: format!("{} (revision {revision})", found.path),
+    })?;
     let previous = if revision > 1 {
         // `and_then`: a missing row or a deletion both mean "no text before".
-        content_at(app.pool(), state.id(), stored, revision - 1)
-            .await?
-            .and_then(|row| row.content)
+        content_at(
+            &app.store_db(state.store()).await?,
+            state.id(),
+            stored,
+            revision - 1,
+        )
+        .await?
+        .and_then(|row| row.content)
     } else {
         None
     };
@@ -565,7 +575,13 @@ async fn recent_changes(
     // `transpose` turns Option<Result<..>> into Result<Option<..>> for `?`.
     let after = query.after.as_deref().map(parse_cursor).transpose()?;
     let limit = query.limit.unwrap_or(RECENT_DEFAULT);
-    let page = recent(app.pool(), state.id(), after.as_ref(), limit).await?;
+    let page = recent(
+        &app.store_db(state.store()).await?,
+        state.id(),
+        after.as_ref(),
+        limit,
+    )
+    .await?;
     let mut wanted = Wanted::default();
     for row in &page.rows {
         wanted.user(&row.actor);
@@ -869,7 +885,7 @@ mod tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
         };
-        import(test.app.pool(), "main", files(&entries), &options)
+        import(&test.app.main_db().await, "main", files(&entries), &options)
             .await
             .expect("import the edit");
 
@@ -1031,7 +1047,7 @@ mod tests {
             .parts();
         crate::invalidate::testing::applied(&test.app, async {
             crate::store::users::set_admin(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 user,
                 AdminChange {
                     on: true,
@@ -1150,7 +1166,7 @@ mod tests {
             now: Utc::now(),
         };
         crate::invalidate::testing::applied(&test.app, async {
-            import(test.app.pool(), catalog, files(entries), &options)
+            import(&test.app.main_db().await, catalog, files(entries), &options)
                 .await
                 .expect("import");
         })
@@ -1543,7 +1559,7 @@ mod tests {
         // `staff` reaches every catalog as an admin, and `require_unlock`
         // makes it ask for an unlock first; `other` is not suspended.
         crate::store::users::set_admin(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "staff",
             AdminChange {
                 on: true,

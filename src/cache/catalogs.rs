@@ -31,13 +31,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::PgPool;
-
 use crate::cache::{Bounded, CacheName, Limit};
 use crate::catalog::{CatalogState, Loaded};
 use crate::error::OkfError;
 use crate::keyed_lock::KeyedLocks;
 use crate::store::catalogs::CatalogRow;
+use crate::stores::Stores;
 use crate::telemetry::metrics::Metrics;
 use crate::telemetry::subscriber::split_event;
 
@@ -133,10 +132,15 @@ pub fn weight_of(loaded: &Loaded) -> u32 {
     )
 )]
 fn from_stored_data(error: &OkfError) -> bool {
-    // `!matches!(..)`: every other variant comes from building the data.
+    // `!matches!(..)`: every other variant comes from building the data. A
+    // store that cannot be reached says nothing about the data: it is not
+    // remembered as broken, and the next request tries the store again.
     !matches!(
         error,
-        OkfError::CatalogNotSelected { .. } | OkfError::Database { .. } | OkfError::Busy { .. }
+        OkfError::CatalogNotSelected { .. }
+            | OkfError::Database { .. }
+            | OkfError::Busy { .. }
+            | OkfError::StoreUnavailable { .. }
     )
 }
 
@@ -153,7 +157,9 @@ pub enum CatchUp {
 
 /// Catalog snapshots by catalog id, bounded in estimated bytes.
 pub struct CatalogCache {
-    pool: PgPool,
+    // Each catalog is read from its own store, which the registry opens on
+    // first use.
+    stores: Stores,
     states: Bounded<i64, Arc<CatalogState>>,
     // `(id, generation)` pairs whose stored data would not build.
     broken: Bounded<(i64, i64), ()>,
@@ -181,7 +187,8 @@ impl CatalogCache {
     /// An empty cache.
     ///
     /// # Arguments
-    /// * `pool` - the database.
+    /// * `stores` - the registry the catalogs it holds are read through,
+    ///   each from its own store.
     /// * `budget_bytes` - the most estimated bytes kept
     ///   (`catalog_cache_bytes`).
     /// * `metrics` - the instruments `okf.cache.*` is recorded on.
@@ -189,12 +196,12 @@ impl CatalogCache {
     /// # Returns
     /// The cache.
     #[tracing::instrument(level = "trace", skip_all)]
-    pub fn new(pool: PgPool, budget_bytes: u64, metrics: Metrics) -> Self {
+    pub fn new(stores: Stores, budget_bytes: u64, metrics: Metrics) -> Self {
         let states = Bounded::new(CacheName::Catalog, Limit::Bytes(budget_bytes), SNAPSHOT_TTL)
             .with_weigher(|_id: &i64, state: &Arc<CatalogState>| weight_of(&state.current()))
             .with_metrics(metrics);
         Self {
-            pool,
+            stores,
             states,
             broken: Bounded::new(
                 CacheName::Catalog,
@@ -239,7 +246,16 @@ impl CatalogCache {
         let loaded = self
             .states
             .get_or_load(row.id, || async {
-                CatalogState::load(&self.pool, row).await.map(Arc::new)
+                // Boxed: the load's future is large, and a debug build would
+                // copy it onto the stack at each layer.
+                self.within_store_bound(
+                    &row.store,
+                    Box::pin(async {
+                        let db = self.stores.get(&row.store).await?;
+                        CatalogState::load(&db, row).await.map(Arc::new)
+                    }),
+                )
+                .await
             })
             .await;
         let state = match loaded {
@@ -259,13 +275,26 @@ impl CatalogCache {
         {
             return Ok(state);
         }
-        match state.refresh(&self.pool, rebuilds).await {
+        let refreshed = self
+            .within_store_bound(
+                state.store(),
+                Box::pin(async {
+                    let db = self.stores.get(state.store()).await?;
+                    state.refresh(&db, rebuilds).await
+                }),
+            )
+            .await;
+        match refreshed {
             Ok(true) => self.refreshed(row.id).await,
             Ok(false) => {}
             Err(error @ OkfError::CatalogNotSelected { .. }) => {
                 self.states.invalidate(&row.id).await;
                 return Err(error);
             }
+            // An outage is not a stale answer: the catalog has changed and
+            // the store cannot say how, so the read is unavailable (the old
+            // snapshot is still served for any other failure, below).
+            Err(error @ OkfError::StoreUnavailable { .. }) => return Err(error),
             Err(error) => {
                 self.refresh_failed(row.id, row.generation, &row.name, &error)
                     .await
@@ -308,7 +337,11 @@ impl CatalogCache {
         if generation <= state.current().generation() {
             return Ok(CatchUp::Current);
         }
-        match state.refresh(&self.pool, rebuilds).await {
+        let refreshed = match self.stores.get(state.store()).await {
+            Ok(db) => state.refresh(&db, rebuilds).await,
+            Err(error) => Err(error),
+        };
+        match refreshed {
             Ok(true) => {
                 self.refreshed(id).await;
                 Ok(CatchUp::Applied)
@@ -407,6 +440,36 @@ impl CatalogCache {
             .get_or_load((id, generation), || async { Ok(()) })
             .await
             .ok();
+    }
+
+    /// Runs a read of `store` under the store's bound
+    /// ([`Stores::state_load_timeout`]) and reads its failures as a store
+    /// outage: a transport error from an established connection, a pool that
+    /// cannot hand one out, or a read that stalls past the bound is
+    /// [`OkfError::StoreUnavailable`], not [`OkfError::Database`].
+    ///
+    /// # Arguments
+    /// * `store` - the store the read runs on.
+    /// * `read` - the read.
+    ///
+    /// # Returns
+    /// What `read` returns, with a transport failure or a stall as
+    /// `StoreUnavailable`.
+    ///
+    /// # Errors
+    /// As `read`; [`OkfError::StoreUnavailable`] on a stall.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn within_store_bound<T>(
+        &self,
+        store: &crate::stores::StoreName,
+        read: impl std::future::Future<Output = Result<T, OkfError>>,
+    ) -> Result<T, OkfError> {
+        match tokio::time::timeout(self.stores.state_load_timeout(), read).await {
+            Ok(outcome) => {
+                outcome.map_err(|error| crate::stores::classify_store_failure(store, error))
+            }
+            Err(_) => Err(OkfError::store_unavailable(store)),
+        }
     }
 
     /// Logs a failed load and turns it into the request's answer: a build

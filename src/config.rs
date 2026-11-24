@@ -46,6 +46,18 @@ pub const DEFAULT_CONCEPT_OUTLINE_CHARS: usize = 20_000;
 /// The default database pool size.
 pub const DEFAULT_DATABASE_MAX_CONNECTIONS: u32 = 16;
 
+/// The default `store_max_connections`: the pool size of each catalog store.
+pub const DEFAULT_STORE_MAX_CONNECTIONS: u32 = 8;
+
+/// The default `store_idle_timeout`: how long an idle store connection is
+/// kept before it is closed.
+pub const DEFAULT_STORE_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// The default `store_connect_timeout`: how long opening a store's pool, or
+/// waiting for one of its connections, may take before the store is
+/// reported unavailable.
+pub const DEFAULT_STORE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// The default `overlay_cache_bytes`: 256 MiB of estimated overlay memory.
 pub const DEFAULT_OVERLAY_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -1040,6 +1052,21 @@ pub struct Config {
     /// `serve`'s workers do not count against it: they share one pool of up
     /// to `mail::queue::WORKER_POOL_SIZE` (3) connections of their own.
     pub database_max_connections: u32,
+    /// The most connections one process opens to each catalog store (`8`),
+    /// beside `database_max_connections`, which is the account pool. Every
+    /// store has a pool of its own, opened on its first use, and a store
+    /// inside the account database still opens one (plan decision P1).
+    pub store_max_connections: u32,
+    /// How long a catalog store's connection may sit idle before it is
+    /// closed (`"10m"`). A store's pool keeps no connection open while
+    /// unused.
+    #[serde(with = "humantime_serde")]
+    pub store_idle_timeout: Duration,
+    /// How long opening a store's pool, or waiting for a
+    /// connection to begin a transaction on it, may take (`"5s"`). Past it the request fails with
+    /// `StoreUnavailable`.
+    #[serde(with = "humantime_serde")]
+    pub store_connect_timeout: Duration,
     /// The most memory the changeset overlays held in this process may take,
     /// estimated as a catalog snapshot's is, over the overlay's own files
     /// (`"256MiB"`, or a number of bytes). Past it, the least recently used
@@ -1123,6 +1150,9 @@ impl Default for Config {
             maintenance_review_intervals: BTreeMap::new(),
             concept_outline_chars: DEFAULT_CONCEPT_OUTLINE_CHARS,
             database_max_connections: DEFAULT_DATABASE_MAX_CONNECTIONS,
+            store_max_connections: DEFAULT_STORE_MAX_CONNECTIONS,
+            store_idle_timeout: DEFAULT_STORE_IDLE_TIMEOUT,
+            store_connect_timeout: DEFAULT_STORE_CONNECT_TIMEOUT,
             overlay_cache_bytes: ByteSize::b(DEFAULT_OVERLAY_CACHE_BYTES),
             overlay_cache_size: None,
             catalog_cache_bytes: ByteSize::b(DEFAULT_CATALOG_CACHE_BYTES),
@@ -1265,6 +1295,15 @@ impl Config {
         }
         if self.database_max_connections == 0 {
             return Err("database_max_connections must be more than zero".to_string());
+        }
+        if self.store_max_connections == 0 {
+            return Err("store_max_connections must be more than zero".to_string());
+        }
+        if self.store_idle_timeout.is_zero() {
+            return Err("store_idle_timeout must be more than zero".to_string());
+        }
+        if self.store_connect_timeout.is_zero() {
+            return Err("store_connect_timeout must be more than zero".to_string());
         }
         if self.overlay_cache_bytes.as_u64() == 0 {
             return Err("overlay_cache_bytes must be more than zero".to_string());
@@ -1686,6 +1725,9 @@ mod tests {
         );
         assert_eq!(config.concept_outline_chars, 20_000);
         assert_eq!(config.database_max_connections, 16);
+        assert_eq!(config.store_max_connections, 8);
+        assert_eq!(config.store_idle_timeout, Duration::from_secs(600));
+        assert_eq!(config.store_connect_timeout, Duration::from_secs(5));
         assert_eq!(config.overlay_cache_bytes.as_u64(), 256 * 1024 * 1024);
         assert_eq!(config.overlay_cache_size, None);
         assert_eq!(config.catalog_cache_bytes.as_u64(), 1024 * 1024 * 1024);
@@ -1770,6 +1812,9 @@ mod tests {
             ("session_idle_timeout = \"0s\"\n", "session_idle_timeout"),
             ("allowed_hosts = []\n", "allowed_hosts"),
             ("database_max_connections = 0\n", "database_max_connections"),
+            ("store_max_connections = 0\n", "store_max_connections"),
+            ("store_idle_timeout = \"0s\"\n", "store_idle_timeout"),
+            ("store_connect_timeout = \"0s\"\n", "store_connect_timeout"),
             ("overlay_cache_bytes = 0\n", "overlay_cache_bytes"),
             ("catalog_cache_bytes = 0\n", "catalog_cache_bytes"),
             (

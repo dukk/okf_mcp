@@ -2,12 +2,13 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use sqlx::{PgConnection, PgPool, Row};
+use sqlx::{PgConnection, Row};
 
 use super::refused;
 use crate::error::OkfError;
 use crate::maintenance::types::{Evidence, RevisionPin};
 use crate::maintenance::validate as report;
+use crate::stores::CatalogDb;
 
 /// Immutable concept bytes decoded without newline normalization.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -65,7 +66,7 @@ async fn pinned(
 /// Reads one concept revision without exposing archive machinery.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `db` - the store database holding the catalog's maintenance rows.
 /// * `catalog_id` - the explicitly selected catalog for this pin.
 /// * `pin` - a concept path and positive immutable revision number.
 ///
@@ -79,12 +80,12 @@ async fn pinned(
 /// [`OkfError::Database`] for database failures.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "evidence.read", catalog_id = catalog_id))]
 pub async fn read(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     pin: &RevisionPin,
 ) -> Result<PinnedConcept, OkfError> {
     report::pin(pin)?;
-    let mut conn = pool.acquire().await?;
+    let mut conn = db.executor().acquire().await?;
     pinned(&mut conn, catalog_id, pin).await
 }
 

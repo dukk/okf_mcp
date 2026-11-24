@@ -50,7 +50,7 @@ ranked `search`. (Their JSON matches `okf.py`'s, compared as parsed values, whic
 the parity tests check.) Catalogs live in Postgres: every file
 is a row holding its exact bytes and execute bit, with an append-only revision
 history, and each catalog's snapshot is built from its rows on first use, kept within
-a memory budget (`catalog_cache_bytes`) and swapped when the catalog changes. The `okf-mcp` command line administers catalogs and API
+a memory budget (`catalog_cache_bytes`) and swapped when the catalog changes. Each catalog lives on a named store: the schema `catalog` of the account database (`main`, the default) or a database of its own, chosen when the catalog is created and never changed (`docs/operations.md`, "Catalog stores"). The `okf-mcp` command line administers catalogs and API
 keys and imports and exports catalogs, and `okf-mcp serve` serves the catalogs
 over MCP streamable HTTP with bearer-key auth: every read tool, the export and
 import routes and `/healthz`, and the write tools: each connection's edits
@@ -212,6 +212,7 @@ session_idle_timeout = "2h"        # an idle MCP session is closed after this; a
 max_import_bytes = "64MiB"         # uncompressed total of an import
 concept_outline_chars = 20000      # get_concept outlines a longer body
 database_max_connections = 16      # database pool size, per process
+store_max_connections = 8          # pool size per catalog store, per process
 catalog_cache_bytes = "1GiB"         # catalog snapshots kept in memory
 overlay_cache_bytes = "256MiB"       # open changesets' views kept in memory
 maintenance_review_intervals = { pg = "30d" } # per-catalog; default 30d, minimum 1d
@@ -628,7 +629,7 @@ key's actor.
   (the bookkeeping, move, split and its link
   rewriting, with the replay of their `index.md` and `log.md` edits; and
   `delete`) and the write `rules`.
-- `src/db.rs`, `migrations/` - the Postgres pool and the schema, embedded at
+- `src/db.rs`, `migrations/accounts/` - the Postgres pool and the account schema, embedded at
   compile time.
 - `src/store/` - async functions over the pool: `catalogs`, `keys`,
   `documents`, `import`, `export`, `history`, `changesets` and `publish`.
@@ -755,6 +756,12 @@ or stop nothing):
 
     export TEST_PG_URL=$(scripts/test-pg.sh up okf-mcp-test-pg)
     scripts/test-pg.sh down okf-mcp-test-pg      # when done
+
+`just test` runs the suite twice, once for each store mode of the test
+harness: `OKF_TEST_STORE=same` (the default; the catalog data lives in the
+account database) and `OKF_TEST_STORE=separate` (the store `main` is a second
+database, copied from its own template and registered as a `host` store).
+`OKF_TEST_STORE=separate cargo test` runs one mode by hand.
 
 Without `TEST_PG_URL` (a plain `cargo test`), every test starts its own
 container (via `testcontainers`) and removes it when done, which is several

@@ -16,7 +16,9 @@ use crate::labels::DisplayName;
 use crate::store::audit::{self, Action, AuditActor, Entry, People, RowLock, Target};
 use crate::store::catalogs::is_valid_name;
 use crate::store::decode_column;
+use crate::store::stores;
 use crate::store::users;
+use crate::stores::StoreName;
 
 /// A member's role in a team.
 // `clap::ValueEnum` parses `--role owner|member`; `serde::Deserialize` with
@@ -186,7 +188,8 @@ macro_rules! select_teams {
         "SELECT t.name, t.display_name, p.name AS personal_of, t.created_at, \
                 t.suspended_at, t.suspension_notice, \
                 COALESCE((SELECT array_agg(c.name ORDER BY c.name) FROM catalogs c \
-                          WHERE c.owner_team_id = t.id), '{}'::text[]) AS catalogs \
+                          WHERE c.owner_team_id = t.id \
+                            AND c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL), '{}'::text[]) AS catalogs \
          FROM teams t LEFT JOIN users p ON p.id = t.personal_of"
     };
 }
@@ -731,6 +734,124 @@ pub async fn set_display_name(
     Ok(())
 }
 
+/// Pins a team to a store (`Some`), or removes its pin (`None`): catalogs
+/// the team owns from then on are created there, instead of on the default
+/// store. Catalogs that exist stay where they are. Records
+/// `team.store_pinned` or `team.store_unpinned` (details: the store it
+/// was on and the one now, `null` when unpinned) and sends the team's invalidation, in one
+/// transaction. Pinning to the store it is on, or unpinning an unpinned
+/// team, is no change: nothing is written or recorded.
+///
+/// Lock order (`tools/agentic/lessons.md`): the users the entry resolves
+/// ([`audit::lock_people`]), the team row (`FOR NO KEY UPDATE`), the
+/// store's row (`FOR SHARE`), then `server_state`.
+///
+/// # Arguments
+/// * `pool` - the account database.
+/// * `team` - the team's name.
+/// * `store` - the store to pin to, or `None` to unpin.
+/// * `actor` - who, for the audit log.
+/// * `now` - the server clock.
+///
+/// # Returns
+/// `true` if the pin changed.
+///
+/// # Errors
+/// [`OkfError::UnknownName`] for an unknown team (a malformed name
+/// included) or store; [`OkfError::Database`], a failed audit write
+/// included.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.set_store"))]
+pub async fn set_store(
+    pool: &PgPool,
+    team: &str,
+    store: Option<&StoreName>,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<bool, OkfError> {
+    if !is_valid_name(team) {
+        return Err(unknown(team));
+    }
+    let mut tx = pool.begin().await?;
+    audit::lock_people(
+        &mut tx,
+        actor,
+        &People {
+            teams: &[team],
+            ..People::default()
+        },
+    )
+    .await?;
+    let (team_id, previous) = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT id, store FROM teams WHERE name = $1 FOR NO KEY UPDATE",
+    )
+    .bind(team)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| unknown(team))?;
+    if previous.as_deref() == store.map(StoreName::as_str) {
+        return Ok(false);
+    }
+    if let Some(store) = store {
+        stores::lock_store(&mut tx, store).await?;
+    }
+    sqlx::query("UPDATE teams SET store = $2 WHERE id = $1")
+        .bind(&team_id)
+        .bind(store.map(StoreName::as_str))
+        .execute(&mut *tx)
+        .await?;
+    let action = if store.is_some() {
+        Action::TeamStorePinned
+    } else {
+        Action::TeamStoreUnpinned
+    };
+    record_team(
+        &mut tx,
+        actor,
+        TeamEvent {
+            action,
+            team,
+            person: None,
+            details: serde_json::json!({"from": previous, "to": store.map(StoreName::as_str)}),
+        },
+        now,
+    )
+    .await?;
+    invalidate(&mut tx, &[Invalidation::team(&team_id)]).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// The refusal for a team or user whose catalog was deleted but whose registry
+/// row the store cleanup has not yet removed (it keeps its owner until then),
+/// or `None` when no such catalog is among `owned` (name, deleted) pairs.
+///
+/// # Arguments
+/// * `owned` - the owner's catalogs as (name, whether it is deleted).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "a pure function of its argument")
+)]
+pub(crate) fn still_deleting_reason(owned: &[(String, bool)]) -> Option<String> {
+    let names: Vec<&str> = owned
+        .iter()
+        .filter(|(_, deleted)| *deleted)
+        .map(|(name, _)| name.as_str())
+        .collect();
+    match names.as_slice() {
+        [] => None,
+        [one] => Some(format!(
+            "catalog {one:?} is still being deleted; try again shortly"
+        )),
+        many => Some(format!(
+            "catalogs {} are still being deleted; try again shortly",
+            many.iter()
+                .map(|name| format!("{name:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
 /// Deletes a shared team that owns no catalog (its memberships cascade),
 /// records `team.deleted`, and bumps the administrative generation (spec
 /// "Deletion").
@@ -743,8 +864,9 @@ pub async fn set_display_name(
 ///
 /// # Errors
 /// [`OkfError::UnknownName`] (a malformed name included);
-/// [`OkfError::Refused`] for a personal team (it goes with its user) or one
-/// that owns a catalog; [`OkfError::Database`], a failed audit write
+/// [`OkfError::Refused`] for a personal team (it goes with its user), one
+/// that owns a catalog, or one whose deleted catalog is still being cleaned
+/// up; [`OkfError::Database`], a failed audit write
 /// included.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.delete"))]
 pub async fn delete(
@@ -769,10 +891,19 @@ pub async fn delete(
             reason: format!("{name:?} is a personal team; it is deleted with its user"),
         });
     }
-    let owned: i64 = sqlx::query_scalar("SELECT count(*) FROM catalogs WHERE owner_team_id = $1")
-        .bind(&locked.id)
-        .fetch_one(&mut *tx)
-        .await?;
+    // A deleted catalog keeps its registry row (and so its owner) until the
+    // store cleanup removes it: say so, rather than "owns a catalog" about
+    // one the person has already deleted.
+    let owned_rows: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT name, deleted_at IS NOT NULL FROM catalogs WHERE owner_team_id = $1 ORDER BY name",
+    )
+    .bind(&locked.id)
+    .fetch_all(&mut *tx)
+    .await?;
+    if let Some(reason) = still_deleting_reason(&owned_rows) {
+        return Err(OkfError::Refused { reason });
+    }
+    let owned = owned_rows.len();
     if owned > 0 {
         return Err(OkfError::Refused {
             reason: format!("team {name:?} owns {owned} catalog(s); give them another owner first"),

@@ -4,15 +4,16 @@ use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::{PgConnection, PgPool, Row};
+use sqlx::{PgConnection, Row};
 
-use super::{evidence, lock, receipt, refused, replay, runs, validate};
+use super::{evidence, lock, receipt, refused, replay, runs, validate, AuditTarget, RunWatch};
 use crate::error::OkfError;
 use crate::maintenance::types::{
     new_id, Actor, Disposition, Evidence, FindingInput, Lane, Receipt, RevisionPin, Submission,
     WorkOutcome,
 };
 use crate::maintenance::validate as report;
+use crate::stores::CatalogDb;
 
 /// An attributed finding, its append-only human history, and read-time freshness.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -135,12 +136,12 @@ async fn finding(
 /// `Refused` for blank IDs, `NotFound` for absent/foreign findings, or database errors.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "reports.get_finding", catalog_id = catalog_id))]
 pub async fn get_finding(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     finding_id: &str,
 ) -> Result<FindingRecord, OkfError> {
     runs::required_id(finding_id)?;
-    let mut tx = runs::snapshot(pool).await?;
+    let mut tx = runs::snapshot(db).await?;
     let result = finding(&mut tx, catalog_id, finding_id).await?;
     tx.commit().await?;
     Ok(result)
@@ -156,12 +157,12 @@ pub async fn get_finding(
 /// `Refused` for invalid limits, `NotFound` for absent/foreign cursors, or database errors.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "reports.list_findings", catalog_id = catalog_id))]
 pub async fn list_findings(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     after: Option<&str>,
     limit: u32,
 ) -> Result<runs::Page<FindingRecord>, OkfError> {
-    list_findings_with(pool, catalog_id, after, limit, None).await
+    list_findings_with(db, catalog_id, after, limit, None).await
 }
 
 /// [`list_findings`], keeping only findings whose current disposition (the
@@ -170,7 +171,7 @@ pub async fn list_findings(
 /// the catalog, so a cursor survives its finding changing disposition.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `db` - the store database holding the catalog's maintenance rows.
 /// * `catalog_id` - the catalog.
 /// * `after` - the previous page's last finding ID, if any.
 /// * `limit` - page size, 1..=200.
@@ -183,13 +184,13 @@ pub async fn list_findings(
 /// As [`list_findings`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "reports.list_findings_with", catalog_id = catalog_id))]
 pub async fn list_findings_with(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     after: Option<&str>,
     limit: u32,
     disposition: Option<Disposition>,
 ) -> Result<runs::Page<FindingRecord>, OkfError> {
-    let mut tx = runs::snapshot(pool).await?;
+    let mut tx = runs::snapshot(db).await?;
     let ids = runs::page_ids(
         &mut tx,
         catalog_id,
@@ -225,7 +226,7 @@ pub struct FindingCounts {
 /// Counts a catalog's findings by current disposition, in one query.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `db` - the store database holding the catalog's maintenance rows.
 /// * `catalog_id` - the catalog.
 ///
 /// # Returns
@@ -234,7 +235,7 @@ pub struct FindingCounts {
 /// # Errors
 /// Database errors; `Refused` for a stored disposition outside the four values.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "reports.count_findings", catalog_id = catalog_id))]
-pub async fn count_findings(pool: &PgPool, catalog_id: i64) -> Result<FindingCounts, OkfError> {
+pub async fn count_findings(db: &CatalogDb, catalog_id: i64) -> Result<FindingCounts, OkfError> {
     // The inner select computes each finding's current disposition, the outer
     // one groups them (grouping by a correlated subquery directly is refused).
     let rows: Vec<(String, i64)> = sqlx::query_as(concat!(
@@ -244,7 +245,7 @@ pub async fn count_findings(pool: &PgPool, catalog_id: i64) -> Result<FindingCou
          GROUP BY disposition"
     ))
     .bind(catalog_id)
-    .fetch_all(pool)
+    .fetch_all(db.executor())
     .await?;
     let mut counts = FindingCounts::default();
     for (text, n) in rows {
@@ -276,7 +277,7 @@ pub async fn count_findings(pool: &PgPool, catalog_id: i64) -> Result<FindingCou
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "reports.dispose", catalog_id = catalog_id))]
 pub async fn dispose(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     actor: &Actor,
     finding_id: &str,
@@ -290,7 +291,7 @@ pub async fn dispose(
     report::text(rationale)?;
     let payload =
         json!({"finding_id": finding_id, "disposition": disposition, "rationale": rationale});
-    let mut tx = pool.begin().await?;
+    let mut tx = db.begin().await?;
     lock(&mut tx, catalog_id, now).await?;
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM maintenance_findings WHERE catalog_id=$1 AND id=$2)",
@@ -404,7 +405,7 @@ async fn store_evidence(
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "reports.submit", catalog_id = catalog_id))]
 pub async fn submit(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     actor: &Actor,
     work_id: &str,
@@ -437,10 +438,13 @@ pub async fn submit(
         item.pin = report::pin(&item.pin)?;
     }
     let payload = json!({"work_id":work_id,"token":token,"submission":input});
-    let mut tx = pool.begin().await?;
+    // Read before the store transaction: see `AuditTarget`.
+    let target = AuditTarget::read(db, catalog_id).await?;
+    let mut tx = db.begin().await?;
     // The catalog lock protects identity; state serializes maintenance writes.
     // Source row locks below exclude concurrent publication of the cited pins.
     lock(&mut tx, catalog_id, now).await?;
+    let watch = RunWatch::open(&mut tx, catalog_id, target).await?;
     let run_id: String =
         sqlx::query_scalar("SELECT run_id FROM maintenance_work WHERE catalog_id=$1 AND id=$2")
             .bind(catalog_id)
@@ -479,7 +483,7 @@ pub async fn submit(
     if now >= deadline || now >= expiry {
         runs::expire_submission(&mut tx, catalog_id, &run_id, work_id, now, now >= deadline)
             .await?;
-        tx.commit().await?;
+        watch.commit(tx, None).await?;
         return Err(stale());
     }
     // Do not call generic recovery here: a changed primary with a valid lease
@@ -573,6 +577,6 @@ pub async fn submit(
         &result,
     )
     .await?;
-    tx.commit().await?;
+    watch.commit(tx, None).await?;
     Ok(result)
 }

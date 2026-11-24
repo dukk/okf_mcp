@@ -481,7 +481,7 @@ mod tests {
             (other.id, "c.md", false),
         ] {
             sqlx::query(
-                "INSERT INTO documents (catalog_id, path, content, executable, revision, \
+                "INSERT INTO catalog.documents (catalog_id, path, content, executable, revision, \
                                         deleted_at, updated_at, updated_by) \
                  VALUES ($1, $2, $3, false, 1, $4, $5, 'test')",
             )
@@ -490,12 +490,12 @@ mod tests {
             .bind(path.as_bytes())
             .bind(deleted.then_some(at))
             .bind(at)
-            .execute(&db.pool)
+            .execute(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
         }
 
-        let rows = published(&db.pool, catalog.id).await.unwrap();
+        let rows = published(&db.store(), catalog.id).await.unwrap();
 
         let paths: Vec<&str> = rows.iter().map(|row| row.path.as_str()).collect();
         // index.md and log.md are the catalog's starter files.

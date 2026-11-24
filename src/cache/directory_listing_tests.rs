@@ -28,7 +28,7 @@ async fn seven() -> (crate::db::pg_support::TestDb, CatalogDirectory) {
             .await
             .unwrap();
     }
-    let directory = CatalogDirectory::new(db.pool.clone(), 100, LONG, Metrics::global());
+    let directory = CatalogDirectory::for_tests(db.pool.clone(), 100, LONG, Metrics::global());
     (db, directory)
 }
 

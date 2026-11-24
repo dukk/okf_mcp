@@ -10,16 +10,15 @@
 
 use std::borrow::Cow;
 
-use sqlx::PgPool;
-
 use super::{comma_list, tab_row, AuditArgs, AuditCommand};
 use crate::cache::labels::{LabelLookup, DEFAULT_LABEL_CACHE_ENTRIES};
 use crate::store::audit::{self, ActorView, AuditRecord, FilterText, TargetView, Viewer};
+use crate::stores::Stores;
 
 /// Runs `okf-mcp audit ...`.
 ///
 /// # Arguments
-/// * `pool` - the migrated database.
+/// * `stores` - the migrated account database and its stores.
 /// * `command` - which audit subcommand, with its filters.
 ///
 /// # Returns
@@ -31,17 +30,17 @@ use crate::store::audit::{self, ActorView, AuditRecord, FilterText, TargetView, 
 /// An unknown action or a time that is not RFC 3339 (naming the filter),
 /// or a database error.
 #[tracing::instrument(level = "debug", skip_all)]
-pub(super) async fn audit(pool: &PgPool, command: &AuditCommand) -> anyhow::Result<String> {
+pub(super) async fn audit(stores: &Stores, command: &AuditCommand) -> anyhow::Result<String> {
     // One command, one read: the lookup lives for this call only.
     let labels = LabelLookup::new(
-        pool.clone(),
+        stores.accounts().executor().clone(),
         DEFAULT_LABEL_CACHE_ENTRIES,
         std::time::Duration::from_secs(60),
     );
     Ok(match command {
         AuditCommand::List(args) => {
             let query = audit::parse_filters(&filter_text(args))?;
-            audit::list(pool, &Viewer::Admin, &query, &labels)
+            audit::list(stores, &Viewer::Admin, &query, &labels)
                 .await?
                 .iter()
                 .map(|record| format_record(record) + "\n")
@@ -49,7 +48,7 @@ pub(super) async fn audit(pool: &PgPool, command: &AuditCommand) -> anyhow::Resu
         }
         AuditCommand::Export(args) => {
             let query = audit::parse_filters(&filter_text(args))?;
-            audit::export_lines(pool, &Viewer::Admin, &query, &labels).await?
+            audit::export_lines(stores, &Viewer::Admin, &query, &labels).await?
         }
     })
 }
@@ -71,12 +70,12 @@ fn filter_text(args: &AuditArgs) -> FilterText<'_> {
         target: args.target.as_deref(),
         since: args.since.as_deref(),
         until: args.until.as_deref(),
-        after: args.after,
+        after: args.after.as_deref(),
         limit: args.limit,
     }
 }
 
-/// One `audit list` line, tab-separated: id, time, action, actor (`person
+/// One `audit list` line, tab-separated: cursor (what `--after` takes), time, action, actor (`person
 /// NAME`, else `credential ID`, else the actor label), target (`user
 /// NAME`, or `KIND NAME` followed by `person NAME` when it names one),
 /// teams (comma-separated, `-` for none), then the details as compact
@@ -97,7 +96,7 @@ fn format_record(record: &AuditRecord) -> String {
         .map(|team| escaped(team).into_owned())
         .collect();
     tab_row(&[
-        &record.cursor.to_string(),
+        &record.cursor.to_plain(),
         &record.at,
         &record.action,
         &escaped(&format_actor(&record.actor)),
@@ -191,16 +190,19 @@ mod tests {
     use chrono::Utc;
     use clap::Parser;
 
+    use sqlx::PgPool;
+
     use super::*;
     use crate::cli::{Cli, Command};
     use crate::db::test_db;
-    use crate::store::audit::{AuditActor, MAX_PAGE};
+    use crate::store::audit::{AuditActor, AuditCursor, MAX_PAGE};
     use crate::store::users::{self, NewUser};
 
     /// Runs `okf-mcp audit ...` within 20 s (an export whose cursor never
     /// advances would loop forever).
     async fn run_audit(pool: &PgPool, command: AuditCommand) -> anyhow::Result<String> {
-        tokio::time::timeout(Duration::from_secs(20), audit(pool, &command))
+        let stores = crate::store::audit::testing::stores_of(pool);
+        tokio::time::timeout(Duration::from_secs(20), audit(&stores, &command))
             .await
             .expect("the audit command finished within 20 s")
     }
@@ -208,20 +210,24 @@ mod tests {
     /// Inserts `count` `setting.changed` entries in one statement.
     ///
     /// # Returns
-    /// Their ids, newest (highest) first.
-    async fn setting_entries(pool: &PgPool, count: i64) -> Vec<i64> {
-        let mut ids: Vec<i64> = sqlx::query_scalar(
+    /// Their ids, newest (highest) first, and each one's cursor.
+    async fn setting_entries(pool: &PgPool, count: i64) -> (Vec<i64>, Vec<String>) {
+        let mut rows: Vec<(i64, chrono::DateTime<Utc>)> = sqlx::query_as(
             "INSERT INTO audit_entries (at, action, source, actor_label, actor_operator, \
                  target_kind, target_name) \
              SELECT now(), 'setting.changed', 'cli', 'cli:test', true, 'setting', 's' || n \
-             FROM generate_series(1, $1) AS n RETURNING id",
+             FROM generate_series(1, $1) AS n RETURNING id, at",
         )
         .bind(count)
         .fetch_all(pool)
         .await
         .unwrap();
-        ids.sort_unstable_by(|a, b| b.cmp(a));
-        ids
+        rows.sort_unstable_by(|a, b| b.cmp(a));
+        let cursors = rows
+            .iter()
+            .map(|(id, at)| AuditCursor::new(*at, "", *id).to_plain())
+            .collect();
+        (rows.into_iter().map(|(id, _)| id).collect(), cursors)
     }
 
     /// The `id` of each JSON line.
@@ -276,15 +282,21 @@ mod tests {
         assert_eq!(record["source"], "cli");
         assert_eq!(record["action"], "user.created");
         assert_eq!(record["target"]["person"], "alice");
-        assert_eq!(cells[0], record["id"].to_string(), "the same entry first");
+        // The first column is the cursor, `<microseconds>::<id>` for an
+        // account database entry.
+        assert!(
+            cells[0].ends_with(&format!("::{}", record["id"])),
+            "the same entry first: {}",
+            cells[0]
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn audit_export_pages_through_every_entry_once_from_any_cursor() {
         let db = test_db().await;
         // Two full pages and a partial one: the export moves its cursor twice.
-        let expected = setting_entries(&db.pool, 2 * MAX_PAGE + 3).await;
-        let cursor = expected[600];
+        let (expected, cursors) = setting_entries(&db.pool, 2 * MAX_PAGE + 3).await;
+        let cursor = cursors[600].clone();
         let filters = |after| AuditArgs {
             action: Some("setting.changed".into()),
             after,
@@ -295,10 +307,13 @@ mod tests {
         let all = run_audit(&db.pool, AuditCommand::Export(filters(None)))
             .await
             .unwrap();
-        let from_cursor = run_audit(&db.pool, AuditCommand::Export(filters(Some(cursor))))
-            .await
-            .unwrap();
-        let listed = run_audit(&db.pool, AuditCommand::List(filters(Some(cursor))))
+        let from_cursor = run_audit(
+            &db.pool,
+            AuditCommand::Export(filters(Some(cursor.clone()))),
+        )
+        .await
+        .unwrap();
+        let listed = run_audit(&db.pool, AuditCommand::List(filters(Some(cursor.clone()))))
             .await
             .unwrap();
 
@@ -312,7 +327,7 @@ mod tests {
             .lines()
             .map(|line| line.split('\t').next().unwrap())
             .collect();
-        let page: Vec<String> = expected[601..604].iter().map(i64::to_string).collect();
+        let page: Vec<String> = cursors[601..604].to_vec();
         assert_eq!(listed_ids, page, "list honours --after and --limit");
     }
 
@@ -383,7 +398,7 @@ mod tests {
             "--action",
             "user.created",
             "--after",
-            "42",
+            "42::7",
             "--limit",
             "5",
         ])
@@ -397,7 +412,7 @@ mod tests {
             AuditArgs {
                 team: Some("family".into()),
                 action: Some("user.created".into()),
-                after: Some(42),
+                after: Some("42::7".into()),
                 limit: Some(5),
                 ..AuditArgs::default()
             }

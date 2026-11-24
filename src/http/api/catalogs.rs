@@ -18,6 +18,8 @@ use crate::auth::{CredentialKind, Principal};
 use crate::catalog::CatalogState;
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
+use crate::http::api::context;
+use crate::http::requester::Requester;
 use crate::http::{archives, AppError};
 use crate::labels::directory::{Labels, Wanted};
 use crate::labels::{catalog_label, DisplayName};
@@ -149,6 +151,10 @@ pub(crate) struct CatalogListing {
     /// The `after` of the next page; absent on the last page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    /// The ids of catalogs on this page left out because the store holding
+    /// them could not be reached (sorted); absent when every store answered.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unavailable: Vec<String>,
 }
 
 /// `POST /catalogs`' body.
@@ -245,12 +251,18 @@ pub(crate) struct CatalogDeleted {
 ///
 /// # Errors
 /// 400 for a malformed `after`; 500 if the directory read or a load fails.
+/// A catalog whose store cannot be reached is left out and named in
+/// `unavailable`.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn list_catalogs(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
+    requester: Requester,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<CatalogListing>, AppError> {
+    // The call's context remembers which stores are down, so a store that
+    // fails once costs this request one bound, not one per catalog on it.
+    let ctx = context(&app, Arc::clone(&principal), requester);
     let page = reachable_page(&app, &principal, &query).await?;
     let mut wanted = Wanted::default();
     for row in &page.items {
@@ -260,14 +272,28 @@ async fn list_catalogs(
     }
     let labels = app.labels().labels_for(&wanted).await?;
     let mut catalogs = Vec::with_capacity(page.items.len());
+    let mut unavailable = page.unavailable;
     for row in &page.items {
-        if let Some(state) = app.listed_state(row).await? {
-            catalogs.push(CatalogSummary::of(row, &state, &principal, &labels));
+        if unavailable.contains(&row.name) {
+            ctx.mark_down(row);
+            continue;
+        }
+        match ctx.listed_state(row).await {
+            Ok(Some(state)) => catalogs.push(CatalogSummary::of(row, &state, &principal, &labels)),
+            Ok(None) => {}
+            // The store went away since the page was read.
+            Err(OkfError::StoreUnavailable { .. }) => {
+                ctx.mark_down(row);
+                unavailable.push(row.name.clone());
+            }
+            Err(error) => return Err(error.into()),
         }
     }
+    unavailable.sort();
     Ok(Json(CatalogListing {
         catalogs,
         next: page.next,
+        unavailable,
     }))
 }
 
@@ -296,8 +322,8 @@ async fn create_catalog(
     // Validated before the store sees it: a refused name is a 422 that
     // writes nothing.
     let display_name = DisplayName::parse(&new.display_name)?;
-    let row = catalog_rows::create(
-        app.pool(),
+    let row = catalog_rows::create_in(
+        app.stores(),
         &catalog_rows::NewCatalog {
             name: &new.name,
             display_name: &display_name,
@@ -320,7 +346,7 @@ async fn create_catalog(
     // The owner may be a suspended team: read the new row's access facts
     // from the database (one query), not from the directory, which may
     // still remember the name as absent until the create's message lands.
-    let suspended = catalog_rows::row_by_name(app.pool(), &row.name)
+    let suspended = catalog_rows::row_by_name(app.accounts().executor(), &row.name)
         .await?
         .and_then(|created| principal.suspension(&created))
         .map(SuspensionInfo::from);
@@ -455,8 +481,13 @@ async fn update_catalog(
         description: change.description.as_deref(),
         owner,
     };
-    let previous =
-        catalog_rows::update_details(app.pool(), &details, &actor, app.clock().now()).await?;
+    let previous = catalog_rows::update_details(
+        app.accounts().executor(),
+        &details,
+        &actor,
+        app.clock().now(),
+    )
+    .await?;
     split_event!(
         info,
         { %catalog, },
@@ -500,7 +531,7 @@ async fn set_owner(
 ) -> Result<Json<OwnerChanged>, AppError> {
     require_every_catalog(&principal)?;
     let previous = catalog_rows::set_owner(
-        app.pool(),
+        app.accounts().executor(),
         &catalog,
         &change.team,
         &actor,
@@ -576,8 +607,13 @@ async fn set_maintenance(
         to: body.maintenance,
         owner,
     };
-    let previous =
-        catalog_rows::set_maintenance(app.pool(), &change, &actor, app.clock().now()).await?;
+    let previous = catalog_rows::set_maintenance(
+        app.accounts().executor(),
+        &change,
+        &actor,
+        app.clock().now(),
+    )
+    .await?;
     split_event!(
         info,
         { %catalog, previous = previous.as_str(), maintenance = body.maintenance.as_str(), },
@@ -684,9 +720,9 @@ async fn member_access(
         .await;
     let unreached = is_unreached(&admin);
     let access = match owner_session(&principal, admin)? {
-        None => ceiling::member_access(app.pool(), &catalog).await?,
+        None => ceiling::member_access(app.accounts().executor(), &catalog).await?,
         // The scalar only: no member or entitlement list is read for it.
-        Some(owner) => ceiling::member_access_as_owner(app.pool(), &catalog, owner)
+        Some(owner) => ceiling::member_access_as_owner(app.accounts().executor(), &catalog, owner)
             .await
             .map_err(|refusal| keep_not_found(refusal, unreached, &catalog))?,
     };
@@ -733,8 +769,13 @@ async fn set_member_access(
         access,
         owner,
     };
-    let previous =
-        ceiling::change_member_access(app.pool(), &change, &actor, app.clock().now()).await?;
+    let previous = ceiling::change_member_access(
+        app.accounts().executor(),
+        &change,
+        &actor,
+        app.clock().now(),
+    )
+    .await?;
     split_event!(
         info,
         { %catalog, previous = previous.as_str(), access = access.as_str(), },
@@ -843,7 +884,7 @@ async fn team_entitlements(
         .await;
     let unreached = is_unreached(&admin);
     let owner = owner_session(&principal, admin)?;
-    let access = ceiling::team_access(app.pool(), &catalog, owner, &page)
+    let access = ceiling::team_access(app.accounts().executor(), &catalog, owner, &page)
         .await
         .map_err(|refusal| keep_not_found(refusal, unreached, &catalog))?;
     let mut wanted = Wanted::default();
@@ -902,15 +943,21 @@ async fn delete_catalog(
             .require_in(app.directory(), Access::Admin, &catalog)
             .await?;
     }
-    catalog_rows::delete(app.pool(), &catalog, query.force, &actor, app.clock().now())
-        .await
-        // The store's hint names the CLI flag; say what HTTP needs.
-        .map_err(|error| match error {
-            OkfError::Refused { reason } => OkfError::Refused {
-                reason: reason.replace("pass --force", "add ?force=true"),
-            },
-            other => other,
-        })?;
+    catalog_rows::delete_in(
+        app.stores(),
+        &catalog,
+        query.force,
+        &actor,
+        app.clock().now(),
+    )
+    .await
+    // The store's hint names the CLI flag; say what HTTP needs.
+    .map_err(|error| match error {
+        OkfError::Refused { reason } => OkfError::Refused {
+            reason: reason.replace("pass --force", "add ?force=true"),
+        },
+        other => other,
+    })?;
     split_event!(
         info,
         { %catalog, force = query.force, },
@@ -1094,7 +1141,7 @@ mod tests {
             .parts();
         crate::invalidate::testing::applied(&test.app, async {
             crate::store::users::set_admin(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 "alice",
                 AdminChange {
                     on: true,
@@ -1211,10 +1258,8 @@ mod tests {
     async fn the_list_shows_reachable_catalogs_with_counts_and_generation() {
         let test = app().await;
         let keys = keys(&test).await;
-        let generation = catalog_rows::find(test.app.pool(), "main")
-            .await
-            .expect("main")
-            .generation;
+        let generation =
+            catalog_rows::test_generation(test.app.accounts().executor(), "main").await;
 
         let (status, body) = send(&test, "GET", "/api/v1/catalogs", Some(&keys.read), None).await;
 
@@ -1323,11 +1368,13 @@ mod tests {
 
         // Assert: stored trimmed; the refusal is a 422 that wrote nothing.
         assert_eq!(created, StatusCode::CREATED, "{body}");
-        let row = catalog_rows::find(test.app.pool(), "work").await.unwrap();
+        let row = catalog_rows::find(test.app.accounts().executor(), "work")
+            .await
+            .unwrap();
         assert_eq!(row.display_name, "Work notes");
         assert_eq!(refused, StatusCode::UNPROCESSABLE_ENTITY, "{error}");
         assert!(matches!(
-            catalog_rows::find(test.app.pool(), "bad").await,
+            catalog_rows::find(test.app.accounts().executor(), "bad").await,
             Err(OkfError::CatalogNotSelected { .. })
         ));
     }
@@ -1579,10 +1626,8 @@ mod tests {
         assert_eq!(report["updated"], json!(["AGENTS.md"]));
         assert_eq!(report["deleted"], json!([]));
 
-        let generation = catalog_rows::find(test.app.pool(), "main")
-            .await
-            .expect("main")
-            .generation;
+        let generation =
+            catalog_rows::test_generation(test.app.accounts().executor(), "main").await;
         let archive = || tarball_of(&[("index.md", "# Main\n\nImported.\n")]);
         let stale = format!(
             "/api/v1/catalogs/main/import?replace=true&expect_generation={}",
@@ -1706,9 +1751,11 @@ mod tests {
         .await;
 
         assert_eq!(status, StatusCode::OK);
-        let changed =
-            crate::store::audit::testing::entries(test.app.pool(), "catalog.description_changed")
-                .await;
+        let changed = crate::store::audit::testing::entries(
+            test.app.accounts().executor(),
+            "catalog.description_changed",
+        )
+        .await;
         assert_eq!(changed.len(), 1, "{changed:?}");
         assert_eq!(changed[0].source, "api");
         assert_eq!(changed[0].actor_label, "api key");
@@ -1798,9 +1845,11 @@ mod tests {
         assert_eq!(answer["previous"], "off");
         assert_eq!(listing["catalogs"][0]["name"], "main");
         assert_eq!(listing["catalogs"][0]["maintenance"], "on");
-        let changes =
-            crate::store::audit::testing::entries(test.app.pool(), "catalog.maintenance_changed")
-                .await;
+        let changes = crate::store::audit::testing::entries(
+            test.app.accounts().executor(),
+            "catalog.maintenance_changed",
+        )
+        .await;
         assert_eq!(changes.len(), 2, "{changes:?}");
         assert_eq!(changes[0].source, "console");
         assert_eq!(

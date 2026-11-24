@@ -1216,6 +1216,7 @@ mod tests {
     /// `family` (`t-family`), active, with maintenance on.
     fn row(name: &str, id: i64) -> CatalogRow {
         CatalogRow {
+            store: crate::stores::StoreName::main(),
             id,
             name: name.to_string(),
             display_name: String::new(),
@@ -1498,7 +1499,7 @@ mod tests {
     async fn stored_key(app: &App, name: &str) -> (String, String) {
         let names = ["main".to_string()];
         let created = key_rows::create_with_id(
-            app.pool(),
+            app.accounts().executor(),
             &key_rows::NewKey {
                 name,
                 access: Access::Read,
@@ -1525,7 +1526,7 @@ mod tests {
         let (id, key) = stored_key(&test.app, "reader").await;
         let (old_id, old_key) = stored_key(&test.app, "old").await;
         key_rows::revoke_by_id(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &old_id,
             &crate::store::audit::AuditActor::cli(),
             Utc::now(),

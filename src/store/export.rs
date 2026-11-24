@@ -3,13 +3,13 @@
 use std::io::Write;
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
 
 use crate::archive::{self, ExportFile};
 use crate::auth::CatalogScope;
 use crate::error::OkfError;
 use crate::store::audit::{self, Action, AuditActor, Entry, People, Target};
 use crate::store::{catalogs, documents};
+use crate::stores::CatalogDb;
 
 /// Writes a catalog's live documents to `out` as a `.tar.gz`: no top-level
 /// directory, modes 0644/0755, each file's mtime its `updated_at`, and no
@@ -27,7 +27,7 @@ use crate::store::{catalogs, documents};
 /// without its entry.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `db` - the catalog's store.
 /// * `catalog` - the catalog's name.
 /// * `out` - where to write (a `Vec<u8>`, a file, an HTTP body buffer).
 /// * `options` - who exports and when, and the incarnation expected.
@@ -46,7 +46,7 @@ use crate::store::{catalogs, documents};
 // could outlive (`'static`). `Vec<u8>` and `File` both qualify.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "export.export"))]
 pub async fn export<W>(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog: &str,
     out: W,
     options: &ExportOptions<'_>,
@@ -59,27 +59,37 @@ where
         now,
         expect_catalog_id,
     } = *options;
-    let mut tx = pool.begin().await?;
-    // Must be the transaction's first statement. Under the default
-    // READ COMMITTED each query would see its own snapshot.
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
-    let found = catalogs::find(&mut *tx, catalog).await?;
+    // The registry facts first, on the account database: the catalog's id
+    // and its owner team's audit id (the entry belongs to the team that
+    // owned what was exported, even if the catalog moves or is deleted
+    // before the entry is written). A plain read (every team has its
+    // `audit_teams` row from creation, migration 0014), since a read-only
+    // transaction cannot run `audit_team_ref`.
+    let mut found = catalogs::find(db.accounts().executor(), catalog).await?;
     catalogs::check_incarnation(catalog, found.id, expect_catalog_id)?;
-    let rows = documents::published(&mut *tx, found.id).await?;
-    // The owner team's audit id, in the same snapshot as the rows: the
-    // entry belongs to the team that owned what was exported, even if the
-    // catalog moves or is deleted before the entry is written. A plain read
-    // (every team has its `audit_teams` row from creation, migration 0014),
-    // since a read-only transaction cannot run `audit_team_ref`.
     let team: Option<i64> = sqlx::query_scalar(
         "SELECT a.id FROM catalogs c JOIN audit_teams a ON a.team_id = c.owner_team_id \
          WHERE c.id = $1",
     )
     .bind(found.id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(db.accounts().executor())
     .await?;
+    let mut tx = db.begin().await?;
+    // Must be the store transaction's first statement. Under the default
+    // READ COMMITTED each query would see its own snapshot.
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    // The generation and the rows are one snapshot of the store.
+    let generation: Option<i64> =
+        sqlx::query_scalar("SELECT generation FROM catalog_state WHERE id = $1")
+            .bind(found.id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    found.generation = generation.ok_or_else(|| OkfError::CatalogNotSelected {
+        catalog: catalog.to_string(),
+    })?;
+    let rows = documents::published(&mut *tx, found.id).await?;
     // Nothing was written; ending the transaction now frees its connection
     // before the (possibly long) compression.
     tx.commit().await?;
@@ -89,7 +99,7 @@ where
         generation: found.generation,
         files: rows.len(),
     };
-    record_export(pool, &exported, audit, now).await?;
+    record_export(db, &exported, audit, now).await?;
     // `move` hands `rows` and `out` to the closure; `ExportFile`s borrow from
     // `rows` inside it, so nothing is copied.
     let caller = crate::okf::caller::Caller::capture();
@@ -146,7 +156,8 @@ struct Exported<'a> {
 /// entry resolves only the actor (and its credential's owner).
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `db` - the store the export read; the entry is an account row, so it
+///   goes through the store handle's account database.
 /// * `exported` - what was exported, and its scope then.
 /// * `audit` - who exports.
 /// * `now` - when.
@@ -155,12 +166,12 @@ struct Exported<'a> {
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "export.record_export"))]
 async fn record_export(
-    pool: &PgPool,
+    db: &CatalogDb,
     exported: &Exported<'_>,
     audit: &AuditActor,
     now: DateTime<Utc>,
 ) -> Result<(), OkfError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = db.accounts().begin().await?;
     audit::lock_people(&mut tx, audit, &People::default()).await?;
     // `into_iter().collect()` turns the `Option` into a zero- or one-item Vec.
     let teams: Vec<i64> = exported.scope.team.into_iter().collect();
@@ -188,6 +199,7 @@ mod tests {
     use crate::okf::workspace::StoredFile;
     use crate::store::import::{import, ImportOptions, ImportScope};
     use chrono::{TimeZone, Utc};
+    use sqlx::PgPool;
 
     fn stored(content: &[u8], executable: bool) -> StoredFile {
         StoredFile {
@@ -226,9 +238,14 @@ mod tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now,
         };
-        import(&db.pool, "pg", files.clone(), &options)
-            .await
-            .unwrap();
+        import(
+            &crate::stores::CatalogDb::main_in(&db.pool),
+            "pg",
+            files.clone(),
+            &options,
+        )
+        .await
+        .unwrap();
         // A later import that changes `a.md` and deletes `gone.md`:
         // `tools/run.sh` keeps its first `updated_at`.
         let later = Utc.with_ymd_and_hms(2026, 11, 2, 13, 0, 0).unwrap();
@@ -243,12 +260,17 @@ mod tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: later,
         };
-        import(&db.pool, "pg", files.clone(), &options)
-            .await
-            .unwrap();
+        import(
+            &crate::stores::CatalogDb::main_in(&db.pool),
+            "pg",
+            files.clone(),
+            &options,
+        )
+        .await
+        .unwrap();
 
         let (tarball, generation) = export(
-            &db.pool,
+            &crate::stores::CatalogDb::main_of(&db.pool),
             "pg",
             Vec::new(),
             &ExportOptions {
@@ -308,7 +330,7 @@ mod tests {
 
         let catalog_id = catalogs::find(&db.pool, "pg").await.unwrap().id;
         let (_, generation) = export(
-            &db.pool,
+            &crate::stores::CatalogDb::main_of(&db.pool),
             "pg",
             Vec::new(),
             &ExportOptions {
@@ -403,7 +425,7 @@ mod tests {
             let pool = pool.clone();
             async move {
                 export(
-                    &pool,
+                    &crate::stores::CatalogDb::main_of(&pool),
                     "pg",
                     Vec::new(),
                     &ExportOptions {
@@ -439,7 +461,7 @@ mod tests {
         })
         .await;
         export_across(&db.pool, actor, || async {
-            catalogs::delete(&db.pool, "pg", true, &AuditActor::cli(), Utc::now())
+            catalogs::delete_settled(&db.pool, "pg", true, &AuditActor::cli(), Utc::now())
                 .await
                 .unwrap();
         })
@@ -481,7 +503,7 @@ mod tests {
             .await;
 
         let failed = export(
-            &db.pool,
+            &crate::stores::CatalogDb::main_of(&db.pool),
             "pg",
             Vec::new(),
             &ExportOptions {
@@ -522,7 +544,7 @@ mod tests {
         .unwrap();
 
         let (tarball, generation) = export(
-            &db.pool,
+            &crate::stores::CatalogDb::main_of(&db.pool),
             "pg",
             Vec::new(),
             &ExportOptions {
@@ -534,7 +556,7 @@ mod tests {
         .await
         .unwrap();
         let unknown = export(
-            &db.pool,
+            &crate::stores::CatalogDb::main_of(&db.pool),
             "nope",
             Vec::new(),
             &ExportOptions {

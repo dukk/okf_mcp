@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use chrono::Utc;
 use okf_mcp::config::Config;
-use okf_mcp::store::catalogs;
 use okf_mcp::store::ceiling;
 use okf_mcp::store::keys::{self, Access, Grants, NewKey};
 use okf_mcp::store::sign_in_events::{self, Method, Outcome};
@@ -261,7 +260,7 @@ async fn a_last_owner_or_an_owned_catalog_refuses_the_delete_until_cleared() {
     .await
     .expect("add carol");
     crate::support::server::applied(&server.app, async {
-        catalogs::create(
+        crate::support::stores::create_catalog(
             pool,
             &okf_mcp::store::catalogs::NewCatalog {
                 name: "bobs",
@@ -819,7 +818,7 @@ async fn a_write_that_settles_after_its_user_was_reopened_updates_the_new_drawer
 async fn the_users_filter_matches_names_and_emails() {
     let server = server().await;
     let admin = server.key("console-admin", Access::Admin, &[], None).await;
-    let pool = server.app.pool();
+    let pool = server.app.accounts().executor();
     for (name, display_name) in [("alice", ""), ("bob", "Robert Example")] {
         users::create(
             pool,

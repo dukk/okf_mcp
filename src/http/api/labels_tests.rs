@@ -186,7 +186,7 @@ async fn patch_me_sets_my_display_name_and_refuses_the_rest() {
     let root = every_catalog_admin(&test).await;
     acme(&test, &root).await;
     let legacy = crate::store::keys::insert_legacy_test_key(
-        test.app.pool(),
+        test.app.accounts().executor(),
         "legacy",
         Access::Admin,
         "legacy",
@@ -515,7 +515,7 @@ async fn a_suspended_teams_owner_cannot_edit_its_catalogs_label() {
         StatusCode::OK,
         "the operator may still edit it: {answer}"
     );
-    let row = crate::store::catalogs::find(test.app.pool(), "main")
+    let row = crate::store::catalogs::find(test.app.accounts().executor(), "main")
         .await
         .unwrap();
     assert_eq!(row.display_name, "Ops", "only the admin's edit landed");
@@ -737,11 +737,11 @@ async fn an_admin_labels_page_reads_a_bounded_number_of_rows() {
          SELECT name, id, now() FROM made",
     )
     .bind(OTHERS)
-    .execute(test.app.pool())
+    .execute(test.app.accounts().executor())
     .await
     .expect("seed users and their personal teams");
     sqlx::query("ANALYZE users, teams")
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .expect("analyze");
     let named = (1..=super::labels::NAMED_MAX)
@@ -840,13 +840,21 @@ async fn edits_are_audited_by_length_not_text() {
     )
     .await;
 
-    let user =
-        crate::store::audit::testing::entries(test.app.pool(), "user.display_name_changed").await;
-    let team =
-        crate::store::audit::testing::entries(test.app.pool(), "team.display_name_changed").await;
-    let catalog =
-        crate::store::audit::testing::entries(test.app.pool(), "catalog.display_name_changed")
-            .await;
+    let user = crate::store::audit::testing::entries(
+        test.app.accounts().executor(),
+        "user.display_name_changed",
+    )
+    .await;
+    let team = crate::store::audit::testing::entries(
+        test.app.accounts().executor(),
+        "team.display_name_changed",
+    )
+    .await;
+    let catalog = crate::store::audit::testing::entries(
+        test.app.accounts().executor(),
+        "catalog.display_name_changed",
+    )
+    .await;
     assert_eq!(user.last().unwrap().details, json!({"length": 7}));
     assert_eq!(team.last().unwrap().details, json!({"length": 6}));
     assert_eq!(catalog.last().unwrap().details, json!({"length": 7}));

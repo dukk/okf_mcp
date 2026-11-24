@@ -96,7 +96,9 @@ pub(super) async fn user(
         UserCommand::Delete { name } => {
             // `allow_last_admin: true`: operator access may delete the last
             // admin user, as it may clear the last admin flag.
-            let deleted = users::delete(
+            // The stores' half (discarding the keys' open changesets) is owed in
+            // `store_cleanups` and done by the server's housekeeping.
+            let deleted = users::delete_on(
                 pool,
                 &name,
                 users::DeleteOptions::OPERATOR,
@@ -105,9 +107,9 @@ pub(super) async fn user(
             )
             .await?;
             format!(
-                "deleted user {name} ({} key(s) and grant(s), {} sign-in code(s), \
-                 {} open changeset(s) discarded)\n",
-                deleted.keys, deleted.codes, deleted.discarded
+                "deleted user {name} ({} key(s) and grant(s), {} sign-in code(s); their open \
+                 changesets are discarded by the server's store cleanup)\n",
+                deleted.keys, deleted.codes
             )
         }
         // `off: _` ignores the field: clap made `--on` and `--off` exclusive
@@ -692,8 +694,8 @@ mod tests {
         );
         assert_eq!(
             deleted,
-            "deleted user alice (0 key(s) and grant(s), 0 sign-in code(s), \
-             0 open changeset(s) discarded)\n"
+            "deleted user alice (0 key(s) and grant(s), 0 sign-in code(s); their open \
+             changesets are discarded by the server's store cleanup)\n"
         );
         assert!(!after.contains("alice"), "{after}");
     }
@@ -1137,8 +1139,8 @@ mod tests {
 
         assert_eq!(
             deleted,
-            "deleted user alice (1 key(s) and grant(s), 0 sign-in code(s), \
-             0 open changeset(s) discarded)\n"
+            "deleted user alice (1 key(s) and grant(s), 0 sign-in code(s); their open \
+             changesets are discarded by the server's store cleanup)\n"
         );
         assert!(!keys.contains("alice"), "{keys}");
     }

@@ -1,9 +1,9 @@
 //! A document's history: its rows in `revisions`, newest first.
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
 
 use crate::error::OkfError;
+use crate::stores::CatalogDb;
 
 /// One revision of a document (its content left out).
 // `sqlx::FromRow` derives the code that builds this struct from a result
@@ -25,7 +25,7 @@ pub struct RevisionRow {
 /// The newest `limit` revisions of one path.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `db` - the catalog's store.
 /// * `catalog_id` - the catalog.
 /// * `path` - catalog-relative path, as stored (no leading `/`).
 /// * `limit` - at most this many rows.
@@ -37,7 +37,7 @@ pub struct RevisionRow {
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "history.revisions", catalog_id = catalog_id))]
 pub async fn revisions(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     path: &str,
     limit: i64,
@@ -51,7 +51,7 @@ pub async fn revisions(
     .bind(catalog_id)
     .bind(path)
     .bind(limit)
-    .fetch_all(pool)
+    .fetch_all(db.executor())
     .await?;
     Ok(rows)
 }
@@ -68,7 +68,7 @@ pub struct RevisionContent {
 /// One path's content at one revision.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `db` - the catalog's store.
 /// * `catalog_id` - the catalog.
 /// * `path` - catalog-relative path, as stored (no leading `/`).
 /// * `revision` - the revision number.
@@ -80,7 +80,7 @@ pub struct RevisionContent {
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "history.content_at", catalog_id = catalog_id))]
 pub async fn content_at(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     path: &str,
     revision: i32,
@@ -93,7 +93,7 @@ pub async fn content_at(
     .bind(catalog_id)
     .bind(path)
     .bind(revision)
-    .fetch_optional(pool)
+    .fetch_optional(db.executor())
     .await?;
     Ok(row)
 }
@@ -163,7 +163,7 @@ pub(crate) const RECENT_AFTER_SQL: &str = "SELECT path, revision, op, actor, mes
 /// and a page continues exactly where the one before stopped.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `db` - the catalog's store.
 /// * `catalog_id` - the catalog.
 /// * `after` - the previous page's `next`, or `None` for the newest page.
 /// * `limit` - the page size, 1..=[`RECENT_MAX`].
@@ -177,7 +177,7 @@ pub(crate) const RECENT_AFTER_SQL: &str = "SELECT path, revision, op, actor, mes
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "history.recent", catalog_id = catalog_id))]
 pub async fn recent(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     after: Option<&RecentCursor>,
     limit: u32,
@@ -195,7 +195,7 @@ pub async fn recent(
                 .bind(catalog_id)
                 .bind(&cursor.path)
                 .bind(cursor.revision)
-                .fetch_optional(pool)
+                .fetch_optional(db.executor())
                 .await?
                 .ok_or_else(|| OkfError::NotFound {
                     path: format!("{} (revision {})", cursor.path, cursor.revision),
@@ -214,14 +214,14 @@ pub async fn recent(
                 .bind(&cursor.path)
                 .bind(cursor.revision)
                 .bind(fetch)
-                .fetch_all(pool)
+                .fetch_all(db.executor())
                 .await?
         }
         None => {
             sqlx::query_as::<_, RecentRow>(RECENT_SQL)
                 .bind(catalog_id)
                 .bind(fetch)
-                .fetch_all(pool)
+                .fetch_all(db.executor())
                 .await?
         }
     };
@@ -247,6 +247,7 @@ mod tests {
     use crate::store::catalogs;
     use crate::store::import::{import, ImportOptions, ImportScope};
     use chrono::Utc;
+    use sqlx::PgPool;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn revisions_come_newest_first_and_outlive_a_delete() {
@@ -276,7 +277,14 @@ mod tests {
             };
             let text = format!("# {version}\n");
             let entries = files(&[("a.md", &text), ("b.md", "# B\n")]);
-            import(&db.pool, "pg", entries, &options).await.unwrap();
+            import(
+                &crate::stores::CatalogDb::main_of(&db.pool),
+                "pg",
+                entries,
+                &options,
+            )
+            .await
+            .unwrap();
         }
         let options = ImportOptions {
             replace: true,
@@ -287,13 +295,39 @@ mod tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
         };
-        import(&db.pool, "pg", files(&[("b.md", "# B\n")]), &options)
-            .await
-            .unwrap();
+        import(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            "pg",
+            files(&[("b.md", "# B\n")]),
+            &options,
+        )
+        .await
+        .unwrap();
 
-        let all = revisions(&db.pool, catalog.id, "a.md", 20).await.unwrap();
-        let one = revisions(&db.pool, catalog.id, "a.md", 1).await.unwrap();
-        let none = revisions(&db.pool, catalog.id, "c.md", 20).await.unwrap();
+        let all = revisions(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            catalog.id,
+            "a.md",
+            20,
+        )
+        .await
+        .unwrap();
+        let one = revisions(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            catalog.id,
+            "a.md",
+            1,
+        )
+        .await
+        .unwrap();
+        let none = revisions(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            catalog.id,
+            "c.md",
+            20,
+        )
+        .await
+        .unwrap();
 
         let numbers: Vec<i32> = all.iter().map(|row| row.revision).collect();
         assert_eq!(numbers, [3, 2, 1]);
@@ -338,14 +372,40 @@ mod tests {
                 audit: &crate::store::audit::AuditActor::cli(),
                 now: Utc::now(),
             };
-            import(&db.pool, "pg", files(entries), &options)
-                .await
-                .unwrap();
+            import(
+                &crate::stores::CatalogDb::main_of(&db.pool),
+                "pg",
+                files(entries),
+                &options,
+            )
+            .await
+            .unwrap();
         }
 
-        let first = content_at(&db.pool, catalog.id, "a.md", 1).await.unwrap();
-        let deleted = content_at(&db.pool, catalog.id, "a.md", 2).await.unwrap();
-        let missing = content_at(&db.pool, catalog.id, "a.md", 3).await.unwrap();
+        let first = content_at(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            catalog.id,
+            "a.md",
+            1,
+        )
+        .await
+        .unwrap();
+        let deleted = content_at(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            catalog.id,
+            "a.md",
+            2,
+        )
+        .await
+        .unwrap();
+        let missing = content_at(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            catalog.id,
+            "a.md",
+            3,
+        )
+        .await
+        .unwrap();
 
         let first = first.expect("revision 1");
         assert_eq!(
@@ -375,9 +435,9 @@ mod tests {
         .await
         .unwrap()
         .id;
-        sqlx::query("DELETE FROM revisions WHERE catalog_id = $1")
+        sqlx::query("DELETE FROM catalog.revisions WHERE catalog_id = $1")
             .bind(id)
-            .execute(pool)
+            .execute(&crate::db::store_pool(pool))
             .await
             .unwrap();
         id
@@ -393,7 +453,7 @@ mod tests {
     ) {
         let content: Option<&[u8]> = (op != "delete").then_some(b"# Text\n");
         sqlx::query(
-            "INSERT INTO revisions (catalog_id, path, revision, op, content, executable, \
+            "INSERT INTO catalog.revisions (catalog_id, path, revision, op, content, executable, \
              actor, message, created_at) VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8)",
         )
         .bind(catalog_id)
@@ -404,7 +464,7 @@ mod tests {
         .bind(actor)
         .bind(format!("{op} {path}"))
         .bind(at)
-        .execute(pool)
+        .execute(&crate::db::store_pool(pool))
         .await
         .unwrap();
     }
@@ -420,9 +480,14 @@ mod tests {
         let mut pages = Vec::new();
         let mut after = None;
         loop {
-            let page = recent(pool, catalog_id, after.as_ref(), limit)
-                .await
-                .unwrap();
+            let page = recent(
+                &crate::stores::CatalogDb::main_of(pool),
+                catalog_id,
+                after.as_ref(),
+                limit,
+            )
+            .await
+            .unwrap();
             pages.push(
                 page.rows
                     .iter()
@@ -448,7 +513,9 @@ mod tests {
         write(&db.pool, pg, ("a.md", 3, "delete"), "bob", at(30)).await;
         write(&db.pool, other, ("secret.md", 1, "create"), "eve", at(40)).await;
 
-        let page = recent(&db.pool, pg, None, 50).await.unwrap();
+        let page = recent(&crate::stores::CatalogDb::main_of(&db.pool), pg, None, 50)
+            .await
+            .unwrap();
 
         let got: Vec<(&str, i32, &str, &str)> = page
             .rows
@@ -475,11 +542,25 @@ mod tests {
         assert_eq!(page.rows[0].message, "delete a.md");
         assert_eq!(page.rows[0].created_at, at(30));
         assert_eq!(page.next, None);
-        let elsewhere = recent(&db.pool, other, None, 50).await.unwrap();
+        let elsewhere = recent(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            other,
+            None,
+            50,
+        )
+        .await
+        .unwrap();
         assert_eq!(elsewhere.rows.len(), 1);
         let empty = catalog(&db.pool, "empty").await;
         assert_eq!(
-            recent(&db.pool, empty, None, 50).await.unwrap(),
+            recent(
+                &crate::stores::CatalogDb::main_of(&db.pool),
+                empty,
+                None,
+                50
+            )
+            .await
+            .unwrap(),
             RecentPage {
                 rows: Vec::new(),
                 next: None
@@ -555,11 +636,35 @@ mod tests {
             revision: 2,
         };
 
-        let zero = recent(&db.pool, pg, None, 0).await;
-        let over = recent(&db.pool, pg, None, RECENT_MAX + 1).await;
-        let most = recent(&db.pool, pg, None, RECENT_MAX).await;
-        let elsewhere = recent(&db.pool, pg, Some(&foreign), 10).await;
-        let unknown = recent(&db.pool, pg, Some(&missing), 10).await;
+        let zero = recent(&crate::stores::CatalogDb::main_of(&db.pool), pg, None, 0).await;
+        let over = recent(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            pg,
+            None,
+            RECENT_MAX + 1,
+        )
+        .await;
+        let most = recent(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            pg,
+            None,
+            RECENT_MAX,
+        )
+        .await;
+        let elsewhere = recent(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            pg,
+            Some(&foreign),
+            10,
+        )
+        .await;
+        let unknown = recent(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            pg,
+            Some(&missing),
+            10,
+        )
+        .await;
 
         assert!(matches!(zero, Err(OkfError::Refused { .. })), "{zero:?}");
         assert!(matches!(over, Err(OkfError::Refused { .. })), "{over:?}");
@@ -581,7 +686,7 @@ mod tests {
         let other = catalog(&db.pool, "other").await;
         // A long history in two catalogs: a page must not read either whole.
         sqlx::query(
-            "INSERT INTO revisions (catalog_id, path, revision, op, content, executable, \
+            "INSERT INTO catalog.revisions (catalog_id, path, revision, op, content, executable, \
              actor, message, created_at) \
              SELECT c, 'p' || (n % 500) || '.md', n / 500 + 1, 'update', NULL, false, 'a', 'm', \
              $3 + n * interval '1 second' FROM generate_series(0, 19999) AS n, \
@@ -590,11 +695,11 @@ mod tests {
         .bind(pg)
         .bind(other)
         .bind(at(0))
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
-        sqlx::query("ANALYZE revisions")
-            .execute(&db.pool)
+        sqlx::query("ANALYZE catalog.revisions")
+            .execute(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
 
@@ -605,7 +710,7 @@ mod tests {
             sqlx::query_scalar(sqlx::AssertSqlSafe(format!("EXPLAIN {RECENT_SQL}")))
                 .bind(pg)
                 .bind(51_i64)
-                .fetch_all(&db.pool)
+                .fetch_all(&db.store())
                 .await
                 .unwrap();
         let later: Vec<String> =
@@ -615,7 +720,7 @@ mod tests {
                 .bind("p0.md")
                 .bind(21_i32)
                 .bind(51_i64)
-                .fetch_all(&db.pool)
+                .fetch_all(&db.store())
                 .await
                 .unwrap();
 

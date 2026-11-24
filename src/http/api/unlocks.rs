@@ -310,7 +310,7 @@ async fn create_unlock(
         hours: body.hours.unwrap_or(policy.max_hours),
     };
     let now = app.clock().now();
-    let created = unlocks::create(app.pool(), &new, &policy, &actor, now).await?;
+    let created = unlocks::create(app.accounts().executor(), &new, &policy, &actor, now).await?;
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
     Ok((StatusCode::CREATED, Json(UnlockView::of(created, now))))
@@ -335,7 +335,7 @@ async fn list_unlocks(
         live_at: params.live.then_some(now),
     };
     if require_admin(&principal).is_ok() {
-        let unlocks = unlocks::list(app.pool(), &filter)
+        let unlocks = unlocks::list(app.accounts().executor(), &filter)
             .await?
             .into_iter()
             .filter(|record| administers(&principal, &record.catalog))
@@ -354,10 +354,10 @@ async fn list_unlocks(
     };
     // `owned_by` answers `None` for a malformed name without SQL. The
     // filter then matches the catalogs that team owns now.
-    teams::owned_by(app.pool(), user_id, team)
+    teams::owned_by(app.accounts().executor(), user_id, team)
         .await?
         .ok_or_else(refused)?;
-    let unlocks = unlocks::list(app.pool(), &filter)
+    let unlocks = unlocks::list(app.accounts().executor(), &filter)
         .await?
         .into_iter()
         .map(|record| OwnerUnlockView::of(record, now))
@@ -384,7 +384,7 @@ async fn end_unlock(
     require_admin(&principal)?;
     // An unlock's catalog never changes, so checking it before `end`
     // cannot go stale.
-    let found = unlocks::find(app.pool(), id).await?;
+    let found = unlocks::find(app.accounts().executor(), id).await?;
     if !administers(&principal, &found.catalog) {
         return Err(OkfError::NotFound {
             path: format!("unlocks/{id}"),
@@ -392,7 +392,7 @@ async fn end_unlock(
         .into());
     }
     let now = app.clock().now();
-    let ended = unlocks::end(app.pool(), id, &actor, now).await?;
+    let ended = unlocks::end(app.accounts().executor(), id, &actor, now).await?;
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
     Ok(Json(UnlockView::of(ended, now)))

@@ -208,7 +208,7 @@ async fn deleting_a_catalog_invalidates_it_and_its_owner() {
     let main = catalog(&db.pool, "main").await;
     let owner = team_id(&db.pool, TEST_TEAM).await;
     let got = invalidations_of(&db.pool, async {
-        catalogs::delete(&db.pool, "main", false, &cli(), now())
+        catalogs::delete_settled(&db.pool, "main", false, &cli(), now())
             .await
             .unwrap();
     })
@@ -826,7 +826,7 @@ async fn an_import_and_a_repair_invalidate_the_catalog_at_their_generation() {
     };
     let imported = invalidations_of(&db.pool, async {
         import(
-            &db.pool,
+            &crate::stores::CatalogDb::main_in(&db.pool),
             "main",
             crate::archive::files(&[("a.md", NOTE)]),
             &options,
@@ -842,7 +842,13 @@ async fn an_import_and_a_repair_invalidate_the_catalog_at_their_generation() {
             audit: &audit,
             now: now(),
         };
-        repair(&db.pool, "main", &options).await.unwrap();
+        repair(
+            &crate::stores::CatalogDb::main_in(&db.pool),
+            "main",
+            &options,
+        )
+        .await
+        .unwrap();
     })
     .await;
     let at = |generation| Invalidation::Catalog {

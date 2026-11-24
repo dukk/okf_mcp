@@ -69,6 +69,14 @@ pub struct SearchResult {
     /// apply over their published files; every other catalog still
     /// answered. Empty when every catalog was searched.
     pub skipped: Vec<SkippedCatalog>,
+    /// The ids of selected catalogs left out because the store holding them
+    /// could not be reached (sorted, each once); every other catalog still
+    /// answered, so retry for these. Absent when every store answered.
+    // `skip_serializing_if` leaves the key out of the JSON when the list is
+    // empty, as the other optional fields are.
+    // `default` keeps the key optional in the output schema, as it is in the JSON.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable: Vec<String>,
 }
 
 /// One hit, with its catalog's label beside the catalog id.
@@ -113,14 +121,16 @@ pub(crate) async fn run(ctx: &ToolContext, params: SearchParams) -> Result<Searc
 /// The merged hits.
 ///
 /// # Errors
-/// A selection error ([`ToolContext::states`]); as [`ToolContext::pin`] for
+/// A selection error ([`ToolContext::states_or_unavailable`]); as [`ToolContext::pin`] for
 /// `changeset`, and [`OkfError::Refused`] if its catalog is not searched;
 /// any error from [`ToolContext::view`] (a database error, `Busy`) but a
 /// broken overlay. A
 /// catalog whose overlay
 /// does not apply ([`is_broken_overlay`]) is not an error: it is left out
 /// and listed in [`SearchResult::skipped`], so one broken changeset does not
-/// fail a search across every catalog.
+/// fail a search across every catalog. A catalog whose store cannot be
+/// reached is no error either: it is listed in [`SearchResult::unavailable`]
+/// and the others answer (plan P3, merging reads).
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn run_with(
     ctx: &ToolContext,
@@ -131,7 +141,9 @@ pub(crate) async fn run_with(
         params.catalogs.as_deref(),
         ctx.app().config().search_fanout_max,
     )?;
-    let states = ctx.states(params.catalogs.as_deref()).await?;
+    let (states, mut unavailable) = ctx
+        .states_or_unavailable(params.catalogs.as_deref())
+        .await?;
     let pinned = ctx.pin(params.changeset.as_deref()).await?;
     require_selected(pinned.as_ref(), &states)?;
     // A search reads every catalog before it answers: all are admitted at
@@ -164,6 +176,9 @@ pub(crate) async fn run_with(
                     error: error.to_json(),
                 });
             }
+            // The store went away between loading the state and reading the
+            // changeset's drafts: unavailable, like one that never loaded.
+            Err(OkfError::StoreUnavailable { .. }) => unavailable.push(state.name().to_string()),
             // Anything else (a database failure, `Busy`): the call fails (and
             // `tool_error` logs an internal error with its details), so the
             // agent retries.
@@ -195,7 +210,13 @@ pub(crate) async fn run_with(
             hit,
         })
         .collect();
-    Ok(SearchResult { hits, skipped })
+    unavailable.sort();
+    unavailable.dedup();
+    Ok(SearchResult {
+        hits,
+        skipped,
+        unavailable,
+    })
 }
 
 /// Refuses a search that names more than `most` distinct catalogs (M18 spec
@@ -265,7 +286,8 @@ impl OkfServer {
                        since a large concept stays in context once read. With \
                        `changeset` (a handle from open_changeset), its catalog is searched \
                        through that changeset's drafts, and is listed in `skipped` if they \
-                       cannot be applied.",
+                       cannot be applied. A catalog whose store cannot be reached is left \
+                       out and listed in `unavailable`; the others still answer.",
         annotations(
             title = "Search Concepts",
             read_only_hint = true,
@@ -453,7 +475,7 @@ mod tests {
             None,
         );
         // A closed pool fails the changeset lookup, as an outage would.
-        test.app.pool().close().await;
+        test.app.accounts().executor().close().await;
         let mut through = params("routes", &[]);
         // Handle-shaped, so the lookup reaches the closed pool: a malformed
         // handle is unknown before any SQL (issue #339).

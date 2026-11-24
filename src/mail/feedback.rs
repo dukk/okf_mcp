@@ -562,7 +562,13 @@ pub(crate) async fn check_and_submit(
         client: sender.client,
         credential_kind: sender.credential_kind,
     };
-    submit(app.pool(), &new, config.max_per_hour, app.clock().now()).await
+    submit(
+        app.accounts().executor(),
+        &new,
+        config.max_per_hour,
+        app.clock().now(),
+    )
+    .await
 }
 
 /// The error for a queue operation apalis refused.
@@ -1178,7 +1184,11 @@ async fn forward(
 pub fn spawn_worker(app: Arc<App>, shutdown: CancellationToken) -> Option<JoinHandle<()>> {
     let forminit = Arc::clone(app.forminit()?);
     let context = FeedbackContext {
-        pool: worker_pool_named(app.pool(), WORKER_APPLICATION_NAME, WORKER_POOL_SIZE),
+        pool: worker_pool_named(
+            app.accounts().executor(),
+            WORKER_APPLICATION_NAME,
+            WORKER_POOL_SIZE,
+        ),
         forminit,
         clock: app.clock_handle(),
     };

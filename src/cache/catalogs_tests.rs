@@ -83,24 +83,29 @@ async fn import_behind(pool: &PgPool, catalog: &str, files: &[(&str, &str)]) -> 
         audit: &AuditActor::cli(),
         now: Utc::now(),
     };
-    import(pool, catalog, files, &options)
-        .await
-        .unwrap()
-        .changed
-        .expect("the import changed the catalog")
-        .generation
+    import(
+        &crate::stores::CatalogDb::main_in(pool),
+        catalog,
+        files,
+        &options,
+    )
+    .await
+    .unwrap()
+    .changed
+    .expect("the import changed the catalog")
+    .generation
 }
 
 /// Stores a row no workspace accepts (a path escaping the catalog) and
 /// moves the generation, so that generation's snapshot fails to build.
 async fn break_catalog(pool: &PgPool, catalog_id: i64) {
     sqlx::query(
-        "INSERT INTO documents (catalog_id, path, content, executable, revision, \
+        "INSERT INTO catalog.documents (catalog_id, path, content, executable, revision, \
                                 updated_at, updated_by) \
          VALUES ($1, '../escape.md', '', false, 1, now(), 'test')",
     )
     .bind(catalog_id)
-    .execute(pool)
+    .execute(&crate::db::store_pool(pool))
     .await
     .unwrap();
     bump_generation(pool, catalog_id).await;
@@ -108,9 +113,9 @@ async fn break_catalog(pool: &PgPool, catalog_id: i64) {
 
 /// Moves a catalog's generation, as an import or publish does.
 async fn bump_generation(pool: &PgPool, catalog_id: i64) {
-    sqlx::query("UPDATE catalogs SET generation = generation + 1 WHERE id = $1")
+    sqlx::query("UPDATE catalog.catalog_state SET generation = generation + 1 WHERE id = $1")
         .bind(catalog_id)
-        .execute(pool)
+        .execute(&crate::db::store_pool(pool))
         .await
         .unwrap();
 }
@@ -175,7 +180,8 @@ async fn a_catalog_invalidation_refreshes_in_place() {
     let state = test.app.catalog_state(&pg).await.unwrap();
     let pinned = state.current();
 
-    let generation = import_behind(test.app.pool(), "pg", &[("a.md", "# A2\n")]).await;
+    let generation =
+        import_behind(test.app.accounts().executor(), "pg", &[("a.md", "# A2\n")]).await;
     test.app
         .apply(&message(Invalidation::Catalog {
             id: pg.id,
@@ -197,7 +203,8 @@ async fn a_catalog_invalidation_refreshes_in_place() {
 async fn a_stale_row_is_caught_up_on_use_without_a_message() {
     let (test, _registry) = app(&[("pg", &[("a.md", "# A\n")])], ByteSize::gib(1).as_u64()).await;
     let state = test.app.catalog("pg").await.unwrap().unwrap();
-    let generation = import_behind(test.app.pool(), "pg", &[("a.md", "# A2\n")]).await;
+    let generation =
+        import_behind(test.app.accounts().executor(), "pg", &[("a.md", "# A2\n")]).await;
 
     // A lost change feed marks the directory stale; the next use reads the
     // row again and refreshes the snapshot to it.
@@ -211,7 +218,7 @@ async fn a_stale_row_is_caught_up_on_use_without_a_message() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_broken_generation_is_not_rebuilt_on_every_request() {
     let (test, registry) = app(&[("pg", &[("a.md", "# A\n")])], ByteSize::gib(1).as_u64()).await;
-    let pool = test.app.pool().clone();
+    let pool = test.app.accounts().executor().clone();
     let id = row(&test.app, "pg").await.id;
     break_catalog(&pool, id).await;
     // Nothing told the directory: as after a lost change feed, it reads the
@@ -236,9 +243,9 @@ async fn a_broken_generation_is_not_rebuilt_on_every_request() {
     assert!(test.app.catalog("pg").await.unwrap().is_none());
 
     // Repaired, and the generation moves (as an import would move it).
-    sqlx::query("DELETE FROM documents WHERE catalog_id = $1 AND path = '../escape.md'")
+    sqlx::query("DELETE FROM catalog.documents WHERE catalog_id = $1 AND path = '../escape.md'")
         .bind(id)
-        .execute(&pool)
+        .execute(&crate::db::store_pool(&pool))
         .await
         .unwrap();
     bump_generation(&pool, id).await;
@@ -263,7 +270,7 @@ async fn a_broken_generation_is_not_rebuilt_on_every_request() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_failed_refresh_keeps_serving_the_old_snapshot_until_the_catalog_changes() {
     let (test, _registry) = app(&[("pg", &[("a.md", "# A\n")])], ByteSize::gib(1).as_u64()).await;
-    let pool = test.app.pool().clone();
+    let pool = test.app.accounts().executor().clone();
     let state = test.app.catalog("pg").await.unwrap().unwrap();
     let loaded_at = state.current().generation();
     break_catalog(&pool, state.id()).await;
@@ -290,7 +297,7 @@ fn concurrent_requests_behind_a_broken_generation_build_it_once() {
             app(&[("pg", &[("a.md", "# A\n")])], ByteSize::gib(1).as_u64()).await;
         let state = test.app.catalog("pg").await.unwrap().unwrap();
         let loaded_at = state.current().generation();
-        break_catalog(test.app.pool(), state.id()).await;
+        break_catalog(test.app.accounts().executor(), state.id()).await;
         test.app.apply_reconnect().await;
         let broken = row(&test.app, "pg").await;
         assert!(broken.generation > loaded_at);
@@ -352,7 +359,8 @@ async fn a_request_sees_one_snapshot_when_the_catalog_refreshes_between_reads() 
     let first = ctx.read_set(Some("a")).await.unwrap();
     let first_generation = ctx.snapshot(&first[0]).generation();
 
-    let generation = import_behind(test.app.pool(), "a", &[("a.md", "# A2\n")]).await;
+    let generation =
+        import_behind(test.app.accounts().executor(), "a", &[("a.md", "# A2\n")]).await;
     test.app
         .apply(&message(Invalidation::Catalog {
             id: first[0].id(),
@@ -385,7 +393,7 @@ async fn a_resident_catalog_that_grows_past_the_budget_is_not_kept() {
 
     // Through the change feed: `work` grows behind this app, then its
     // message is applied (an in-place refresh).
-    let generation = import_behind(test.app.pool(), "work", &[("a.md", &big)]).await;
+    let generation = import_behind(test.app.accounts().executor(), "work", &[("a.md", &big)]).await;
     test.app
         .apply(&message(Invalidation::Catalog {
             id: work.id(),
@@ -451,7 +459,7 @@ async fn a_refused_publish_after_a_growing_refresh_still_reweighs() {
     let changeset = pending_entry(&test, &handle, &edit).await;
     // The catalog grows past the budget behind this app's back.
     let big = note(8 * 1024);
-    let generation = import_behind(test.app.pool(), "pg", &[("a.md", &big)]).await;
+    let generation = import_behind(test.app.accounts().executor(), "pg", &[("a.md", &big)]).await;
 
     let input = PublishInput {
         changeset: &changeset,
@@ -473,12 +481,12 @@ async fn a_refused_publish_after_a_growing_refresh_still_reweighs() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_load_overtaken_by_a_catalog_message_is_served_but_not_kept() {
     let (test, _registry) = app(&[("pg", &[("a.md", "# A\n")])], ByteSize::gib(1).as_u64()).await;
-    let pool = test.app.pool().clone();
+    let pool = crate::db::store_pool(test.app.accounts().executor());
     let pg = row(&test.app, "pg").await;
     // Hold the documents table, so the load reads the generation and then
     // waits; release it on every path (dropping the transaction rolls back).
     let mut hold = pool.begin().await.unwrap();
-    sqlx::query("LOCK TABLE documents IN ACCESS EXCLUSIVE MODE")
+    sqlx::query("LOCK TABLE catalog.documents IN ACCESS EXCLUSIVE MODE")
         .execute(&mut *hold)
         .await
         .unwrap();
@@ -531,18 +539,19 @@ async fn a_load_overtaken_by_a_catalog_message_is_served_but_not_kept() {
 async fn a_deleted_catalog_leaves_the_cache_on_its_message() {
     let (test, _registry) = app(&[("pg", &[("a.md", "# A\n")])], ByteSize::gib(1).as_u64()).await;
     let state = test.app.catalog("pg").await.unwrap().unwrap();
-    let sent = crate::invalidate::testing::invalidations_of(test.app.pool(), async {
-        crate::store::catalogs::delete(
-            test.app.pool(),
-            "pg",
-            false,
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-    })
-    .await;
+    let sent =
+        crate::invalidate::testing::invalidations_of(test.app.accounts().executor(), async {
+            crate::store::catalogs::delete_settled(
+                test.app.accounts().executor(),
+                "pg",
+                false,
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .unwrap();
+        })
+        .await;
 
     for invalidation in sent {
         test.app.apply(&message(invalidation)).await;
@@ -568,17 +577,18 @@ async fn a_description_change_keeps_the_snapshot() {
         description: Some("source of truth"),
         owner: None,
     };
-    let sent = crate::invalidate::testing::invalidations_of(test.app.pool(), async {
-        crate::store::catalogs::update_details(
-            test.app.pool(),
-            &change,
-            &AuditActor::cli(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-    })
-    .await;
+    let sent =
+        crate::invalidate::testing::invalidations_of(test.app.accounts().executor(), async {
+            crate::store::catalogs::update_details(
+                test.app.accounts().executor(),
+                &change,
+                &AuditActor::cli(),
+                Utc::now(),
+            )
+            .await
+            .unwrap();
+        })
+        .await;
 
     for invalidation in sent {
         test.app.apply(&message(invalidation)).await;

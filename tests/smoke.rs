@@ -137,7 +137,7 @@ async fn storage_round_trip_on_a_real_catalog() {
     let root = std::env::var_os("OKF_PARITY_CATALOG").expect("set OKF_PARITY_CATALOG");
     let db = support::pg::TestDb::start_migrated().await;
     support::server::migrate_with_owner(&db.pool).await;
-    catalogs::create(
+    support::stores::create_catalog(
         &db.pool,
         &okf_mcp::store::catalogs::NewCatalog {
             name: "pg",
@@ -169,7 +169,14 @@ async fn storage_round_trip_on_a_real_catalog() {
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),
     };
-    let report = import(&db.pool, "pg", files, &options).await.unwrap();
+    let report = import(
+        &support::stores::main_store(&db.pool),
+        "pg",
+        files,
+        &options,
+    )
+    .await
+    .unwrap();
     eprintln!(
         "import: {} added, lint {} errors / {} warnings in {:?}",
         report.added.len(),
@@ -183,7 +190,9 @@ async fn storage_round_trip_on_a_real_catalog() {
         .await
         .unwrap()
         .expect("pg");
-    let state = CatalogState::load(&db.pool, &row).await.unwrap();
+    let state = CatalogState::load(&support::stores::main_store(&db.pool), &row)
+        .await
+        .unwrap();
     eprintln!("load snapshot: {:?}", started.elapsed());
     // `current()` hands out an `Arc` (a shared pointer) to the loaded
     // snapshot, so the borrows below stay valid while `state` could swap.
@@ -215,7 +224,7 @@ async fn storage_round_trip_on_a_real_catalog() {
 
     let started = Instant::now();
     let (tarball, _generation) = export::export(
-        &db.pool,
+        &support::stores::main_store(&db.pool),
         "pg",
         Vec::new(),
         &export::ExportOptions {

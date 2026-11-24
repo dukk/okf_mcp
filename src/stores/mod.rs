@@ -1,0 +1,626 @@
+//! The two kinds of database handle: [`AccountDb`] (users, teams, keys,
+//! sessions, the catalog registry) and [`CatalogDb`] (one store's catalog
+//! data), and [`StoreName`], a store's name.
+//!
+//! Both handles wrap a `PgPool`. They are separate types so a function that
+//! takes one cannot be handed the other: the compiler, not a code review,
+//! catches a query sent to the wrong database. Release 1 of the catalog
+//! stores milestone only introduces the types; in it both reach the same
+//! database. (A Python reader: this is the "newtype" pattern, two classes
+//! that wrap the same object so the type checker can tell them apart.)
+
+use sqlx::postgres::PgPool;
+use sqlx::{Postgres, Transaction};
+
+pub mod bounded;
+mod credentials;
+pub mod placement;
+mod registry;
+
+pub(crate) use credentials::{is_auth_failure, signal_auth_refused};
+#[cfg(test)]
+pub(crate) use registry::same_database;
+pub use registry::{PoolSettings, Stores, STORE_SEARCH_PATH};
+
+use crate::error::OkfError;
+
+/// The most stores a read across stores talks to at once, so a listing or a
+/// search over many catalogs never opens more than this many connections in
+/// parallel (each store's own pool is bounded by `store_max_connections`).
+pub const READ_CONCURRENCY: usize = 8;
+
+/// How many times `store_connect_timeout` loading a catalog's state from a
+/// store may take (30 s by default) before the store is reported
+/// unavailable: a connection that stalls after it was opened (a lock, a
+/// network that dropped packets) is as unavailable as one that refuses, but
+/// a large catalog legitimately takes longer than one connect.
+pub const STATE_LOAD_TIMEOUT_FACTOR: u32 = 6;
+
+/// Reads a driver error from `store`: a failure to get a connection, a
+/// broken connection or a refused login is [`OkfError::StoreUnavailable`],
+/// anything else the usual conversion. [`CatalogDb::classify`] for a caller
+/// that holds only the store's name.
+///
+/// # Arguments
+/// * `store` - the store the operation ran on.
+/// * `error` - what the driver returned.
+///
+/// # Returns
+/// The error to hand back.
+#[tracing::instrument(level = "trace", skip_all)]
+pub fn classify_store_error(store: &StoreName, error: sqlx::Error) -> OkfError {
+    // A refused login is the store being unreachable to this server (a
+    // rotated secret, an expired token), not a fault in the request;
+    // the credential tasks are told to fetch a fresh login.
+    if credentials::is_auth_failure(&error) {
+        credentials::signal_auth_refused(&error);
+        return OkfError::store_unavailable(store);
+    }
+    match error {
+        sqlx::Error::PoolTimedOut
+        | sqlx::Error::PoolClosed
+        | sqlx::Error::Io(_)
+        | sqlx::Error::Tls(_)
+        | sqlx::Error::WorkerCrashed => OkfError::store_unavailable(store),
+        other => OkfError::from(other),
+    }
+}
+
+/// [`classify_store_error`] for an error already converted with `?`: a
+/// [`OkfError::Database`] from a transport failure becomes
+/// [`OkfError::StoreUnavailable`]; every other error is returned as it is.
+///
+/// # Arguments
+/// * `store` - the store the operation ran on.
+/// * `error` - what the operation returned.
+///
+/// # Returns
+/// The error to hand back.
+#[tracing::instrument(level = "trace", skip_all)]
+pub fn classify_store_failure(store: &StoreName, error: OkfError) -> OkfError {
+    match error {
+        OkfError::Database { source } => classify_store_error(store, source),
+        other => other,
+    }
+}
+
+/// The name of the store every existing catalog is on after migration 0036.
+const MAIN_STORE: &str = "main";
+
+/// The longest store name accepted: a bound so a name fits a metric label
+/// and a log line.
+const MAX_STORE_NAME_LEN: usize = 63;
+
+/// A store's name, as on its `stores` row: lowercase letters, digits and
+/// hyphens (`^[a-z0-9-]+$`), 1 to 63 characters.
+// The field is private (no `pub`), so the only way to make one is `parse`
+// or `main`: a `StoreName` in hand is always valid.
+// `try_from = "String"` makes serde read a string and then call `TryFrom<String>`
+// (below), so deserializing goes through `parse` like any other constructor.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String")]
+pub struct StoreName(String);
+
+impl StoreName {
+    /// Checks a store name.
+    ///
+    /// # Arguments
+    /// * `name` - the text to check.
+    ///
+    /// # Returns
+    /// The name, if it matches `^[a-z0-9-]+$` and is at most 63 characters.
+    ///
+    /// # Errors
+    /// [`OkfError::Refused`] naming the rule (never the rejected text, which
+    /// is caller input) when it does not.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn parse(name: &str) -> Result<Self, OkfError> {
+        let valid = !name.is_empty()
+            && name.len() <= MAX_STORE_NAME_LEN
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+        if valid {
+            Ok(Self(name.to_string()))
+        } else {
+            Err(OkfError::Refused {
+                reason: format!(
+                    "a store name is 1 to {MAX_STORE_NAME_LEN} characters: lowercase letters, \
+                     digits and hyphens"
+                ),
+            })
+        }
+    }
+
+    /// The name as text.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// `main`, the store every existing catalog is on after migration 0036.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "returns a constant")
+    )]
+    pub fn main() -> Self {
+        Self(MAIN_STORE.to_string())
+    }
+}
+
+impl TryFrom<String> for StoreName {
+    type Error = OkfError;
+
+    /// [`StoreName::parse`] for an owned string, so deserialization validates.
+    ///
+    /// # Arguments
+    /// * `name` - the text to check.
+    ///
+    /// # Returns
+    /// The name, if valid.
+    ///
+    /// # Errors
+    /// [`OkfError::Refused`], as [`StoreName::parse`].
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "delegates to the instrumented `parse`")
+    )]
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        Self::parse(&name)
+    }
+}
+
+impl std::fmt::Display for StoreName {
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
+        )
+    )]
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// The account database. Cloning is cheap (the pool is reference-counted).
+#[derive(Debug, Clone)]
+pub struct AccountDb {
+    pool: PgPool,
+}
+
+impl AccountDb {
+    /// Wraps a pool as the account database.
+    ///
+    /// # Arguments
+    /// * `pool` - a pool on the account database.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line constructor")
+    )]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Begins a transaction on the account database.
+    ///
+    /// # Returns
+    /// The transaction, which owns its connection (`'static`).
+    ///
+    /// # Errors
+    /// [`OkfError::Database`] (or `Busy`) when no connection is available.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub async fn begin(&self) -> Result<Transaction<'static, Postgres>, OkfError> {
+        Ok(self.pool.begin().await?)
+    }
+
+    /// The pool, for store-layer functions that take an executor. Routes and
+    /// tools pass the [`AccountDb`] itself, not this.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn executor(&self) -> &PgPool {
+        &self.pool
+    }
+
+    /// The account database over a test pool: the one-line handle the
+    /// tests build around the pool they hold (the account side of
+    /// [`CatalogDb::main_of`]).
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line test constructor")
+    )]
+    pub(crate) fn of(pool: &PgPool) -> Self {
+        Self::new(pool.clone())
+    }
+}
+
+/// One store's database: the catalog data of the catalogs placed on it.
+#[derive(Debug, Clone)]
+pub struct CatalogDb {
+    store: StoreName,
+    pool: PgPool,
+    // The account database this store belongs to. Until Task 12 moves the
+    // audit entry into the store transaction, a change that touches both
+    // (the audit entry, the users it locks, the catalog's registry row)
+    // runs an account transaction beside the store's, and takes it from here.
+    accounts: AccountDb,
+}
+
+impl CatalogDb {
+    /// Wraps a pool as a store's database.
+    ///
+    /// # Arguments
+    /// * `store` - the store's name.
+    /// * `pool` - a pool on the store's database.
+    /// * `accounts` - the account database the store serves.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line constructor")
+    )]
+    pub fn new(store: StoreName, pool: PgPool, accounts: AccountDb) -> Self {
+        Self {
+            store,
+            pool,
+            accounts,
+        }
+    }
+
+    /// The account database this store serves: the other side of a change
+    /// that writes both (an audit entry and the rows it locks, a catalog's
+    /// registry row). The store's own pool is never the account's, even when
+    /// the store is inside the account database (plan decision P1).
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn accounts(&self) -> &AccountDb {
+        &self.accounts
+    }
+
+    /// The store's name.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn store(&self) -> &StoreName {
+        &self.store
+    }
+
+    /// Begins a transaction on the store's database.
+    ///
+    /// # Acquisition order
+    /// A change that also holds an account transaction takes the account
+    /// side first: the account connection, then every account row lock
+    /// (`lock_people`, the user and key rows), and only then this. A
+    /// transaction that holds the store's connection must never wait for an
+    /// account row, because a user deletion holds those rows and then needs
+    /// a store connection: with one store connection that is a cycle
+    /// PostgreSQL cannot detect (one edge is a pool wait). The store
+    /// commits first, then the account transaction (issue #970).
+    ///
+    /// # Returns
+    /// The transaction, which owns its connection (`'static`).
+    ///
+    /// # Errors
+    /// [`OkfError::StoreUnavailable`] when no connection can be had within
+    /// `store_connect_timeout` (the pool is exhausted, or the store cannot be
+    /// reached to open another, or refuses the login); [`OkfError::Database`] or `Busy` otherwise.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub async fn begin(&self) -> Result<Transaction<'static, Postgres>, OkfError> {
+        self.pool
+            .begin()
+            .await
+            .map_err(|error| self.classify(error))
+    }
+
+    /// Reads a driver error from this store's pool: a failure to get a
+    /// connection, or a refused login, is [`OkfError::StoreUnavailable`] (which never names the
+    /// store to the client), anything else the usual conversion. Account
+    /// database errors never pass through here.
+    ///
+    /// # Arguments
+    /// * `error` - what the driver returned for an operation on this store.
+    ///
+    /// # Returns
+    /// The error to hand back.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn classify(&self, error: sqlx::Error) -> OkfError {
+        classify_store_error(&self.store, error)
+    }
+
+    /// The pool, for store-layer functions that take an executor. Routes and
+    /// tools pass the [`CatalogDb`] itself, not this.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn executor(&self) -> &PgPool {
+        &self.pool
+    }
+
+    /// The `main` store when it is the account database, for a caller that
+    /// holds only the account pool (the tests, and tools that run outside
+    /// the server): a pool of its own on the same database and login, with
+    /// the store's `search_path` ([`STORE_SEARCH_PATH`]), so a query for an
+    /// account table sent to it fails as it does in production. The pool is
+    /// lazy (it connects on first use) and as large as `accounts`.
+    ///
+    /// # Arguments
+    /// * `accounts` - the account pool.
+    ///
+    /// # Returns
+    /// A handle for the store `main`. The server itself never calls this: it
+    /// gets its handles from [`Stores`].
+    #[cfg(test)]
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn main_in(accounts: &PgPool) -> Self {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(accounts.options().get_max_connections())
+            .after_connect(|connection, _meta| Box::pin(registry::set_search_path(connection)))
+            .connect_lazy_with(crate::db::pg::store_options(accounts));
+        Self::new(StoreName::main(), pool, AccountDb::new(accounts.clone()))
+    }
+
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line test constructor")
+    )]
+    pub(crate) fn main_of(pool: &PgPool) -> Self {
+        Self::main_in(pool)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn classify_turns_connection_failures_into_store_unavailable() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://u:p@127.0.0.1:1/x")
+            .unwrap();
+        let db = CatalogDb::new(
+            StoreName::parse("shared-1").unwrap(),
+            pool.clone(),
+            AccountDb::new(pool),
+        );
+
+        for failure in [
+            sqlx::Error::PoolTimedOut,
+            sqlx::Error::PoolClosed,
+            sqlx::Error::WorkerCrashed,
+            sqlx::Error::Io(std::io::Error::other("connection refused")),
+        ] {
+            let error = db.classify(failure);
+            assert!(
+                matches!(error, OkfError::StoreUnavailable { .. }),
+                "{error:?}"
+            );
+        }
+        let other = db.classify(sqlx::Error::RowNotFound);
+        assert!(matches!(other, OkfError::Database { .. }), "{other:?}");
+    }
+
+    #[test]
+    fn store_name_parse_accepts_slugs_and_refuses_the_rest() {
+        for good in [
+            "main",
+            "shared-1",
+            "acme",
+            "0",
+            "a-b-c",
+            "-",
+            &"a".repeat(63),
+        ] {
+            assert_eq!(StoreName::parse(good).unwrap().as_str(), good);
+        }
+        let too_long = "a".repeat(64);
+        for bad in [
+            "",
+            "Main",
+            "shared_1",
+            "a b",
+            "a.b",
+            "a/b",
+            "caf\u{e9}",
+            "nul\0",
+            &too_long,
+        ] {
+            let error = StoreName::parse(bad).unwrap_err();
+            assert_eq!(error.kind(), "Refused", "{bad:?}");
+            // The rejected text is caller input: the message never echoes it.
+            if !bad.is_empty() {
+                assert!(!error.to_string().contains(bad), "{bad:?}");
+            }
+        }
+        assert_eq!(StoreName::main().as_str(), "main");
+        assert_eq!(StoreName::main().to_string(), "main");
+    }
+
+    #[test]
+    fn store_name_deserialize_validates_like_parse() {
+        let too_long = format!("\"{}\"", "a".repeat(64));
+        for bad in [
+            r#""Main/invalid""#,
+            r#""""#,
+            r#""shared_1""#,
+            too_long.as_str(),
+            "5",
+            "null",
+        ] {
+            assert!(serde_json::from_str::<StoreName>(bad).is_err(), "{bad}");
+        }
+        // The refusal is the fixed message: it does not echo the input.
+        let error = serde_json::from_str::<StoreName>(r#""Main/invalid""#).unwrap_err();
+        assert!(!error.to_string().contains("Main/invalid"));
+
+        let name = StoreName::parse("shared-1").unwrap();
+        let json = serde_json::to_string(&name).unwrap();
+        assert_eq!(json, r#""shared-1""#);
+        assert_eq!(serde_json::from_str::<StoreName>(&json).unwrap(), name);
+    }
+
+    #[tokio::test]
+    async fn main_store_and_accounts_reach_the_same_database_in_release_one() {
+        let db = crate::db::test_db().await;
+        crate::db::main_in_the_account_database(&db.pool).await;
+        let app = crate::app::App::load(
+            db.pool.clone(),
+            crate::config::Config::default(),
+            std::sync::Arc::new(crate::clock::SystemClock),
+        )
+        .await
+        .unwrap();
+
+        let from_accounts: String = sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(app.accounts().executor())
+            .await
+            .unwrap();
+        let from_store: String = sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(app.main_db().await.executor())
+            .await
+            .unwrap();
+        assert_eq!(from_accounts, from_store);
+        assert_eq!(app.main_db().await.store(), &StoreName::main());
+    }
+    /// The Postgres error code for "undefined table".
+    const UNDEFINED_TABLE: &str = "42P01";
+
+    /// Whether `error` is Postgres's "the relation does not exist".
+    fn is_undefined_table(error: &sqlx::Error) -> bool {
+        error
+            .as_database_error()
+            .and_then(|database| database.code())
+            .is_some_and(|code| code == UNDEFINED_TABLE)
+    }
+
+    /// Issue #970 review: with `database_max_connections = 1` the process
+    /// holds one connection per pool, and every path reaches the `main`
+    /// store through the registry's one pool for it, never a pool of its
+    /// own: a create, an import (the publish write path), the directory
+    /// load and a deletion all run, within a time limit, and the registry
+    /// opened exactly one store pool.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_one_connection_configuration_never_opens_a_second_pool_for_main() {
+        use crate::archive::files;
+        use crate::cache::directory::CatalogDirectory;
+        use crate::labels::DisplayName;
+        use crate::store::audit::AuditActor;
+        use crate::store::catalogs::{self, NewCatalog};
+        use crate::store::import::{import, ImportOptions, ImportScope};
+        use crate::telemetry::metrics::Metrics;
+        use std::time::Duration;
+
+        let db = crate::db::test_db().await;
+        let one = crate::db::connect(&db.url, 1).await.unwrap();
+        let stores = Stores::new(
+            one.clone(),
+            PoolSettings {
+                max_connections: 1,
+                idle_timeout: Duration::from_secs(60),
+                connect_timeout: Duration::from_secs(5),
+            },
+        );
+        let limit = Duration::from_secs(30);
+        let cli = AuditActor::cli();
+        let name = DisplayName::default();
+        let new = NewCatalog {
+            name: "solo",
+            display_name: &name,
+            description: "",
+            owner_team: crate::db::TEST_TEAM,
+        };
+
+        let work = async {
+            catalogs::create_in(&stores, &new, &cli, chrono::Utc::now()).await?;
+            let main = stores.get(&StoreName::main()).await?;
+            let options = ImportOptions {
+                replace: true,
+                scope: ImportScope::Everything,
+                expect_generation: None,
+                expect_catalog_id: None,
+                actor: "t",
+                audit: &cli,
+                now: chrono::Utc::now(),
+            };
+            import(&main, "solo", files(&[("a.md", "# A\n")]), &options).await?;
+            let directory = CatalogDirectory::new(
+                one.clone(),
+                stores.clone(),
+                10,
+                Duration::from_secs(60),
+                Metrics::global(),
+            );
+            let row = directory.resolve("solo").await?.expect("the catalog");
+            assert_eq!(row.generation, 1);
+            catalogs::delete_in(&stores, "solo", true, &cli, chrono::Utc::now()).await
+        };
+        tokio::time::timeout(limit, work)
+            .await
+            .expect("finished on one connection")
+            .unwrap();
+
+        assert_eq!(stores.pools_opened(), 1);
+        assert!(one.size() <= 1);
+        let main = stores.get(&StoreName::main()).await.unwrap();
+        assert!(main.executor().size() <= 1);
+        assert_eq!(stores.pools_opened(), 1);
+    }
+
+    /// Migration 0041 (issue #970): a store's connections see schema
+    /// `catalog` only, so a query for an account table fails there, and the
+    /// store's own tables answer.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_pool_cannot_see_account_tables() {
+        let db = crate::db::test_db().await;
+        let store = CatalogDb::main_in(&db.pool);
+
+        let account = sqlx::query("SELECT 1 FROM users")
+            .fetch_all(store.executor())
+            .await
+            .unwrap_err();
+        let registry = sqlx::query("SELECT 1 FROM catalogs")
+            .fetch_all(store.executor())
+            .await
+            .unwrap_err();
+        let own: i64 = sqlx::query_scalar("SELECT count(*) FROM documents")
+            .fetch_one(store.executor())
+            .await
+            .unwrap();
+
+        assert!(is_undefined_table(&account), "{account:?}");
+        assert!(is_undefined_table(&registry), "{registry:?}");
+        assert_eq!(own, 0);
+    }
+
+    /// The reverse: an account pool sees `public` only, so a query for a
+    /// catalog table by its bare name fails there (it must be qualified).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_account_pool_cannot_see_catalog_tables() {
+        let db = crate::db::test_db().await;
+
+        let bare = sqlx::query("SELECT 1 FROM documents")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap_err();
+        let state = sqlx::query("SELECT 1 FROM catalog_state")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap_err();
+        let qualified: i64 = sqlx::query_scalar("SELECT count(*) FROM catalog.documents")
+            .fetch_one(&crate::db::store_pool(&db.pool))
+            .await
+            .unwrap();
+
+        assert!(is_undefined_table(&bare), "{bare:?}");
+        assert!(is_undefined_table(&state), "{state:?}");
+        assert_eq!(qualified, 0);
+    }
+}

@@ -6,15 +6,18 @@ use chrono::{DateTime, Duration, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 
-use super::{candidates, lease_end, lock, receipt, recover, refused, replay, validate};
+use super::{
+    candidates, lease_end, lock, receipt, recover, refused, replay, validate, AuditTarget, RunWatch,
+};
 use crate::error::OkfError;
 use crate::maintenance::select;
 use crate::maintenance::types::{new_id, Disposition};
 use crate::maintenance::types::{
     Actor, Assessment, ClaimResult, Evidence, Lane, Lease, RevisionPin, RunState, WorkOutcome,
 };
+use crate::stores::CatalogDb;
 
 /// A deterministic page (ascending unless a run listing asks for newest
 /// first); the cursor is the last returned row ID.
@@ -103,9 +106,9 @@ pub(super) fn not_found() -> OkfError {
 
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "runs.snapshot"))]
 pub(super) async fn snapshot(
-    pool: &PgPool,
+    db: &CatalogDb,
 ) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, OkfError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = db.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *tx)
         .await?;
@@ -241,13 +244,13 @@ pub(super) async fn page_ids(
 /// or a database error. An empty catalog returns an empty page.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "runs.list_runs", catalog_id = catalog_id))]
 pub async fn list_runs(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     after: Option<&str>,
     limit: u32,
     order: RunOrder,
 ) -> Result<Page<RunSummary>, OkfError> {
-    let mut tx = snapshot(pool).await?;
+    let mut tx = snapshot(db).await?;
     let ids = page_ids(&mut tx, catalog_id, after, limit, Listing::Runs(order)).await?;
     let mut items = Vec::with_capacity(ids.items.len());
     for id in ids.items {
@@ -269,9 +272,9 @@ pub async fn list_runs(
 /// # Errors
 /// `Refused` for a blank ID, `NotFound` for an absent/foreign run, or a database error.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "runs.get_run", catalog_id = catalog_id))]
-pub async fn get_run(pool: &PgPool, catalog_id: i64, run_id: &str) -> Result<RunReport, OkfError> {
+pub async fn get_run(db: &CatalogDb, catalog_id: i64, run_id: &str) -> Result<RunReport, OkfError> {
     required_id(run_id)?;
-    let mut tx = snapshot(pool).await?;
+    let mut tx = snapshot(db).await?;
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM maintenance_runs WHERE catalog_id=$1 AND id=$2)",
     )
@@ -430,11 +433,23 @@ async fn summary(
 
 /// Opens one bounded batch; a retry returns its original leases unchanged.
 ///
+/// The run records the claiming key's id in `maintenance_runs.key_id` when the
+/// key still exists, else NULL (the credential id and actor are recorded
+/// either way). The key's row is on the account database, so no statement
+/// names both sides (plan decision P1, issue #963). It is read `FOR KEY SHARE`
+/// in the account transaction that `AuditTarget::read` opens BEFORE the
+/// store's connection (`CatalogDb::begin`'s order), and that transaction
+/// lasts until after the store commits: the deletion of the key (a user's),
+/// which locks the row `FOR UPDATE`, waits for the claim, and the cleanup it
+/// owes then finds the run and clears the key from it; a claim that comes
+/// after the deletion finds no key and records NULL (issue #972;
+/// `maintenance_runs.key_id` has no foreign key now).
+///
 /// # Errors
 /// Refuses invalid limits or conflicting idempotency; propagates database failures.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "runs.claim", catalog_id = catalog_id))]
 pub async fn claim(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     actor: &Actor,
     idempotency_key: &str,
@@ -452,8 +467,13 @@ pub async fn claim(
         ));
     }
     let payload = json!({"limit": limit});
-    let mut tx = pool.begin().await?;
+    // The audit target's account transaction first, then the key's row in it
+    // (`None` records a NULL `key_id`), then the store's connection.
+    let mut target = AuditTarget::read(db, catalog_id).await?;
+    let recorded_key = target.lock_key(&actor.key_id).await?;
+    let mut tx = db.begin().await?;
     lock(&mut tx, catalog_id, now).await?;
+    let watch = RunWatch::open(&mut tx, catalog_id, target).await?;
     if let Some(previous) = replay(
         &mut tx,
         catalog_id,
@@ -478,8 +498,8 @@ pub async fn claim(
     let selection = select::select(&rows, &cursors, now, review_interval, limit)?;
     let id = new_id()?;
     let deadline = now + Duration::seconds(3_600);
-    sqlx::query("INSERT INTO maintenance_runs (id,catalog_id,key_id,credential_id,actor,state,deadline,created_at,ended_at,primary_count) VALUES ($1,$2,(SELECT id FROM api_keys WHERE id=$3),$3,$4,$5,$6,$7,$8,$9)")
-        .bind(&id).bind(catalog_id).bind(&actor.key_id).bind(&actor.actor)
+    sqlx::query("INSERT INTO maintenance_runs (id,catalog_id,key_id,credential_id,actor,state,deadline,created_at,ended_at,primary_count) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
+        .bind(&id).bind(catalog_id).bind(&recorded_key).bind(&actor.key_id).bind(&actor.actor)
         .bind(if selection.items.is_empty() { "completed" } else { "running" })
         .bind(deadline).bind(now).bind(selection.items.is_empty().then_some(now)).bind(selection.items.len() as i32)
         .execute(&mut *tx).await?;
@@ -523,7 +543,7 @@ pub async fn claim(
         &result,
     )
     .await?;
-    tx.commit().await?;
+    watch.commit(tx, Some(&result.run_id)).await?;
     Ok(result)
 }
 
@@ -533,7 +553,7 @@ pub async fn claim(
 /// Refuses expired, foreign, or terminal leases; propagates database failures.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "runs.renew", catalog_id = catalog_id))]
 pub async fn renew(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     actor: &Actor,
     work_id: &str,
@@ -547,8 +567,11 @@ pub async fn renew(
         return Err(refused("work ID and lease token are required"));
     }
     let payload = json!({"work_id": work_id, "token": token});
-    let mut tx = pool.begin().await?;
+    // Read before the store transaction: see `AuditTarget`.
+    let target = AuditTarget::read(db, catalog_id).await?;
+    let mut tx = db.begin().await?;
     lock(&mut tx, catalog_id, now).await?;
+    let watch = RunWatch::open(&mut tx, catalog_id, target).await?;
     // Ownership is checked before replay; old tokens must not cross credential boundaries.
     let row = sqlx::query("SELECT w.run_id,w.path,w.revision,w.lanes,w.lease_token,w.lease_expires_at,w.outcome,r.credential_id,r.state,r.deadline FROM maintenance_work w JOIN maintenance_runs r ON r.catalog_id=w.catalog_id AND r.id=w.run_id WHERE w.catalog_id=$1 AND w.id=$2 FOR UPDATE OF r,w")
         .bind(catalog_id).bind(work_id).fetch_optional(&mut *tx).await?;
@@ -586,7 +609,7 @@ pub async fn renew(
         || now >= expiry
         || now >= deadline
     {
-        tx.commit().await?;
+        watch.commit(tx, None).await?;
         return Err(refused("maintenance lease has expired or ended"));
     }
     let current: Option<i32> = sqlx::query_scalar(
@@ -602,7 +625,7 @@ pub async fn renew(
         let run_id: String = row.try_get("run_id")?;
         sqlx::query("UPDATE maintenance_runs SET state='completed', ended_at=$3 WHERE catalog_id=$1 AND id=$2 AND state='running' AND NOT EXISTS (SELECT 1 FROM maintenance_work WHERE catalog_id=$1 AND run_id=$2 AND outcome IS NULL)")
             .bind(catalog_id).bind(&run_id).bind(now).execute(&mut *tx).await?;
-        tx.commit().await?;
+        watch.commit(tx, None).await?;
         return Err(refused("maintenance source changed"));
     }
     let renewed = lease_end(now, deadline);
@@ -643,7 +666,7 @@ pub async fn renew(
         &result,
     )
     .await?;
-    tx.commit().await?;
+    watch.commit(tx, None).await?;
     Ok(result)
 }
 
@@ -658,7 +681,7 @@ pub async fn renew(
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "runs.close", catalog_id = catalog_id))]
 pub async fn close(
-    pool: &PgPool,
+    db: &CatalogDb,
     catalog_id: i64,
     actor: &Actor,
     run_id: &str,
@@ -675,8 +698,11 @@ pub async fn close(
         return Err(refused("run ID and terminal state are required"));
     }
     let payload = json!({"run_id":run_id,"state":desired,"rationale":rationale,"may_close_others":may_close_others});
-    let mut tx = pool.begin().await?;
+    // Read before the store transaction: see `AuditTarget`.
+    let target = AuditTarget::read(db, catalog_id).await?;
+    let mut tx = db.begin().await?;
     lock(&mut tx, catalog_id, now).await?;
+    let watch = RunWatch::open(&mut tx, catalog_id, target).await?;
     let owner: Option<String> = sqlx::query_scalar(
         "SELECT credential_id FROM maintenance_runs WHERE catalog_id=$1 AND id=$2 FOR UPDATE",
     )
@@ -714,7 +740,7 @@ pub async fn close(
         let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM maintenance_work WHERE catalog_id=$1 AND run_id=$2 AND outcome IS NULL")
             .bind(catalog_id).bind(run_id).fetch_one(&mut *tx).await?;
         if desired == RunState::Completed && remaining > 0 {
-            tx.commit().await?;
+            watch.commit(tx, None).await?;
             return Err(refused("cannot complete a run with active work"));
         }
         if remaining > 0 {
@@ -733,7 +759,7 @@ pub async fn close(
         || status == "completed" && desired == RunState::Completed)
         && (status != "failed" || now < row.try_get::<DateTime<Utc>, _>("deadline")?)
     {
-        tx.commit().await?;
+        watch.commit(tx, None).await?;
         return Err(refused("maintenance run already ended"));
     }
     let result = summary(&mut tx, catalog_id, run_id).await?;
@@ -747,6 +773,6 @@ pub async fn close(
         &result,
     )
     .await?;
-    tx.commit().await?;
+    watch.commit(tx, None).await?;
     Ok(result)
 }

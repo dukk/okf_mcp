@@ -132,9 +132,14 @@ async fn the_links_tab_shows_backlinks_and_a_revision_opens_its_diff() {
     };
     let edited = ALPHA.replace("Nothing yet.", "Two settings.");
     crate::support::server::applied(&server.app, async {
-        import(&server.db.pool, "main", main_catalog(&edited), &options)
-            .await
-            .expect("import the edit");
+        import(
+            &crate::support::stores::main_store(&server.db.pool),
+            "main",
+            main_catalog(&edited),
+            &options,
+        )
+        .await
+        .expect("import the edit");
     })
     .await;
     drive(server.base.clone(), move |ui| {

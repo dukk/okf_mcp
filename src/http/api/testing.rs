@@ -62,7 +62,7 @@ pub(crate) struct Keys {
 /// Creates [`Keys`] in the test database (keys load on their first use).
 pub(crate) async fn keys(test: &TestApp) -> Keys {
     let make = |name: &'static str, access: Access, catalog: &'static str| {
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         async move {
             let grants = [catalog.to_owned()];
             let new = NewKey {
@@ -117,7 +117,7 @@ pub(crate) async fn every_catalog_admin(test: &TestApp) -> String {
         levels: &[],
     };
     let key = key_rows::create_with_id(
-        test.app.pool(),
+        test.app.accounts().executor(),
         &new,
         &crate::store::audit::AuditActor::cli(),
         Utc::now(),
@@ -307,7 +307,7 @@ pub(crate) async fn user_with_password(
     email: &str,
     password: Option<&str>,
 ) -> UserAuth {
-    let pool = test.app.pool();
+    let pool = test.app.accounts().executor();
     users::create(
         pool,
         &users::NewUser {
@@ -513,9 +513,10 @@ impl Browser {
     /// # Panics
     /// If the password is refused.
     pub(crate) async fn signed_in(test: &TestApp, email: &str, password: &str) -> Self {
-        let outcome = passwords::verify(test.app.pool(), email, password, Utc::now())
-            .await
-            .expect("check the password");
+        let outcome =
+            passwords::verify(test.app.accounts().executor(), email, password, Utc::now())
+                .await
+                .expect("check the password");
         let passwords::SignInOutcome::Ok(passwords::Verified { user, .. }) = outcome else {
             panic!("the password for {email} was refused");
         };
@@ -530,10 +531,10 @@ impl Browser {
     pub(crate) async fn session_for(test: &TestApp, name: &str) -> Self {
         let id: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
             .bind(name)
-            .fetch_one(test.app.pool())
+            .fetch_one(test.app.accounts().executor())
             .await
             .expect("the user exists");
-        let user = users::find_auth(test.app.pool(), &id)
+        let user = users::find_auth(test.app.accounts().executor(), &id)
             .await
             .expect("read the user")
             .expect("the user exists");
@@ -556,10 +557,11 @@ impl Browser {
 /// lock.
 pub(crate) async fn wait_for_lock_waiters(pool: &PgPool, want: i64) {
     for _ in 0..200 {
-        let waiting: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM pg_stat_activity \
-              WHERE datname = current_database() AND wait_event_type = 'Lock'",
-        )
+        let waiting: i64 = sqlx::query_scalar(concat!(
+            "SELECT count(*) FROM pg_stat_activity WHERE ",
+            crate::test_locks::own_databases!("datname"),
+            " AND wait_event_type = 'Lock'"
+        ))
         .fetch_one(pool)
         .await
         .expect("count the lock waiters");
@@ -571,9 +573,22 @@ pub(crate) async fn wait_for_lock_waiters(pool: &PgPool, want: i64) {
     panic!("{want} backends never waited on a lock");
 }
 
+/// The database a trigger on `table` belongs in: the store for a table of
+/// schema `catalog` (a database of its own in `OKF_TEST_STORE=separate`
+/// mode), else the account database `pool`.
+fn database_of(pool: &PgPool, table: &str) -> PgPool {
+    if table.contains(" catalog.") || table.starts_with("catalog.") {
+        crate::db::store_pool(pool)
+    } else {
+        pool.clone()
+    }
+}
+
 /// Makes every statement matching `event` (`BEFORE DELETE ON
-/// user_sessions`, ...) fail, until [`allow`] drops it.
+/// user_sessions`, ...) fail, until [`allow`] drops it. An event on a table
+/// of schema `catalog` is installed on the store.
 pub(crate) async fn fail_on(pool: &PgPool, event: &str) {
+    let pool = &database_of(pool, event);
     sqlx::query(
         "CREATE FUNCTION okf_test_fail() RETURNS trigger LANGUAGE plpgsql AS \
          $$ BEGIN RAISE EXCEPTION 'injected failure'; END $$",
@@ -592,6 +607,7 @@ pub(crate) async fn fail_on(pool: &PgPool, event: &str) {
 
 /// Drops [`fail_on`]'s trigger.
 pub(crate) async fn allow(pool: &PgPool, table: &str) {
+    let pool = &database_of(pool, table);
     // `AssertSqlSafe`: `table` is a literal of the calling test.
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP TRIGGER okf_test_fail ON {table}"

@@ -366,7 +366,12 @@ async fn export_catalog(
     // Only now is the name admitted: the span and the metrics take the
     // loaded catalog's own name, never the path segment.
     transfer.admit(resolved_catalog(&transfer.span, &app, &name).await);
-    let exported = export(app.pool(), &name, Vec::new(), &options).await;
+    // A store that cannot be reached is an error of the export, which
+    // `finish` records like any other.
+    let exported = match app.catalog_db(&row).await {
+        Ok(db) => export(&db, &name, Vec::new(), &options).await,
+        Err(error) => Err(error),
+    };
     transfer.finish(
         exported
             .as_ref()
@@ -547,7 +552,8 @@ async fn import_catalog(
             audit: &actor,
             now: app.clock().now(),
         };
-        let report = import(app.pool(), &name, files, &options)
+        let db = app.catalog_db(&row).await?;
+        let report = import(&db, &name, files, &options)
             .await
             // `store::import`'s "not empty" refusal names the CLI flag: say what
             // HTTP needs instead. Its generation refusal ("... export it again")
@@ -707,15 +713,18 @@ mod tests {
 
     /// `pg`'s generation and live document count in the database.
     async fn stored(test: &TestApp) -> (i64, i64) {
-        let catalog = catalogs::find(test.app.pool(), "pg").await.unwrap();
+        let catalog = catalogs::find(test.app.accounts().executor(), "pg")
+            .await
+            .unwrap();
+        let generation = catalogs::test_generation(test.app.accounts().executor(), "pg").await;
         let live: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM documents WHERE catalog_id = $1 AND deleted_at IS NULL",
+            "SELECT count(*) FROM catalog.documents WHERE catalog_id = $1 AND deleted_at IS NULL",
         )
         .bind(catalog.id)
-        .fetch_one(test.app.pool())
+        .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
-        (catalog.generation, live)
+        (generation, live)
     }
 
     /// An import of `size` zero bytes into `pg` by `caller`, through the
@@ -896,15 +905,15 @@ mod tests {
         sqlx::raw_sql(
             "CREATE FUNCTION break_the_refresh() RETURNS trigger LANGUAGE plpgsql AS $$ \
              BEGIN \
-                 INSERT INTO documents (catalog_id, path, content, executable, revision, \
+                 INSERT INTO catalog.documents (catalog_id, path, content, executable, revision, \
                                         updated_at, updated_by) \
                  VALUES (NEW.id, '../escape.md', '', false, 1, now(), 'test'); \
                  RETURN NULL; \
              END $$; \
-             CREATE TRIGGER break_the_refresh AFTER UPDATE OF generation ON catalogs \
+             CREATE TRIGGER break_the_refresh AFTER UPDATE OF generation ON catalog.catalog_state \
                  FOR EACH ROW EXECUTE FUNCTION break_the_refresh();",
         )
-        .execute(test.app.pool())
+        .execute(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
         let import = || {
@@ -923,10 +932,10 @@ mod tests {
         // (here marked stale, as the import's change message would) and
         // retries the refresh.
         sqlx::raw_sql(
-            "DROP TRIGGER break_the_refresh ON catalogs; \
-             DELETE FROM documents WHERE path = '../escape.md';",
+            "DROP TRIGGER break_the_refresh ON catalog.catalog_state; \
+             DELETE FROM catalog.documents WHERE path = '../escape.md';",
         )
-        .execute(test.app.pool())
+        .execute(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
         test.app.catch_up_catalogs().await;
@@ -962,17 +971,17 @@ mod tests {
         let id = test.app.catalog_row("pg").await.unwrap().expect("pg").id;
         // A row no workspace accepts, at a new generation.
         sqlx::query(
-            "INSERT INTO documents (catalog_id, path, content, executable, revision, \
+            "INSERT INTO catalog.documents (catalog_id, path, content, executable, revision, \
                                     updated_at, updated_by) \
              VALUES ($1, '../escape.md', '', false, 1, now(), 'test')",
         )
         .bind(id)
-        .execute(test.app.pool())
+        .execute(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
-        sqlx::query("UPDATE catalogs SET generation = generation + 1 WHERE id = $1")
+        sqlx::query("UPDATE catalog.catalog_state SET generation = generation + 1 WHERE id = $1")
             .bind(id)
-            .execute(test.app.pool())
+            .execute(&crate::db::store_pool(test.app.accounts().executor()))
             .await
             .unwrap();
         test.app.catch_up_catalogs().await;
@@ -1028,11 +1037,12 @@ mod tests {
 
         let (status, report) =
             import_with(&test, "?replace=true&only_machinery=true", archive).await;
+        let catalog_id = crate::db::catalog_id(test.app.accounts().executor(), "pg").await;
         let kept: Vec<u8> = sqlx::query_scalar(
-            "SELECT content FROM documents WHERE path = 'a.md' \
-             AND catalog_id = (SELECT id FROM catalogs WHERE name = 'pg')",
+            "SELECT content FROM catalog.documents WHERE path = 'a.md' AND catalog_id = $1",
         )
-        .fetch_one(test.app.pool())
+        .bind(catalog_id)
+        .fetch_one(&crate::db::store_pool(test.app.accounts().executor()))
         .await
         .unwrap();
 
@@ -1173,7 +1183,7 @@ mod tests {
             owner: None,
         };
         catalogs::update_details(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &change,
             &AuditActor::cli(),
             test.app.clock().now(),
@@ -1407,7 +1417,7 @@ mod tests {
         use crate::telemetry::subscriber::capture::{attribute, Observer};
         let (test, registry) =
             crate::mcp::testing::app_with_metrics(&[("pg", &[])], Config::default()).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         // The catalog's directory row is cached first, as for any catalog in
         // use: the wait below is the export's own.
         test.app.directory().resolve("pg").await.unwrap();

@@ -117,20 +117,28 @@ fn revision_limit(requested: Option<u32>) -> i64 {
 /// # Errors
 /// A selection error ([`ToolContext::read_set`]); [`OkfError::NotFound`] if
 /// no catalog in the read set has any revision of the path;
-/// [`OkfError::Database`].
+/// [`OkfError::StoreUnavailable`] when none of the catalogs before the first
+/// unreachable store has one (plan P3); [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn history(ctx: &ToolContext, params: HistoryParams) -> Result<History, OkfError> {
     let limit = revision_limit(params.limit);
     let paths = candidates(&params.path);
-    for state in ctx.read_set(params.catalog.as_deref()).await? {
+    let set = ctx.read_set(params.catalog.as_deref()).await?;
+    for state in &set.states {
         // Admitted right before its revisions are read, so a catalog after
         // the one that answers is never recorded (plan Decision 23). A
         // `Busy` here leaves the catalogs already read recorded: they were.
-        ctx.admit(&state, AccessKind::Read).await?;
+        ctx.admit(state, AccessKind::Read).await?;
         for path in &paths {
             // `.await` suspends this call until Postgres answers, freeing the
             // thread for other requests meanwhile.
-            let rows = revisions(ctx.app().pool(), state.id(), path, limit).await?;
+            let rows = revisions(
+                &ctx.app().store_db(state.store()).await?,
+                state.id(),
+                path,
+                limit,
+            )
+            .await?;
             if rows.is_empty() {
                 continue;
             }
@@ -159,6 +167,11 @@ pub(crate) async fn history(ctx: &ToolContext, params: HistoryParams) -> Result<
                 revisions,
             });
         }
+    }
+    // An unreachable store before "not found" (plan P3): the catalog behind
+    // it might have held the path's revisions.
+    if let Some(blocked) = set.blocked {
+        return Err(blocked);
     }
     Err(OkfError::NotFound { path: params.path })
 }

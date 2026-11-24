@@ -15,7 +15,7 @@ fn lines(text: &str) -> Vec<Value> {
 /// A provisioner key `signup` of TEST_USER.
 async fn provisioner(test: &TestApp) -> String {
     let created = crate::store::keys::create_provisioner(
-        test.app.pool(),
+        test.app.accounts().executor(),
         &crate::store::keys::NewProvisioner {
             name: "signup",
             actor: "signup",
@@ -80,8 +80,9 @@ async fn an_admin_reads_everything_newest_first_with_filters_and_a_cursor() {
     )
     .await;
     let after = page["next_after"]
-        .as_i64()
-        .expect("a full page has a cursor");
+        .as_str()
+        .expect("a full page has a cursor")
+        .to_string();
     let (_, rest) = send(
         &test,
         "GET",
@@ -308,17 +309,18 @@ async fn the_export_pages_through_every_entry_once_newest_first_from_any_cursor(
     let root = every_catalog_admin(&test).await;
     // 1203 matching entries in one statement: two full pages and a partial
     // one, so the export must advance its cursor twice.
-    let mut expected: Vec<i64> = sqlx::query_scalar(
+    let mut rows: Vec<(i64, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "INSERT INTO audit_entries (at, action, source, actor_label, actor_operator, \
              target_kind, target_name) \
          SELECT now(), 'setting.changed', 'cli', 'cli:test', true, 'setting', 's' || n \
-         FROM generate_series(1, 1203) AS n RETURNING id",
+         FROM generate_series(1, 1203) AS n RETURNING id, at",
     )
-    .fetch_all(test.app.pool())
+    .fetch_all(test.app.accounts().executor())
     .await
     .unwrap();
-    expected.sort_unstable_by(|a, b| b.cmp(a));
-    let cursor = expected[600];
+    rows.sort_unstable_by(|a, b| b.cmp(a));
+    let expected: Vec<i64> = rows.iter().map(|(id, _)| *id).collect();
+    let cursor = crate::store::audit::AuditCursor::new(rows[600].1, "", rows[600].0).to_plain();
 
     // `limit` is ignored by the export: it pages to the end.
     let all = export_ids(&test, &root, "action=setting.changed&limit=3").await;
@@ -602,6 +604,9 @@ async fn a_team_or_catalog_recreated_under_an_old_name_never_lends_its_label_to_
     for (method, uri, body) in steps {
         let (status, answer) = send(&test, method, uri, Some(&root), body).await;
         assert!(status.is_success(), "{method} {uri}: {status} {answer}");
+        if method == "DELETE" && uri.starts_with("/api/v1/catalogs/") {
+            test.settle_cleanups().await;
+        }
     }
 
     let listed = entries(&test, &root, "limit=200").await;
@@ -642,7 +647,7 @@ async fn a_team_or_catalog_recreated_under_an_old_name_never_lends_its_label_to_
 /// in a payload.
 async fn interleaved(test: &TestApp, root: &str, rounds: usize) {
     sqlx::query("SELECT setval(pg_get_serial_sequence('audit_entries', 'id'), 7000000)")
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .unwrap();
     family(test, root).await;
@@ -671,7 +676,7 @@ async fn interleaved(test: &TestApp, root: &str, rounds: usize) {
 /// written before it, have small ids that could match any digit).
 async fn every_id(test: &TestApp) -> Vec<i64> {
     sqlx::query_scalar("SELECT id FROM audit_entries WHERE id > 7000000 ORDER BY id")
-        .fetch_all(test.app.pool())
+        .fetch_all(test.app.accounts().executor())
         .await
         .unwrap()
 }
@@ -873,7 +878,7 @@ async fn a_rotated_key_refuses_the_cursors_it_sealed() {
     let cursor = page["next_after"].as_str().unwrap().to_string();
 
     sqlx::query("DELETE FROM server_keys")
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .unwrap();
     let (stale, _) = owner_get(
@@ -897,7 +902,7 @@ async fn a_rotated_key_refuses_the_cursors_it_sealed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_admin_still_pages_by_raw_ids_and_refuses_an_owners_cursor() {
+async fn an_admin_pages_by_a_readable_cursor_and_refuses_an_owners_cursor() {
     let test = app().await;
     let root = every_catalog_admin(&test).await;
     interleaved(&test, &root, 1).await;
@@ -917,8 +922,9 @@ async fn an_admin_still_pages_by_raw_ids_and_refuses_an_owners_cursor() {
         .as_i64()
         .expect("an admin sees the id");
     let after = page["next_after"]
-        .as_i64()
-        .expect("an admin's cursor is the raw id");
+        .as_str()
+        .expect("an admin's cursor is the readable one")
+        .to_string();
     let (_, rest) = send(
         &test,
         "GET",
@@ -938,7 +944,11 @@ async fn an_admin_still_pages_by_raw_ids_and_refuses_an_owners_cursor() {
     let export = export_ids(&test, &root, &format!("team=family&after={after}")).await;
 
     assert_eq!(status, StatusCode::OK, "{page}");
-    assert_eq!(after, first_id, "the cursor is the last entry's id");
+    // `<microseconds>::<id>`: the account database is store "".
+    assert!(
+        after.ends_with(&format!("::{first_id}")),
+        "the cursor is the last entry's position: {after}"
+    );
     let rest_ids: Vec<i64> = rest["entries"]
         .as_array()
         .unwrap()
@@ -946,10 +956,10 @@ async fn an_admin_still_pages_by_raw_ids_and_refuses_an_owners_cursor() {
         .map(|entry| entry["id"].as_i64().unwrap())
         .collect();
     assert!(
-        !rest_ids.is_empty() && rest_ids.iter().all(|id| *id < after),
+        !rest_ids.is_empty() && rest_ids.iter().all(|id| *id < first_id),
         "{rest}"
     );
-    assert_eq!(export, rest_ids, "the export starts after a raw id too");
+    assert_eq!(export, rest_ids, "the export starts after it too");
     assert_eq!(refused, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "InvalidPath");
 }

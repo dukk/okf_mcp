@@ -165,7 +165,7 @@ async fn a_failed_start_with_a_stored_key_shows_the_login_card() {
         ui.wait_text("#whoami", "read");
         // The key stays stored, but the next /whoami fails with a 500: the
         // key cache is in memory, and listing key names needs the database.
-        runtime.block_on(app.pool().close());
+        runtime.block_on(app.accounts().executor().close());
         ui.page.reload(GotoOptions::default()).expect("reload");
         ui.wait_visible("#login");
         ui.wait_text("#login-error", "could not load");
@@ -179,7 +179,7 @@ async fn the_header_shows_labels_and_the_catalog_option_keeps_the_slug() {
     use chrono::Utc;
     use okf_mcp::labels::DisplayName;
     use okf_mcp::store::audit::AuditActor;
-    use okf_mcp::store::catalogs::{self, NewCatalog};
+    use okf_mcp::store::catalogs::NewCatalog;
     use okf_mcp::store::users;
 
     let server = login_server().await;
@@ -196,7 +196,7 @@ async fn the_header_shows_labels_and_the_catalog_option_keeps_the_slug() {
     .expect("name alice");
     // alice's personal team owns it, so her ceiling reaches it.
     crate::support::server::applied(&server.app, async {
-        catalogs::create(
+        crate::support::stores::create_catalog(
             pool,
             &NewCatalog {
                 name: "notes",
@@ -237,7 +237,7 @@ async fn a_failed_labels_read_keeps_the_console_open_and_clears_stale_labels() {
     use chrono::Utc;
     use okf_mcp::labels::DisplayName;
     use okf_mcp::store::audit::AuditActor;
-    use okf_mcp::store::catalogs::{self, NewCatalog};
+    use okf_mcp::store::catalogs::NewCatalog;
     use okf_mcp::store::users;
 
     let server = login_server().await;
@@ -254,7 +254,7 @@ async fn a_failed_labels_read_keeps_the_console_open_and_clears_stale_labels() {
     .expect("name alice");
     // alice's personal team owns it, so her ceiling reaches it.
     crate::support::server::applied(&server.app, async {
-        catalogs::create(
+        crate::support::stores::create_catalog(
             pool,
             &NewCatalog {
                 name: "notes",

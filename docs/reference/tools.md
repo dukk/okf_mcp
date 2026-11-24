@@ -23,6 +23,19 @@ How a session usually goes:
 - When the person asks you to remember something, save it to the catalog (under a fitting
   folder) rather than only in the conversation; asking is their consent, so don't ask again.
   Don't save what they didn't ask you to keep.
+- A catalog's data lives on a store, and a store can be unreachable (a separate database that
+  is down). Then a call that needs it fails with `StoreUnavailable` (retry later; the message
+  never names the store), and the other catalogs keep working:
+  - A read that merges catalogs (`search`, `list_catalogs`, `list_changesets` without
+    `catalog`) answers from the others and lists the left-out catalog ids in `unavailable`
+    (absent when every store answered). Say so to the person: those catalogs were not searched.
+  - A read that answers from the first selected catalog holding the document (`get_concept`,
+    `read_document` and `history` without `catalog`) answers from a catalog before the first
+    unreachable one. If none of those has it, it fails with `StoreUnavailable` rather than
+    `NotFound`, because the unreachable catalog might hold it: retry, or pass `catalog`.
+  - A write and `cited_by` (it does not merge) fail with `StoreUnavailable` while a store they
+    need is down. So does a changeset handle that is not found before a lost store is reached
+    (the stores are asked in turn, `main` first): a handle found earlier still works.
 
 A tool is one of five kinds:
 
@@ -233,7 +246,7 @@ Lint a catalog: errors and warnings with file, line, rule and message. Without `
 
 **List Catalogs** (read-only)
 
-List the catalogs this connection offers (name, display name, label, description, file count, last change). Pass `name` (the id) in other tools and say `label` to people: those the API key can reach, limited to the connection's X-OKF-Catalogs list when it has one. A catalog whose team is suspended is listed with `suspended` set, and only export works on it. Returns up to 100 catalogs, by name; when `next` is set, call again with it as `after` for the rest. Also this connection's selection: the catalogs a call without a `catalog` argument reads, and the default write target. It comes from the X-OKF-Catalogs header or `?catalogs=`, else the key's or the server's default catalog, else the only catalog the key reaches (a key granted every catalog has no such fallback). When the selection is empty, `selection_error` says why: pass `catalog`.
+List the catalogs this connection offers (name, display name, label, description, file count, last change). Pass `name` (the id) in other tools and say `label` to people: those the API key can reach, limited to the connection's X-OKF-Catalogs list when it has one. A catalog whose team is suspended is listed with `suspended` set, and only export works on it. Returns up to 100 catalogs, by name; when `next` is set, call again with it as `after` for the rest. Also this connection's selection: the catalogs a call without a `catalog` argument reads, and the default write target. It comes from the X-OKF-Catalogs header or `?catalogs=`, else the key's or the server's default catalog, else the only catalog the key reaches (a key granted every catalog has no such fallback). When the selection is empty, `selection_error` says why: pass `catalog`. A catalog whose store cannot be reached is left out of `catalogs` and listed in `unavailable`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -243,7 +256,7 @@ List the catalogs this connection offers (name, display name, label, description
 
 **List Changesets** (read-only)
 
-List the open changesets this key may use (an admin: every key's, in the catalogs it reaches), with their handles, paths and last change; idle means nothing changed within the idle timeout. Empty changesets are listed too, but one with no write within 24 hours is discarded and no longer listed: open a new one then. Use it to find a handle again after a reconnect or a lost context. Read access.
+List the open changesets this key may use (an admin: every key's, in the catalogs it reaches), with their handles, paths and last change; idle means nothing changed within the idle timeout. Empty changesets are listed too, but one with no write within 24 hours is discarded and no longer listed: open a new one then. Use it to find a handle again after a reconnect or a lost context. Read access. A catalog whose store cannot be reached is listed in `unavailable`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -555,7 +568,7 @@ Replace a concept's `reviewed` with { by, at: now, outcome, note } and queue any
 
 **Search Concepts** (read-only)
 
-Search concepts across this connection's catalogs (or `catalogs`). Every term of `query` must occur, as a case-insensitive substring, in a concept's title or aliases, tags, description or body; free text matches tags by substring. The `tags` filter matches whole tags only. Returns catalog, path, title, description, a snippet and the concept's size (`lines` and `chars` of the whole file, as a read returns it), best first: check the size before a `get_concept`, since a large concept stays in context once read. With `changeset` (a handle from open_changeset), its catalog is searched through that changeset's drafts, and is listed in `skipped` if they cannot be applied.
+Search concepts across this connection's catalogs (or `catalogs`). Every term of `query` must occur, as a case-insensitive substring, in a concept's title or aliases, tags, description or body; free text matches tags by substring. The `tags` filter matches whole tags only. Returns catalog, path, title, description, a snippet and the concept's size (`lines` and `chars` of the whole file, as a read returns it), best first: check the size before a `get_concept`, since a large concept stays in context once read. With `changeset` (a handle from open_changeset), its catalog is searched through that changeset's drafts, and is listed in `skipped` if they cannot be applied. A catalog whose store cannot be reached is left out and listed in `unavailable`; the others still answer.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|

@@ -140,7 +140,7 @@ fn key_of(text: &str) -> Result<SettingKey, OkfError> {
 /// row for a key it defines (a bug).
 #[tracing::instrument(level = "debug", skip_all)]
 async fn current(app: &App, key: SettingKey) -> Result<SettingView, OkfError> {
-    settings::list(app.pool(), &app.config().auth)
+    settings::list(app.accounts().executor(), &app.config().auth)
         .await?
         .into_iter()
         .find(|row| row.key == key)
@@ -162,7 +162,7 @@ async fn list_settings(
     require_admin(&principal)?;
     let config = app.config();
     Ok(Json(SettingsView {
-        settings: settings::list(app.pool(), &config.auth)
+        settings: settings::list(app.accounts().executor(), &config.auth)
             .await?
             .into_iter()
             .map(SettingView::from)
@@ -199,7 +199,14 @@ async fn set_setting(
 ) -> Result<Json<SettingView>, AppError> {
     require_every_catalog(&principal)?;
     let key = key_of(&key)?;
-    settings::set(app.pool(), key, &body.value, &actor, app.clock().now()).await?;
+    settings::set(
+        app.accounts().executor(),
+        key,
+        &body.value,
+        &actor,
+        app.clock().now(),
+    )
+    .await?;
     // `key` names the setting here, so the credential is logged as `key_id`.
     split_event!(
         info,
@@ -226,7 +233,7 @@ async fn reset_setting(
 ) -> Result<Json<SettingView>, AppError> {
     require_every_catalog(&principal)?;
     let key = key_of(&key)?;
-    settings::reset(app.pool(), key, &actor, app.clock().now()).await?;
+    settings::reset(app.accounts().executor(), key, &actor, app.clock().now()).await?;
     split_event!(
         info,
         { setting = key.as_str(), },
@@ -348,8 +355,8 @@ mod tests {
         assert_eq!(back["value"], "20");
         assert_eq!(back["overridden"], false);
         assert_eq!(back["updated_by"], serde_json::Value::Null);
-        let changed = entries(test.app.pool(), "setting.changed").await;
-        let cleared = entries(test.app.pool(), "setting.cleared").await;
+        let changed = entries(test.app.accounts().executor(), "setting.changed").await;
+        let cleared = entries(test.app.accounts().executor(), "setting.cleared").await;
         assert_eq!(changed.len(), 1, "a refused value records nothing");
         assert_eq!(
             (
@@ -369,7 +376,7 @@ mod tests {
     async fn sessions(test: &TestApp) -> (Browser, Browser) {
         for name in ["plain", "boss"] {
             users::create(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 &users::NewUser {
                     name,
                     display_name: &crate::labels::DisplayName::default(),
@@ -381,7 +388,7 @@ mod tests {
             .expect("create the user");
         }
         users::set_admin(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "boss",
             AdminChange {
                 on: true,
@@ -436,7 +443,7 @@ mod tests {
         assert_eq!(boss_write.as_u16(), 200, "{row}");
         assert_eq!(row["updated_by"], "boss");
         assert_eq!(boss_reset.as_u16(), 200);
-        let changed = entries(test.app.pool(), "setting.changed").await;
+        let changed = entries(test.app.accounts().executor(), "setting.changed").await;
         assert_eq!(changed.len(), 1, "the refused session recorded nothing");
         assert_eq!(
             (
@@ -446,6 +453,11 @@ mod tests {
             ),
             ("console", "console session", Some("boss"))
         );
-        assert_eq!(entries(test.app.pool(), "setting.cleared").await.len(), 1);
+        assert_eq!(
+            entries(test.app.accounts().executor(), "setting.cleared")
+                .await
+                .len(),
+            1
+        );
     }
 }

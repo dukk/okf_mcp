@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 
 use crate::app::App;
 use crate::auth::{Admission, CatalogScope, Principal, Reach};
+use crate::cache::directory::Lookup;
 use crate::catalog::{CatalogState, Loaded};
 use crate::error::OkfError;
 use crate::http::requester::Requester;
@@ -21,6 +22,7 @@ use crate::store::audit::{AccessKind, AccessRecord, AuditActor, Source};
 use crate::store::catalogs::{self, CatalogRow};
 use crate::store::changesets::{self, ChangesetRow, ChangesetState};
 use crate::store::keys::Access;
+use crate::stores::{StoreName, READ_CONCURRENCY};
 
 /// Is this [`ToolContext::view`] error a changeset's overlay failing to
 /// apply, rather than the database failing?
@@ -75,6 +77,44 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// What this call has found unreachable: whole stores (so the next catalog
+/// on one is not probed again, one connect timeout per store and not per
+/// catalog), and the catalogs resolved on them, by name.
+#[derive(Debug, Default)]
+struct Down {
+    stores: HashSet<StoreName>,
+    catalogs: HashMap<String, StoreName>,
+}
+
+/// The catalogs a first-match read looks through, in order (design Decision
+/// 13, plan P3): the states up to the first catalog whose store cannot be
+/// reached, and that failure. A tool answers from `states` if one holds
+/// what it was asked for, and otherwise returns `blocked` rather than
+/// "not found": the catalog behind the failure might have held the answer,
+/// and the catalogs after it are never consulted.
+#[derive(Debug)]
+pub struct ReadSet {
+    /// The catalogs before the first unreachable one, in selection order.
+    pub states: Vec<Arc<CatalogState>>,
+    /// The [`OkfError::StoreUnavailable`] that ended the list, if one did.
+    pub blocked: Option<OkfError>,
+}
+
+// `Deref` lets a `ReadSet` be indexed and iterated as its `Vec` of states
+// (like a Python class delegating to a list), so a caller that only reads
+// the states needs no `.states`.
+impl std::ops::Deref for ReadSet {
+    type Target = Vec<Arc<CatalogState>>;
+
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    fn deref(&self) -> &Self::Target {
+        &self.states
+    }
+}
+
 /// One tool call's context.
 // `Arc<T>` is a shared, reference-counted pointer (like holding a Python
 // reference): cloning one bumps a counter, it never copies `T`.
@@ -95,6 +135,9 @@ pub struct ToolContext {
     // and kind counts once per call (plan Decision 5). A `std` mutex: held
     // only to insert, never across an `.await`.
     noted: Mutex<HashSet<(String, AccessKind)>>,
+    // The stores and catalogs this call found unreachable. A `std` mutex,
+    // as above.
+    down: Mutex<Down>,
 }
 
 impl ToolContext {
@@ -123,6 +166,7 @@ impl ToolContext {
                 source: Source::Api,
             },
             noted: Mutex::default(),
+            down: Mutex::default(),
         }
     }
 
@@ -394,10 +438,26 @@ impl ToolContext {
             if rows.contains_key(*name) || self.principal.excludes(name) {
                 continue;
             }
-            if let Some(row) = self.app.directory().resolve(name).await? {
-                if self.principal.reaches_row(&row) {
-                    rows.insert(name.to_string(), row);
+            let known_down = locked(&self.down).stores.clone();
+            let found = self
+                .app
+                .directory()
+                .resolve_or_unavailable(name, &known_down)
+                .await?;
+            // A catalog on an unreachable store is kept like any other: the
+            // key's reach is decided by the row (from the account
+            // database), so only a catalog the key reaches is ever named
+            // as unavailable.
+            let (row, unreachable) = match found {
+                Some(Lookup::Available(row)) => (row, false),
+                Some(Lookup::Unavailable(row)) => (row, true),
+                None => continue,
+            };
+            if self.principal.reaches_row(&row) {
+                if unreachable {
+                    self.mark_down(&row);
                 }
+                rows.insert(name.to_string(), row);
             }
         }
         // With no source naming a catalog, `resolve` falls back to the only
@@ -407,12 +467,43 @@ impl ToolContext {
         if names.is_empty() {
             if let Reach::Catalogs(levels) = &self.principal.reach {
                 let granted: Vec<String> = levels.keys().cloned().collect();
-                for row in self.app.directory().resolve_many(&granted).await? {
+                let (found, down) = self.app.directory().resolve_many(&granted).await?;
+                for row in found {
+                    if down.contains(&row.store) {
+                        self.mark_down(&row);
+                    }
                     rows.insert(row.name.clone(), row);
                 }
             }
         }
         Ok(rows)
+    }
+
+    /// Notes that `row`'s store could not be reached in this call, so the
+    /// catalog is unavailable and no other catalog on the store is probed.
+    /// A caller that read a directory page and found stores down tells the
+    /// call, so the selection and the state loads that follow do not spend a
+    /// timeout on the same store again.
+    ///
+    /// # Arguments
+    /// * `row` - a catalog on the unreachable store.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub(crate) fn mark_down(&self, row: &CatalogRow) {
+        let mut down = locked(&self.down);
+        down.stores.insert(row.store.clone());
+        down.catalogs.insert(row.name.clone(), row.store.clone());
+    }
+
+    /// The unreachable store `name` was found on in this call, if any.
+    ///
+    /// # Arguments
+    /// * `name` - a catalog name.
+    ///
+    /// # Returns
+    /// The store, or `None` for a catalog not found unreachable.
+    #[tracing::instrument(level = "trace", skip_all)]
+    fn down_store_of(&self, name: &str) -> Option<StoreName> {
+        locked(&self.down).catalogs.get(name).cloned()
     }
 
     /// The directory row of `state`'s catalog, as it is now: what every
@@ -539,28 +630,92 @@ impl ToolContext {
         Ok(states)
     }
 
+    /// [`ToolContext::states`] for a read that merges what the catalogs
+    /// hold (a search): the catalogs whose store cannot be reached do not
+    /// fail the call. Their states load together, at most
+    /// [`READ_CONCURRENCY`] at a time.
+    ///
+    /// # Arguments
+    /// * `argument` - as [`ToolContext::select`].
+    ///
+    /// # Returns
+    /// The states of the catalogs that could be read, in selection order
+    /// (possibly none), and the ids of the selected catalogs that could not,
+    /// sorted and each once. Only selected catalogs, which the key reaches
+    /// and the connection offers, are ever named.
+    ///
+    /// # Errors
+    /// As [`ToolContext::select`]; any other error from loading a state.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn states_or_unavailable(
+        &self,
+        argument: Option<&[String]>,
+    ) -> Result<(Vec<Arc<CatalogState>>, Vec<String>), OkfError> {
+        let selection = self.select(argument).await?;
+        // `join_all` runs a chunk's loads together; chunks of
+        // `READ_CONCURRENCY` bound how many run at once, in selection order.
+        let mut loads: Vec<Result<Arc<CatalogState>, OkfError>> =
+            Vec::with_capacity(selection.catalogs().len());
+        for chunk in selection.catalogs().chunks(READ_CONCURRENCY) {
+            loads.extend(
+                futures_util::future::join_all(chunk.iter().map(|name| self.state(name))).await,
+            );
+        }
+        let mut states = Vec::with_capacity(loads.len());
+        let mut unavailable = std::collections::BTreeSet::new();
+        for (name, load) in selection.catalogs().iter().zip(loads) {
+            match load {
+                Ok(state) => states.push(state),
+                Err(OkfError::StoreUnavailable { .. }) => {
+                    unavailable.insert(name.clone());
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok((states, unavailable.into_iter().collect()))
+    }
+
     /// The read set of a tool with a single `catalog` argument: that catalog,
-    /// else the selected catalogs (Decision 1).
+    /// else the selected catalogs (Decision 1), up to the first whose store
+    /// cannot be reached ([`ReadSet`]).
     ///
     /// # Arguments
     /// * `catalog` - the call's `catalog` argument.
     ///
     /// # Returns
-    /// The states, in order; never empty.
+    /// The states, in order, and the failure that ended them, if one did.
     ///
     /// # Errors
-    /// As [`ToolContext::select`].
+    /// As [`ToolContext::select`], and any error from loading a state but
+    /// [`OkfError::StoreUnavailable`].
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn read_set(
-        &self,
-        catalog: Option<&str>,
-    ) -> Result<Vec<Arc<CatalogState>>, OkfError> {
+    pub async fn read_set(&self, catalog: Option<&str>) -> Result<ReadSet, OkfError> {
         // `select` takes a slice of `String`s, so the name is copied into one
         // `String` (a small allocation); `std::slice::from_ref` then views it
         // as a one-element slice without also allocating a `Vec`.
         let argument = catalog.map(str::to_string);
-        self.states(argument.as_ref().map(std::slice::from_ref))
-            .await
+        let selection = self
+            .select(argument.as_ref().map(std::slice::from_ref))
+            .await?;
+        let mut states = Vec::with_capacity(selection.catalogs().len());
+        for name in selection.catalogs() {
+            match self.state(name).await {
+                Ok(state) => states.push(state),
+                // P3: stop here. A later catalog must not answer in place of
+                // this one, which might have held the answer.
+                Err(error @ OkfError::StoreUnavailable { .. }) => {
+                    return Ok(ReadSet {
+                        states,
+                        blocked: Some(error),
+                    })
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(ReadSet {
+            states,
+            blocked: None,
+        })
     }
 
     /// The one catalog a call acts on: `catalog`, else the first selected.
@@ -873,7 +1028,7 @@ impl ToolContext {
                     .app
                     .overlays()
                     .get(
-                        self.app.pool(),
+                        &self.app.store_db(state.store()).await?,
                         self.app.rebuild_locks(),
                         state,
                         &pinned.row,
@@ -975,15 +1130,29 @@ impl ToolContext {
         let unknown = || OkfError::UnknownChangeset {
             changeset: handle.to_string(),
         };
-        let row = changesets::by_handle(self.app.pool(), handle)
+        // A handle does not name its store, so every store is asked, `main`
+        // first. One that cannot be reached ends the search with
+        // `StoreUnavailable` (plan P3): the handle might be on it.
+        let (row, store) = self
+            .changeset_by_handle(handle)
             .await?
             .ok_or_else(unknown)?;
         // By the changeset's `catalogs.id`: that incarnation, never one
         // created since under its name. A catalog deleted since, or one
         // whose data does not build, resolves no handle.
-        let catalog = catalogs::row_by_id(self.app.pool(), row.catalog_id)
+        // The registry row carries no generation; the store's state row does.
+        let catalog = catalogs::row_by_id(self.app.accounts().executor(), row.catalog_id).await?;
+        let catalog = self
+            .app
+            .directory()
+            .with_generation(catalog)
             .await?
             .ok_or_else(unknown)?;
+        // A changeset row on a store the catalog is not on belongs to no
+        // catalog this call can reach.
+        if catalog.store != store {
+            return Err(unknown());
+        }
         let state = match self.held_state(&catalog).await {
             Ok(state) => state,
             Err(OkfError::CatalogNotSelected { .. }) => return Err(unknown()),
@@ -1018,6 +1187,64 @@ impl ToolContext {
         })
     }
 
+    /// Every store's name, `main` first and the rest in name order: the
+    /// order a lookup that must try each store follows.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`] if the registry cannot be read;
+    /// [`OkfError::Busy`] when the `stores` table (in the account database,
+    /// not a store) is locked past `store_connect_timeout`. No store is
+    /// unavailable then, so the call is told to retry, not given an
+    /// `unavailable` entry.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn stores_main_first(&self) -> Result<Vec<StoreName>, OkfError> {
+        let mut stores = self.app.stores().all().await?;
+        // A stable sort on `false < true` moves `main` to the front and
+        // keeps the others in the order they came.
+        stores.sort_by_key(|store| *store != StoreName::main());
+        Ok(stores)
+    }
+
+    /// The changeset a handle names and the store holding it, trying each
+    /// store in turn ([`ToolContext::stores_main_first`]).
+    ///
+    /// # Arguments
+    /// * `handle` - the handle as the caller gave it.
+    ///
+    /// # Returns
+    /// The changeset's row and its store, or `None` if no store holds it
+    /// (or the handle is not the shape of an issued one, which no store is
+    /// asked about).
+    ///
+    /// # Errors
+    /// [`OkfError::StoreUnavailable`] when a store that comes before the one
+    /// holding the handle (or any, for an unknown handle) cannot be
+    /// reached, since the handle might be on it; [`OkfError::Database`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn changeset_by_handle(
+        &self,
+        handle: &str,
+    ) -> Result<Option<(ChangesetRow, StoreName)>, OkfError> {
+        if !changesets::is_issued_handle(handle) {
+            return Ok(None);
+        }
+        for store in self.stores_main_first().await? {
+            let db = self.app.store_db(&store).await?;
+            let found = changesets::by_handle(db.executor(), handle)
+                .await
+                // A connection that fails mid-query is the store being
+                // unreachable, as for a connect.
+                .map_err(|error| match error {
+                    OkfError::Database { source } => db.classify(source),
+                    other => other,
+                })?;
+            if let Some(row) = found {
+                return Ok(Some((row, store)));
+            }
+        }
+        Ok(None)
+    }
+
     /// The state of catalog `name` for this call: the one it already
     /// resolved, else resolved now from the directory row (the one
     /// [`ToolContext::select`] read, if it did) and the catalog cache, its
@@ -1039,6 +1266,9 @@ impl ToolContext {
     pub(crate) async fn state(&self, name: &str) -> Result<Arc<CatalogState>, OkfError> {
         if let Some(held) = locked(&self.held).get(name) {
             return Ok(Arc::clone(&held.state));
+        }
+        if let Some(store) = self.down_store_of(name) {
+            return Err(OkfError::store_unavailable(&store));
         }
         // `remove`: the row is needed once, then the state stands for it.
         let selected = locked(&self.rows).remove(name);
@@ -1096,7 +1326,17 @@ impl ToolContext {
         if let Some(state) = held {
             return Ok(state);
         }
-        let state = self.app.catalog_state(row).await?;
+        if locked(&self.down).stores.contains(&row.store) {
+            return Err(OkfError::store_unavailable(&row.store));
+        }
+        let state = match self.app.catalog_state(row).await {
+            Ok(state) => state,
+            Err(error @ OkfError::StoreUnavailable { .. }) => {
+                self.mark_down(row);
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
         // `entry(..).or_insert`: a concurrent resolve of the same catalog in
         // this call (a `join!`) keeps the first snapshot taken.
         let mut held = locked(&self.held);
@@ -1264,7 +1504,7 @@ mod tests {
             .await
             .unwrap()
             .changeset;
-        let mut tx = test.app.pool().begin().await.unwrap();
+        let mut tx = test.app.main_db().await.begin().await.unwrap();
         for (handle, closed) in [
             (&discarded, ChangesetState::Discarded),
             (&published, ChangesetState::Published),
@@ -1485,7 +1725,10 @@ mod tests {
                 ),
                 (
                     "read_set",
-                    ctx.read_set(catalog).await.map_or_else(kind, named),
+                    ctx.read_set(catalog)
+                        .await
+                        .map(|set| set.states)
+                        .map_or_else(kind, named),
                 ),
                 (
                     "one",

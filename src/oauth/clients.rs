@@ -885,7 +885,7 @@ pub async fn resolve(
     if looks_like_url {
         return resolve_cimd(app, oauth, client_id).await;
     }
-    match client_rows::find(app.pool(), client_id).await? {
+    match client_rows::find(app.accounts().executor(), client_id).await? {
         Some(client) if client.kind == ClientKind::Dcr => Ok(client),
         Some(_) | None => Err(OAuthError::InvalidClient(format!(
             "unknown client_id {client_id:?}"
@@ -929,7 +929,7 @@ async fn resolve_cimd(
     client_id: &str,
 ) -> Result<ClientRecord, OAuthError> {
     let url = cimd_url(client_id, oauth.cimd.allows_http())?;
-    let cached = client_rows::find(app.pool(), client_id).await?;
+    let cached = client_rows::find(app.accounts().executor(), client_id).await?;
     if let Some(client) = &cached {
         if is_fresh(client, app.clock().now()) {
             return Ok(client.clone());
@@ -938,7 +938,7 @@ async fn resolve_cimd(
     // Held until this function returns: other resolves of the same URL wait.
     let _flight = oauth.cimd.in_flight.lock(flight_key(client_id)).await;
     // Another resolve may have refreshed it while this one waited.
-    let cached = match client_rows::find(app.pool(), client_id).await? {
+    let cached = match client_rows::find(app.accounts().executor(), client_id).await? {
         Some(client) if is_fresh(&client, app.clock().now()) => return Ok(client),
         other => other.or(cached),
     };
@@ -975,7 +975,7 @@ async fn resolve_cimd(
         // `Option::map_or`: the cached row's first sighting, or now.
         created_at: cached.map_or(now, |client| client.created_at),
     };
-    client_rows::upsert_cimd(app.pool(), &client).await?;
+    client_rows::upsert_cimd(app.accounts().executor(), &client).await?;
     Ok(client)
 }
 
@@ -1033,7 +1033,7 @@ async fn register(State(app): State<Arc<App>>, body: Bytes) -> Result<Response, 
     // `None`: the cap of unbound clients is reached (checked atomically with
     // the insert, so concurrent registrations cannot pass it).
     let Some(client) = client_rows::insert_dcr(
-        app.pool(),
+        app.accounts().executor(),
         &NewDcrClient {
             client_name: metadata.client_name.as_deref(),
             redirect_uris: &metadata.redirect_uris,
@@ -1986,7 +1986,7 @@ mod tests {
             .expect("first");
         let expire = || {
             sqlx::query("UPDATE oauth_clients SET cache_expires_at = now() - interval '1 second'")
-                .execute(test.app.pool())
+                .execute(test.app.accounts().executor())
         };
 
         expire().await.expect("expire");
@@ -2002,7 +2002,7 @@ mod tests {
         assert_eq!(host.hits.load(Ordering::SeqCst), 3);
 
         sqlx::query("UPDATE oauth_clients SET fetched_at = now() - interval '25 hours'")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .expect("age");
         let too_old = resolve(&test.app, oauth(&test), &client_id).await;
@@ -2019,12 +2019,12 @@ mod tests {
             .await
             .expect("first");
         sqlx::query("UPDATE oauth_clients SET cache_expires_at = now() - interval '1 second'")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .expect("expire");
         assert_eq!(host.hits.load(Ordering::SeqCst), 1);
         // The row as stored now, expired, which is what a failed refetch sees.
-        client_rows::find(test.app.pool(), client_id)
+        client_rows::find(test.app.accounts().executor(), client_id)
             .await
             .expect("find")
             .expect("cached")
@@ -2062,7 +2062,7 @@ mod tests {
                 "case {index}: {result:?}"
             );
             assert_eq!(host.hits.load(Ordering::SeqCst), 2 + index, "refetched");
-            let row = client_rows::find(test.app.pool(), &client_id)
+            let row = client_rows::find(test.app.accounts().executor(), &client_id)
                 .await
                 .expect("find")
                 .expect("the cached row is kept");
@@ -2114,7 +2114,7 @@ mod tests {
             client_id: dead_id.clone(),
             ..cached.clone()
         };
-        client_rows::upsert_cimd(test.app.pool(), &dead)
+        client_rows::upsert_cimd(test.app.accounts().executor(), &dead)
             .await
             .expect("seed");
         sqlx::query(
@@ -2122,7 +2122,7 @@ mod tests {
              WHERE client_id = $1",
         )
         .bind(&dead_id)
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .expect("expire");
         let served = resolve(&test.app, oauth(&test), &dead_id)
@@ -2131,7 +2131,7 @@ mod tests {
         assert_eq!(served.client_id, dead_id);
 
         sqlx::query("UPDATE oauth_clients SET fetched_at = now() - interval '25 hours'")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .expect("age");
         for id in [&client_id, &dead_id] {
@@ -2178,7 +2178,7 @@ mod tests {
             "{unknown:?}"
         );
         assert!(
-            client_rows::find(test.app.pool(), &mismatch_url)
+            client_rows::find(test.app.accounts().executor(), &mismatch_url)
                 .await
                 .expect("find")
                 .is_none(),
@@ -2267,7 +2267,7 @@ mod tests {
             assert_eq!(headers[header::CACHE_CONTROL], "no-store", "{body}");
         }
         assert_eq!(
-            client_rows::count_unbound_dcr(test.app.pool())
+            client_rows::count_unbound_dcr(test.app.accounts().executor())
                 .await
                 .expect("count"),
             0
@@ -2282,7 +2282,7 @@ mod tests {
              SELECT gen_random_uuid()::text, 'dcr', ARRAY['https://client.example.com/cb'], \
                     '{}'::jsonb, now() FROM generate_series(1, 499)",
         )
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .expect("fill");
         let body = r#"{"redirect_uris": ["https://client.example.com/cb"]}"#;
@@ -2303,7 +2303,7 @@ mod tests {
              SELECT gen_random_uuid()::text, 'dcr', ARRAY['https://client.example.com/cb'], \
                     '{}'::jsonb, now() FROM generate_series(1, 499)",
         )
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .expect("fill");
         let body = r#"{"redirect_uris": ["https://client.example.com/cb"]}"#;
@@ -2336,7 +2336,7 @@ mod tests {
             "{statuses:?}"
         );
         assert_eq!(
-            client_rows::count_unbound_dcr(test.app.pool())
+            client_rows::count_unbound_dcr(test.app.accounts().executor())
                 .await
                 .expect("count"),
             MAX_UNBOUND_DCR
@@ -2367,7 +2367,7 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
         assert_eq!(json["error"], "invalid_client_metadata");
         assert_eq!(
-            client_rows::count_unbound_dcr(test.app.pool())
+            client_rows::count_unbound_dcr(test.app.accounts().executor())
                 .await
                 .expect("count"),
             0
@@ -2386,7 +2386,7 @@ mod tests {
 
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(
-            client_rows::count_unbound_dcr(test.app.pool())
+            client_rows::count_unbound_dcr(test.app.accounts().executor())
                 .await
                 .expect("count"),
             0

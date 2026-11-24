@@ -660,7 +660,7 @@ fn user_consent_page(
 /// [`OkfError::Io`] if the OS random source fails; [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
 async fn new_consent(app: &App, user: &UserAuth) -> Result<UserConsent, OkfError> {
-    let page = ceiling::page(app.pool(), &user.id, "", None, CONSENT_PAGE).await?;
+    let page = ceiling::page(app.accounts().executor(), &user.id, "", None, CONSENT_PAGE).await?;
     Ok(UserConsent {
         user_id: user.id.clone(),
         nonce: keys::generate_with("")?,
@@ -1142,7 +1142,7 @@ async fn check_code(
 ) -> Response {
     let mut decision = Decision::start();
     let brand = app.settings().brand();
-    match code_rows::find_live(app.pool(), presented, app.clock().now()).await {
+    match code_rows::find_live(app.accounts().executor(), presented, app.clock().now()).await {
         Ok(Some(record)) => {
             let summary_nonce = match keys::generate_with("") {
                 Ok(nonce) => nonce,
@@ -1193,15 +1193,21 @@ async fn approve(
     code_id: &str,
 ) -> Response {
     let brand = app.settings().brand();
-    let grant_id =
-        match code_rows::redeem(app.pool(), code_id, &pending.client, app.clock().now()).await {
-            Ok(grant_id) => grant_id,
-            // Expired, revoked or redeemed meanwhile (another approve won).
-            Err(OkfError::Refused { .. }) => {
-                return failed_attempt(oauth, pending_id, pending, &brand).await
-            }
-            Err(error) => return server_error(&error, &brand),
-        };
+    let grant_id = match code_rows::redeem(
+        app.accounts().executor(),
+        code_id,
+        &pending.client,
+        app.clock().now(),
+    )
+    .await
+    {
+        Ok(grant_id) => grant_id,
+        // Expired, revoked or redeemed meanwhile (another approve won).
+        Err(OkfError::Refused { .. }) => {
+            return failed_attempt(oauth, pending_id, pending, &brand).await
+        }
+        Err(error) => return server_error(&error, &brand),
+    };
     finish(app, oauth, pending_id, pending, grant_id).await
 }
 
@@ -1299,8 +1305,13 @@ async fn finish(
 #[tracing::instrument(level = "debug", skip_all)]
 async fn revoke_unused_grant(app: &App, grant_id: &str) {
     let audit = crate::store::audit::AuditActor::system("oauth");
-    if let Err(error) =
-        crate::store::keys::revoke_by_id(app.pool(), grant_id, &audit, app.clock().now()).await
+    if let Err(error) = crate::store::keys::revoke_by_id(
+        app.accounts().executor(),
+        grant_id,
+        &audit,
+        app.clock().now(),
+    )
+    .await
     {
         split_event!(
             warn,
@@ -1416,17 +1427,23 @@ async fn consent_as_user(
         provisioner: false,
         ip: crate::http::console_session::client_ip(parts, &app.config().auth),
     };
-    let grant_id =
-        match grant_rows::create_self_issued(app.pool(), &new, &audit, app.clock().now()).await {
-            Ok(grant_id) => grant_id,
-            // Signed out, reset or deleted since the check above.
-            Err(OkfError::Unauthenticated { .. }) => return refuse(SIGNED_OUT).await,
-            // The ceiling shrank, or a chosen catalog was deleted, meanwhile.
-            Err(OkfError::Refused { .. } | OkfError::CatalogNotSelected { .. }) => {
-                return refuse(CHANGED).await
-            }
-            Err(error) => return server_error(&error, brand),
-        };
+    let grant_id = match grant_rows::create_self_issued(
+        app.accounts().executor(),
+        &new,
+        &audit,
+        app.clock().now(),
+    )
+    .await
+    {
+        Ok(grant_id) => grant_id,
+        // Signed out, reset or deleted since the check above.
+        Err(OkfError::Unauthenticated { .. }) => return refuse(SIGNED_OUT).await,
+        // The ceiling shrank, or a chosen catalog was deleted, meanwhile.
+        Err(OkfError::Refused { .. } | OkfError::CatalogNotSelected { .. }) => {
+            return refuse(CHANGED).await
+        }
+        Err(error) => return server_error(&error, brand),
+    };
     split_event!(
         info,
         { grant = %grant_id, },
@@ -1465,12 +1482,24 @@ async fn browse_offer(
     let names: Vec<String> = ticked.keys().cloned().collect();
     // `&mut *` borrows the pooled connection, returned when the statement ends.
     let carried_ceiling = ceiling::ceiling_in(
-        &mut *app.pool().acquire().await.map_err(OkfError::from)?,
+        &mut *app
+            .accounts()
+            .executor()
+            .acquire()
+            .await
+            .map_err(OkfError::from)?,
         user_id,
         &names,
     )
     .await?;
-    let page = ceiling::page(app.pool(), user_id, prefix, after, CONSENT_PAGE).await?;
+    let page = ceiling::page(
+        app.accounts().executor(),
+        user_id,
+        prefix,
+        after,
+        CONSENT_PAGE,
+    )
+    .await?;
     // Each ticked catalog the ceiling still reaches, at the lower of the
     // level chosen and the ceiling's now.
     let carried: BTreeMap<String, Access> = ticked
@@ -1783,7 +1812,7 @@ mod tests {
     }
 
     async fn oauth_grants(test: &TestApp) -> usize {
-        key_rows::list(test.app.pool())
+        key_rows::list(test.app.accounts().executor())
             .await
             .unwrap()
             .iter()
@@ -2114,14 +2143,20 @@ mod tests {
             .expect("cached grant");
         assert_eq!(principal.actor, "example-actor");
         assert_eq!(principal.access, Access::Write);
-        let rows = key_rows::list(test.app.pool()).await.unwrap();
+        let rows = key_rows::list(test.app.accounts().executor())
+            .await
+            .unwrap();
         let grant = rows.iter().find(|row| row.id == waiting.grant_id).unwrap();
         assert_eq!(grant.kind, KeyKind::OAuth);
         assert_eq!(grant.client_id.as_deref(), Some(CLIENT_ID));
         // The sign-in code is spent.
-        let live = code_rows::find_live(test.app.pool(), &code, test.app.clock().now())
-            .await
-            .unwrap();
+        let live = code_rows::find_live(
+            test.app.accounts().executor(),
+            &code,
+            test.app.clock().now(),
+        )
+        .await
+        .unwrap();
         assert!(live.is_none());
 
         // The pending request is spent: a second approve finds nothing.
@@ -2156,9 +2191,13 @@ mod tests {
         );
 
         // Step 2 then Deny left the code live and made no grant.
-        let live = code_rows::find_live(test.app.pool(), &code, test.app.clock().now())
-            .await
-            .unwrap();
+        let live = code_rows::find_live(
+            test.app.accounts().executor(),
+            &code,
+            test.app.clock().now(),
+        )
+        .await
+        .unwrap();
         assert!(live.is_some(), "the code survives a deny");
         assert_eq!(oauth_grants(&test).await, 0);
     }
@@ -2372,7 +2411,7 @@ mod tests {
         assert_eq!(oauth_grants(&test).await, 0);
         let now = test.app.clock().now();
         for code in [&read_code, &write_code] {
-            let live = code_rows::find_live(test.app.pool(), code, now)
+            let live = code_rows::find_live(test.app.accounts().executor(), code, now)
                 .await
                 .unwrap();
             assert!(live.is_some(), "neither code is redeemed");
@@ -2409,7 +2448,7 @@ mod tests {
             .unwrap()
             .expect("cached grant");
         assert_eq!(principal.access, Access::Write);
-        let read_live = code_rows::find_live(test.app.pool(), &read_code, now)
+        let read_live = code_rows::find_live(test.app.accounts().executor(), &read_code, now)
             .await
             .unwrap();
         assert!(read_live.is_some(), "A was never redeemed");
@@ -2435,9 +2474,15 @@ mod tests {
                 (SettingKey::ProductName, "Acme Notes"),
                 (SettingKey::SupportContact, "help@example.com"),
             ] {
-                settings::set(test.app.pool(), key, value, &AuditActor::cli(), Utc::now())
-                    .await
-                    .unwrap();
+                settings::set(
+                    test.app.accounts().executor(),
+                    key,
+                    value,
+                    &AuditActor::cli(),
+                    Utc::now(),
+                )
+                .await
+                .unwrap();
             }
         })
         .await;
@@ -2469,7 +2514,7 @@ mod tests {
     /// Creates user `name` with these entitlements and signs it in.
     async fn signed_in(test: &TestApp, name: &str, grants: &[(&str, Access)]) -> Browser {
         users::create(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &NewUser {
                 name,
                 display_name: &crate::labels::DisplayName::default(),
@@ -2481,7 +2526,7 @@ mod tests {
         .expect("create the user");
         for (catalog, access) in grants {
             ceiling::entitle(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 &NewEntitlement {
                     user: name,
                     catalog,
@@ -2673,7 +2718,7 @@ mod tests {
     /// Sets display names straight in SQL and reloads the key cache the
     /// way any label change does (a bump of `admin_generation`, then a poll).
     async fn relabel(test: &TestApp, user: (&str, &str), catalogs: [(&str, &str); 2]) {
-        let pool = test.app.pool();
+        let pool = test.app.accounts().executor();
         sqlx::query("UPDATE users SET display_name = $1 WHERE name = $2")
             .bind(user.1)
             .bind(user.0)
@@ -2748,7 +2793,7 @@ mod tests {
         .await;
         // `other` moves to a second team, so the shared label gets a suffix.
         teams::create(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &NewTeam {
                 name: "acme",
                 display_name: &DisplayName::parse("Acme Team").unwrap(),
@@ -2763,7 +2808,7 @@ mod tests {
             "UPDATE catalogs SET owner_team_id = (SELECT id FROM teams WHERE name = 'acme') \
              WHERE name = 'other'",
         )
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .unwrap();
         relabel(
@@ -2934,7 +2979,7 @@ mod tests {
         assert_eq!(principal.level("main"), Some(Access::Write));
         assert_eq!(principal.level("other"), None, "not ticked");
         assert_eq!(principal.default_catalog.as_deref(), Some("main"));
-        let record = key_rows::list(test.app.pool())
+        let record = key_rows::list(test.app.accounts().executor())
             .await
             .unwrap()
             .into_iter()
@@ -2972,7 +3017,7 @@ mod tests {
 
         crate::invalidate::testing::applied(&test.app, async {
             ceiling::entitle(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 &NewEntitlement {
                     user: "alice",
                     catalog: "main",
@@ -2994,7 +3039,7 @@ mod tests {
             .level("main");
         crate::invalidate::testing::applied(&test.app, async {
             ceiling::unentitle(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 "alice",
                 "main",
                 &AuditActor::cli(),
@@ -3096,9 +3141,12 @@ mod tests {
 
         let (no_cookie, _, no_cookie_body) =
             consent_as(&test, None, &without_cookie, READ_MAIN).await;
-        user_sessions::revoke(test.app.pool(), alice.cookie(COOKIE).expect("a session"))
-            .await
-            .expect("sign out");
+        user_sessions::revoke(
+            test.app.accounts().executor(),
+            alice.cookie(COOKIE).expect("a session"),
+        )
+        .await
+        .expect("sign out");
         let (ended, _, ended_body) = consent_as(&test, Some(&alice), &signed_out, READ_MAIN).await;
 
         assert_eq!(no_cookie, StatusCode::BAD_REQUEST);
@@ -3114,7 +3162,7 @@ mod tests {
         let alice = signed_in(&test, "alice", &[("main", Access::Write)]).await;
         let page = user_page(&test, &alice).await;
         ceiling::entitle(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &NewEntitlement {
                 user: "alice",
                 catalog: "main",
@@ -3147,7 +3195,7 @@ mod tests {
         let alice = signed_in(&test, "alice", &[("main", Access::Read)]).await;
         let page = user_page(&test, &alice).await;
         ceiling::entitle(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &NewEntitlement {
                 user: "alice",
                 catalog: "other",
@@ -4020,7 +4068,7 @@ mod tests {
         /// The ids of the OAuth grants that are not revoked: the user's grant
         /// list.
         async fn live_grants(test: &TestApp) -> Vec<String> {
-            key_rows::list(test.app.pool())
+            key_rows::list(test.app.accounts().executor())
                 .await
                 .expect("list the grants")
                 .into_iter()
@@ -4216,11 +4264,11 @@ mod tests {
         )
         .bind(user)
         .bind(count)
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .unwrap();
         sqlx::query("ANALYZE catalogs")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .unwrap();
     }
@@ -4293,7 +4341,7 @@ mod tests {
             ("c00004", Access::Read),
         ] {
             ceiling::entitle(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 &NewEntitlement {
                     user: "alice",
                     catalog,
@@ -4305,7 +4353,9 @@ mod tests {
             .await
             .expect("entitle");
         }
-        let whole = ceiling::ceiling_of(test.app.pool(), "alice").await.unwrap();
+        let whole = ceiling::ceiling_of(test.app.accounts().executor(), "alice")
+            .await
+            .unwrap();
 
         let mut page = user_page(&test, &alice).await;
         let mut walked = Ceiling::new();
@@ -4455,7 +4505,7 @@ mod tests {
         .await;
         let page = user_page(&test, &alice).await;
         ceiling::entitle(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &NewEntitlement {
                 user: "alice",
                 catalog: "main",
@@ -4467,7 +4517,7 @@ mod tests {
         .await
         .expect("lower");
         ceiling::unentitle(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "alice",
             "other",
             &AuditActor::cli(),
@@ -4577,11 +4627,11 @@ mod tests {
                     (SELECT id FROM teams WHERE name = 'alice') \
              FROM generate_series(1, 50000) AS n",
         )
-        .execute(test.app.pool())
+        .execute(test.app.accounts().executor())
         .await
         .unwrap();
         sqlx::query("ANALYZE catalogs")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .unwrap();
         let (test, alice) = (&test, &alice);

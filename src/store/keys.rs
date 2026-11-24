@@ -844,7 +844,8 @@ pub(crate) async fn catalog_ids(
     // the caller's order with a NULL id for each unknown name.
     let rows: Vec<(String, Option<i64>)> = sqlx::query_as(
         "SELECT n.name, c.id FROM unnest($1::text[]) WITH ORDINALITY AS n (name, ord) \
-         LEFT JOIN catalogs c ON c.name = n.name ORDER BY n.ord",
+         LEFT JOIN catalogs c ON c.name = n.name AND c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL \
+         ORDER BY n.ord",
     )
     .bind(names)
     .fetch_all(&mut *conn)
@@ -2611,7 +2612,7 @@ mod tests {
         )
         .await;
 
-        catalogs::delete(
+        catalogs::delete_settled(
             &db.pool,
             "pg",
             false,
@@ -2691,7 +2692,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut tx = db.pool.begin().await.unwrap();
+        let mut tx = crate::stores::CatalogDb::main_of(&db.pool)
+            .begin()
+            .await
+            .unwrap();
         let old_changeset = crate::store::changesets::open(
             &mut tx,
             work_catalog.id,
@@ -2703,7 +2707,7 @@ mod tests {
         .unwrap();
         tx.commit().await.unwrap();
         sqlx::query(
-            "INSERT INTO revisions \
+            "INSERT INTO catalog.revisions \
              (catalog_id, path, revision, op, content, executable, actor, changeset_id, \
               message, created_at) \
              VALUES ($1, 'owned.md', 1, 'create', $2, false, $3, $4, 'original publish', $5)",
@@ -2713,7 +2717,7 @@ mod tests {
         .bind(terminal.actor)
         .bind(old_changeset.id)
         .bind(now())
-        .execute(&db.pool)
+        .execute(&crate::db::store_pool(&db.pool))
         .await
         .unwrap();
         assert_ne!(first.id, "claude");
@@ -2754,9 +2758,14 @@ mod tests {
         .await
         .unwrap();
         assert_ne!(replacement.id, first.id);
-        let historical = crate::store::changesets::list_open(&db.pool, &[work_catalog.id], None)
-            .await
-            .unwrap();
+        let historical = crate::store::changesets::list_open(
+            &crate::stores::AccountDb::of(&db.pool),
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            &[work_catalog.id],
+            None,
+        )
+        .await
+        .unwrap();
         let historical = historical
             .iter()
             .find(|row| row.changeset.handle == old_changeset.handle)
@@ -2767,9 +2776,14 @@ mod tests {
         );
         assert_eq!(historical.key_name.as_deref(), Some("claude"));
         assert_eq!(historical.changeset.actor, terminal.actor);
-        let revisions = crate::store::history::revisions(&db.pool, work_catalog.id, "owned.md", 20)
-            .await
-            .unwrap();
+        let revisions = crate::store::history::revisions(
+            &crate::stores::CatalogDb::main_of(&db.pool),
+            work_catalog.id,
+            "owned.md",
+            20,
+        )
+        .await
+        .unwrap();
         assert_eq!(revisions.len(), 1);
         assert_eq!(revisions[0].actor, terminal.actor);
         assert_eq!(revisions[0].message, "original publish");

@@ -73,7 +73,13 @@ pub(crate) async fn oauth_app_with(config: Config) -> TestApp {
     .await;
     // Corrected (issue #247): `insert_dcr` lets Postgres pick a UUID, so the
     // fixed test id goes in through the store's plain-SQL helper.
-    insert_test_client(test.app.pool(), CLIENT_ID, ClientKind::Dcr, REDIRECT_URI).await;
+    insert_test_client(
+        test.app.accounts().executor(),
+        CLIENT_ID,
+        ClientKind::Dcr,
+        REDIRECT_URI,
+    )
+    .await;
     test
 }
 
@@ -88,7 +94,13 @@ pub(crate) async fn oauth_app_with_metrics() -> (TestApp, prometheus::Registry) 
         oauth_config(PUBLIC_URL),
     )
     .await;
-    insert_test_client(test.app.pool(), CLIENT_ID, ClientKind::Dcr, REDIRECT_URI).await;
+    insert_test_client(
+        test.app.accounts().executor(),
+        CLIENT_ID,
+        ClientKind::Dcr,
+        REDIRECT_URI,
+    )
+    .await;
     (test, registry)
 }
 
@@ -102,7 +114,7 @@ pub(crate) async fn oauth_app_with_metrics() -> (TestApp, prometheus::Registry) 
 /// If the insert fails: a broken test setup.
 pub(crate) async fn insert_loopback_client(test: &TestApp) {
     insert_test_client(
-        test.app.pool(),
+        test.app.accounts().executor(),
         LOOPBACK_CLIENT_ID,
         ClientKind::Dcr,
         LOOPBACK_REDIRECT_URI,
@@ -133,7 +145,7 @@ pub(crate) async fn sign_in_code(test: &TestApp, access: Access) -> String {
         user: crate::db::TEST_USER,
     };
     code_rows::create(
-        test.app.pool(),
+        test.app.accounts().executor(),
         &new,
         &crate::store::audit::AuditActor::cli(),
         Utc::now(),
@@ -263,7 +275,13 @@ pub(crate) async fn oauth_replica_pair_on(redis: TestRedis) -> (TestApp, Arc<App
         redis,
     )
     .await;
-    insert_test_client(first.app.pool(), CLIENT_ID, ClientKind::Dcr, REDIRECT_URI).await;
+    insert_test_client(
+        first.app.accounts().executor(),
+        CLIENT_ID,
+        ClientKind::Dcr,
+        REDIRECT_URI,
+    )
+    .await;
     (first, second, redis)
 }
 

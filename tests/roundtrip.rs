@@ -14,8 +14,8 @@ use std::process::Command;
 use chrono::Utc;
 use okf_mcp::archive::{self, Files};
 use okf_mcp::okf::workspace::StoredFile;
+use okf_mcp::store::export;
 use okf_mcp::store::import::{import, ImportOptions, ImportReport, ImportScope};
-use okf_mcp::store::{catalogs, export};
 use support::pg::TestDb;
 
 /// Imports `files` into a new catalog, exports it, reads the export back,
@@ -26,7 +26,7 @@ use support::pg::TestDb;
 async fn round_trip(files: &Files) -> (Files, ImportReport) {
     let db = TestDb::start_migrated().await;
     support::server::migrate_with_owner(&db.pool).await;
-    catalogs::create(
+    support::stores::create_catalog(
         &db.pool,
         &okf_mcp::store::catalogs::NewCatalog {
             name: "rt",
@@ -48,10 +48,17 @@ async fn round_trip(files: &Files) -> (Files, ImportReport) {
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),
     };
-    import(&db.pool, "rt", files.clone(), &first).await.unwrap();
+    import(
+        &support::stores::main_store(&db.pool),
+        "rt",
+        files.clone(),
+        &first,
+    )
+    .await
+    .unwrap();
 
     let (tarball, _generation) = export::export(
-        &db.pool,
+        &support::stores::main_store(&db.pool),
         "rt",
         Vec::new(),
         &export::ExportOptions {
@@ -72,9 +79,14 @@ async fn round_trip(files: &Files) -> (Files, ImportReport) {
         audit: &okf_mcp::store::audit::AuditActor::cli(),
         now: Utc::now(),
     };
-    let report = import(&db.pool, "rt", exported.clone(), &again)
-        .await
-        .unwrap();
+    let report = import(
+        &support::stores::main_store(&db.pool),
+        "rt",
+        exported.clone(),
+        &again,
+    )
+    .await
+    .unwrap();
     (exported, report)
 }
 

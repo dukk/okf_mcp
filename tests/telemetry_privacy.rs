@@ -320,7 +320,9 @@ fn migration_tables() -> BTreeSet<String> {
     let pattern =
         regex::Regex::new(r"(?i)create\s+table\s+(?:if\s+not\s+exists\s+)?(?:\w+\.)?(\w+)")
             .expect("pattern");
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("migrations")
+        .join("accounts");
     let mut tables = BTreeSet::new();
     for entry in std::fs::read_dir(dir).expect("migrations directory") {
         let path = entry.expect("entry").path();
@@ -671,11 +673,21 @@ async fn nothing_secret_is_exported_or_scraped() {
     .execute(pool)
     .await
     .expect("create the mail trigger");
+    // `catalog.changesets` is on the store, a database of its own in
+    // `OKF_TEST_STORE=separate` mode; the function goes there too.
+    let store = support::pg::store_pool(pool);
     sqlx::query(
-        "CREATE TRIGGER zq_refuse_changesets BEFORE INSERT ON changesets \
+        "CREATE OR REPLACE FUNCTION zq_refuse() RETURNS trigger LANGUAGE plpgsql AS \
+         $$ BEGIN RAISE EXCEPTION 'zq-sentinel-7f3a-dberr'; END $$",
+    )
+    .execute(&store)
+    .await
+    .expect("create the trigger function on the store");
+    sqlx::query(
+        "CREATE TRIGGER zq_refuse_changesets BEFORE INSERT ON catalog.changesets \
          FOR EACH ROW EXECUTE FUNCTION zq_refuse()",
     )
-    .execute(pool)
+    .execute(&store)
     .await
     .expect("create the changeset trigger");
     let failed = http

@@ -19,9 +19,10 @@ use crate::http::requester::Requester;
 use crate::labels::directory::{Labels, Wanted};
 use crate::labels::user_label;
 use crate::store::keys::Access;
+use crate::stores::{AccountDb, CatalogDb, StoreName, Stores};
 
 /// How many days entries are kept with no `audit_retention_days` override
-/// (the append-only trigger in `migrations/0012_audit.sql` uses the same).
+/// (the append-only trigger in `migrations/accounts/0012_audit.sql` uses the same).
 pub const DEFAULT_RETENTION_DAYS: u32 = 400;
 
 /// The shortest retention: the setting refuses less, and the trigger
@@ -309,6 +310,10 @@ actions! {
     CatalogUnlockEnded => "catalog.unlock_ended",
     UserLookedUp => "user.looked_up",
     ProvisionerRefused => "provisioner.refused",
+    StoreAdded => "store.added",
+    SettingDefaultStoreChanged => "setting.default_store_changed",
+    TeamStorePinned => "team.store_pinned",
+    TeamStoreUnpinned => "team.store_unpinned",
 }
 
 /// What an entry is about.
@@ -330,6 +335,8 @@ pub enum Target<'a> {
     Setting(&'a str),
     /// An unlock, by id.
     Unlock(i64),
+    /// A catalog store, by name.
+    Store(&'a str),
 }
 
 /// Where a target is stored: its kind, and at most one of a name, a team
@@ -374,6 +381,7 @@ impl<'a> Target<'a> {
             Target::Code(id) => credential("code", id),
             Target::Setting(key) => plain("setting", key.to_string()),
             Target::Unlock(id) => plain("unlock", id.to_string()),
+            Target::Store(name) => plain("store", name.to_string()),
         }
     }
 }
@@ -534,6 +542,285 @@ async fn insert(
     .bind(fixed.map(|fixed| fixed.person_id))
     .bind(fixed.map(|fixed| fixed.operator))
     // `&mut *conn` reborrows the connection, so `conn` stays usable after.
+    .fetch_one(&mut *conn)
+    .await?)
+}
+
+impl Action {
+    /// Whether an entry of this action is written inside a catalog store's
+    /// transaction ([`record_catalog`], plan decision P4) rather than on the
+    /// account database ([`record`]). The six actions recorded where a
+    /// catalog's documents, changesets or maintenance runs change: the
+    /// entry then commits or rolls back with the change it records.
+    ///
+    /// # Returns
+    /// `true` for `catalog.published`, `catalog.imported`, `catalog.repaired`,
+    /// `catalog.reverted`, `catalog.changeset_discarded` and
+    /// `catalog.maintenance_run`.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "trivial accessor or conversion: maps a value, no I/O"
+        )
+    )]
+    pub fn is_catalog_event(self) -> bool {
+        matches!(
+            self,
+            Action::CatalogPublished
+                | Action::CatalogImported
+                | Action::CatalogRepaired
+                | Action::CatalogReverted
+                | Action::CatalogChangesetDiscarded
+                | Action::CatalogMaintenanceRun
+        )
+    }
+}
+
+/// The account database's side of a catalog entry, resolved BEFORE the
+/// store transaction that writes the entry begins: the `audit_people`,
+/// `audit_credentials` and `audit_teams` ids the store row holds as plain
+/// values (a store has none of those tables), and the markings the account
+/// `INSERT` of [`record`] computes in SQL. Built by [`resolve_actor`] (a
+/// change's actor) or [`resolve_run`] (a maintenance run's), on the
+/// change's account transaction, after [`lock_people`] and so in the
+/// order every writer takes (`CatalogDb::begin`'s acquisition rule).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedActor {
+    source: Source,
+    credential_ref: Option<i64>,
+    person_id: Option<i64>,
+    label: String,
+    operator: bool,
+    ip: Option<IpAddr>,
+    teams: Vec<i64>,
+    target_person: Option<FixedPerson>,
+}
+
+impl ResolvedActor {
+    /// The entry also names a user (a discard when the user is deleted): its
+    /// `audit_people` id and operator marking, from [`resolve_person`].
+    ///
+    /// # Arguments
+    /// * `person` - the person and marking.
+    ///
+    /// # Returns
+    /// The actor, with the person set.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "sets one field, no I/O")
+    )]
+    pub fn about(mut self, person: Option<FixedPerson>) -> Self {
+        self.target_person = person;
+        self
+    }
+}
+
+/// One entry for a catalog store: the six actions of
+/// [`Action::is_catalog_event`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatalogEntry<'a> {
+    /// What happened; one of the six catalog events.
+    pub action: Action,
+    /// The catalog's id.
+    pub catalog_id: i64,
+    /// The catalog's name as it is now (kept in the entry: it outlives the
+    /// catalog, plan decision P5).
+    pub catalog: &'a str,
+    /// A small JSON object; never a secret or an email address.
+    pub details: serde_json::Value,
+}
+
+/// Resolves a change's actor and its catalog's owner team on the account
+/// database, for [`record_catalog`] in the store transaction that follows.
+/// The same lookups [`record`]'s `INSERT` makes in SQL (`audit_person`,
+/// `audit_credential`, the operator marking of issue #402, [`catalog_teams`]),
+/// so an entry says the same on either side.
+///
+/// # Arguments
+/// * `conn` - the change's account transaction, with [`lock_people`] already
+///   called for this actor and catalog.
+/// * `actor` - who.
+/// * `catalog_id` - the catalog the entry is about.
+///
+/// # Returns
+/// The resolved ids and markings.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.resolve_actor"))]
+pub async fn resolve_actor(
+    conn: &mut PgConnection,
+    actor: &AuditActor,
+    catalog_id: i64,
+) -> Result<ResolvedActor, OkfError> {
+    // One statement, as `insert` resolves them: the subquery makes the
+    // person once, and the credential row reuses it.
+    let (credential_ref, person_id, operator): (Option<i64>, Option<i64>, bool) = sqlx::query_as(
+        "SELECT audit_credential($1, p.actor, $2), p.actor, \
+                    $3 OR COALESCE((SELECT is_admin FROM users WHERE id = $4), false) \
+             FROM (SELECT audit_person($4) AS actor) p",
+    )
+    .bind(&actor.credential)
+    .bind(&actor.label)
+    .bind(actor.operator)
+    .bind(&actor.user_id)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(ResolvedActor {
+        source: actor.source,
+        credential_ref,
+        person_id,
+        label: actor.stored_label(),
+        operator,
+        ip: actor.ip,
+        teams: catalog_teams(conn, catalog_id).await?,
+        target_person: None,
+    })
+}
+
+/// A user's `audit_people` id and operator marking, for an entry that is
+/// also about them ([`ResolvedActor::about`]).
+///
+/// # Arguments
+/// * `conn` - the change's account transaction, holding the user's row.
+/// * `user_id` - the user's `users.id`.
+///
+/// # Returns
+/// The person and whether they are an admin now; `None` for an unknown user.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.resolve_person"))]
+pub async fn resolve_person(
+    conn: &mut PgConnection,
+    user_id: &str,
+) -> Result<Option<FixedPerson>, OkfError> {
+    let row: Option<(Option<i64>, bool)> =
+        sqlx::query_as("SELECT audit_person(id), is_admin FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&mut *conn)
+            .await?;
+    Ok(row.and_then(|(person, operator)| {
+        person.map(|person_id| FixedPerson {
+            person_id,
+            operator,
+        })
+    }))
+}
+
+/// What a maintenance run's entry names about the run's credential: the
+/// ids [`resolve_run`] reads. A run's own key may be gone (a deleted user's
+/// keys), and then the entry names no credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunCredential {
+    /// The run's `credential_id` (a key or grant id, kept in the run).
+    pub credential_id: String,
+    /// The run's `key_id`: the credential's row while it exists.
+    pub key_id: Option<String>,
+}
+
+/// Resolves a maintenance run's actor on the account database, for
+/// [`record_catalog`]: the system, running as the run's credential. It
+/// locks no user and waits for no audit row: the credential's `audit_credentials`
+/// row is only read (a row [`forget_person`] has cleared simply names no
+/// credential), and an admin-level key, or one of an admin user, is marked
+/// as operator staff, as [`record`] marks it (issue #402). The entry names
+/// no label (M14 Decision 17: `system:maintenance`).
+///
+/// # Arguments
+/// * `conn` - the change's account transaction.
+/// * `run` - the run's credential.
+/// * `owner_team_id` - the catalog's owner team (`teams.id`), if any.
+///
+/// # Returns
+/// The resolved actor.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.resolve_run"))]
+pub async fn resolve_run(
+    conn: &mut PgConnection,
+    run: &RunCredential,
+    owner_team_id: Option<&str>,
+) -> Result<ResolvedActor, OkfError> {
+    let (credential_ref, operator, team): (Option<i64>, bool, Option<i64>) = sqlx::query_as(
+        "SELECT (SELECT a.id FROM audit_credentials a WHERE a.credential_id = $1), \
+                EXISTS (SELECT 1 FROM api_keys k LEFT JOIN users u ON u.id = k.user_id \
+                         WHERE k.id = $2 AND (k.access = 'admin' OR COALESCE(u.is_admin, false))), \
+                (SELECT t.id FROM audit_teams t WHERE t.team_id = $3)",
+    )
+    .bind(&run.credential_id)
+    .bind(&run.key_id)
+    .bind(owner_team_id)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(ResolvedActor {
+        source: Source::System,
+        credential_ref,
+        person_id: None,
+        label: AuditActor::system("maintenance").stored_label(),
+        operator,
+        ip: None,
+        teams: team.into_iter().collect(),
+        target_person: None,
+    })
+}
+
+/// Writes one catalog entry inside the catalog's store transaction, from ids
+/// resolved on the account database beforehand ([`resolve_actor`],
+/// [`resolve_run`]). It reads no account table, so the store connection
+/// never waits for an account row (the acquisition rule of
+/// `CatalogDb::begin`).
+///
+/// # Arguments
+/// * `conn` - the change's store transaction (`&mut tx`).
+/// * `actor` - the resolved actor and teams.
+/// * `entry` - what.
+/// * `now` - when (server clock).
+///
+/// # Returns
+/// The entry's id on the store.
+///
+/// # Errors
+/// [`OkfError::Refused`] for an action that is not a catalog event, before
+/// any SQL; [`OkfError::Database`], which fails the caller's change with it.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.record_catalog"))]
+pub async fn record_catalog(
+    conn: &mut PgConnection,
+    actor: &ResolvedActor,
+    entry: &CatalogEntry<'_>,
+    now: DateTime<Utc>,
+) -> Result<i64, OkfError> {
+    if !entry.action.is_catalog_event() {
+        return Err(OkfError::Refused {
+            reason: format!(
+                "{} is recorded on the account database, not on a store",
+                entry.action.as_str()
+            ),
+        });
+    }
+    Ok(sqlx::query_scalar(
+        "INSERT INTO catalog_audit_entries (at, catalog_id, action, source, \
+             actor_credential_ref, actor_person_id, actor_label, actor_operator, client_ip, \
+             target_name, target_person_id, target_operator, teams, details) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::inet, $10, $11, $12, $13, $14) \
+         RETURNING id",
+    )
+    .bind(now)
+    .bind(entry.catalog_id)
+    .bind(entry.action.as_str())
+    .bind(actor.source.as_str())
+    .bind(actor.credential_ref)
+    .bind(actor.person_id)
+    .bind(&actor.label)
+    .bind(actor.operator)
+    .bind(actor.ip.map(|ip| ip.to_string()))
+    .bind(entry.catalog)
+    .bind(actor.target_person.map(|person| person.person_id))
+    .bind(actor.target_person.is_some_and(|person| person.operator))
+    .bind(&actor.teams)
+    .bind(&entry.details)
     .fetch_one(&mut *conn)
     .await?)
 }
@@ -795,7 +1082,7 @@ pub async fn team_ref(conn: &mut PgConnection, team: &str) -> Result<i64, OkfErr
 /// insert and after [`lock_people`] has locked the owner: the SQL resolver
 /// takes the owner `FOR KEY SHARE` again (a no-op under the stronger lock
 /// already held) and inserts a row no other transaction can see yet, so it
-/// waits on nothing (`migrations/0014_audit_row_locks.sql`).
+/// waits on nothing (`migrations/accounts/0014_audit_row_locks.sql`).
 ///
 /// # Arguments
 /// * `conn` - the creating transaction.
@@ -956,6 +1243,50 @@ pub async fn prune(pool: &PgPool, before: DateTime<Utc>) -> Result<u64, OkfError
         .execute(pool)
         .await?
         .rows_affected())
+}
+
+/// Deletes a store's catalog events older than `before`: the retention
+/// prune of `catalog_audit_entries`, the one delete of that log. The
+/// store's append-only trigger refuses the whole statement if any of those
+/// entries is still inside the retention period by the store's clock, so
+/// the caller leaves a margin, as for [`prune`]. A store has no settings
+/// table: `retention_days` is passed to the trigger in a transaction-local
+/// setting (`okf.audit_retention_days`).
+///
+/// # Arguments
+/// * `store` - the store to prune.
+/// * `before` - the cut-off: now, minus the retention, minus a margin.
+/// * `retention_days` - the `audit_retention_days` setting.
+/// * `wait` - the bound at the database (`lock_timeout` and
+///   `statement_timeout`) on the delete, so background work never waits on a
+///   lock without limit ([`crate::stores::bounded`]).
+///
+/// # Returns
+/// How many entries went.
+///
+/// # Errors
+/// [`OkfError::Database`] (a lock or statement past `wait` included) or
+/// [`OkfError::StoreUnavailable`], which delete nothing.
+#[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.prune_catalog"))]
+pub async fn prune_catalog(
+    store: &CatalogDb,
+    before: DateTime<Utc>,
+    retention_days: i64,
+    wait: std::time::Duration,
+) -> Result<u64, OkfError> {
+    let mut tx = crate::stores::bounded::store_tx(store, wait).await?;
+    // `set_config(.., true)` is `SET LOCAL` with a bindable value.
+    sqlx::query("SELECT set_config('okf.audit_retention_days', $1, true)")
+        .bind(retention_days.to_string())
+        .execute(&mut *tx)
+        .await?;
+    let removed = sqlx::query("DELETE FROM catalog_audit_entries WHERE at < $1")
+        .bind(before)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    tx.commit().await.map_err(|error| store.classify(error))?;
+    Ok(removed)
 }
 
 /// How long past the end of its hour a provisioner budget counter is kept,
@@ -1477,6 +1808,144 @@ pub enum Viewer {
     Credential(String),
 }
 
+/// A position in the merged audit view: the entry a page ends at, by the
+/// order the view sorts by, `(at, store, id)` newest first. `store` is the
+/// name of the store the entry is on, and the empty string for the account
+/// database (so entries written before the split, which stay there, sort
+/// first among equal times). Ids are per source: two sources can hold the
+/// same id, so the id alone says nothing.
+///
+/// An admin's cursor is the readable [`AuditCursor::to_plain`]; a team
+/// owner's is sealed (`http::api::audit::cursor`, issue #430), because an id
+/// shows how much was written in between.
+// The derived `Ord` compares the fields in declaration order, which is the
+// view's order.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AuditCursor {
+    at_micros: i64,
+    store: String,
+    id: i64,
+}
+
+impl AuditCursor {
+    /// The position of an entry.
+    ///
+    /// # Arguments
+    /// * `at` - when the entry was written (database precision: microseconds).
+    /// * `store` - the store it is on, or `""` for the account database.
+    /// * `id` - its id in that source.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line constructor")
+    )]
+    pub fn new(at: DateTime<Utc>, store: &str, id: i64) -> Self {
+        Self {
+            at_micros: at.timestamp_micros(),
+            store: store.to_string(),
+            id,
+        }
+    }
+
+    /// The position from its parts, as [`AuditCursor::parts`] gives them.
+    ///
+    /// # Arguments
+    /// * `at_micros` - microseconds since the Unix epoch.
+    /// * `store` - the store's name, or `""`.
+    /// * `id` - the entry's id in its source.
+    ///
+    /// # Errors
+    /// [`OkfError::InvalidPath`] (400, naming `after`) for a time out of
+    /// range, a store name that is not one, or a negative id.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn from_parts(at_micros: i64, store: &str, id: i64) -> Result<Self, OkfError> {
+        let refused = || OkfError::InvalidPath {
+            path: "after".to_string(),
+            reason: "not a cursor this audit view issued; load the first page again".to_string(),
+        };
+        let store_ok = store.is_empty() || crate::stores::StoreName::parse(store).is_ok();
+        if !store_ok || id < 0 || DateTime::from_timestamp_micros(at_micros).is_none() {
+            return Err(refused());
+        }
+        Ok(Self {
+            at_micros,
+            store: store.to_string(),
+            id,
+        })
+    }
+
+    /// The parts: microseconds since the epoch, the store (`""` for the
+    /// account database) and the id.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn parts(&self) -> (i64, &str, i64) {
+        (self.at_micros, &self.store, self.id)
+    }
+
+    /// The readable form an admin or the CLI passes back as `after`:
+    /// `<microseconds>:<store>:<id>`. Callers treat it as opaque.
+    ///
+    /// # Returns
+    /// The text.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "formats a value, no I/O")
+    )]
+    pub fn to_plain(&self) -> String {
+        format!("{}:{}:{}", self.at_micros, self.store, self.id)
+    }
+
+    /// Reads [`AuditCursor::to_plain`]'s text.
+    ///
+    /// # Arguments
+    /// * `text` - the `after` value as sent.
+    ///
+    /// # Errors
+    /// [`OkfError::InvalidPath`] (400, naming `after`) for anything else, a
+    /// bare entry id included: ids are per source, so one no longer says
+    /// where a page ends.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn parse_plain(text: &str) -> Result<Self, OkfError> {
+        let refused = || OkfError::InvalidPath {
+            path: "after".to_string(),
+            reason: format!(
+                "{text:?} is not a cursor; pass a page's next_after (or last id column)"
+            ),
+        };
+        let mut parts = text.splitn(3, ':');
+        let (Some(at), Some(store), Some(id), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            return Err(refused());
+        };
+        let at = at.parse::<i64>().map_err(|_| refused())?;
+        let id = id.parse::<i64>().map_err(|_| refused())?;
+        Self::from_parts(at, store, id).map_err(|_| refused())
+    }
+
+    /// How a source sorts against this cursor, for the page after it.
+    ///
+    /// # Arguments
+    /// * `source` - the source's store name, `""` for the account database.
+    ///
+    /// # Returns
+    /// 1 when a source's entries at this cursor's time all come after it
+    /// (the source's name sorts before the cursor's, so every tie is
+    /// older), 0 when the id decides, and -1 when none do.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "compares two strings, no I/O")
+    )]
+    fn ties_for(&self, source: &str) -> i32 {
+        match source.cmp(self.store.as_str()) {
+            std::cmp::Ordering::Less => 1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => -1,
+        }
+    }
+}
+
 /// The most entries one page holds.
 pub const MAX_PAGE: i64 = 500;
 
@@ -1500,10 +1969,10 @@ pub struct AuditQuery<'a> {
     pub since: Option<DateTime<Utc>>,
     /// Before this time.
     pub until: Option<DateTime<Utc>>,
-    /// Older than this entry id (the cursor). A team owner's request never
+    /// Older than this position (the cursor). A team owner's request never
     /// sets it from the query string directly: the route opens the owner's
     /// sealed cursor into it (`http::api::audit::cursor`, issue #430).
-    pub after: Option<i64>,
+    pub after: Option<AuditCursor>,
     /// At most this many ([`AuditQuery::page_size`]).
     pub limit: i64,
 }
@@ -1546,8 +2015,8 @@ pub struct FilterText<'a> {
     pub since: Option<&'a str>,
     /// An RFC 3339 time.
     pub until: Option<&'a str>,
-    /// [`AuditQuery::after`].
-    pub after: Option<i64>,
+    /// [`AuditQuery::after`], as [`AuditCursor::to_plain`] writes it.
+    pub after: Option<&'a str>,
     /// [`AuditQuery::limit`]; [`DEFAULT_PAGE`] when absent.
     pub limit: Option<i64>,
 }
@@ -1562,8 +2031,8 @@ pub struct FilterText<'a> {
 /// The query; empty values are dropped.
 ///
 /// # Errors
-/// [`OkfError::InvalidPath`] (400) for an unknown action, or a time that is
-/// not RFC 3339, naming the filter.
+/// [`OkfError::InvalidPath`] (400) for an unknown action, a time that is
+/// not RFC 3339, or an `after` that is not a cursor, naming the filter.
 #[tracing::instrument(level = "debug", skip_all)]
 pub fn parse_filters<'a>(text: &FilterText<'a>) -> Result<AuditQuery<'a>, OkfError> {
     // `filter` turns `Some("")` into `None`: an empty form field filters nothing.
@@ -1596,7 +2065,9 @@ pub fn parse_filters<'a>(text: &FilterText<'a>) -> Result<AuditQuery<'a>, OkfErr
         target: given(text.target),
         since: time("since", text.since)?,
         until: time("until", text.until)?,
-        after: text.after,
+        after: given(text.after)
+            .map(AuditCursor::parse_plain)
+            .transpose()?,
         limit: text.limit.unwrap_or(DEFAULT_PAGE),
     })
 }
@@ -1648,18 +2119,24 @@ pub struct TargetView {
 /// One entry as a reader sees it.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct AuditRecord {
-    /// Its id, the admin's and provisioner's cursor; `None` for a team
+    /// Its id in its source, for an admin or provisioner; `None` for a team
     /// owner, whose payload then has no `id` key at all (issue #430): ids
-    /// are one global sequence, so the gaps between an owner's entries
-    /// would show how much every other team did in between.
+    /// are sequences, so the gaps between an owner's entries would show how
+    /// much every other team did in between. An id is only unique with
+    /// [`AuditRecord::store`]: each store numbers its own entries.
     // `skip_serializing_if` leaves the key out of the JSON when it is `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<i64>,
-    /// Its id for the server's own use: the next page's cursor, which the
-    /// owner routes seal (`http::api::audit::cursor`) before an owner sees
-    /// it. Never serialized, in any view.
+    /// The store the entry is on, for an admin or provisioner; `None` for
+    /// the account database and for a team owner (store names are the
+    /// operator's).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store: Option<String>,
+    /// Its position for the server's own use: the next page's cursor, which
+    /// the owner routes seal (`http::api::audit::cursor`) before an owner
+    /// sees it. Never serialized, in any view.
     #[serde(skip)]
-    pub cursor: i64,
+    pub cursor: AuditCursor,
     /// When (`2026-11-13T12:00:00Z`).
     pub at: String,
     /// The action.
@@ -1686,14 +2163,99 @@ pub struct AuditRecord {
 /// records here.
 pub const OWNER_REDACTED: &[(&str, &[&str])] = &[("catalog.unlocked", &["reason"])];
 
-/// The entries a viewer may read, newest first.
+/// The filters and the viewer, as [`list`] hands them to each source.
+struct ViewScope<'a> {
+    /// An owner's `audit_teams` id: the one team an entry must belong to.
+    scope: Option<i64>,
+    /// An admin's or provisioner's team filter, by name.
+    team_name: Option<&'a str>,
+    /// An owner's `teams.id` (for the member-IP rule).
+    team_id: Option<&'a str>,
+    /// A provisioner's key id: only the entries it wrote.
+    credential: Option<&'a str>,
+    /// Whether an owner reads (operator staff are redacted).
+    owner: bool,
+}
+
+impl<'a> ViewScope<'a> {
+    /// What the viewer and the query ask of every source.
+    ///
+    /// # Arguments
+    /// * `viewer` - who reads.
+    /// * `query` - the filters.
+    ///
+    /// # Returns
+    /// The scope.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "maps a value, no I/O")
+    )]
+    fn of(viewer: &'a Viewer, query: &AuditQuery<'a>) -> Self {
+        // `scope`: the one audit team an owner's entries must belong to.
+        let (scope, team_name, team_id, credential) = match viewer {
+            Viewer::Admin => (None, query.team, None, None),
+            Viewer::Owner {
+                team_id,
+                audit_team,
+            } => (Some(*audit_team), None, Some(team_id.as_str()), None),
+            Viewer::Credential(id) => (None, query.team, None, Some(id.as_str())),
+        };
+        Self {
+            scope,
+            team_name,
+            team_id,
+            credential,
+            owner: matches!(viewer, Viewer::Owner { .. }),
+        }
+    }
+}
+
+/// A cursor's three binds for one source: the time, the id, and how the
+/// source's name sorts against the cursor's ([`AuditCursor::ties_for`]).
+///
+/// # Arguments
+/// * `after` - the cursor, if any.
+/// * `source` - the source's store name, `""` for the account database.
+///
+/// # Returns
+/// `(None, 0, 0)` without a cursor.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "maps a value, no I/O")
+)]
+fn after_binds(after: Option<&AuditCursor>, source: &str) -> (Option<DateTime<Utc>>, i64, i32) {
+    match after {
+        Some(cursor) => (
+            DateTime::from_timestamp_micros(cursor.at_micros),
+            cursor.id,
+            cursor.ties_for(source),
+        ),
+        None => (None, 0, 0),
+    }
+}
+
+/// The entries a viewer may read, newest first, from the account database
+/// and every store.
+///
+/// The account database (the account actions, and every catalog event
+/// written before the split, plan decision P7) and each store's
+/// `catalog_audit_entries` (the catalog events since) are read
+/// concurrently, each with the same filters and limit, and merged by
+/// `(at, store, id)` descending ([`AuditCursor`]), so an entry appears
+/// once and a page never skips or repeats one. A store's rows hold the
+/// account database's person, credential and team ids as plain values:
+/// the filters that name an actor, team or target are turned into those
+/// ids first, and names are read from the account database after the
+/// merge, so deleting a user (which clears their name there) clears it in
+/// the store's entries too. Entries stay visible after their catalog is
+/// deleted or transferred: nothing here reads the catalog's store side.
 ///
 /// For an owner, the actor filter never matches an operator's entry and the
 /// target filter never matches a hidden (operator) person or credential, so
 /// neither can reveal who operator staff are.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `stores` - the account database and the stores.
 /// * `viewer` - who reads.
 /// * `query` - the filters.
 /// * `labels` - the lookup that labels catalog and shared-team targets.
@@ -1703,10 +2265,12 @@ pub const OWNER_REDACTED: &[(&str, &[&str])] = &[("catalog.unlocked", &["reason"
 /// anything (a malformed team name, a NUL) matches nothing, without SQL.
 ///
 /// # Errors
-/// [`OkfError::Database`].
+/// [`OkfError::Database`]; [`OkfError::StoreUnavailable`] when a store
+/// cannot be read: a page that silently left a store out would hide
+/// entries and skip them for good once the cursor passed their time.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.list"))]
 pub async fn list(
-    pool: &PgPool,
+    stores: &Stores,
     viewer: &Viewer,
     query: &AuditQuery<'_>,
     labels: &LabelLookup,
@@ -1723,31 +2287,18 @@ pub async fn list(
     if unmatchable {
         return Ok(Vec::new());
     }
-    // `scope`: the one audit team an owner's entries must belong to.
-    let (scope, team_name, team_id, credential) = match viewer {
-        Viewer::Admin => (None, query.team, None, None),
-        Viewer::Owner {
-            team_id,
-            audit_team,
-        } => (Some(*audit_team), None, Some(team_id.as_str()), None),
-        Viewer::Credential(id) => (None, query.team, None, Some(id.as_str())),
-    };
-    let owner = matches!(viewer, Viewer::Owner { .. });
-    let rows = sqlx::query_as::<_, ListedRow>(LIST_SQL)
-        .bind(scope)
-        .bind(query.action.map(Action::as_str))
-        .bind(query.actor)
-        .bind(query.target)
-        .bind(query.since)
-        .bind(query.until)
-        .bind(query.after)
-        .bind(credential)
-        .bind(team_id)
-        .bind(owner)
-        .bind(query.page_size())
-        .bind(team_name)
-        .fetch_all(pool)
-        .await?;
+    let scope = ViewScope::of(viewer, query);
+    // Both reads at once: the account database, and the stores.
+    let (account, stored) = tokio::try_join!(
+        account_rows(stores.accounts(), &scope, query),
+        store_rows(stores, &scope, query),
+    )?;
+    let mut rows = account;
+    rows.extend(stored);
+    // Newest first by the view's order; each source is already in it, so
+    // the first `page_size` of the union are the page.
+    rows.sort_unstable_by(|a, b| (b.at, &b.store, b.id).cmp(&(a.at, &a.store, a.id)));
+    rows.truncate(usize::try_from(query.page_size()).unwrap_or(usize::MAX));
     // The labels of this page's catalog and team targets, read together.
     let mut wanted = Wanted::default();
     for row in &rows {
@@ -1761,8 +2312,281 @@ pub async fn list(
     let labels = labels.labels_for(&wanted).await?;
     Ok(rows
         .into_iter()
-        .map(|row| row.into_record(owner, &labels))
+        .map(|row| row.into_record(scope.owner, &labels))
         .collect())
+}
+
+/// The account database's page: [`LIST_SQL`].
+///
+/// # Arguments
+/// * `accounts` - the account database.
+/// * `scope` - the viewer's scope.
+/// * `query` - the filters.
+///
+/// # Returns
+/// At most one page of rows, newest first, with `store` empty.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn account_rows(
+    accounts: AccountDb,
+    scope: &ViewScope<'_>,
+    query: &AuditQuery<'_>,
+) -> Result<Vec<ListedRow>, OkfError> {
+    let (after_at, after_id, ties) = after_binds(query.after.as_ref(), "");
+    Ok(sqlx::query_as::<_, ListedRow>(LIST_SQL)
+        .bind(scope.scope)
+        .bind(query.action.map(Action::as_str))
+        .bind(query.actor)
+        .bind(query.target)
+        .bind(query.since)
+        .bind(query.until)
+        .bind(after_at)
+        .bind(scope.credential)
+        .bind(scope.team_id)
+        .bind(scope.owner)
+        .bind(query.page_size())
+        .bind(scope.team_name)
+        .bind(after_id)
+        .bind(ties)
+        .fetch_all(accounts.executor())
+        .await?)
+}
+
+/// The account ids a store's rows are filtered by: what the filters that
+/// name an actor, team or target stand for in `audit_people`,
+/// `audit_credentials` and `audit_teams`, which a store cannot join.
+#[derive(Debug, Default, sqlx::FromRow)]
+struct FilterIds {
+    /// Every audit team that had the team filter's name.
+    teams: Vec<i64>,
+    /// The people the actor filter names.
+    actor_people: Vec<i64>,
+    /// The credentials the actor filter names (by id or label).
+    actor_credentials: Vec<i64>,
+    /// The people the target filter names.
+    target_people: Vec<i64>,
+    /// The provisioner's own credential.
+    viewer_credentials: Vec<i64>,
+}
+
+/// Turns the filters into account ids, in one statement.
+///
+/// # Arguments
+/// * `accounts` - the account database.
+/// * `scope` - the viewer's scope.
+/// * `query` - the filters.
+///
+/// # Returns
+/// The ids; empty vectors for a filter that is not set or names nobody.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn filter_ids(
+    accounts: &AccountDb,
+    scope: &ViewScope<'_>,
+    query: &AuditQuery<'_>,
+) -> Result<FilterIds, OkfError> {
+    if scope.team_name.is_none()
+        && scope.credential.is_none()
+        && query.actor.is_none()
+        && query.target.is_none()
+    {
+        return Ok(FilterIds::default());
+    }
+    Ok(sqlx::query_as::<_, FilterIds>(
+        "SELECT ARRAY(SELECT t.id FROM audit_teams t \
+                      LEFT JOIN audit_people p ON p.id = t.person_id \
+                      WHERE t.name = $1::text OR p.name = $1::text) AS teams, \
+                ARRAY(SELECT id FROM audit_people WHERE name = $2::text) AS actor_people, \
+                ARRAY(SELECT id FROM audit_credentials \
+                      WHERE credential_id = $2::text OR label = $2::text) AS actor_credentials, \
+                ARRAY(SELECT id FROM audit_people WHERE name = $3::text) AS target_people, \
+                ARRAY(SELECT id FROM audit_credentials \
+                      WHERE credential_id = $4::text) AS viewer_credentials",
+    )
+    .bind(scope.team_name)
+    .bind(query.actor)
+    .bind(query.target)
+    .bind(scope.credential)
+    .fetch_one(accounts.executor())
+    .await?)
+}
+
+/// One row of a store's `catalog_audit_entries`, before its names are read
+/// from the account database.
+#[derive(Debug, sqlx::FromRow)]
+struct StoredRow {
+    id: i64,
+    at: DateTime<Utc>,
+    action: String,
+    source: String,
+    actor_credential_ref: Option<i64>,
+    actor_person_id: Option<i64>,
+    actor_label: String,
+    actor_operator: bool,
+    client_ip: Option<String>,
+    target_name: String,
+    target_person_id: Option<i64>,
+    target_operator: bool,
+    teams: Vec<i64>,
+    details: serde_json::Value,
+    // Set by the reader that fetched it, not by the query.
+    #[sqlx(skip)]
+    store: String,
+}
+
+/// The stores' page: each store's newest entries (one page each, with the
+/// same filters), merged, cut to a page and given their names.
+///
+/// # Arguments
+/// * `stores` - the registry.
+/// * `scope` - the viewer's scope.
+/// * `query` - the filters.
+///
+/// # Returns
+/// At most one page of rows, in no particular order.
+///
+/// # Errors
+/// [`OkfError::Database`]; [`OkfError::StoreUnavailable`] for a store that
+/// cannot be reached.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn store_rows(
+    stores: &Stores,
+    scope: &ViewScope<'_>,
+    query: &AuditQuery<'_>,
+) -> Result<Vec<ListedRow>, OkfError> {
+    // A store holds the six catalog events only: any other action's filter
+    // matches nothing there.
+    if query
+        .action
+        .is_some_and(|action| !action.is_catalog_event())
+    {
+        return Ok(Vec::new());
+    }
+    let names = stores.all().await?;
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids = filter_ids(&stores.accounts(), scope, query).await?;
+    // Every store at once. `try_join_all` returns the first error and drops
+    // (cancels) the rest.
+    let pages = futures_util::future::try_join_all(
+        names
+            .iter()
+            .map(|name| stored_page(stores, name, scope, query, &ids)),
+    )
+    .await?;
+    let mut rows: Vec<StoredRow> = pages.into_iter().flatten().collect();
+    rows.sort_unstable_by(|a, b| (b.at, &b.store, b.id).cmp(&(a.at, &a.store, a.id)));
+    rows.truncate(usize::try_from(query.page_size()).unwrap_or(usize::MAX));
+    resolve_stored(&stores.accounts(), scope, &rows).await
+}
+
+/// One store's page of raw rows.
+///
+/// # Arguments
+/// * `stores` - the registry.
+/// * `name` - the store.
+/// * `scope` - the viewer's scope.
+/// * `query` - the filters.
+/// * `ids` - the account ids the filters stand for.
+///
+/// # Returns
+/// At most one page, newest first, each tagged with the store's name.
+///
+/// # Errors
+/// [`OkfError::StoreUnavailable`]; [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn stored_page(
+    stores: &Stores,
+    name: &StoreName,
+    scope: &ViewScope<'_>,
+    query: &AuditQuery<'_>,
+    ids: &FilterIds,
+) -> Result<Vec<StoredRow>, OkfError> {
+    let db = stores.get(name).await?;
+    let (after_at, after_id, ties) = after_binds(query.after.as_ref(), name.as_str());
+    let mut rows = sqlx::query_as::<_, StoredRow>(STORE_LIST_SQL)
+        .bind(scope.scope)
+        .bind(query.action.map(Action::as_str))
+        .bind(query.actor)
+        .bind(query.target)
+        .bind(query.since)
+        .bind(query.until)
+        .bind(after_at)
+        .bind(after_id)
+        .bind(ties)
+        .bind(scope.owner)
+        .bind(query.page_size())
+        // `team_name.map(..)`: no team filter binds NULL, which matches all.
+        .bind(scope.team_name.map(|_| &ids.teams))
+        .bind(&ids.actor_people)
+        .bind(&ids.actor_credentials)
+        .bind(&ids.target_people)
+        .bind(scope.credential.map(|_| &ids.viewer_credentials))
+        .fetch_all(db.executor())
+        .await
+        .map_err(|error| db.classify(error))?;
+    for row in &mut rows {
+        row.store = name.to_string();
+    }
+    Ok(rows)
+}
+
+/// Gives raw store rows their names, from the account database: the
+/// listing's own joins ([`listed_columns!`]), over the rows passed as JSON.
+///
+/// # Arguments
+/// * `accounts` - the account database.
+/// * `scope` - the viewer's scope.
+/// * `rows` - the raw rows.
+///
+/// # Returns
+/// The rows as the listing reads them.
+///
+/// # Errors
+/// [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn resolve_stored(
+    accounts: &AccountDb,
+    scope: &ViewScope<'_>,
+    rows: &[StoredRow],
+) -> Result<Vec<ListedRow>, OkfError> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let as_json: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            serde_json::json!({
+                "store": row.store,
+                "id": row.id,
+                "at": row.at,
+                "action": row.action,
+                "source": row.source,
+                "actor_credential_ref": row.actor_credential_ref,
+                "actor_person_id": row.actor_person_id,
+                "actor_label": row.actor_label,
+                "actor_operator": row.actor_operator,
+                "client_ip": row.client_ip,
+                "target_kind": "catalog",
+                "target_name": row.target_name,
+                "target_person_id": row.target_person_id,
+                "target_operator": row.target_operator,
+                "teams": row.teams,
+                "details": row.details,
+            })
+        })
+        .collect();
+    Ok(sqlx::query_as::<_, ListedRow>(RESOLVE_SQL)
+        .bind(scope.scope)
+        .bind(scope.team_id)
+        .bind(serde_json::Value::Array(as_json))
+        .fetch_all(accounts.executor())
+        .await?)
 }
 
 /// Every entry a viewer may read that the filters select, as JSON Lines
@@ -1770,11 +2594,11 @@ pub async fn list(
 /// /api/v1/audit/export` and `okf-mcp audit export`, so the two cannot
 /// differ. `query.after` is a starting cursor and `query.limit` is
 /// ignored: it reads [`MAX_PAGE`] entries at a time, moving the cursor to
-/// each full page's last id, until a page is not full. Retention bounds
+/// each full page's last entry, until a page is not full. Retention bounds
 /// the total.
 ///
 /// # Arguments
-/// * `pool` - the database.
+/// * `stores` - the account database and the stores.
 /// * `viewer` - who reads ([`list`] redacts for them).
 /// * `query` - the filters.
 /// * `labels` - the lookup [`list`] labels targets with.
@@ -1783,10 +2607,10 @@ pub async fn list(
 /// The lines, each ending in `\n` (empty when nothing matches).
 ///
 /// # Errors
-/// [`OkfError::Database`].
+/// As [`list`].
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "audit.export_lines"))]
 pub async fn export_lines(
-    pool: &PgPool,
+    stores: &Stores,
     viewer: &Viewer,
     query: &AuditQuery<'_>,
     labels: &LabelLookup,
@@ -1799,7 +2623,7 @@ pub async fn export_lines(
     };
     let mut lines = String::new();
     loop {
-        let page = list(pool, viewer, &page_query, labels).await?;
+        let page = list(stores, viewer, &page_query, labels).await?;
         for record in &page {
             // A record holds only strings, numbers and JSON values, so
             // serializing it cannot fail.
@@ -1807,22 +2631,24 @@ pub async fn export_lines(
             lines.push('\n');
         }
         match page.last() {
-            Some(last) if page.len() as i64 == MAX_PAGE => page_query.after = Some(last.cursor),
+            Some(last) if page.len() as i64 == MAX_PAGE => {
+                page_query.after = Some(last.cursor.clone());
+            }
             _ => return Ok(lines),
         }
     }
 }
 
-/// The listing. `$1` an owner's audit team id, `$2` action, `$3` actor,
-/// `$4` target, `$5` since, `$6` until, `$7` cursor, `$8` credential, `$9`
-/// the owner's `teams.id`, `$10` owner view, `$11` limit, `$12` a team
-/// name (every audit team that had it, a personal team by its person).
-/// Newest first is `ORDER BY id DESC`, the primary key. The target filter's
-/// `target_name` and `tt.name` branches need no operator guard: they hold
-/// only catalog, setting and unlock names and shared teams' names (a
-/// personal team's `name` is NULL), never a person's.
-const LIST_SQL: &str = "\
-    SELECT e.id, e.at, e.action, e.source, e.actor_operator, \
+/// The listing's select list, as a macro so `concat!` can splice it into
+/// both queries that read it ([`LIST_SQL`] for the account database,
+/// [`RESOLVE_SQL`] for a store's rows): names are always read the same
+/// way. It reads the entry as `e` and needs the joins of [`listed_joins!`].
+/// `$scope` and `$team_id` name the bind parameters holding an owner's
+/// audit team and `teams.id`.
+macro_rules! listed_columns {
+    ($scope:literal, $team_id:literal) => {
+        concat!(
+            "e.id, e.at, e.action, e.source, e.actor_operator, \
            COALESCE(ac.credential_id, 'credential #' || ac.id) AS actor_credential, \
            COALESCE(ac.label, e.actor_label) AS actor_label, \
            ap.name AS actor_person, ap.display_name AS actor_display_name, \
@@ -1840,19 +2666,54 @@ const LIST_SQL: &str = "\
                  FROM unnest(e.teams) WITH ORDINALITY AS r (id, n) \
                  JOIN audit_teams t ON t.id = r.id \
                  LEFT JOIN audit_people p ON p.id = t.person_id \
-                 WHERE $1::bigint IS NULL OR r.id = $1 ORDER BY r.n) AS teams, \
-           e.details, c.requests, \
-           ($9::text IS NOT NULL AND EXISTS ( \
+                 WHERE ",
+            $scope,
+            "::bigint IS NULL OR r.id = ",
+            $scope,
+            " ORDER BY r.n) AS teams, \
+           e.details, \
+           (",
+            $team_id,
+            "::text IS NOT NULL AND EXISTS ( \
                SELECT 1 FROM audit_people p JOIN team_members m ON m.user_id = p.user_id \
-               WHERE p.id = e.actor_person_id AND m.team_id = $9)) AS actor_in_team \
-    FROM audit_entries e \
-    LEFT JOIN audit_credentials ac ON ac.id = e.actor_credential_ref \
-    LEFT JOIN audit_people ap ON ap.id = e.actor_person_id \
-    LEFT JOIN audit_people tp ON tp.id = e.target_person_id \
-    LEFT JOIN audit_teams tt ON tt.id = e.target_team_ref \
-    LEFT JOIN audit_people ttp ON ttp.id = tt.person_id \
-    LEFT JOIN audit_credentials tc ON tc.id = e.target_credential_ref \
-    LEFT JOIN audit_access_counts c ON c.entry_id = e.id \
+               WHERE p.id = e.actor_person_id AND m.team_id = ",
+            $team_id,
+            ")) AS actor_in_team"
+        )
+    };
+}
+
+/// The joins [`listed_columns!`] reads names through: the entry's actor,
+/// target and credentials in the account database's audit tables.
+macro_rules! listed_joins {
+    () => {
+        "LEFT JOIN audit_credentials ac ON ac.id = e.actor_credential_ref \
+         LEFT JOIN audit_people ap ON ap.id = e.actor_person_id \
+         LEFT JOIN audit_people tp ON tp.id = e.target_person_id \
+         LEFT JOIN audit_teams tt ON tt.id = e.target_team_ref \
+         LEFT JOIN audit_people ttp ON ttp.id = tt.person_id \
+         LEFT JOIN audit_credentials tc ON tc.id = e.target_credential_ref"
+    };
+}
+
+/// The account database's listing. `$1` an owner's audit team id, `$2`
+/// action, `$3` actor, `$4` target, `$5` since, `$6` until, `$7` the
+/// cursor's time, `$8` credential, `$9` the owner's `teams.id`, `$10` owner
+/// view, `$11` limit, `$12` a team name (every audit team that had it, a
+/// personal team by its person), `$13` the cursor's id and `$14` how this
+/// source's name sorts against the cursor's ([`AuditCursor::ties_for`]).
+/// Newest first is `ORDER BY at DESC, id DESC`, the view's order within one
+/// source. The target filter's `target_name` and `tt.name` branches need no
+/// operator guard: they hold only catalog, setting and unlock names and
+/// shared teams' names (a personal team's `name` is NULL), never a
+/// person's.
+const LIST_SQL: &str = concat!(
+    "SELECT ",
+    listed_columns!("$1", "$9"),
+    ", ''::text AS store, c.requests \
+     FROM audit_entries e ",
+    listed_joins!(),
+    " LEFT JOIN audit_access_counts c ON c.entry_id = e.id \
     WHERE ($1::bigint IS NULL OR e.teams @> ARRAY[$1]) \
       AND ($12::text IS NULL OR e.teams && ARRAY( \
            SELECT t.id FROM audit_teams t LEFT JOIN audit_people p ON p.id = t.person_id \
@@ -1865,16 +2726,65 @@ const LIST_SQL: &str = "\
                AND (tp.name = $4 OR ttp.name = $4 OR tc.credential_id = $4))) \
       AND ($5::timestamptz IS NULL OR e.at >= $5) \
       AND ($6::timestamptz IS NULL OR e.at < $6) \
-      AND ($7::bigint IS NULL OR e.id < $7) \
+      AND ($7::timestamptz IS NULL OR e.at < $7 \
+           OR (e.at = $7 AND ($14::int > 0 OR ($14::int = 0 AND e.id < $13::bigint)))) \
       AND ($8::text IS NULL OR ac.credential_id = $8) \
-    ORDER BY e.id DESC LIMIT $11";
+    ORDER BY e.at DESC, e.id DESC LIMIT $11"
+);
 
-/// One row of [`LIST_SQL`], before redaction.
+/// A store's listing, with the same filters as [`LIST_SQL`] translated to
+/// the account ids a store holds ([`FilterIds`]). `$1` an owner's audit
+/// team id, `$2` action, `$3` actor text, `$4` target text, `$5` since, `$6`
+/// until, `$7` the cursor's time, `$8` its id, `$9` how this store's name
+/// sorts against the cursor's, `$10` owner view, `$11` limit, `$12` the
+/// team filter's audit teams (NULL for no filter), `$13` the actor's
+/// people, `$14` its credentials, `$15` the target's people, `$16` a
+/// provisioner's credential (NULL for another viewer).
+const STORE_LIST_SQL: &str = "\
+    SELECT e.id, e.at, e.action, e.source, e.actor_credential_ref, e.actor_person_id, \
+           e.actor_label, e.actor_operator, host(e.client_ip) AS client_ip, e.target_name, \
+           e.target_person_id, e.target_operator, e.teams, e.details \
+    FROM catalog_audit_entries e \
+    WHERE ($1::bigint IS NULL OR e.teams @> ARRAY[$1]) \
+      AND ($12::bigint[] IS NULL OR e.teams && $12) \
+      AND ($2::text IS NULL OR e.action = $2) \
+      AND ($3::text IS NULL OR ((NOT $10 OR NOT e.actor_operator) \
+           AND (e.actor_person_id = ANY($13::bigint[]) \
+                OR e.actor_credential_ref = ANY($14::bigint[]) OR e.actor_label = $3))) \
+      AND ($4::text IS NULL OR e.target_name = $4 \
+           OR ((NOT $10 OR NOT e.target_operator) AND e.target_person_id = ANY($15::bigint[]))) \
+      AND ($5::timestamptz IS NULL OR e.at >= $5) \
+      AND ($6::timestamptz IS NULL OR e.at < $6) \
+      AND ($7::timestamptz IS NULL OR e.at < $7 \
+           OR (e.at = $7 AND ($9::int > 0 OR ($9::int = 0 AND e.id < $8::bigint)))) \
+      AND ($16::bigint[] IS NULL OR e.actor_credential_ref = ANY($16)) \
+    ORDER BY e.at DESC, e.id DESC LIMIT $11";
+
+/// Reads store rows' names from the account database: [`listed_columns!`]
+/// over the rows passed as JSON (`$3`), shaped like `audit_entries` rows
+/// plus their `store`. `$1` an owner's audit team id, `$2` the owner's
+/// `teams.id`. A store row's `id` is its own: it is never joined to
+/// `audit_access_counts`, whose entries are the account database's.
+const RESOLVE_SQL: &str = concat!(
+    "SELECT ",
+    listed_columns!("$1", "$2"),
+    ", e.store, NULL::bigint AS requests \
+     FROM jsonb_to_recordset($3::jsonb) AS e (store text, id bigint, at timestamptz, \
+         action text, source text, actor_credential_ref bigint, actor_person_id bigint, \
+         actor_label text, actor_operator boolean, client_ip inet, target_kind text, \
+         target_name text, target_person_id bigint, target_operator boolean, \
+         teams bigint[], details jsonb, target_team_ref bigint, target_credential_ref bigint) ",
+    listed_joins!()
+);
+
+/// One row of [`LIST_SQL`] or [`RESOLVE_SQL`], before redaction.
 // `FromRow` maps each selected column to the field of the same name.
 #[derive(Debug, sqlx::FromRow)]
 struct ListedRow {
     id: i64,
     at: DateTime<Utc>,
+    // The store the entry is on; empty for the account database.
+    store: String,
     action: String,
     source: String,
     actor_operator: bool,
@@ -2009,9 +2919,11 @@ impl ListedRow {
                 person: self.target_person,
             }
         };
+        let cursor = AuditCursor::new(self.at, &self.store, self.id);
         AuditRecord {
             id: (!owner).then_some(self.id),
-            cursor: self.id,
+            store: (!owner && !self.store.is_empty()).then_some(self.store),
+            cursor,
             at: crate::clock::format_timestamp(self.at),
             action: self.action,
             source: self.source,
@@ -2029,6 +2941,128 @@ impl ListedRow {
 #[cfg(test)]
 pub(crate) mod testing {
     use sqlx::PgPool;
+
+    use crate::stores::{PoolSettings, Stores};
+
+    /// A registry over `pool` for a test that holds only the account pool:
+    /// the `main` store is the account database itself.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "test helper")
+    )]
+    pub(crate) fn stores_of(pool: &PgPool) -> Stores {
+        Stores::new(
+            pool.clone(),
+            PoolSettings::from_config(&crate::config::Config::default()),
+        )
+    }
+
+    /// The registry of `db` with a second store, `shared-1`, in a database of
+    /// its own (migrated, on the same server and login): the tests of what
+    /// the view does across stores.
+    ///
+    /// # Returns
+    /// The registry and the second database, which the test keeps alive.
+    pub(crate) async fn with_second_store(
+        db: &crate::db::pg_support::TestDb,
+    ) -> (Stores, crate::db::pg_support::TestDb) {
+        crate::db::main_in_the_account_database(&db.pool).await;
+        let other = crate::db::test_db().await;
+        let options = other.pool.connect_options();
+        // The password in `scheme://user:password@host/db`.
+        let password = other
+            .url
+            .split("://")
+            .nth(1)
+            .and_then(|rest| rest.split('@').next())
+            .and_then(|credentials| credentials.split_once(':'))
+            .map(|(_, password)| password.to_string())
+            .unwrap_or_default();
+        sqlx::query(
+            "INSERT INTO stores (name, location_kind, host, port, database, \
+             credential_kind, credential_ref, created_at) \
+             VALUES ('shared-1', 'host', $1, $2, $3, 'env', 'SHARED_1_PASSWORD', now())",
+        )
+        .bind(options.get_host())
+        .bind(i32::from(options.get_port()))
+        .bind(options.get_database().expect("a database name"))
+        .execute(&db.pool)
+        .await
+        .expect("register the second store");
+        let stores = Stores::with_environment(
+            db.pool.clone(),
+            PoolSettings::from_config(&crate::config::Config::default()),
+            std::sync::Arc::new(move |name| {
+                (name == "SHARED_1_PASSWORD").then(|| password.clone())
+            }),
+        );
+        (stores, other)
+    }
+
+    /// Every catalog event of this action on the store `main`, oldest
+    /// first, with names read from the account database as the view reads
+    /// them.
+    pub(crate) async fn catalog_entries(pool: &PgPool, action: &str) -> Vec<RecordedEntry> {
+        /// A stored row, before its names are read.
+        #[derive(sqlx::FromRow)]
+        struct Stored {
+            source: String,
+            actor_label: String,
+            target_name: String,
+            actor_operator: bool,
+            actor_person_id: Option<i64>,
+            target_person_id: Option<i64>,
+            teams: Vec<i64>,
+            details: serde_json::Value,
+        }
+        let rows: Vec<Stored> = sqlx::query_as(
+            "SELECT source, actor_label, target_name, actor_operator, actor_person_id, \
+                    target_person_id, teams, details \
+             FROM catalog.catalog_audit_entries WHERE action = $1 ORDER BY id",
+        )
+        .bind(action)
+        .fetch_all(&crate::db::store_pool(pool))
+        .await
+        .expect("read the catalog audit entries");
+        let mut entries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let (actor, person) = (row.actor_person_id, row.target_person_id);
+            let name = |id: Option<i64>| async move {
+                match id {
+                    Some(id) => sqlx::query_scalar::<_, String>(
+                        "SELECT name FROM audit_people WHERE id = $1",
+                    )
+                    .bind(id)
+                    .fetch_optional(pool)
+                    .await
+                    .expect("read a person"),
+                    None => None,
+                }
+            };
+            let team_names: Vec<String> = sqlx::query_scalar(
+                "SELECT COALESCE(t.name, p.name) FROM unnest($1::bigint[]) WITH ORDINALITY AS r (id, n) \
+                 JOIN audit_teams t ON t.id = r.id LEFT JOIN audit_people p ON p.id = t.person_id \
+                 ORDER BY r.n",
+            )
+            .bind(&row.teams)
+            .fetch_all(pool)
+            .await
+            .expect("read the teams");
+            entries.push(RecordedEntry {
+                source: row.source,
+                actor_label: row.actor_label,
+                actor_operator: row.actor_operator,
+                actor_person: name(actor).await,
+                target_kind: "catalog".to_string(),
+                target: Some(row.target_name),
+                person: name(person).await,
+                teams: team_names,
+                details: row.details,
+                requests: None,
+            });
+        }
+        entries
+    }
 
     /// A credential's `audit_credentials` row as `(label, owner's user id)`,
     /// or `None` when it has none: what the create paths must leave behind
@@ -2104,8 +3138,13 @@ pub(crate) mod testing {
         }
     }
 
-    /// Every entry with this action, oldest first.
+    /// Every entry with this action, oldest first: from the store `main`
+    /// for a catalog event ([`super::Action::is_catalog_event`]), else from
+    /// the account database.
     pub(crate) async fn entries(pool: &PgPool, action: &str) -> Vec<RecordedEntry> {
+        if super::Action::parse(action).is_some_and(super::Action::is_catalog_event) {
+            return catalog_entries(pool, action).await;
+        }
         sqlx::query_as::<_, RecordedEntry>(
             "SELECT e.source, e.actor_label, e.actor_operator, ap.name AS actor_person, \
                     e.target_kind, \
@@ -2149,7 +3188,7 @@ mod tests {
         query: &AuditQuery<'_>,
     ) -> Result<Vec<AuditRecord>, OkfError> {
         let lookup = LabelLookup::new(pool.clone(), 100, std::time::Duration::from_secs(60));
-        list(pool, viewer, query, &lookup).await
+        list(&testing::stores_of(pool), viewer, query, &lookup).await
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2173,9 +3212,14 @@ mod tests {
         let lookup = LabelLookup::new(db.pool.clone(), 100, std::time::Duration::from_secs(60))
             .with_metrics(metrics);
 
-        let page = list(&db.pool, &Viewer::Admin, &AuditQuery::default(), &lookup)
-            .await
-            .unwrap();
+        let page = list(
+            &testing::stores_of(&db.pool),
+            &Viewer::Admin,
+            &AuditQuery::default(),
+            &lookup,
+        )
+        .await
+        .unwrap();
 
         let labelled = page
             .iter()
@@ -3500,7 +4544,7 @@ mod tests {
             .unwrap();
         read(1).await;
         read(2).await;
-        catalogs::delete(&db.pool, "main", true, &cli, now())
+        catalogs::delete_settled(&db.pool, "main", true, &cli, now())
             .await
             .unwrap();
         catalogs::create(&db.pool, &main(TEST_TEAM), &cli, now())
@@ -3645,9 +4689,19 @@ mod tests {
                     .len(),
             );
         }
-        let admin = list_plain(&db.pool, &Viewer::Admin, &AuditQuery::default())
-            .await
-            .unwrap();
+        // The fixture user's own entry is made at the real time, after every
+        // entry the test records at `now()`: the window leaves it out, so
+        // the newest entry is the last one recorded.
+        let admin = list_plain(
+            &db.pool,
+            &Viewer::Admin,
+            &AuditQuery {
+                until: Some(now() + TimeDelta::seconds(1)),
+                ..AuditQuery::default()
+            },
+        )
+        .await
+        .unwrap();
 
         assert_eq!(owner.len(), 4, "every entry is the team's");
         assert_eq!(owner[0].actor, ActorView::Operator);
@@ -3819,9 +4873,19 @@ mod tests {
         )
         .await
         .unwrap();
-        let admin = list_plain(&db.pool, &Viewer::Admin, &AuditQuery::default())
-            .await
-            .unwrap();
+        // The fixture user's own entry is made at the real time, after every
+        // entry the test records at `now()`: the window leaves it out, so
+        // the newest entry is the last one recorded.
+        let admin = list_plain(
+            &db.pool,
+            &Viewer::Admin,
+            &AuditQuery {
+                until: Some(now() + TimeDelta::seconds(1)),
+                ..AuditQuery::default()
+            },
+        )
+        .await
+        .unwrap();
 
         assert_eq!(owner.len(), 3);
         assert_eq!(owner[0].ip, None, "an operator, though a member");
@@ -3902,9 +4966,19 @@ mod tests {
         .await
         .unwrap();
 
-        let admin = list_plain(&db.pool, &Viewer::Admin, &AuditQuery::default())
-            .await
-            .unwrap();
+        // The fixture user's own entry is made at the real time, after every
+        // entry the test records at `now()`: the window leaves it out, so
+        // the newest entry is the last one recorded.
+        let admin = list_plain(
+            &db.pool,
+            &Viewer::Admin,
+            &AuditQuery {
+                until: Some(now() + TimeDelta::seconds(1)),
+                ..AuditQuery::default()
+            },
+        )
+        .await
+        .unwrap();
         let owner = list_plain(
             &db.pool,
             &owner_of(&db.pool, "family").await,
@@ -4065,7 +5139,7 @@ mod tests {
         let rest = list_plain(
             &db.pool,
             &Viewer::Admin,
-            &query(None, None, Some(first[1].cursor), 2),
+            &query(None, None, Some(first[1].cursor.clone()), 2),
         )
         .await
         .unwrap();
@@ -4156,3 +5230,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod catalog_tests;

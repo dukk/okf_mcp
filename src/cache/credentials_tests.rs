@@ -43,7 +43,7 @@ fn credentials_with(
     };
     // The ceilings of self-issued credentials are resolved against this
     // directory's rows; `apply_messages_of` applies each message to it too.
-    let directory = Arc::new(CatalogDirectory::new(
+    let directory = Arc::new(CatalogDirectory::for_tests(
         pool.clone(),
         100,
         ttl,
@@ -340,7 +340,7 @@ async fn a_user_load_overtaken_by_a_team_invalidation_is_not_cached() {
 async fn a_suspension_closes_the_catalog_for_every_cached_principal() {
     let test =
         crate::mcp::testing::app_with(&[("main", &[])], crate::config::Config::default()).await;
-    let pool = test.app.pool();
+    let pool = test.app.accounts().executor();
     let granted = ["main".to_string()];
     let (_, secret) = stored(pool, &new_key("writer", TEST_USER, &granted, false)).await;
     // Assembled before the suspension, and kept (a request in progress).
@@ -598,7 +598,7 @@ async fn a_catalog_created_again_under_its_name_is_not_reached_through_the_old_g
 
     // The grant goes with the catalog; the new `pg` was never granted.
     apply_messages_of(&db.pool, &caches, async {
-        catalogs::delete(&db.pool, "pg", true, &AuditActor::cli(), Utc::now())
+        catalogs::delete_settled(&db.pool, "pg", true, &AuditActor::cli(), Utc::now())
             .await
             .unwrap();
         catalog(&db.pool, "pg", TEST_TEAM).await;

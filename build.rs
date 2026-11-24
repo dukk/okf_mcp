@@ -1,7 +1,8 @@
 //! Build-time work:
 //! - rebuilds the crate when a migration is added or edited (`sqlx::migrate!`
-//!   embeds `migrations/` at compile time, and cargo would not notice a new
-//!   file);
+//!   embeds `migrations/accounts/` and `migrations/catalog/` at compile time,
+//!   and cargo would not notice a new file; a directory named here is
+//!   watched with everything under it);
 //! - embeds the web console (`src/http/ui/**`) as `$OUT_DIR/ui_assets.rs`, a
 //!   table of `include_bytes!` that `src/http/ui.rs` pastes in with `include!`;
 //! - embeds the mobile reader (`src/http/read/**`) the same way, as

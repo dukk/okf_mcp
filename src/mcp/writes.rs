@@ -1100,9 +1100,12 @@ mod tests {
             mismatch,
             OkfError::EditMismatch { matches: 0, .. }
         ));
-        let entries = changesets::entries(test.app.pool(), changeset_row(&test, &handle).await.id)
-            .await
-            .unwrap();
+        let entries = changesets::entries(
+            test.app.main_db().await.executor(),
+            changeset_row(&test, &handle).await.id,
+        )
+        .await
+        .unwrap();
         let paths: Vec<&str> = entries.iter().map(|entry| entry.path.as_str()).collect();
         assert_eq!(paths, ["a.md", "infra/ntp.md"]);
     }
@@ -1237,7 +1240,7 @@ mod bookkeeping_tests {
     /// The entry for `path` of the changeset `handle` names.
     async fn entry(test: &TestApp, handle: &str, path: &str) -> EntryRow {
         let row = changeset_row(test, handle).await;
-        changesets::entries(test.app.pool(), row.id)
+        changesets::entries(test.app.main_db().await.executor(), row.id)
             .await
             .unwrap()
             .into_iter()
@@ -1509,10 +1512,12 @@ mod bookkeeping_tests {
         assert_eq!(no_source.kind(), "Refused", "{no_source}");
         // `apply` rolls back on an op error: the changeset holds nothing.
         let row = changeset_row(&test, &handle).await;
-        assert!(changesets::entries(test.app.pool(), row.id)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            changesets::entries(test.app.main_db().await.executor(), row.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1773,7 +1778,7 @@ mod repair_tests {
         let imported = "---\nokf_version: \"0.2\"\n---\n# Imported\n";
         crate::invalidate::testing::applied(&test.app, async {
             crate::store::import::import(
-                test.app.pool(),
+                &test.app.main_db().await,
                 "pg",
                 crate::mcp::testing::files(&[("index.md", imported), ("log.md", "# Log\n")]),
                 &options,
@@ -2467,7 +2472,7 @@ mod folder_summary_tests {
     /// The entry for `path` of the changeset `handle` names.
     async fn entry(test: &TestApp, handle: &str, path: &str) -> crate::store::changesets::EntryRow {
         let row = changeset_row(test, handle).await;
-        changesets::entries(test.app.pool(), row.id)
+        changesets::entries(test.app.main_db().await.executor(), row.id)
             .await
             .unwrap()
             .into_iter()

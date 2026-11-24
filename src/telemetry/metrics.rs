@@ -1133,7 +1133,7 @@ impl Metrics {
                 let Some(app) = app.upgrade() else {
                     return;
                 };
-                let pool = app.pool();
+                let pool = app.accounts().executor();
                 let size = i64::from(pool.size());
                 // `size` and `num_idle` are read a moment apart, so idle can
                 // briefly exceed size; clamp, so used is never negative and

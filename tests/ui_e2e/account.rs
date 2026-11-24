@@ -777,7 +777,7 @@ pub(crate) async fn acme_with_owner_and_member(server: &TestServer) {
     .await
     .expect("add carol");
     crate::support::server::applied(&server.app, async {
-        okf_mcp::store::catalogs::create(
+        crate::support::stores::create_catalog(
             pool,
             &okf_mcp::store::catalogs::NewCatalog {
                 name: "acme-notes",

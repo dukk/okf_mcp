@@ -155,7 +155,9 @@ impl AppError {
             OkfError::LintFailed { .. } | OkfError::LimitExceeded { .. } => {
                 StatusCode::UNPROCESSABLE_ENTITY
             }
-            OkfError::Busy { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            OkfError::Busy { .. } | OkfError::StoreUnavailable { .. } => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             OkfError::InvalidPath { .. }
             | OkfError::FrontmatterParse { .. }
             | OkfError::SecretDetected { .. }
@@ -224,7 +226,7 @@ struct Health {
 /// The status and a [`Health`] body.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn healthz(State(app): State<Arc<App>>) -> Response {
-    let probe = sqlx::query("SELECT 1").execute(app.pool());
+    let probe = sqlx::query("SELECT 1").execute(app.accounts().executor());
     // `timeout` gives `Err` if the deadline passes first (waiting for a pool
     // connection included), else the query's own `Result`; only `Ok(Ok(_))`
     // means the database answered in time.
@@ -868,12 +870,15 @@ pub async fn serve_with(
         Arc::clone(&app),
         shutdown.clone(),
     ));
+    // The same for each separate store's own feed: a listener per opened
+    // store (Task 17), stopped with the store's pool or the shutdown.
+    app.stores().follow(Arc::downgrade(&app), shutdown.clone());
     let clock_checker = tokio::spawn(Arc::clone(&app).check_clock_until(shutdown.clone()));
     // The workers' one pool, shared by every worker this process runs.
     // `bool::then` runs the closure only for `true`, giving an `Option`.
     let worker_pool = options
         .worker
-        .then(|| crate::mail::queue::WorkerPool::new(app.pool()));
+        .then(|| crate::mail::queue::WorkerPool::new(app.accounts().executor()));
     // Each worker runs under a supervisor that enforces
     // `worker_shutdown_grace` from the moment `shutdown` is cancelled,
     // concurrently with the HTTP drain and the other joins below.
@@ -1282,6 +1287,26 @@ mod tests {
     }
 
     #[test]
+    fn store_unavailable_is_503_and_hides_the_store_name() {
+        let store = crate::stores::StoreName::parse("shared-1").unwrap();
+        let error = AppError(OkfError::store_unavailable(&store));
+
+        let status = error.status();
+        let body = error.0.to_json();
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"], "StoreUnavailable");
+        assert!(!error.0.is_internal());
+        assert!(!body.to_string().contains("shared-1"));
+        assert_eq!(
+            body["message"],
+            "the catalog's data is temporarily unavailable; retry later"
+        );
+        // The Display text (what a tool error shows) hides it too.
+        assert!(!error.0.to_string().contains("shared-1"));
+    }
+
+    #[test]
     fn an_unknown_user_or_team_is_a_404() {
         let error = AppError(OkfError::UnknownName {
             noun: "user",
@@ -1407,7 +1432,7 @@ mod tests {
         let before = product_name().await;
 
         settings::set(
-            test.app.pool(),
+            test.app.accounts().executor(),
             SettingKey::ProductName,
             "Acme Notes",
             &AuditActor::cli(),
@@ -1438,7 +1463,7 @@ mod tests {
         let (status, headers, before) = get_brand().await;
 
         settings::set(
-            test.app.pool(),
+            test.app.accounts().executor(),
             SettingKey::ProductName,
             "Acme Notes",
             &AuditActor::cli(),
@@ -1447,7 +1472,7 @@ mod tests {
         .await
         .unwrap();
         settings::set(
-            test.app.pool(),
+            test.app.accounts().executor(),
             SettingKey::SupportContact,
             "help@example.com",
             &AuditActor::cli(),
@@ -1457,7 +1482,7 @@ mod tests {
         .unwrap();
         crate::invalidate::testing::applied(&test.app, async {
             settings::set(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 SettingKey::FeedbackUrl,
                 "https://example.com/feedback",
                 &AuditActor::cli(),
@@ -1466,7 +1491,7 @@ mod tests {
             .await
             .unwrap();
             settings::set(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 SettingKey::DocsUrl,
                 "https://docs.example.com",
                 &AuditActor::cli(),
@@ -1476,7 +1501,7 @@ mod tests {
             .unwrap();
             // Not in the brand: only the setup redirect reads it.
             settings::set(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 SettingKey::OnboardingUrl,
                 "https://docs.example.com/start/",
                 &AuditActor::cli(),
@@ -1560,10 +1585,15 @@ mod tests {
         let router = router(Arc::clone(&test.app), &CancellationToken::new());
         // Hold every pool connection, so the probe waits for one (sqlx's own
         // acquire timeout is 30 s).
-        let size = test.app.pool().options().get_max_connections();
+        let size = test
+            .app
+            .accounts()
+            .executor()
+            .options()
+            .get_max_connections();
         let mut held = Vec::new();
         for _ in 0..size {
-            held.push(test.app.pool().acquire().await.unwrap());
+            held.push(test.app.accounts().executor().acquire().await.unwrap());
         }
 
         let started = std::time::Instant::now();
@@ -1589,7 +1619,7 @@ mod tests {
     async fn healthz_reports_an_unreachable_database_as_503() {
         let test = app_with(&[("pg", &[])], Config::default()).await;
         let router = router(Arc::clone(&test.app), &CancellationToken::new());
-        test.app.pool().close().await;
+        test.app.accounts().executor().close().await;
 
         let request = Request::get("/healthz")
             .body(Body::empty())

@@ -142,11 +142,11 @@ const CEILING_ROWS: &str = "\
     SELECT c.name AS catalog, bool_or(s.access = 'write') AS write \
     FROM (SELECT m.user_id, c.id AS catalog_id, c.member_access AS access \
           FROM team_members m JOIN catalogs c ON c.owner_team_id = m.team_id \
-          WHERE c.member_access <> 'none' \
+          WHERE c.member_access <> 'none' AND c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL \
           UNION ALL \
           SELECT e.user_id, e.catalog_id, e.access FROM user_catalogs e) s \
     JOIN catalogs c ON c.id = s.catalog_id \
-    WHERE s.user_id = $1 \
+    WHERE s.user_id = $1 AND c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL \
     GROUP BY c.name";
 
 /// The ceiling rows of the user with this id.
@@ -269,7 +269,7 @@ const NAMED_CEILING_ROWS: &str = "\
         UNION ALL \
         SELECT e.access FROM user_catalogs e \
         WHERE e.catalog_id = c.id AND e.user_id = $1) s \
-    WHERE c.name = ANY($2) \
+    WHERE c.name = ANY($2) AND c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL \
     GROUP BY c.name";
 
 /// One user's ceiling on the named catalogs, by id, read on the caller's
@@ -319,9 +319,12 @@ pub(crate) async fn ceiling_in(
 const HIGHEST_SQL: &str = "\
     SELECT EXISTS (SELECT 1 FROM team_members m \
                    JOIN catalogs c ON c.owner_team_id = m.team_id \
-                   WHERE m.user_id = $1 AND c.member_access = 'write') \
+                   WHERE m.user_id = $1 AND c.member_access = 'write' \
+                     AND c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL) \
         OR EXISTS (SELECT 1 FROM user_catalogs e \
-                   WHERE e.user_id = $1 AND e.access = 'write')";
+                   JOIN catalogs c ON c.id = e.catalog_id \
+                   WHERE e.user_id = $1 AND e.access = 'write' \
+                     AND c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL)";
 
 /// Whether any catalog of the user's ceiling is at `write`: a user's
 /// highest ceiling level, which `GET /whoami` shows as a console
@@ -367,6 +370,7 @@ const PAGE_SQL: &str = "\
           CROSS JOIN LATERAL ( \
               SELECT i.name, i.member_access FROM catalogs i \
               WHERE i.owner_team_id = m.team_id AND i.member_access <> 'none' \
+                AND i.provisioned_at IS NOT NULL AND i.deleted_at IS NULL \
                 AND i.name COLLATE \"C\" >= $2 AND i.name COLLATE \"C\" < $3 \
                 AND i.name COLLATE \"C\" > $4 \
               ORDER BY i.name COLLATE \"C\" LIMIT $5) o \
@@ -374,7 +378,7 @@ const PAGE_SQL: &str = "\
           UNION ALL \
           (SELECT c.name, e.access FROM user_catalogs e \
            JOIN catalogs c ON c.id = e.catalog_id \
-           WHERE e.user_id = $1 \
+           WHERE e.user_id = $1 AND c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL \
              AND c.name COLLATE \"C\" >= $2 AND c.name COLLATE \"C\" < $3 \
              AND c.name COLLATE \"C\" > $4 \
            ORDER BY c.name COLLATE \"C\" LIMIT $5)) s \
@@ -665,7 +669,8 @@ pub async fn change_member_access(
     // under its row lock, so this returns the value it replaced.
     let previous: Option<(i64, String, Option<String>)> = sqlx::query_as(
         "UPDATE catalogs c SET member_access = $2 \
-         FROM (SELECT id, member_access FROM catalogs WHERE name = $1 FOR UPDATE) old \
+         FROM (SELECT id, member_access FROM catalogs \
+               WHERE name = $1 AND provisioned_at IS NOT NULL AND deleted_at IS NULL FOR UPDATE) old \
          WHERE c.id = old.id RETURNING c.id, old.member_access, c.owner_team_id",
     )
     .bind(catalog)
@@ -719,11 +724,13 @@ pub async fn change_member_access(
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "ceiling.member_access"))]
 pub async fn member_access(pool: &PgPool, catalog: &str) -> Result<MemberAccess, OkfError> {
     check_names(None, catalog)?;
-    let stored: Option<String> =
-        sqlx::query_scalar("SELECT member_access FROM catalogs WHERE name = $1")
-            .bind(catalog)
-            .fetch_optional(pool)
-            .await?;
+    let stored: Option<String> = sqlx::query_scalar(
+        "SELECT member_access FROM catalogs \
+             WHERE name = $1 AND provisioned_at IS NOT NULL AND deleted_at IS NULL",
+    )
+    .bind(catalog)
+    .fetch_optional(pool)
+    .await?;
     let stored = stored.ok_or_else(|| unknown_catalog(catalog))?;
     decode_column(MemberAccess::parse(&stored), "catalogs.member_access")
 }
@@ -824,7 +831,8 @@ async fn read_catalog_locked(
         None => None,
     };
     let row: Option<(i64, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, member_access, owner_team_id FROM catalogs WHERE name = $1 FOR SHARE",
+        "SELECT id, member_access, owner_team_id FROM catalogs \
+         WHERE name = $1 AND provisioned_at IS NOT NULL AND deleted_at IS NULL FOR SHARE",
     )
     .bind(catalog)
     .fetch_optional(&mut *conn)
@@ -1290,11 +1298,13 @@ async fn begin_entitlement(
     // The catalog row under a share lock: a move to another team waits for
     // this change, and one that happened since the membership was read is
     // refused.
-    let row: Option<(i64, Option<String>)> =
-        sqlx::query_as("SELECT id, owner_team_id FROM catalogs WHERE name = $1 FOR SHARE")
-            .bind(catalog)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let row: Option<(i64, Option<String>)> = sqlx::query_as(
+        "SELECT id, owner_team_id FROM catalogs \
+             WHERE name = $1 AND provisioned_at IS NOT NULL AND deleted_at IS NULL FOR SHARE",
+    )
+    .bind(catalog)
+    .fetch_optional(&mut *tx)
+    .await?;
     let catalog_id = match row {
         Some((id, owner_team)) if owner_team.as_deref() == Some(team.as_str()) => id,
         _ => return Err(not_team_owner()),
@@ -1367,7 +1377,8 @@ pub(crate) async fn entitlements_in(
     let user_id = users::id_by_name(&mut *conn, user).await?;
     let rows: Vec<(String, String, DateTime<Utc>)> = sqlx::query_as(
         "SELECT c.name, e.access, e.created_at FROM user_catalogs e \
-         JOIN catalogs c ON c.id = e.catalog_id WHERE e.user_id = $1 ORDER BY c.name",
+         JOIN catalogs c ON c.id = e.catalog_id \
+         WHERE e.user_id = $1 AND c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL ORDER BY c.name",
     )
     .bind(&user_id)
     .fetch_all(&mut *conn)
@@ -1931,7 +1942,7 @@ mod tests {
         moved(pool, "member access", &mut last, &bob, lowered).await;
 
         // The entitlement to `extra` cascades with the catalog.
-        catalogs::delete(pool, "extra", false, &AuditActor::cli(), Utc::now())
+        catalogs::delete_settled(pool, "extra", false, &AuditActor::cli(), Utc::now())
             .await
             .unwrap();
         let shared_read = ceiling(&[("shared", Access::Read)]);
@@ -2402,6 +2413,49 @@ mod tests {
             by_id(&db.pool, &bob).await,
             ceiling(&[("shared", Access::Read)])
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owner_cannot_act_on_a_catalog_that_is_not_provisioned_yet() {
+        // Arrange: alice owns `shared`, bob is a member; the registry row
+        // has not been provisioned (plan Task 10b, decision P11).
+        let db = test_db().await;
+        family(&db.pool).await;
+        let (alice, bob) = (id(&db.pool, "alice").await, id(&db.pool, "bob").await);
+        sqlx::query("UPDATE catalogs SET provisioned_at = NULL WHERE name = 'shared'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        // Act
+        let entitled = owner_entitles(&db.pool, &alice, "bob", "shared", Access::Read).await;
+        let access = owner_sets(&db.pool, &alice, "shared", MemberAccess::None).await;
+
+        // Assert: the owner checks refuse it as they refuse an unknown
+        // catalog, and nothing was written.
+        assert!(
+            matches!(entitled, Err(OkfError::Forbidden { .. })),
+            "{entitled:?}"
+        );
+        assert!(
+            matches!(access, Err(OkfError::Forbidden { .. })),
+            "{access:?}"
+        );
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM user_catalogs WHERE user_id = $1")
+            .bind(&bob)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 0);
+
+        // Once provisioned, the same owner request succeeds.
+        sqlx::query("UPDATE catalogs SET provisioned_at = now() WHERE name = 'shared'")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        owner_entitles(&db.pool, &alice, "bob", "shared", Access::Read)
+            .await
+            .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -39,11 +39,12 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 use sqlx::migrate::Migrator;
-use sqlx::postgres::{PgConnection, PgPool, PgPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgConnection, PgPool, PgPoolOptions};
 use sqlx::Connection;
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::bollard::errors::Error as DockerError;
@@ -91,7 +92,74 @@ const POOL_SIZE: u32 = 8;
 /// The schema migrations, embedded here as in `okf_mcp::db::MIGRATOR` (this
 /// file cannot name that: it is `crate::db` in the library's unit tests and
 /// `okf_mcp::db` in the integration tests).
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations/accounts");
+
+/// The catalog store migrations, with their history in
+/// `catalog._sqlx_migrations`, as in `okf_mcp::db::CATALOG_MIGRATOR`.
+fn catalog_migrator() -> Migrator {
+    let mut migrator = sqlx::migrate!("./migrations/catalog");
+    migrator.dangerous_set_table_name("catalog._sqlx_migrations");
+    migrator
+}
+
+/// What `okf_mcp::db::migrate` does to the catalog schema after the account
+/// migrations: adopts the baseline (records it without running it: 0041
+/// and 0042 built the schema) and runs the later catalog migrations. It
+/// writes no `catalog.store_identity` row, unlike `migrate`, which writes
+/// `main`: a copy of the template is then free to be opened as any store
+/// (tests use a second migrated database as a `host` store), and the first
+/// store to open it writes its own name.
+///
+/// # Errors
+/// [`sqlx::Error`] if a migration fails.
+async fn adopt_catalog(connection: &mut PgConnection) -> Result<(), sqlx::Error> {
+    let migrator = catalog_migrator();
+    // `run_direct` with `skip = true` up to version 1: the baseline's
+    // history row alone. A database with no account migrations has no
+    // catalog schema to adopt.
+    migrator.run_direct(Some(1), &mut *connection, true).await?;
+    migrator.run_direct(None, &mut *connection, false).await?;
+    Ok(())
+}
+
+/// Runs the account, catalog (adoption) and apalis migrations on `pool`'s
+/// database, as `okf_mcp::db::migrate` does.
+///
+/// # Panics
+/// If a migration fails: a test environment problem.
+async fn migrate_in_place(pool: &PgPool) {
+    MIGRATOR.run(pool).await.expect("migrations apply");
+    let mut connection = pool.acquire().await.expect("a connection");
+    adopt_catalog(&mut connection)
+        .await
+        .expect("catalog migrations apply");
+    drop(connection);
+    apalis_migrator()
+        .run(pool)
+        .await
+        .expect("apalis migrations apply");
+}
+
+/// In [`StoreMode::Separate`], removes schema `catalog` (the tables the
+/// account migrations built) from the account database, so that a statement
+/// sent to the account pool instead of the store's fails with "relation does
+/// not exist" instead of reading nothing. Does nothing in
+/// [`StoreMode::Same`], where the account database is the store.
+///
+/// Production keeps the schema in a separated deployment's account database
+/// (release 3 removes it in a later migration), but nothing reads it there:
+/// every catalog statement goes to the store's pool.
+///
+/// # Panics
+/// If the statement fails: a test environment problem.
+async fn drop_account_catalog(connection: &mut PgConnection) {
+    if store_mode() == StoreMode::Separate {
+        sqlx::query("DROP SCHEMA catalog CASCADE")
+            .execute(connection)
+            .await
+            .expect("drop the account database's catalog schema");
+    }
+}
 
 /// apalis-postgres' migrations (schema `apalis`, history in
 /// `apalis._sqlx_migrations`), which `okf_mcp::db::migrate` runs after
@@ -119,6 +187,52 @@ pub struct TestDb {
 }
 
 impl TestDb {
+    /// A pool on the `main` store whose connections see only schema
+    /// `catalog`, as a store's pool does: for tests that call store-layer
+    /// functions with a bare pool. Lazy, with the same limit as
+    /// [`TestDb::pool`]. In [`StoreMode::Same`] the store is this database;
+    /// in [`StoreMode::Separate`] it is the second database ([`store_options`]).
+    pub fn store(&self) -> PgPool {
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(self.pool.options().get_max_connections())
+            .after_connect(|connection, _meta| {
+                Box::pin(async move {
+                    sqlx::query("SET search_path = catalog")
+                        .execute(connection)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .connect_lazy_with(store_options(&self.pool))
+    }
+
+    /// Creates one more store database on this test's server, empty and
+    /// migrated as a new store is, dropped with this [`TestDb`]. The caller
+    /// registers it (a `stores` row with the `env` credential
+    /// [`STORE_PASSWORD_VAR`], whose variable this sets).
+    ///
+    /// # Arguments
+    /// * `suffix` - lowercase letters and digits, unique among this test's
+    ///   store databases.
+    ///
+    /// # Returns
+    /// The database's name.
+    ///
+    /// # Panics
+    /// As [`TestDb::start`].
+    pub async fn extra_store_database(&self, suffix: &str) -> String {
+        let database = &self._database;
+        let name = format!("{}_x{suffix}", database.name);
+        create_store_database(&database.server_url, &name, database.container.is_some()).await;
+        set_store_password_once(&database.server_url);
+        database
+            .extra
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(name.clone());
+        name
+    }
+
     /// Creates an empty database (no migrations), for tests of migrating.
     ///
     /// # Panics
@@ -127,6 +241,20 @@ impl TestDb {
     /// a test environment problem, reported at once.
     pub async fn start() -> Self {
         Self::create(false).await
+    }
+
+    /// Creates a database migrated as production's release one leaves it:
+    /// the account database holds schema `catalog` (the store `main`) in
+    /// every [`StoreMode`], with no second database. For tests of the
+    /// account migrations' own schema and of the store `main` being the
+    /// account database.
+    ///
+    /// # Panics
+    /// As [`TestDb::start`], or if a migration fails.
+    pub async fn start_account_layout() -> Self {
+        let test_db = Self::create(false).await;
+        migrate_in_place(&test_db.pool).await;
+        test_db
     }
 
     /// Creates a migrated database, a copy of the server's template.
@@ -164,22 +292,258 @@ impl TestDb {
             .await
             .expect("connect to the test database");
         if migrated && container.is_some() {
-            MIGRATOR.run(&pool).await.expect("migrations apply");
-            apalis_migrator()
-                .run(&pool)
-                .await
-                .expect("apalis migrations apply");
+            migrate_in_place(&pool).await;
+            let mut connection = pool.acquire().await.expect("a connection");
+            drop_account_catalog(&mut connection).await;
         }
+        let (store_database, registry_key) = match migrated && store_mode() == StoreMode::Separate {
+            true => {
+                let (store, key) =
+                    separate_store(&server_url, &name, container.is_some(), &pool).await;
+                (Some(store), Some(key))
+            }
+            false => (None, None),
+        };
         Self {
             pool,
             url,
             _database: Database {
                 server_url,
                 name,
+                store_database,
+                registry_key,
+                extra: Mutex::new(Vec::new()),
                 container,
             },
         }
     }
+}
+
+/// Where the catalog tests keep catalog data (`OKF_TEST_STORE`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreMode {
+    /// The store `main` is the account database (the default).
+    Same,
+    /// The store `main` is a second database on the same server, registered
+    /// as a `host` store with the `env` credential kind, so a query that
+    /// reads the wrong database finds an empty table or none.
+    Separate,
+}
+
+/// The variable that picks the [`StoreMode`]: `same` (the default) or
+/// `separate`.
+pub const STORE_MODE_VAR: &str = "OKF_TEST_STORE";
+
+/// The variable that holds the second database's password (the `env`
+/// credential of the registered store).
+pub const STORE_PASSWORD_VAR: &str = "OKF_TEST_STORE_PASSWORD";
+
+/// The environment of a test registry that knows only the harness's own
+/// store credential: [`STORE_PASSWORD_VAR`] (set in `separate` mode, unset
+/// in `same` mode) and nothing else.
+pub fn harness_password(name: &str) -> Option<String> {
+    (name == STORE_PASSWORD_VAR)
+        .then(|| std::env::var(name).ok())
+        .flatten()
+}
+
+/// The mode `OKF_TEST_STORE` names.
+///
+/// # Panics
+/// On a value other than `same` or `separate`: a typo must not silently
+/// run the default mode.
+pub fn store_mode() -> StoreMode {
+    match std::env::var(STORE_MODE_VAR).as_deref() {
+        Err(_) | Ok("" | "same") => StoreMode::Same,
+        Ok("separate") => StoreMode::Separate,
+        Ok(other) => panic!("{STORE_MODE_VAR} must be `same` or `separate`, not {other:?}"),
+    }
+}
+
+/// The second database of each [`StoreMode::Separate`] test, by the account
+/// database's server and name ([`registry_key`]), for the helpers that derive
+/// a store handle from the account pool alone.
+static SEPARATE_STORES: Mutex<Option<HashMap<String, PgConnectOptions>>> = Mutex::new(None);
+
+/// The connection settings of the `main` store of the test whose account
+/// database `accounts` is connected to: the second database in
+/// [`StoreMode::Separate`], else the account database's own.
+///
+/// # Arguments
+/// * `accounts` - a pool on a test's account database.
+///
+/// # Returns
+/// Options (login included) for the store's database.
+pub fn store_options(accounts: &PgPool) -> PgConnectOptions {
+    let options = (*accounts.connect_options()).clone();
+    let registered = SEPARATE_STORES
+        .lock()
+        .expect("the store registry lock")
+        .as_ref()
+        .and_then(|stores| stores.get(&registry_key(&options)).cloned());
+    registered.unwrap_or(options)
+}
+
+/// The key of an account database in [`SEPARATE_STORES`]: its server (host
+/// and port) and its name. The name alone is not unique: every container of
+/// its own holds its account database as `postgres`.
+pub fn registry_key(accounts: &PgConnectOptions) -> String {
+    format!(
+        "{}:{}/{}",
+        accounts.get_host(),
+        accounts.get_port(),
+        accounts.get_database().unwrap_or_default()
+    )
+}
+
+/// Registers `store` as the `main` store of the account database `accounts`
+/// connects to.
+///
+/// # Returns
+/// The key to [`unregister_store`] it with.
+pub fn register_store(accounts: &PgConnectOptions, store: PgConnectOptions) -> String {
+    let key = registry_key(accounts);
+    SEPARATE_STORES
+        .lock()
+        .expect("the store registry lock")
+        .get_or_insert_with(HashMap::new)
+        .insert(key.clone(), store);
+    key
+}
+
+/// Removes the registration [`register_store`] made under `key`.
+pub fn unregister_store(key: &str) {
+    if let Some(stores) = SEPARATE_STORES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+    {
+        stores.remove(key);
+    }
+}
+
+/// A pool on the store `main` of the test whose account pool is `accounts`:
+/// for a test statement on schema `catalog`, which is a database of its own
+/// in [`StoreMode::Separate`]. Connects on first use; drop it when done.
+///
+/// # Arguments
+/// * `accounts` - a pool on a test's account database.
+pub fn store_pool(accounts: &PgPool) -> PgPool {
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect_lazy_with(store_options(accounts))
+}
+
+/// Makes the second database of a [`StoreMode::Separate`] test and registers
+/// it as the store `main` in the account database.
+///
+/// On the shared server the database is a copy of the store template; on a
+/// container of the test's own it is built in place. The `stores` row `main`
+/// becomes a `host` row naming it, with the `env` credential
+/// [`STORE_PASSWORD_VAR`]. The copy carries no identity row: the first open
+/// writes `main`.
+///
+/// # Returns
+/// The second database's name, for [`Database`] to drop, and its registry key.
+///
+/// # Panics
+/// If a statement fails: a test environment problem.
+async fn separate_store(
+    server_url: &str,
+    account_database: &str,
+    own_container: bool,
+    accounts: &PgPool,
+) -> (String, String) {
+    let store_name = format!("{account_database}_store");
+    create_store_database(server_url, &store_name, own_container).await;
+    let options = (*accounts.connect_options()).clone();
+    // The password of every test database is the server's: one value per
+    // process, set before the first registered store opens.
+    set_store_password_once(server_url);
+    sqlx::query(
+        "UPDATE stores SET location_kind = 'host', host = $1, port = $2, database = $3, \
+         credential_kind = 'env', credential_ref = $4 WHERE name = 'main'",
+    )
+    .bind(options.get_host())
+    .bind(i32::from(options.get_port()))
+    .bind(&store_name)
+    .bind(STORE_PASSWORD_VAR)
+    .execute(accounts)
+    .await
+    .expect("register the second database as the store main");
+    let key = register_store(&options, options.clone().database(&store_name));
+    (store_name, key)
+}
+
+/// Creates database `name` holding an empty, migrated store schema: a copy
+/// of the store template on the shared server, built in place on a container
+/// of the test's own.
+///
+/// # Panics
+/// If a statement fails: a test environment problem.
+async fn create_store_database(server_url: &str, name: &str, own_container: bool) {
+    if own_container {
+        create_database(server_url, name, None)
+            .await
+            .expect("create the store database");
+        let mut connection = PgConnection::connect(&format!("{server_url}/{name}"))
+            .await
+            .expect("connect to the store database");
+        build_store_schema(&mut connection)
+            .await
+            .expect("catalog migrations apply to the store");
+        connection
+            .close()
+            .await
+            .expect("close the store connection");
+    } else {
+        let template = format!("{}_store", shared_template(server_url).await);
+        create_database(server_url, name, Some(&template))
+            .await
+            .expect("create the store database");
+    }
+}
+
+/// Sets [`STORE_PASSWORD_VAR`] to the server URL's password, once per
+/// process. (Edition 2021: `set_var` is a safe call. It runs before the
+/// first store opens, and every test of the process sets the same value.)
+fn set_store_password_once(server_url: &str) {
+    static SET: std::sync::Once = std::sync::Once::new();
+    SET.call_once(|| std::env::set_var(STORE_PASSWORD_VAR, server_password(server_url)));
+}
+
+/// The password `server_url` logs in with, as the connection uses it: the
+/// URL's userinfo is percent-encoded, so `p%40ss` is the password `p@ss`.
+///
+/// # Returns
+/// The decoded password, or an empty string when the URL has none or does
+/// not parse.
+pub fn server_password(server_url: &str) -> String {
+    url::Url::parse(server_url)
+        .ok()
+        .and_then(|parsed| {
+            parsed.password().map(|encoded| {
+                percent_encoding::percent_decode_str(encoded)
+                    .decode_utf8_lossy()
+                    .into_owned()
+            })
+        })
+        .unwrap_or_default()
+}
+
+/// Creates schema `catalog` in an empty database and runs every catalog
+/// migration on it, as a new store gets them, without an identity row.
+async fn build_store_schema(connection: &mut PgConnection) -> Result<(), sqlx::Error> {
+    execute_ddl(connection, "CREATE SCHEMA catalog".to_string()).await?;
+    catalog_migrator()
+        .run_direct(None, &mut *connection, false)
+        .await?;
+    // The identity row is written by the first open, under the name the
+    // copy is registered as.
+    sqlx::query("DELETE FROM catalog.store_identity")
+        .execute(connection)
+        .await?;
+    Ok(())
 }
 
 /// A test's database; dropping it drops the database (on the shared server)
@@ -187,6 +551,12 @@ impl TestDb {
 struct Database {
     server_url: String,
     name: String,
+    /// The second database of a [`StoreMode::Separate`] test.
+    store_database: Option<String>,
+    /// The key of that store in [`SEPARATE_STORES`].
+    registry_key: Option<String>,
+    /// The databases [`TestDb::extra_store_database`] made.
+    extra: Mutex<Vec<String>>,
     /// The container of this test's own, when no server is shared.
     container: Option<ContainerAsync<Postgres>>,
 }
@@ -195,11 +565,26 @@ struct Database {
 // deterministic), including while a failed test unwinds.
 impl Drop for Database {
     fn drop(&mut self) {
+        if let Some(key) = &self.registry_key {
+            unregister_store(key);
+        }
         if self.container.is_some() {
             // The container's own `Drop` removes the whole server.
             return;
         }
         let (server_url, name) = (self.server_url.clone(), self.name.clone());
+        let databases: Vec<String> = self
+            .store_database
+            .iter()
+            .cloned()
+            .chain(
+                self.extra
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .iter()
+                    .cloned(),
+            )
+            .collect();
         // `drop` cannot `.await`, and blocking on the test's own runtime from
         // inside it would deadlock a single-threaded one, so the DROP runs on
         // a thread with a runtime of its own, joined before `drop` returns.
@@ -209,7 +594,13 @@ impl Drop for Database {
                 .build()
                 .map_err(|error| error.to_string())?;
             runtime
-                .block_on(drop_database(&server_url, &name))
+                .block_on(async {
+                    drop_database(&server_url, &name).await?;
+                    for store in &databases {
+                        drop_database(&server_url, store).await?;
+                    }
+                    Ok::<(), sqlx::Error>(())
+                })
                 .map_err(|error| error.to_string())
         })
         .join();
@@ -277,7 +668,17 @@ async fn shared_template(server_url: &str) -> String {
 /// version and checksum, so a schema change gets a template of its own.
 pub fn template_name() -> String {
     let mut hasher = Sha256::new();
-    for migration in MIGRATOR.iter().chain(apalis_migrator().iter()) {
+    // Names the layout of the templates too: a server that kept an older
+    // template without a store template builds a new one.
+    hasher.update(b"account-and-store-templates");
+    // The account template of `separate` mode has no schema `catalog`.
+    hasher.update([u8::from(store_mode() == StoreMode::Separate)]);
+    let catalog = catalog_migrator();
+    for migration in MIGRATOR
+        .iter()
+        .chain(catalog.iter())
+        .chain(apalis_migrator().iter())
+    {
         hasher.update(migration.version.to_le_bytes());
         hasher.update(&migration.checksum);
     }
@@ -302,7 +703,10 @@ pub fn migration_count() -> usize {
 /// The check and the build run under a session advisory lock, so of several
 /// processes racing, one builds and the rest wait, then find it complete. A
 /// template is marked complete (`IS_TEMPLATE`) only once migrated, so one
-/// whose builder was killed is dropped and built again.
+/// whose builder was killed is dropped and built again. Its store template
+/// (`{name}_store`) is marked first and the account template last: the
+/// account mark is the commit point, and a builder killed between the two
+/// leaves a marked store template, which the rebuild unmarks and drops.
 ///
 /// # Arguments
 /// * `server_url` - the server, with no database name.
@@ -328,7 +732,7 @@ pub async fn ensure_template(server_url: &str, name: &str) -> Result<bool, sqlx:
     let built = match complete {
         Some(true) => false,
         Some(false) => {
-            drop_database_on(&mut admin, name).await?;
+            drop_template_on(&mut admin, name).await?;
             build_template(&mut admin, server_url, name).await?;
             true
         }
@@ -349,17 +753,35 @@ async fn build_template(
     server_url: &str,
     name: &str,
 ) -> Result<(), sqlx::Error> {
+    // The store template (`{name}_store`: schema `catalog` alone, for the
+    // second database of `OKF_TEST_STORE=separate`) is complete before the
+    // account template is, so a complete account template has its store one.
+    let store_name = format!("{name}_store");
+    drop_template_on(admin, &store_name).await?;
+    execute_ddl(admin, format!("CREATE DATABASE {}", quoted(&store_name))).await?;
+    let mut store = PgConnection::connect(&format!("{server_url}/{store_name}")).await?;
+    build_store_schema(&mut store).await?;
+    store.close().await?;
     execute_ddl(admin, format!("CREATE DATABASE {}", quoted(name))).await?;
     let mut template = PgConnection::connect(&format!("{server_url}/{name}")).await?;
     MIGRATOR.run(&mut template).await?;
+    adopt_catalog(&mut template).await?;
+    drop_account_catalog(&mut template).await;
     apalis_migrator().run(&mut template).await?;
     // A copy needs the template to have no connections.
     template.close().await?;
-    execute_ddl(
-        admin,
-        format!("ALTER DATABASE {} IS_TEMPLATE true", quoted(name)),
-    )
-    .await
+    // Marked only now: the store first, the account last. The account mark
+    // is the commit point ([`ensure_template`] trusts nothing else), so a
+    // builder killed between the two leaves an unmarked account template and
+    // a marked store one, and the next build unmarks the store's to drop it.
+    for database in [&store_name, name] {
+        execute_ddl(
+            admin,
+            format!("ALTER DATABASE {} IS_TEMPLATE true", quoted(database)),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// A new test database name: [`DATABASE_PREFIX`], the creation time in Unix
@@ -453,6 +875,41 @@ pub async fn drop_database(server_url: &str, name: &str) -> Result<(), sqlx::Err
     let mut admin = connect_admin(server_url).await?;
     drop_database_on(&mut admin, name).await?;
     admin.close().await
+}
+
+/// Drops the template `name` and its store template (`{name}_store`) on
+/// `server_url`, unmarking each first; either already gone is fine.
+///
+/// The account template goes first, as its mark is the commit point
+/// [`ensure_template`] checks: stopped halfway, this leaves a state the next
+/// build recovers from.
+///
+/// # Errors
+/// If the server is unreachable or a statement fails.
+pub async fn drop_template(server_url: &str, name: &str) -> Result<(), sqlx::Error> {
+    let mut admin = connect_admin(server_url).await?;
+    drop_template_on(&mut admin, name).await?;
+    drop_template_on(&mut admin, &format!("{name}_store")).await?;
+    admin.close().await
+}
+
+/// As [`drop_database_on`], but first unmarks `name` if it is a template:
+/// PostgreSQL refuses to drop a database whose `IS_TEMPLATE` is true. Every
+/// drop in the template build and its recovery goes through here.
+///
+/// # Errors
+/// If a statement fails.
+async fn drop_template_on(admin: &mut PgConnection, name: &str) -> Result<(), sqlx::Error> {
+    let marked: Option<bool> =
+        sqlx::query_scalar("SELECT datistemplate FROM pg_database WHERE datname = $1")
+            .bind(name)
+            .fetch_optional(&mut *admin)
+            .await?;
+    if marked == Some(true) {
+        let statement = format!("ALTER DATABASE {} IS_TEMPLATE false", quoted(name));
+        execute_ddl(admin, statement).await?;
+    }
+    drop_database_on(admin, name).await
 }
 
 /// As [`drop_database`], over an open connection to the server.

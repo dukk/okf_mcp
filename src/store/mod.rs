@@ -8,6 +8,7 @@ pub mod audit;
 pub mod catalogs;
 pub mod ceiling;
 pub mod changesets;
+pub mod cleanups;
 pub mod documents;
 pub mod email_tokens;
 pub mod export;
@@ -28,6 +29,7 @@ pub mod server_keys;
 pub mod settings;
 pub mod sign_in_events;
 pub mod sign_in_methods;
+pub mod stores;
 pub mod teams;
 pub mod unassigned;
 pub mod unlocks;
@@ -78,6 +80,13 @@ pub(crate) fn decode_column<T>(parsed: Option<T>, column: &'static str) -> Resul
 /// * `table` - the table's name.
 #[cfg(test)]
 pub(crate) async fn drop_check_constraints(pool: &sqlx::PgPool, table: &str) {
+    // A table of schema `catalog` is on the store, a database of its own in
+    // `OKF_TEST_STORE=separate` mode.
+    let pool = &if table.starts_with("catalog.") {
+        crate::db::store_pool(pool)
+    } else {
+        pool.clone()
+    };
     // `contype = 'c'` is a CHECK; `conrelid` names the table.
     let names: Vec<String> = sqlx::query_scalar(
         "SELECT conname FROM pg_constraint WHERE contype = 'c' AND conrelid = $1::regclass",

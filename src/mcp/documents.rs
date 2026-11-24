@@ -1,8 +1,6 @@
 //! `get_concept` and `read_document`: one document, from the first selected
 //! catalog that has it (Decision 1).
 
-use std::sync::Arc;
-
 use axum::http::request::Parts;
 use rmcp::handler::server::tool::Extension;
 use rmcp::handler::server::wrapper::Parameters;
@@ -13,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog::CatalogState;
 use crate::error::OkfError;
-use crate::mcp::context::{is_broken_overlay, require_selected, Pinned, ToolContext};
+use crate::mcp::context::{is_broken_overlay, require_selected, Pinned, ReadSet, ToolContext};
 use crate::mcp::{reply, OkfServer};
 use crate::okf::outline::{Outline, OutlineHeading};
 use crate::okf::paths::{basename, escapes_root, normpath};
@@ -361,11 +359,11 @@ pub(crate) async fn get_concept(
 ) -> Result<Concept, OkfError> {
     let mut refused = None;
     let mut broken = None;
-    let (states, pinned) =
+    let (set, pinned) =
         read_set(ctx, params.catalog.as_deref(), params.changeset.as_deref()).await?;
-    for state in states {
+    for state in &set.states {
         // The pinned changeset's overlay in its own catalog, else published.
-        let Some(view) = view_or_note(ctx, &state, pinned.as_ref(), &mut broken).await? else {
+        let Some(view) = view_or_note(ctx, state, pinned.as_ref(), &mut broken).await? else {
             continue;
         };
         let snapshot = view.snapshot();
@@ -392,6 +390,11 @@ pub(crate) async fn get_concept(
             }
         }
     }
+    // An unreachable store before any "not found" (plan P3): the catalog
+    // behind it might have held the concept, so no later one answers.
+    if let Some(blocked) = set.blocked {
+        return Err(blocked);
+    }
     // A broken overlay first: the concept may be among its pending edits.
     Err(broken
         .or(refused)
@@ -407,20 +410,25 @@ pub(crate) async fn get_concept(
 /// * `changeset` - the call's `changeset` argument.
 ///
 /// # Returns
-/// The catalogs to read, in order, and the pinned changeset, if any.
+/// The catalogs to read, in order, up to the first whose store cannot be
+/// reached ([`ReadSet`]), and the pinned changeset, if any.
 ///
 /// # Errors
-/// A selection error; as [`ToolContext::pin`]; as [`require_selected`].
+/// A selection error; as [`ToolContext::pin`]; as [`require_selected`]
+/// (but when a catalog's store cannot be reached, the changeset's catalog
+/// may be behind it, so that failure is returned instead).
 #[tracing::instrument(level = "debug", skip_all)]
 async fn read_set(
     ctx: &ToolContext,
     catalog: Option<&str>,
     changeset: Option<&str>,
-) -> Result<(Vec<Arc<CatalogState>>, Option<Pinned>), OkfError> {
-    let states = ctx.read_set(catalog).await?;
+) -> Result<(ReadSet, Option<Pinned>), OkfError> {
+    let mut set = ctx.read_set(catalog).await?;
     let pinned = ctx.pin(changeset).await?;
-    require_selected(pinned.as_ref(), &states)?;
-    Ok((states, pinned))
+    if let Err(refused) = require_selected(pinned.as_ref(), &set.states) {
+        return Err(set.blocked.take().unwrap_or(refused));
+    }
+    Ok((set, pinned))
 }
 
 /// The call's view of one catalog of a read set, or `None` if its overlay
@@ -507,10 +515,10 @@ pub(crate) async fn read_document(
         });
     }
     let mut broken = None;
-    let (states, pinned) =
+    let (set, pinned) =
         read_set(ctx, params.catalog.as_deref(), params.changeset.as_deref()).await?;
-    for state in states {
-        let Some(view) = view_or_note(ctx, &state, pinned.as_ref(), &mut broken).await? else {
+    for state in &set.states {
+        let Some(view) = view_or_note(ctx, state, pinned.as_ref(), &mut broken).await? else {
             continue;
         };
         if let Some(doc) = view.snapshot().get(&path) {
@@ -521,6 +529,10 @@ pub(crate) async fn read_document(
                 text: doc.raw(),
             });
         }
+    }
+    // As for `get_concept`: an unreachable store comes before "not found".
+    if let Some(blocked) = set.blocked {
+        return Err(blocked);
     }
     Err(broken.unwrap_or(OkfError::NotFound { path: asked }))
 }

@@ -32,7 +32,9 @@ use sqlx::{PgConnection, Row};
 use crate::error::OkfError;
 use crate::maintenance::types::Actor;
 use crate::okf::analysis::secrets::scan_secrets;
+use crate::store::audit::{self, Action, CatalogEntry, RunCredential};
 use crate::store::changesets;
+use crate::stores::CatalogDb;
 
 #[cfg_attr(
     dylint_lib = "hyp_tracing",
@@ -92,6 +94,188 @@ async fn lock(
         .fetch_one(conn)
         .await?;
     Ok(())
+}
+
+/// The runs of one catalog that were running when a maintenance transaction
+/// took the catalog's locks, so the transaction can tell, before it commits,
+/// which of them it ended. A run that leaves `running` is recorded in the
+/// audit log as `catalog.maintenance_run` (M14 spec Part 6), in the same
+/// store transaction that ended it ([`RunWatch::commit`]), so the entry and
+/// the end of the run commit or roll back together.
+///
+/// Every maintenance transaction is serialized per catalog by [`lock`], so
+/// no other transaction ends a run between the watch and the commit.
+pub(super) struct RunWatch {
+    catalog_id: i64,
+    running: Vec<String>,
+    target: AuditTarget,
+}
+
+/// What a maintenance entry needs from the account database, read BEFORE
+/// the store transaction begins and held until it ends: the catalog's name
+/// and owner team, and the account transaction that resolves the ended
+/// runs' credential ids when the entry is written.
+///
+/// The account connection comes first and is kept while the store
+/// transaction runs, the acquisition order of plan Task 11 (issue #970,
+/// `CatalogDb::begin`): the store connection never waits for an account
+/// connection or row. The transaction only reads, and the store commits
+/// before it ends. An early return drops both, which rolls both back.
+pub(super) struct AuditTarget {
+    account_tx: sqlx::Transaction<'static, sqlx::Postgres>,
+    name: String,
+    owner_team_id: Option<String>,
+}
+
+impl AuditTarget {
+    /// Opens the account transaction and reads the catalog's name and owner
+    /// team.
+    ///
+    /// # Errors
+    /// [`OkfError::Refused`] if the catalog no longer exists;
+    /// [`OkfError::Database`].
+    #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "maintenance.audit_target", catalog_id = catalog_id))]
+    pub(super) async fn read(db: &CatalogDb, catalog_id: i64) -> Result<Self, OkfError> {
+        let mut account_tx = db.accounts().begin().await?;
+        let row: Option<(String, Option<String>)> =
+            sqlx::query_as("SELECT name, owner_team_id FROM catalogs WHERE id = $1")
+                .bind(catalog_id)
+                .fetch_optional(&mut *account_tx)
+                .await?;
+        let (name, owner_team_id) = row.ok_or_else(|| refused("the catalog no longer exists"))?;
+        Ok(Self {
+            account_tx,
+            name,
+            owner_team_id,
+        })
+    }
+}
+
+impl AuditTarget {
+    /// Reads the key's row `FOR KEY SHARE` in the account transaction, which
+    /// keeps it until the store commits: a deletion of the key waits.
+    ///
+    /// # Arguments
+    /// * `key_id` - the claiming key.
+    ///
+    /// # Returns
+    /// The key's id if the key exists, else `None`.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`].
+    #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "maintenance.lock_key"))]
+    pub(super) async fn lock_key(&mut self, key_id: &str) -> Result<Option<String>, OkfError> {
+        Ok(
+            sqlx::query_scalar("SELECT id FROM api_keys WHERE id = $1 FOR KEY SHARE")
+                .bind(key_id)
+                .fetch_optional(&mut *self.account_tx)
+                .await?,
+        )
+    }
+}
+
+/// A run that ended, with what its audit entry says.
+#[derive(Debug, sqlx::FromRow)]
+struct EndedRun {
+    id: String,
+    state: String,
+    at: DateTime<Utc>,
+    credential_id: String,
+    key_id: Option<String>,
+    findings: i64,
+}
+
+impl RunWatch {
+    /// Notes the catalog's running runs. Call it right after [`lock`].
+    ///
+    /// # Errors
+    /// [`OkfError::Database`].
+    #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "maintenance.watch_runs", catalog_id = catalog_id))]
+    pub(super) async fn open(
+        conn: &mut PgConnection,
+        catalog_id: i64,
+        target: AuditTarget,
+    ) -> Result<Self, OkfError> {
+        let running = sqlx::query_scalar(
+            "SELECT id FROM maintenance_runs WHERE catalog_id=$1 AND state='running'",
+        )
+        .bind(catalog_id)
+        .fetch_all(conn)
+        .await?;
+        Ok(Self {
+            catalog_id,
+            running,
+            target,
+        })
+    }
+
+    /// Records an audit entry for every run this transaction ended (and for
+    /// `inserted`, a run it created already ended), in the transaction
+    /// itself, then commits it and ends the account transaction.
+    ///
+    /// # Arguments
+    /// * `tx` - the maintenance transaction; consumed.
+    /// * `inserted` - the id of a run this transaction inserted, if any.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`]. An entry that cannot be written fails the
+    /// whole change: nothing commits.
+    #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "maintenance.commit", catalog_id = self.catalog_id))]
+    pub(super) async fn commit(
+        self,
+        mut tx: sqlx::Transaction<'static, sqlx::Postgres>,
+        inserted: Option<&str>,
+    ) -> Result<(), OkfError> {
+        let Self {
+            catalog_id,
+            running,
+            mut target,
+        } = self;
+        let mut watched = running;
+        watched.extend(inserted.map(str::to_string));
+        let ended: Vec<EndedRun> = sqlx::query_as(
+            "SELECT r.id, r.state, COALESCE(r.ended_at, r.deadline) AS at, r.credential_id, \
+                    r.key_id, \
+                    (SELECT count(*) FROM maintenance_findings f \
+                      WHERE f.catalog_id=r.catalog_id AND f.run_id=r.id) AS findings \
+             FROM maintenance_runs r \
+             WHERE r.catalog_id=$1 AND r.id = ANY($2) AND r.state <> 'running' \
+             ORDER BY r.created_at, r.id",
+        )
+        .bind(catalog_id)
+        .bind(&watched)
+        .fetch_all(&mut *tx)
+        .await?;
+        for run in &ended {
+            // The run's credential ids come from the account transaction
+            // opened before this one began; the entry goes to the store.
+            let credential = RunCredential {
+                credential_id: run.credential_id.clone(),
+                key_id: run.key_id.clone(),
+            };
+            let resolved = audit::resolve_run(
+                &mut target.account_tx,
+                &credential,
+                target.owner_team_id.as_deref(),
+            )
+            .await?;
+            let entry = CatalogEntry {
+                action: Action::CatalogMaintenanceRun,
+                catalog_id,
+                catalog: &target.name,
+                details: serde_json::json!({
+                    "run": run.id,
+                    "state": run.state,
+                    "findings": run.findings,
+                }),
+            };
+            audit::record_catalog(&mut tx, &resolved, &entry, run.at).await?;
+        }
+        tx.commit().await?;
+        // Read-only: ending it releases the connection.
+        target.account_tx.commit().await?;
+        Ok(())
+    }
 }
 
 #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "maintenance.replay"))]

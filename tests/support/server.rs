@@ -20,7 +20,7 @@ use okf_mcp::shared::Redis;
 use okf_mcp::store::audit::AuditActor;
 use okf_mcp::store::import::{import, ImportOptions, ImportScope};
 use okf_mcp::store::keys::{self, Access, Grants, NewKey};
-use okf_mcp::store::{catalogs, users};
+use okf_mcp::store::users;
 use okf_mcp::telemetry::metrics::Metrics;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
@@ -57,6 +57,17 @@ pub const OWNER: &str = "tester";
 /// If the migration or the create fails: a broken test setup.
 pub async fn migrate_with_owner(pool: &PgPool) {
     okf_mcp::db::migrate(pool).await.expect("migrations");
+    create_owner(pool).await;
+}
+
+/// Creates [`OWNER`] in a database that is already migrated.
+///
+/// # Arguments
+/// * `pool` - the migrated database.
+///
+/// # Panics
+/// If the create fails: a broken test setup.
+pub async fn create_owner(pool: &PgPool) {
     let owner = users::NewUser {
         name: OWNER,
         display_name: &okf_mcp::labels::DisplayName::default(),
@@ -269,6 +280,31 @@ impl TestServer {
         }
     }
 
+    /// Serves an existing, already migrated database, which this server then
+    /// owns: for tests that build the database themselves (an upgrade from
+    /// an older schema) and then need a running server on it.
+    ///
+    /// # Arguments
+    /// * `db` - the database, at the current schema.
+    /// * `config` - the server's settings.
+    ///
+    /// # Returns
+    /// The running server.
+    ///
+    /// # Panics
+    /// If the bind or the load fails.
+    pub async fn start_on(db: TestDb, config: Config) -> Self {
+        let (base, app, shutdown, served) =
+            serve_app(db.pool.clone(), move |_| config, false, None).await;
+        Self {
+            base,
+            app,
+            shutdown,
+            served,
+            db,
+        }
+    }
+
     async fn start_inner(
         catalogs_and_files: Vec<(&str, Files)>,
         make_config: impl FnOnce(&str) -> Config,
@@ -278,7 +314,7 @@ impl TestServer {
         let db = TestDb::start_migrated().await;
         migrate_with_owner(&db.pool).await;
         for (name, files) in catalogs_and_files {
-            catalogs::create(
+            super::stores::create_catalog(
                 &db.pool,
                 &okf_mcp::store::catalogs::NewCatalog {
                     name,
@@ -300,9 +336,14 @@ impl TestServer {
                 audit: &okf_mcp::store::audit::AuditActor::cli(),
                 now: Utc::now(),
             };
-            import(&db.pool, name, files, &options)
-                .await
-                .expect("import");
+            import(
+                &crate::support::stores::main_store(&db.pool),
+                name,
+                files,
+                &options,
+            )
+            .await
+            .expect("import");
         }
         let (base, app, shutdown, served) =
             serve_app(db.pool.clone(), make_config, mail_worker, redis).await;

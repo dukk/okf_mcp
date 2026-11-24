@@ -44,9 +44,14 @@ async fn publish(server: &TestServer, catalog: &str, entries: Files, actor: &str
         now: Utc::now(),
     };
     crate::support::server::applied(&server.app, async {
-        import(&server.db.pool, catalog, entries, &options)
-            .await
-            .expect("import");
+        import(
+            &crate::support::stores::main_store(&server.db.pool),
+            catalog,
+            entries,
+            &options,
+        )
+        .await
+        .expect("import");
     })
     .await;
 }
@@ -67,12 +72,17 @@ async fn server() -> (TestServer, String) {
     .await;
     let edited = ALPHA.replace("Nothing yet.", "Two settings.");
     publish(&server, "main", main_catalog(&edited, false), "editor").await;
-    sqlx::query(
-        "DELETE FROM revisions WHERE catalog_id = (SELECT id FROM catalogs WHERE name = 'empty')",
-    )
-    .execute(&server.db.pool)
-    .await
-    .expect("empty the history of `empty`");
+    // Two statements: the registry and the store are databases of their own
+    // in `OKF_TEST_STORE=separate` mode.
+    let empty: i64 = sqlx::query_scalar("SELECT id FROM catalogs WHERE name = 'empty'")
+        .fetch_one(&server.db.pool)
+        .await
+        .expect("find `empty`");
+    sqlx::query("DELETE FROM catalog.revisions WHERE catalog_id = $1")
+        .bind(empty)
+        .execute(&server.db.store())
+        .await
+        .expect("empty the history of `empty`");
     let key = server
         .key(
             "recent-reader",
@@ -100,9 +110,14 @@ async fn add_late(pool: &sqlx::PgPool, app: &std::sync::Arc<okf_mcp::app::App>) 
         now: Utc::now(),
     };
     crate::support::server::applied(app, async {
-        import(pool, "main", entries, &options)
-            .await
-            .expect("import late.md");
+        import(
+            &crate::support::stores::main_store(pool),
+            "main",
+            entries,
+            &options,
+        )
+        .await
+        .expect("import late.md");
     })
     .await;
 }

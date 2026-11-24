@@ -1,7 +1,8 @@
 //! Tests of the test-database helper itself (`tests/support/pg.rs`): the
 //! migrated template is built once however many processes race for it, a
-//! half-built one is rebuilt, a killed run's databases are dropped by a later
-//! one, and a dropped `TestDb` drops its database.
+//! half-built one is rebuilt (also one killed between its two marks), a
+//! killed run's databases are dropped by a later one, and a dropped `TestDb`
+//! drops its database.
 //!
 //! Each test works on the shared server when `TEST_PG_URL` names one (as
 //! `just test` does), else on a container of its own.
@@ -33,13 +34,22 @@ async fn database_exists(server_url: &str, name: &str) -> bool {
     found.is_some()
 }
 
-/// Drops the template `name` (a template must be unmarked first).
+/// Drops the template `name` and its store template.
 async fn drop_template(server_url: &str, name: &str) {
+    pg::drop_template(server_url, name).await.unwrap();
+}
+
+/// Whether `name` exists on `server_url` marked a template.
+async fn is_template(server_url: &str, name: &str) -> bool {
     let mut admin = pg::connect_admin(server_url).await.unwrap();
-    let statement = format!("ALTER DATABASE {} IS_TEMPLATE false", pg::quoted(name));
-    pg::execute_ddl(&mut admin, statement).await.unwrap();
+    let marked: Option<bool> =
+        sqlx::query_scalar("SELECT datistemplate FROM pg_database WHERE datname = $1")
+            .bind(name)
+            .fetch_optional(&mut admin)
+            .await
+            .unwrap();
     admin.close().await.unwrap();
-    pg::drop_database(server_url, name).await.unwrap();
+    marked == Some(true)
 }
 
 /// A template name of this test's own, so the race really builds one.
@@ -157,6 +167,35 @@ async fn a_half_built_template_is_dropped_and_rebuilt() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_build_killed_between_the_two_marks_is_rebuilt() {
+    // Arrange: the store template complete and marked, the account template
+    // created but unmarked, as a builder killed between the two marks
+    // leaves them. PostgreSQL refuses to drop the marked one as it is.
+    let (server_url, _container) = pg::server().await;
+    let template = own_template_name("marks");
+    let store = format!("{template}_store");
+    for name in [&template, &store] {
+        pg::create_database(&server_url, name, None).await.unwrap();
+    }
+    let mut admin = pg::connect_admin(&server_url).await.unwrap();
+    let statement = format!("ALTER DATABASE {} IS_TEMPLATE true", pg::quoted(&store));
+    pg::execute_ddl(&mut admin, statement).await.unwrap();
+    admin.close().await.unwrap();
+
+    // Act
+    let built = pg::ensure_template(&server_url, &template).await.unwrap();
+
+    // Assert: rebuilt, both marked, and a copy fully migrated.
+    assert!(built);
+    assert!(is_template(&server_url, &template).await);
+    assert!(is_template(&server_url, &store).await);
+    let applied = migrations_in_a_copy_of(&server_url, &template).await;
+    assert_eq!(applied, pg::migration_count() as i64);
+    drop_template(&server_url, &template).await;
+    assert!(!database_exists(&server_url, &store).await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_killed_runs_databases_are_dropped_and_fresh_ones_kept() {
     // Arrange: a database created two hours ago (a killed run's) and one
     // created now (a test still running).
@@ -229,4 +268,73 @@ fn the_template_name_is_stable_and_valid() {
     assert_eq!(name, pg::template_name());
     assert!(name.starts_with("okf_tpl_"));
     assert_eq!(name.len(), "okf_tpl_".len() + 16);
+}
+
+/// The password of a server URL is the decoded one, as the connection uses
+/// it: the store `main`'s `env` credential must equal it.
+#[test]
+fn the_server_password_is_percent_decoded() {
+    assert_eq!(
+        pg::server_password("postgres://tester:p%40ss@localhost:5432"),
+        "p@ss"
+    );
+    assert_eq!(
+        pg::server_password("postgres://postgres:postgres@127.0.0.1:5432"),
+        "postgres"
+    );
+    assert_eq!(pg::server_password("postgres://postgres@localhost"), "");
+    assert_eq!(pg::server_password("not a url"), "");
+}
+
+/// A lazy pool on `database` of the server at `port`: nothing connects.
+fn lazy_pool(port: u16, database: &str) -> sqlx::PgPool {
+    let options = sqlx::postgres::PgConnectOptions::new()
+        .host("db.example.internal")
+        .port(port)
+        .username("postgres")
+        .database(database);
+    sqlx::postgres::PgPoolOptions::new().connect_lazy_with(options)
+}
+
+/// Two account databases that share a name (every container names its own
+/// `postgres`) on distinct servers keep distinct stores, and dropping one
+/// leaves the other's registration.
+#[tokio::test]
+async fn stores_of_same_named_databases_on_distinct_servers_stay_apart() {
+    let (first, second) = (lazy_pool(15432, "postgres"), lazy_pool(15433, "postgres"));
+    let first_key = pg::register_store(
+        &first.connect_options(),
+        first
+            .connect_options()
+            .as_ref()
+            .clone()
+            .database("first_store"),
+    );
+    let second_key = pg::register_store(
+        &second.connect_options(),
+        second
+            .connect_options()
+            .as_ref()
+            .clone()
+            .database("second_store"),
+    );
+
+    assert_ne!(first_key, second_key);
+    assert_eq!(
+        pg::store_options(&first).get_database(),
+        Some("first_store")
+    );
+    assert_eq!(
+        pg::store_options(&second).get_database(),
+        Some("second_store")
+    );
+    assert_eq!(pg::store_options(&first).get_port(), 15432);
+
+    pg::unregister_store(&first_key);
+    assert_eq!(pg::store_options(&first).get_database(), Some("postgres"));
+    assert_eq!(
+        pg::store_options(&second).get_database(),
+        Some("second_store")
+    );
+    pg::unregister_store(&second_key);
 }

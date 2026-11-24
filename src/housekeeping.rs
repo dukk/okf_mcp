@@ -1,5 +1,6 @@
 //! Housekeeping as apalis jobs, run once per cluster (issue #693, folding in
-//! #356; M18 spec Decisions 15 and 16).
+//! #356; M18 spec Decisions 15 and 16), and once per store for the work on
+//! catalog data (catalog stores plan Task 16, issue #976).
 //!
 //! The pruning and the cluster-wide counts used to run in every replica's
 //! poll loop, so N replicas ran every delete N times and the work was
@@ -7,33 +8,58 @@
 //! [`QUEUE`]:
 //!
 //! 1. **Scheduling.** Every replica's ticker ([`tick_until`]) wakes once a
-//!    minute and, for each [`Task`], pushes the job of the task's current
+//!    minute and, for each [`Task`], pushes the jobs of the task's current
 //!    slot ([`schedule`]). A slot is the start of the task's cadence window,
-//!    as a Unix second. The job's idempotency key is `"<task>:<slot>"`. A
+//!    as a Unix second. A task has a cluster job ([`Task::runs_on_cluster`]),
+//!    keyed `"<task>:<slot>"`, and, for work on catalog data, one job per
+//!    store ([`Task::runs_per_store`]), keyed `"<task>:<store>:<slot>"`. The
+//!    stores are read from the `stores` table on every tick, so a store added
+//!    after start-up gets its jobs from the next tick on, opened or not. A
 //!    push first looks the key up and stops if the slot is scheduled (the
 //!    common case, which so attempts no insert and logs nothing in
 //!    Postgres); apalis-postgres's unique index on
 //!    `(job_type, idempotency_key)` turns the rare insert that loses a race
 //!    with another replica into a unique violation, which is ignored. Each
-//!    slot is therefore scheduled once in the cluster. A slot missed because every
-//!    replica was down is not caught up; the next slot does the same work.
+//!    slot is therefore scheduled once in the cluster, per store. A slot
+//!    missed because every replica was down is not caught up; the next slot
+//!    does the same work.
 //! 2. **Running.** Every replica runs a housekeeping worker
 //!    ([`spawn_worker`]) on the process's [`WorkerPool`]. apalis takes a job
 //!    with `FOR UPDATE SKIP LOCKED`, so whichever worker takes it runs it
 //!    alone. The worker polls every [`POLL_INTERVAL`] and opens no `LISTEN`
 //!    connection: one of the pool's [`crate::mail::queue::WORKER_POOL_SIZE`]
 //!    connections serves its fetches, acks and heartbeats. The tasks' own
-//!    deletes and counts run on the request pool, as the poll loop's did.
-//! 3. **Failures.** A failed task returns a plain error: apalis marks the job
+//!    deletes and counts run on the request pool, as the poll loop's did, or
+//!    on the store's pool.
+//! 3. **Per-store jobs** ([`run_on_store`]): `prune_changesets` (all of its
+//!    work), the store half of `prune_audit` ([`audit::prune_catalog`]) and
+//!    the open changeset count of `cluster_stats`. Each job touches one
+//!    store, so a store that is down fails its own jobs only. Every step is
+//!    bounded ([`crate::stores::bounded`]): the job's own statements run
+//!    under `lock_timeout` and `statement_timeout`, and the step, opening the
+//!    store included, under a `tokio` backstop. Two reads are bounded by the
+//!    backstop alone: the first open of a store runs its schema migrations
+//!    (whose statements may rightly take long, so they get no statement
+//!    bound; the registry's row read is bounded), and `prune_audit` reads
+//!    the settings through [`App::fresh_settings`], which has its own
+//!    timeout. No step holds a connection of one
+//!    database while it takes one of the other. A job whose store has no
+//!    `stores` row any more does nothing and succeeds (it is not retried);
+//!    a store the registry forgot ([`crate::stores::Stores::forget`], after
+//!    its row changed) is opened again by its next job, from the new row.
+//! 4. **Failures.** A failed task returns a plain error: apalis marks the job
 //!    `Failed`, the handler moves its `run_at` back by the mail queue's
 //!    backoff (30 s, doubling), and it is tried again, [`MAX_ATTEMPTS`] times
 //!    in all. Every task is idempotent, so a retry, or a job re-run after its
 //!    worker died, does no harm.
-//! 4. **Gauges.** The `cluster_stats` task writes the open changeset total
-//!    and the mail queue's depth to the one-row `cluster_stats` table
-//!    (migration `0024_cluster_stats.sql`). Each replica's ticker reads the
-//!    row once a minute into its gauges ([`refresh_gauges`]), so every
-//!    replica reports the same values and a scrape never queries Postgres.
+//! 5. **Gauges.** Each store's `cluster_stats` job writes its open changeset
+//!    count to `cluster_store_stats` (migration `0043_cluster_store_stats.sql`);
+//!    the cluster's job sums those rows, with the mail queue's depth, into the
+//!    one-row `cluster_stats` table (migration `0024_cluster_stats.sql`). A
+//!    store whose count fails keeps its last row, so the sum carries its last
+//!    known count. Each replica's ticker reads the row once a minute into its
+//!    gauges ([`refresh_gauges`]), so every replica reports the same values
+//!    and a scrape never queries Postgres.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -56,7 +82,11 @@ use crate::mail::queue::{
 use crate::store::oauth::{
     clients as oauth_clients, codes as sign_in_codes, tokens as oauth_tokens,
 };
-use crate::store::{audit, changesets, email_tokens, keys, sign_in_events, user_sessions};
+use crate::store::{
+    audit, catalogs, changesets, cleanups, email_tokens, keys, sign_in_events, user_sessions,
+};
+use crate::stores::bounded::{account_tx, backstop, is_timeout, store_tx, Limits, LIMITS};
+use crate::stores::{AccountDb, CatalogDb, StoreName};
 use crate::telemetry::metrics::{MailStatus, Outcome};
 use crate::telemetry::subscriber::{split_event, LOCAL_ONLY};
 
@@ -90,6 +120,11 @@ const UNIQUE_VIOLATION: &str = "23505";
 /// discarded (design "Session lifecycle").
 const EMPTY_CHANGESET_HOURS: i64 = 24;
 
+/// How old a half-created catalog must be before the `provision_catalogs`
+/// task looks at it: an efficiency filter that keeps it off creates still
+/// running. Safety does not depend on it (decision P9).
+const UNPROVISIONED_GRACE_SECONDS: i64 = 60;
+
 /// How long expired tokens and unredeemed codes are kept (for diagnosis).
 const OAUTH_RETENTION_DAYS: i64 = 7;
 
@@ -115,30 +150,43 @@ const FAILED_JOB_RETENTION_DAYS: i64 = 30;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Task {
-    /// Discards empty changesets unchanged for a day; every 5 minutes.
+    /// Discards empty changesets unchanged for a day, one job per store;
+    /// every 5 minutes.
     PruneChangesets,
     /// Revokes idle OAuth grants, then deletes expired tokens, codes,
     /// unbound clients, old sign-in events, expired emailed links, console
     /// sessions, old mail and housekeeping jobs and forwarded feedback;
     /// hourly.
     PruneOauth,
-    /// Deletes audit entries past `audit_retention_days`; daily.
+    /// Deletes audit entries past `audit_retention_days`: the account
+    /// database's in the cluster job, each store's catalog events in a job
+    /// of its own; daily.
     PruneAudit,
     /// Deletes the `apalis.workers` rows of stopped workers; hourly.
     PruneWorkers,
-    /// Counts the open changesets and the mail queue into `cluster_stats`;
-    /// every minute.
+    /// Counts each store's open changesets (a job per store, into
+    /// `cluster_store_stats`), and sums them with the mail queue into
+    /// `cluster_stats` (the cluster job); every minute.
     ClusterStats,
+    /// Finishes or removes catalogs whose create stopped half-way (plan
+    /// Task 10b, decision P9); every minute.
+    ProvisionCatalogs,
+    /// Settles the cleanup owed on every catalog store after a deletion on
+    /// the account database: a deleted catalog's data, a deleted key's open
+    /// changesets (plan P13, issue #972); every minute.
+    CleanupStores,
 }
 
 impl Task {
     /// Every task, in the order the ticker schedules them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::PruneChangesets,
         Self::PruneOauth,
         Self::PruneAudit,
         Self::PruneWorkers,
         Self::ClusterStats,
+        Self::ProvisionCatalogs,
+        Self::CleanupStores,
     ];
 
     /// The task's name: its idempotency-key prefix, its metric label and
@@ -153,19 +201,56 @@ impl Task {
             Self::PruneAudit => "prune_audit",
             Self::PruneWorkers => "prune_workers",
             Self::ClusterStats => "cluster_stats",
+            Self::ProvisionCatalogs => "provision_catalogs",
+            Self::CleanupStores => "cleanup_stores",
+        }
+    }
+
+    /// Whether the task has a cluster job each slot, keyed `"<task>:<slot>"`.
+    ///
+    /// # Returns
+    /// `false` only for a task whose work is all on the stores.
+    pub const fn runs_on_cluster(self) -> bool {
+        match self {
+            Self::PruneChangesets => false,
+            Self::PruneOauth
+            | Self::PruneAudit
+            | Self::PruneWorkers
+            | Self::ClusterStats
+            | Self::ProvisionCatalogs
+            | Self::CleanupStores => true,
+        }
+    }
+
+    /// Whether the task has a job for each store each slot, keyed
+    /// `"<task>:<store>:<slot>"`: the tasks that work on catalog data.
+    /// `cleanup_stores` is not one: its one job settles every store's rows,
+    /// each store contained (issue #972).
+    ///
+    /// # Returns
+    /// `true` for `prune_changesets`, `prune_audit` and `cluster_stats`.
+    pub const fn runs_per_store(self) -> bool {
+        match self {
+            Self::PruneChangesets | Self::PruneAudit | Self::ClusterStats => true,
+            Self::PruneOauth
+            | Self::PruneWorkers
+            | Self::ProvisionCatalogs
+            | Self::CleanupStores => false,
         }
     }
 
     /// How often the task runs in the cluster.
     ///
     /// # Returns
-    /// 5 minutes, an hour, a day, an hour or a minute.
+    /// 5 minutes, an hour, a day, an hour, or a minute.
     pub const fn cadence(self) -> Duration {
         match self {
             Self::PruneChangesets => Duration::from_secs(5 * 60),
             Self::PruneOauth | Self::PruneWorkers => Duration::from_secs(60 * 60),
             Self::PruneAudit => Duration::from_secs(24 * 60 * 60),
-            Self::ClusterStats => Duration::from_secs(60),
+            Self::ClusterStats | Self::ProvisionCatalogs | Self::CleanupStores => {
+                Duration::from_secs(60)
+            }
         }
     }
 
@@ -194,14 +279,83 @@ impl Task {
     }
 }
 
-/// The job: which task, for which slot. The slot is in the payload as well
-/// as the key, so a job's span and log lines can name it.
+/// The job: which task, for which slot, and on which store. The slot and
+/// the store are in the payload as well as the key, so a job's span and log
+/// lines can name them. The payload carries the store's name only, never
+/// catalog content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Housekeeping {
     /// The task to run.
     pub task: Task,
     /// The slot it was scheduled for ([`Task::slot_at`]).
     pub slot: i64,
+    /// The store a per-store job runs on; `None` for the cluster's job.
+    // `default`: a payload written before stores (no `store` key) reads as
+    // a cluster job; `skip_serializing_if`: a cluster job's payload is as it
+    // was. `StoreName` deserializes through `parse`, so a bad name is a
+    // payload error, not a store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store: Option<StoreName>,
+}
+
+impl Housekeeping {
+    /// The cluster job of `task` for `slot`.
+    ///
+    /// # Arguments
+    /// * `task` - the task.
+    /// * `slot` - its slot ([`Task::slot_at`]).
+    ///
+    /// # Returns
+    /// The job.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "builds a value")
+    )]
+    pub const fn cluster(task: Task, slot: i64) -> Self {
+        Self {
+            task,
+            slot,
+            store: None,
+        }
+    }
+
+    /// The job of `task` on `store` for `slot`.
+    ///
+    /// # Arguments
+    /// * `task` - the task.
+    /// * `store` - the store.
+    /// * `slot` - its slot ([`Task::slot_at`]).
+    ///
+    /// # Returns
+    /// The job.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "builds a value")
+    )]
+    pub const fn on_store(task: Task, store: StoreName, slot: i64) -> Self {
+        Self {
+            task,
+            slot,
+            store: Some(store),
+        }
+    }
+
+    /// The job's idempotency key: `"<task>:<slot>"` for a cluster job,
+    /// `"<task>:<store>:<slot>"` for a store's. A store name has no `:`, so
+    /// the two never collide.
+    ///
+    /// # Returns
+    /// The key.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "formats a value")
+    )]
+    pub fn key(&self) -> String {
+        match &self.store {
+            None => format!("{}:{}", self.task.as_str(), self.slot),
+            Some(store) => format!("{}:{store}:{}", self.task.as_str(), self.slot),
+        }
+    }
 }
 
 /// The error for a queue operation apalis refused (its own error type).
@@ -213,47 +367,60 @@ fn queue_error(error: impl std::fmt::Display) -> OkfError {
     }
 }
 
-/// Pushes `task`'s job for `slot` unless one exists. It first looks the
-/// idempotency key `"<task>:<slot>"` up (through apalis's unique index), so
-/// the common case, a slot another replica or an earlier tick already
-/// scheduled, attempts no insert and leaves no error in the Postgres log.
-/// Only two replicas racing for a new slot both get past the lookup: then
-/// the unique index makes the second push a unique violation, which is
-/// ignored. The push runs on the pool in its own statement, so the
-/// violation aborts nothing else.
+/// Pushes `job` unless one with its key ([`Housekeeping::key`]) exists. It
+/// first looks the key up (through apalis's unique index), so the common
+/// case, a slot another replica or an earlier tick already scheduled,
+/// attempts no insert and leaves no error in the Postgres log. Only two
+/// replicas racing for a new slot both get past the lookup: then the unique
+/// index makes the second push a unique violation, which is ignored. The
+/// lookup and the push run in a transaction of their own, bounded at the
+/// database by [`LIMITS`] (a lock held on the queue fails the push instead of
+/// holding the tick), so the violation aborts nothing else.
 ///
 /// # Arguments
-/// * `pool` - the database.
-/// * `task` - the task.
-/// * `slot` - its slot ([`Task::slot_at`]).
+/// * `pool` - the account database.
+/// * `job` - the job.
 ///
 /// # Returns
 /// `true` if this call created the job, `false` if the slot already had one.
 ///
 /// # Errors
 /// [`OkfError::Database`] or [`OkfError::Io`] if the insert fails for any
-/// other reason.
-#[tracing::instrument(level = "debug", skip_all, fields(okf.housekeeping.task = task.as_str()))]
-pub async fn schedule(pool: &PgPool, task: Task, slot: i64) -> Result<bool, OkfError> {
-    let key = format!("{}:{slot}", task.as_str());
-    let mut conn = pool.acquire().await?;
+/// other reason; `Busy` past the backstop.
+#[tracing::instrument(level = "debug", skip_all, fields(okf.housekeeping.task = job.task.as_str()))]
+pub async fn schedule(pool: &PgPool, job: &Housekeeping) -> Result<bool, OkfError> {
+    backstop(LIMITS, push_once(pool, job)).await
+}
+
+/// [`schedule`]'s body, without the backstop.
+///
+/// # Errors
+/// As [`schedule`].
+#[tracing::instrument(level = "trace", skip_all)]
+async fn push_once(pool: &PgPool, job: &Housekeeping) -> Result<bool, OkfError> {
+    let key = job.key();
+    let mut tx = account_tx(&AccountDb::new(pool.clone()), LIMITS.wait).await?;
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM apalis.jobs WHERE job_type = $1 AND idempotency_key = $2)",
     )
     .bind(QUEUE)
     .bind(&key)
-    .fetch_one(&mut *conn)
+    .fetch_one(&mut *tx)
     .await?;
     if exists {
         return Ok(false);
     }
-    let payload = serde_json::to_vec(&Housekeeping { task, slot }).map_err(queue_error)?;
-    let job = TaskBuilder::new(payload)
+    let payload = serde_json::to_vec(job).map_err(queue_error)?;
+    let task = TaskBuilder::new(payload)
         .max_attempts(MAX_ATTEMPTS)
         .idempotency_key(key)
         .build();
-    match push_tasks(&mut *conn, QUEUE, vec![job]).await {
-        Ok(()) => Ok(true),
+    // A failed push leaves `tx` aborted; dropping it rolls it back.
+    match push_tasks(&mut *tx, QUEUE, vec![task]).await {
+        Ok(()) => {
+            tx.commit().await?;
+            Ok(true)
+        }
         Err(apalis_postgres::Error::Database(sqlx::Error::Database(error)))
             if error.code().as_deref() == Some(UNIQUE_VIOLATION)
                 && error.constraint() == Some(IDEMPOTENCY_INDEX) =>
@@ -303,18 +470,55 @@ pub async fn tick_until(app: Arc<App>, shutdown: CancellationToken) {
 /// One tick of [`tick_until`]: each its own trace (`parent: None`).
 #[tracing::instrument(level = "debug", name = "okf.housekeeping.tick", parent = None, skip_all)]
 async fn tick(app: &App) {
-    let now = app.clock().now();
-    for task in Task::ALL {
-        if let Err(error) = schedule(app.pool(), task, task.slot_at(now)).await {
+    schedule_slots(app, app.clock().now()).await;
+    refresh_gauges(app).await;
+}
+
+/// Pushes every job of the slots containing `now`: each task's cluster job,
+/// and its job on every store in the `stores` table (read now, so a store
+/// added since the last tick is included). A failure is logged and the next
+/// tick tries again; it stops neither another task nor another store. If
+/// the stores cannot be read, this tick pushes cluster jobs only.
+///
+/// # Arguments
+/// * `app` - the shared state (its pools and registry).
+/// * `now` - the time whose slots are pushed.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn schedule_slots(app: &App, now: DateTime<Utc>) {
+    let stores = match app.stores().all().await {
+        Ok(stores) => stores,
+        Err(error) => {
             split_event!(
                 warn,
-                { task = task.as_str(), kind = error.kind(), },
+                { kind = error.kind(), },
                 { %error, },
-                "scheduling a housekeeping job failed; retrying at the next tick"
+                "reading the stores failed; their housekeeping jobs wait for the next tick"
             );
+            Vec::new()
+        }
+    };
+    let pool = app.accounts().executor();
+    for task in Task::ALL {
+        let slot = task.slot_at(now);
+        let cluster = task
+            .runs_on_cluster()
+            .then(|| Housekeeping::cluster(task, slot));
+        let per_store = stores
+            .iter()
+            .filter(|_| task.runs_per_store())
+            .map(|store| Housekeeping::on_store(task, store.clone(), slot));
+        // `chain`: the cluster job (if any) first, then one per store.
+        for job in cluster.into_iter().chain(per_store) {
+            if let Err(error) = schedule(pool, &job).await {
+                split_event!(
+                    warn,
+                    { task = task.as_str(), store = job.store.as_ref().map_or("", StoreName::as_str), kind = error.kind(), },
+                    { %error, },
+                    "scheduling a housekeeping job failed; retrying at the next tick"
+                );
+            }
         }
     }
-    refresh_gauges(app).await;
 }
 
 /// The counts the `cluster_stats` task stores, as one row.
@@ -372,7 +576,7 @@ pub async fn read_stats(pool: &PgPool) -> Result<Option<ClusterStats>, OkfError>
 /// * `app` - the shared state (its pool and metrics).
 #[tracing::instrument(level = "debug", skip_all)]
 pub async fn refresh_gauges(app: &App) {
-    match read_stats(app.pool()).await {
+    match read_stats(app.accounts().executor()).await {
         Ok(Some(stats)) => {
             app.metrics().set_open_changesets(stats.open_changesets);
             app.metrics().set_mail_queue_depth(&stats.mail_queue);
@@ -389,8 +593,11 @@ pub async fn refresh_gauges(app: &App) {
     }
 }
 
-/// Runs one task now, in this process. The worker calls it for each job;
-/// tests call it directly.
+/// Runs one task's cluster job now, in this process. The worker calls it
+/// for each cluster job; tests call it directly. A task whose work is all on
+/// the stores (`prune_changesets`) does nothing here: a cluster job of it
+/// can only come from a release before stores, and that slot's store jobs
+/// do its work.
 ///
 /// # Arguments
 /// * `task` - the task.
@@ -402,18 +609,100 @@ pub async fn refresh_gauges(app: &App) {
 #[tracing::instrument(level = "debug", skip_all, fields(okf.housekeeping.task = task.as_str()))]
 pub async fn run(task: Task, app: &App) -> Result<(), OkfError> {
     match task {
-        Task::PruneChangesets => prune_changesets(app).await,
+        Task::PruneChangesets => Ok(()),
         Task::PruneOauth => prune_oauth(app).await,
         Task::PruneAudit => prune_audit(app).await,
         Task::PruneWorkers => {
             let mut steps = Steps::default();
             steps.note(
                 "rows of stopped workers",
-                mail_queue::prune_workers(app.pool(), app.clock().now()).await,
+                mail_queue::prune_workers(app.accounts().executor(), app.clock().now()).await,
             );
             steps.finish()
         }
         Task::ClusterStats => cluster_stats(app).await,
+        Task::ProvisionCatalogs => provision_catalogs(app).await,
+        Task::CleanupStores => cleanup_stores(app).await,
+    }
+}
+
+/// Runs one task's job on `store` now, in this process, under [`LIMITS`]:
+/// the worker calls it for each store job; tests call it directly. Only
+/// this store is touched, so its failure is its job's alone.
+///
+/// # Arguments
+/// * `task` - the task.
+/// * `store` - the store.
+/// * `app` - the shared state.
+///
+/// # Errors
+/// The step's failure: [`OkfError::StoreUnavailable`] for a store that cannot
+/// be reached, [`OkfError::Database`] (a lock or statement past the bound
+/// included), or `Busy` past the backstop. A store with no `stores` row is
+/// not an error: the job has nothing to do.
+#[tracing::instrument(level = "debug", skip_all, fields(okf.housekeeping.task = task.as_str(), okf.store = store.as_str()))]
+pub async fn run_on_store(task: Task, store: &StoreName, app: &App) -> Result<(), OkfError> {
+    run_on_store_bounded(task, store, app, LIMITS).await
+}
+
+/// [`run_on_store`] under `limits`.
+///
+/// # Errors
+/// As [`run_on_store`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn run_on_store_bounded(
+    task: Task,
+    store: &StoreName,
+    app: &App,
+    limits: Limits,
+) -> Result<(), OkfError> {
+    if !task.runs_per_store() {
+        // Only a hand-made job can be one: nothing schedules it.
+        tracing::warn!(
+            task = task.as_str(),
+            "a store job of a task that has none; ignored"
+        );
+        return Ok(());
+    }
+    let Some(db) = open_store(app, store, limits).await? else {
+        return Ok(());
+    };
+    match task {
+        Task::PruneChangesets => prune_store_changesets(app, &db, limits).await,
+        Task::PruneAudit => prune_store_audit(app, &db, limits).await,
+        Task::ClusterStats => count_store_changesets(app, &db, limits).await,
+        // Returned above (`runs_per_store` is false for these).
+        Task::PruneOauth | Task::PruneWorkers | Task::ProvisionCatalogs | Task::CleanupStores => {
+            Ok(())
+        }
+    }
+}
+
+/// Opens `store` for a store job, under the backstop (the registry's row
+/// read is bounded at the database too: issue #1006).
+///
+/// # Returns
+/// The store, or `None` if it has no `stores` row (logged; the job has
+/// nothing to do and is not retried).
+///
+/// # Errors
+/// [`OkfError::StoreUnavailable`], `Busy`, or [`OkfError::Database`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn open_store(
+    app: &App,
+    store: &StoreName,
+    limits: Limits,
+) -> Result<Option<CatalogDb>, OkfError> {
+    match backstop(limits, app.stores().get(store)).await {
+        Ok(db) => Ok(Some(db)),
+        Err(OkfError::NotFound { .. }) => {
+            tracing::info!(
+                store = store.as_str(),
+                "a housekeeping job's store has no row; nothing to do"
+            );
+            Ok(None)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -466,20 +755,141 @@ impl Steps {
     }
 }
 
-/// Discards empty changesets unchanged for [`EMPTY_CHANGESET_HOURS`].
+/// Discards the empty changesets on `db` unchanged for
+/// [`EMPTY_CHANGESET_HOURS`], in one bounded store transaction.
 ///
 /// # Errors
-/// [`OkfError::Database`].
+/// [`OkfError::Database`], [`OkfError::StoreUnavailable`] or `Busy`.
 #[tracing::instrument(level = "debug", skip_all)]
-async fn prune_changesets(app: &App) -> Result<(), OkfError> {
+async fn prune_store_changesets(app: &App, db: &CatalogDb, limits: Limits) -> Result<(), OkfError> {
     let now = app.clock().now();
     let older_than = now - TimeDelta::hours(EMPTY_CHANGESET_HOURS);
+    let pruned = backstop(limits, async {
+        let mut tx = store_tx(db, limits.wait).await?;
+        let pruned = changesets::prune_empty(&mut *tx, older_than, now).await?;
+        tx.commit().await.map_err(|error| db.classify(error))?;
+        Ok(pruned)
+    })
+    .await;
     let mut steps = Steps::default();
-    steps.note(
-        "empty changesets a day old",
-        changesets::prune_empty(app.pool(), older_than, now).await,
-    );
+    steps.note("empty changesets a day old", pruned);
     steps.finish()
+}
+
+/// How many times `store_connect_timeout` one recovery attempt may take in
+/// all: the first open (registry read, connect, migration) and the
+/// recovery's own transactions each wait at most that long at the database.
+/// With the default 5 s it is 30 s, [`LIMITS`]'s backstop.
+const PROVISION_ATTEMPT_FACTOR: u32 = 6;
+
+/// Finishes or removes the catalogs whose create stopped half-way
+/// ([`catalogs::recover`], decision P9). It looks at rows older than
+/// [`UNPROVISIONED_GRACE_SECONDS`]; that age only keeps it off creates still
+/// running, since the catalog's lock decides the outcome. A failure on one
+/// catalog (its store unreachable or stalled, say) is logged and does not stop the
+/// others; the first is the task's result, so the job is retried. It pages
+/// through the rows ([`catalogs::pending`]) and, once a store is found
+/// unreachable, leaves that store's remaining rows for the next run, so a
+/// lost store cannot starve the others.
+///
+/// # Errors
+/// The first failure; every catalog is tried regardless.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn provision_catalogs(app: &App) -> Result<(), OkfError> {
+    provision_catalogs_bounded(app, provision_limits(app)).await
+}
+
+/// The bounds on one recovery attempt: `store_connect_timeout` at the
+/// database (`lock_timeout` and `statement_timeout` on each transaction),
+/// and [`PROVISION_ATTEMPT_FACTOR`] times that for the whole attempt, which
+/// also covers the store's first open and migration. The database bound is
+/// the shorter, so it fires first and PostgreSQL rolls back.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "builds a value from the settings")
+)]
+fn provision_limits(app: &App) -> Limits {
+    let wait = app.stores().connect_timeout();
+    Limits {
+        attempt: wait.saturating_mul(PROVISION_ATTEMPT_FACTOR),
+        wait,
+    }
+}
+
+/// [`provision_catalogs`] under `limits`.
+///
+/// # Errors
+/// As [`provision_catalogs`].
+#[tracing::instrument(level = "debug", skip_all)]
+async fn provision_catalogs_bounded(app: &App, limits: Limits) -> Result<(), OkfError> {
+    let now = app.clock().now();
+    let older_than = now - TimeDelta::seconds(UNPROVISIONED_GRACE_SECONDS);
+    let mut steps = Steps::default();
+    let mut finished = 0_u64;
+    // Stores found unreachable in this run: their rows are left out of the
+    // later pages, so a lost store cannot hold up the others.
+    let mut down: Vec<String> = Vec::new();
+    let mut after = None;
+    loop {
+        let page = catalogs::pending(app.accounts().executor(), older_than, after, &down).await?;
+        let Some(last) = page.last() else { break };
+        after = Some(last.cursor());
+        for catalog in &page {
+            if down.contains(&catalog.store) {
+                continue;
+            }
+            // The store is read from the row, so a catalog is recovered
+            // where it was placed.
+            let outcome = backstop(limits, async {
+                let store = StoreName::parse(&catalog.store)?;
+                let db = app.store_db(&store).await?;
+                catalogs::recover(&db, catalog, now, limits.wait).await
+            })
+            .await;
+            match outcome {
+                Ok(catalogs::Recovery::Finished) => finished += 1,
+                Ok(catalogs::Recovery::Removed) => {
+                    tracing::warn!(
+                        catalog_id = catalog.id,
+                        "removed a catalog whose create failed"
+                    );
+                }
+                Ok(catalogs::Recovery::Settled) => {}
+                Err(error) => {
+                    if matches!(error, OkfError::StoreUnavailable { .. }) || is_timeout(&error) {
+                        down.push(catalog.store.clone());
+                    }
+                    split_event!(
+                        error,
+                        { kind = error.kind(), catalog_id = catalog.id, },
+                        { %error, },
+                        "recovering a half-created catalog failed"
+                    );
+                    steps.keep(error);
+                }
+            }
+        }
+    }
+    if finished > 0 {
+        tracing::info!(finished, "finished half-created catalogs");
+    }
+    steps.finish()
+}
+
+/// Settles the cleanup owed on the stores ([`cleanups::run`]). A store that
+/// cannot be reached, or a row that fails, is logged and counted in the
+/// row's `attempts` and retried by the next run; it neither stops the other
+/// stores nor fails the job, so the minute's slot is not re-run for it.
+///
+/// # Errors
+/// [`OkfError::Database`] reading the account database's list of cleanups.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn cleanup_stores(app: &App) -> Result<(), OkfError> {
+    let report = cleanups::run(app.stores(), app.clock().now()).await?;
+    if report.done > 0 {
+        tracing::info!(done = report.done, "settled store cleanups");
+    }
+    Ok(())
 }
 
 /// Revokes idle OAuth grants ([`revoke_idle_grants`]), then deletes expired
@@ -496,7 +906,7 @@ async fn prune_changesets(app: &App) -> Result<(), OkfError> {
 /// The first step's failure; every step runs regardless.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn prune_oauth(app: &App) -> Result<(), OkfError> {
-    let pool = app.pool();
+    let pool = app.accounts().executor();
     let now = app.clock().now();
     let mut steps = Steps::default();
     // Before the token prune, which may delete the tokens that date a
@@ -580,7 +990,7 @@ async fn revoke_idle_grants(app: &App, now: DateTime<Utc>) -> Result<(), OkfErro
     else {
         return Ok(());
     };
-    let revoked = keys::revoke_idle_grants(app.pool(), idle_before, now).await?;
+    let revoked = keys::revoke_idle_grants(app.accounts().executor(), idle_before, now).await?;
     if !revoked.is_empty() {
         tracing::info!(
             revoked = revoked.len(),
@@ -590,28 +1000,57 @@ async fn revoke_idle_grants(app: &App, now: DateTime<Utc>) -> Result<(), OkfErro
     Ok(())
 }
 
-/// Deletes the audit entries older than the `audit_retention_days` setting
-/// plus [`AUDIT_PRUNE_MARGIN_HOURS`], and the provisioner budget counters of
-/// past hours. Nothing else deletes entries.
+/// The audit retention in days, and the cut-off it gives at `now`: the
+/// `audit_retention_days` setting plus [`AUDIT_PRUNE_MARGIN_HOURS`] before
+/// `now`.
+///
+/// # Returns
+/// `(days, before)`.
+#[tracing::instrument(level = "trace", skip_all)]
+async fn audit_cut_off(app: &App, now: DateTime<Utc>) -> (i64, DateTime<Utc>) {
+    // Outside any request, so it checks the settings itself (spec Decision
+    // 9): the retention never runs on settings older than `credential_ttl`.
+    let days = i64::from(app.fresh_settings().await.audit_retention_days);
+    let before = now - TimeDelta::days(days) - TimeDelta::hours(AUDIT_PRUNE_MARGIN_HOURS);
+    (days, before)
+}
+
+/// The account half of `prune_audit`: deletes the account database's audit
+/// entries older than the `audit_retention_days` setting plus
+/// [`AUDIT_PRUNE_MARGIN_HOURS`], and the provisioner budget counters of past
+/// hours. Each store's catalog events are pruned by its own job
+/// ([`prune_store_audit`]). Nothing else deletes entries.
 ///
 /// # Errors
 /// [`OkfError::Database`].
 #[tracing::instrument(level = "debug", skip_all)]
 async fn prune_audit(app: &App) -> Result<(), OkfError> {
-    // Outside any request, so it checks the settings itself (spec Decision
-    // 9): the retention never runs on settings older than `credential_ttl`.
-    let days = i64::from(app.fresh_settings().await.audit_retention_days);
     let now = app.clock().now();
-    let before = now - TimeDelta::days(days) - TimeDelta::hours(AUDIT_PRUNE_MARGIN_HOURS);
+    let (_, before) = audit_cut_off(app, now).await;
     let mut steps = Steps::default();
     steps.note(
         "audit entries past retention",
-        audit::prune(app.pool(), before).await,
+        audit::prune(app.accounts().executor(), before).await,
     );
     steps.note(
         "provisioner budget counters of past hours",
-        audit::prune_budget_counters(app.pool(), now).await,
+        audit::prune_budget_counters(app.accounts().executor(), now).await,
     );
+    steps.finish()
+}
+
+/// The store half of `prune_audit`: deletes `db`'s catalog events past the
+/// same cut-off as the account's ([`audit::prune_catalog`], which hands the
+/// retention to the store's trigger in `okf.audit_retention_days`).
+///
+/// # Errors
+/// [`OkfError::Database`], [`OkfError::StoreUnavailable`] or `Busy`.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn prune_store_audit(app: &App, db: &CatalogDb, limits: Limits) -> Result<(), OkfError> {
+    let (days, before) = audit_cut_off(app, app.clock().now()).await;
+    let pruned = backstop(limits, audit::prune_catalog(db, before, days, limits.wait)).await;
+    let mut steps = Steps::default();
+    steps.note("catalog audit entries past retention", pruned);
     steps.finish()
 }
 
@@ -645,15 +1084,17 @@ async fn prune_jobs(pool: &PgPool, now: DateTime<Utc>) -> Result<u64, OkfError> 
     .rows_affected())
 }
 
-/// Counts the open changesets and the mail queue and writes them to the
-/// `cluster_stats` row (spec Decision 16).
+/// Sums every store's open changeset count (`cluster_store_stats`, written
+/// by [`count_store_changesets`]) and counts the mail queue, and writes both
+/// to the `cluster_stats` row (spec Decision 16). The sum is taken in the
+/// statement that writes it, so it holds each store's latest count.
 ///
 /// # Errors
-/// [`OkfError::Database`] for a failed count or write.
+/// [`OkfError::Database`] for a failed count or write; `Busy` past the
+/// bound.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn cluster_stats(app: &App) -> Result<(), OkfError> {
-    let pool = app.pool();
-    let open_changesets = changesets::open_total(pool).await?;
+    let pool = app.accounts().executor();
     let depth = mail_queue::depth(pool).await?;
     // `{"pending": 2, ...}`: one key per status, zero included.
     let mail_queue: serde_json::Map<String, serde_json::Value> = MailStatus::ALL
@@ -667,18 +1108,63 @@ async fn cluster_stats(app: &App) -> Result<(), OkfError> {
             (status.as_str().to_string(), serde_json::Value::from(jobs))
         })
         .collect();
-    sqlx::query(
-        "INSERT INTO cluster_stats (id, open_changesets, mail_queue, computed_at) \
-         VALUES (true, $1, $2, $3) \
-         ON CONFLICT (id) DO UPDATE SET open_changesets = EXCLUDED.open_changesets, \
-             mail_queue = EXCLUDED.mail_queue, computed_at = EXCLUDED.computed_at",
-    )
-    .bind(open_changesets)
-    .bind(serde_json::Value::Object(mail_queue))
-    .bind(app.clock().now())
-    .execute(pool)
+    let now = app.clock().now();
+    backstop(LIMITS, async {
+        let mut tx = account_tx(app.accounts(), LIMITS.wait).await?;
+        // `sum` of bigints is a numeric: cast back. No rows sum to 0.
+        sqlx::query(
+            "INSERT INTO cluster_stats (id, open_changesets, mail_queue, computed_at) \
+             SELECT true, COALESCE(sum(open_changesets), 0)::bigint, $1, $2 \
+             FROM cluster_store_stats \
+             ON CONFLICT (id) DO UPDATE SET open_changesets = EXCLUDED.open_changesets, \
+                 mail_queue = EXCLUDED.mail_queue, computed_at = EXCLUDED.computed_at",
+        )
+        .bind(serde_json::Value::Object(mail_queue))
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    })
+    .await
+}
+
+/// The store half of `cluster_stats`: counts `db`'s open changesets in a
+/// bounded store transaction, gives that connection back, then writes the
+/// count to the store's `cluster_store_stats` row in a bounded account
+/// transaction. The two never overlap, so a pool of one connection on
+/// either side is enough.
+///
+/// # Errors
+/// [`OkfError::Database`], [`OkfError::StoreUnavailable`] or `Busy`; a
+/// failed count leaves the store's last row as it was.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn count_store_changesets(app: &App, db: &CatalogDb, limits: Limits) -> Result<(), OkfError> {
+    let open = backstop(limits, async {
+        let mut tx = store_tx(db, limits.wait).await?;
+        let open = changesets::open_total(&mut *tx).await?;
+        tx.commit().await.map_err(|error| db.classify(error))?;
+        Ok(open)
+    })
     .await?;
-    Ok(())
+    let now = app.clock().now();
+    backstop(limits, async {
+        let mut tx = account_tx(app.accounts(), limits.wait).await?;
+        sqlx::query(
+            "INSERT INTO cluster_store_stats (store, open_changesets, computed_at) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT (store) DO UPDATE SET open_changesets = EXCLUDED.open_changesets, \
+                 computed_at = EXCLUDED.computed_at",
+        )
+        .bind(db.store().as_str())
+        .bind(open)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    })
+    .await
 }
 
 /// What the job handler needs, given to apalis as worker data (cloned per
@@ -706,6 +1192,7 @@ pub(crate) struct HousekeepingContext {
     fields(
         okf.housekeeping.task = job.task.as_str(),
         okf.housekeeping.slot = job.slot,
+        okf.store = job.store.as_ref().map(StoreName::as_str),
         okf.outcome = tracing::field::Empty,
     )
 )]
@@ -715,7 +1202,10 @@ async fn run_job(
     id: TaskId,
 ) -> Result<(), BoxDynError> {
     let started = std::time::Instant::now();
-    let result = run(job.task, &context.app).await;
+    let result = match &job.store {
+        None => run(job.task, &context.app).await,
+        Some(store) => run_on_store(job.task, store, &context.app).await,
+    };
     let outcome = if result.is_ok() {
         Outcome::Ok
     } else {
@@ -731,7 +1221,7 @@ async fn run_job(
     };
     split_event!(
         warn,
-        { task = job.task.as_str(), kind = error.kind(), },
+        { task = job.task.as_str(), store = job.store.as_ref().map_or("", StoreName::as_str), kind = error.kind(), },
         { %error, },
         "a housekeeping job failed; it is retried"
     );
@@ -894,7 +1384,7 @@ mod tests {
     use chrono::TimeZone;
 
     /// Generous: the tests share a loaded machine.
-    const PATIENCE: Duration = Duration::from_secs(30);
+    pub(super) const PATIENCE: Duration = Duration::from_secs(30);
 
     /// A worker's timing scaled down for a test: it polls every 100 ms.
     const FAST: WorkerTiming = WorkerTiming {
@@ -904,12 +1394,12 @@ mod tests {
         missed_heartbeats: 6,
     };
 
-    fn fixed_now() -> DateTime<Utc> {
+    pub(super) fn fixed_now() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 11, 18, 19, 52, 10).unwrap()
     }
 
     /// The housekeeping jobs' `(idempotency_key, status, attempts)`, by key.
-    async fn jobs(pool: &PgPool) -> Vec<(String, String, i32)> {
+    pub(super) async fn jobs(pool: &PgPool) -> Vec<(String, String, i32)> {
         sqlx::query_as(
             "SELECT idempotency_key, status, attempts FROM apalis.jobs \
              WHERE job_type = $1 ORDER BY idempotency_key",
@@ -922,7 +1412,7 @@ mod tests {
 
     /// Waits until the job keyed `key` has `status`, or panics after
     /// [`PATIENCE`].
-    async fn wait_for(pool: &PgPool, key: &str, status: &str) {
+    pub(super) async fn wait_for(pool: &PgPool, key: &str, status: &str) {
         let waited = tokio::time::timeout(PATIENCE, async {
             loop {
                 let found: Option<String> = sqlx::query_scalar(
@@ -965,8 +1455,11 @@ mod tests {
 
     /// Starts `app`'s housekeeping worker with [`FAST`] timing, on a worker
     /// pool of its own named `name`.
-    fn start(app: &Arc<App>, name: &str) -> (CancellationToken, JoinHandle<()>, WorkerPool) {
-        let pool = WorkerPool::new(app.pool());
+    pub(super) fn start(
+        app: &Arc<App>,
+        name: &str,
+    ) -> (CancellationToken, JoinHandle<()>, WorkerPool) {
+        let pool = WorkerPool::new(app.accounts().executor());
         let context = HousekeepingContext {
             app: Arc::clone(app),
             pool: pool.pool().clone(),
@@ -977,7 +1470,7 @@ mod tests {
     }
 
     /// Stops a worker started by [`start`] and closes its pool.
-    async fn stop(started: (CancellationToken, JoinHandle<()>, WorkerPool)) {
+    pub(super) async fn stop(started: (CancellationToken, JoinHandle<()>, WorkerPool)) {
         let (shutdown, worker, pool) = started;
         shutdown.cancel();
         tokio::time::timeout(PATIENCE, worker)
@@ -988,7 +1481,7 @@ mod tests {
     }
 
     /// How many `task` jobs the registry counts with `outcome`.
-    fn runs(registry: &prometheus::Registry, task: Task, outcome: &str) -> f64 {
+    pub(super) fn runs(registry: &prometheus::Registry, task: Task, outcome: &str) -> f64 {
         sample_of(
             &render(registry),
             &format!(
@@ -1014,6 +1507,7 @@ mod tests {
         assert_eq!(Task::PruneChangesets.slot_at(now), at(19, 50));
         assert_eq!(Task::PruneAudit.slot_at(now), at(0, 0));
         assert_eq!(Task::ClusterStats.slot_at(now), at(19, 52));
+        assert_eq!(Task::ProvisionCatalogs.slot_at(now), at(19, 52));
         // A window's start is its own slot, and the next second too.
         let start = Utc.timestamp_opt(at(19, 50), 0).unwrap();
         assert_eq!(Task::PruneChangesets.slot_at(start), at(19, 50));
@@ -1033,7 +1527,9 @@ mod tests {
                 "prune_oauth",
                 "prune_audit",
                 "prune_workers",
-                "cluster_stats"
+                "cluster_stats",
+                "provision_catalogs",
+                "cleanup_stores"
             ]
         );
         for task in Task::ALL {
@@ -1055,18 +1551,24 @@ mod tests {
         let mut pushes = tokio::task::JoinSet::new();
         for turn in 0..16 {
             let pool = if turn % 2 == 0 {
-                test.app.pool().clone()
+                test.app.accounts().executor().clone()
             } else {
-                other.pool().clone()
+                other.accounts().executor().clone()
             };
-            pushes.spawn(async move { schedule(&pool, Task::PruneOauth, slot).await });
+            pushes.spawn(async move {
+                schedule(&pool, &Housekeeping::cluster(Task::PruneOauth, slot)).await
+            });
         }
         let created = tokio::time::timeout(PATIENCE, pushes.join_all())
             .await
             .expect("every push returns");
         // The next slot is a job of its own.
         let next = slot + 3600;
-        let next_created = schedule(test.app.pool(), Task::PruneOauth, next).await;
+        let next_created = schedule(
+            test.app.accounts().executor(),
+            &Housekeeping::cluster(Task::PruneOauth, next),
+        )
+        .await;
 
         let created: Vec<bool> = created
             .into_iter()
@@ -1079,7 +1581,7 @@ mod tests {
         );
         assert!(next_created.unwrap());
         assert_eq!(
-            jobs(test.app.pool()).await,
+            jobs(test.app.accounts().executor()).await,
             [
                 (format!("prune_oauth:{slot}"), "Pending".to_string(), 0),
                 (format!("prune_oauth:{next}"), "Pending".to_string(), 0),
@@ -1092,7 +1594,7 @@ mod tests {
     async fn the_ticker_stops_at_shutdown_while_a_tick_is_blocked() {
         let test = app_with(&[], Config::default()).await;
         // Arrange: another connection holds ACCESS EXCLUSIVE on the queue.
-        let mut blocker = test.app.pool().begin().await.unwrap();
+        let mut blocker = test.app.accounts().executor().begin().await.unwrap();
         sqlx::query("LOCK TABLE apalis.jobs IN ACCESS EXCLUSIVE MODE")
             .execute(&mut *blocker)
             .await
@@ -1115,7 +1617,7 @@ mod tests {
                      AND pg_blocking_pids(pid) @> ARRAY[$1]::int[]",
                 )
                 .bind(holder)
-                .fetch_one(test.app.pool())
+                .fetch_one(test.app.accounts().executor())
                 .await
                 .unwrap();
                 if waiting > 0 {
@@ -1139,9 +1641,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_scheduled_slot_is_not_pushed_again() {
         let test = app_with(&[], Config::default()).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let slot = Task::PruneOauth.slot_at(fixed_now());
-        assert!(schedule(&pool, Task::PruneOauth, slot).await.unwrap());
+        assert!(
+            schedule(&pool, &Housekeeping::cluster(Task::PruneOauth, slot))
+                .await
+                .unwrap()
+        );
         // From now on any insert into the jobs table fails loudly, so a push
         // that reached the insert would return an error, not `false`.
         sqlx::raw_sql(
@@ -1154,8 +1660,8 @@ mod tests {
         .await
         .unwrap();
 
-        let again = schedule(&pool, Task::PruneOauth, slot).await;
-        let next = schedule(&pool, Task::PruneOauth, slot + 3600).await;
+        let again = schedule(&pool, &Housekeeping::cluster(Task::PruneOauth, slot)).await;
+        let next = schedule(&pool, &Housekeeping::cluster(Task::PruneOauth, slot + 3600)).await;
 
         assert!(!again.expect("no insert is attempted"), "already scheduled");
         assert!(next.is_err(), "a new slot does reach the insert: {next:?}");
@@ -1171,14 +1677,20 @@ mod tests {
 
         // Both replicas schedule each slot while both workers poll.
         for slot in &slots {
+            let job = Housekeeping::cluster(Task::ClusterStats, *slot);
             let (first, second) = tokio::join!(
-                schedule(test.app.pool(), Task::ClusterStats, *slot),
-                schedule(other.pool(), Task::ClusterStats, *slot),
+                schedule(test.app.accounts().executor(), &job),
+                schedule(other.accounts().executor(), &job),
             );
             assert!(first.unwrap() ^ second.unwrap(), "one push creates it");
         }
         for slot in &slots {
-            wait_for(test.app.pool(), &format!("cluster_stats:{slot}"), "Done").await;
+            wait_for(
+                test.app.accounts().executor(),
+                &format!("cluster_stats:{slot}"),
+                "Done",
+            )
+            .await;
         }
         // Several polls more, for any second run to show.
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1188,7 +1700,7 @@ mod tests {
         let total = runs(&registry, Task::ClusterStats, "ok")
             + runs(&other_registry, Task::ClusterStats, "ok");
         assert_eq!(total, 4.0, "each slot ran once in the cluster");
-        assert!(jobs(test.app.pool())
+        assert!(jobs(test.app.accounts().executor())
             .await
             .iter()
             .all(|(_, status, attempts)| status == "Done" && *attempts == 1));
@@ -1199,15 +1711,18 @@ mod tests {
         let (test, registry) = app_with_metrics(&[], Config::default()).await;
         // The task's write fails while the table is gone.
         sqlx::query("DROP TABLE cluster_stats")
-            .execute(test.app.pool())
+            .execute(test.app.accounts().executor())
             .await
             .unwrap();
         let worker = start(&test.app, "replica-a");
-        schedule(test.app.pool(), Task::ClusterStats, 60)
-            .await
-            .unwrap();
+        schedule(
+            test.app.accounts().executor(),
+            &Housekeeping::cluster(Task::ClusterStats, 60),
+        )
+        .await
+        .unwrap();
 
-        wait_for(test.app.pool(), "cluster_stats:60", "Failed").await;
+        wait_for(test.app.accounts().executor(), "cluster_stats:60", "Failed").await;
         stop(worker).await;
 
         let (attempts, max_attempts, waits): (i32, i32, f64) = sqlx::query_as(
@@ -1215,7 +1730,7 @@ mod tests {
              FROM apalis.jobs WHERE job_type = $1",
         )
         .bind(QUEUE)
-        .fetch_one(test.app.pool())
+        .fetch_one(test.app.accounts().executor())
         .await
         .unwrap();
         assert_eq!((attempts, max_attempts), (1, 3), "it is tried again");
@@ -1231,12 +1746,14 @@ mod tests {
         let (test, registry) =
             app_with_metrics(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
         let (other, _provider, other_registry) = replica(&test).await;
-        let pg = catalogs::find(test.app.pool(), "pg").await.unwrap();
-        writer_key(test.app.pool()).await;
-        changeset_at(test.app.pool(), pg.id, Utc::now(), None).await;
-        changeset_at(test.app.pool(), pg.id, Utc::now(), None).await;
+        let pg = catalogs::find(test.app.accounts().executor(), "pg")
+            .await
+            .unwrap();
+        writer_key(test.app.accounts().executor()).await;
+        changeset_at(test.app.accounts().executor(), pg.id, Utc::now(), None).await;
+        changeset_at(test.app.accounts().executor(), pg.id, Utc::now(), None).await;
         crate::mail::queue::enqueue(
-            test.app.pool(),
+            test.app.accounts().executor(),
             "alice@example.com",
             &crate::mail::Template::Test,
             Utc::now(),
@@ -1256,7 +1773,11 @@ mod tests {
         refresh_gauges(&other).await;
         let before = (open(&other_registry), pending(&other_registry));
 
-        // One replica's job writes the row; each replica reads it.
+        // One replica's jobs (the store's count, then the cluster's sum)
+        // write the row; each replica reads it.
+        run_on_store(Task::ClusterStats, &StoreName::main(), &test.app)
+            .await
+            .unwrap();
         run(Task::ClusterStats, &test.app).await.unwrap();
         let unread = open(&registry);
         refresh_gauges(&test.app).await;
@@ -1268,14 +1789,17 @@ mod tests {
             assert_eq!(open(registry), Some(2.0), "{}", render(registry));
             assert_eq!(pending(registry), Some(1.0), "{}", render(registry));
         }
-        let stats = read_stats(test.app.pool()).await.unwrap().unwrap();
+        let stats = read_stats(test.app.accounts().executor())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stats.open_changesets, 2);
         assert!(stats.mail_queue.contains(&(MailStatus::Pending, 1)));
         assert!(stats.mail_queue.contains(&(MailStatus::Failed, 0)));
     }
 
     /// Creates key `writer`, which [`changeset_at`] opens changesets for.
-    async fn writer_key(pool: &PgPool) {
+    pub(super) async fn writer_key(pool: &PgPool) {
         keys::insert_legacy_test_key(pool, "writer", keys::Access::Read, "tester", Utc::now())
             .await;
     }
@@ -1288,7 +1812,17 @@ mod tests {
         at: DateTime<Utc>,
         path: Option<&str>,
     ) -> i64 {
-        let mut tx = pool.begin().await.unwrap();
+        changeset_on(&CatalogDb::main_of(pool), catalog_id, at, path).await
+    }
+
+    /// [`changeset_at`] on the store `db`.
+    pub(super) async fn changeset_on(
+        db: &CatalogDb,
+        catalog_id: i64,
+        at: DateTime<Utc>,
+        path: Option<&str>,
+    ) -> i64 {
+        let mut tx = db.begin().await.unwrap();
         changesets::lock_catalog(&mut tx, catalog_id).await.unwrap();
         let changeset = changesets::open(&mut tx, catalog_id, "writer", "writer", at)
             .await
@@ -1312,7 +1846,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn prune_changesets_discards_empty_changesets_a_day_old_and_keeps_the_rest() {
         let test = app_with(&[("pg", &[("a.md", "# A\n")])], Config::default()).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let pg = catalogs::find(&pool, "pg").await.unwrap();
         writer_key(&pool).await;
         let day_old = Utc::now() - TimeDelta::hours(25);
@@ -1320,11 +1854,20 @@ mod tests {
         let empty_new = changeset_at(&pool, pg.id, Utc::now(), None).await;
         let full_old = changeset_at(&pool, pg.id, day_old, Some("a.md")).await;
 
-        run(Task::PruneChangesets, &test.app).await.unwrap();
+        run_on_store(Task::PruneChangesets, &StoreName::main(), &test.app)
+            .await
+            .unwrap();
 
+        let store = test.app.main_db().await;
         let state = |id| {
-            let pool = pool.clone();
-            async move { changesets::by_id(&pool, id).await.unwrap().unwrap().state }
+            let store = store.clone();
+            async move {
+                changesets::by_id(store.executor(), id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .state
+            }
         };
         assert_eq!(state(empty_old).await, ChangesetState::Discarded);
         assert_eq!(state(empty_new).await, ChangesetState::Open);
@@ -1332,11 +1875,129 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn provision_catalogs_finishes_or_removes_old_half_made_catalogs_and_spares_young_ones() {
+        let test = app_with(&[("whole", &[])], Config::default()).await;
+        let pool = test.app.accounts().executor().clone();
+        let now = test.app.clock().now();
+        let owner = crate::db::TEST_TEAM;
+        // `finish` has its store side but no `provisioned_at`; `lost` has
+        // neither; `young` has neither and is too new to look at.
+        for name in ["finish", "lost", "young"] {
+            let name_text = name.to_string();
+            let display = crate::labels::DisplayName::default();
+            catalogs::create(
+                &pool,
+                &catalogs::NewCatalog {
+                    name: &name_text,
+                    display_name: &display,
+                    description: "",
+                    owner_team: owner,
+                },
+                &AuditActor::cli(),
+                now,
+            )
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "UPDATE catalogs SET provisioned_at = NULL, created_at = $1 \
+             WHERE name IN ('finish', 'lost')",
+        )
+        .bind(now - TimeDelta::minutes(5))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE catalogs SET provisioned_at = NULL WHERE name = 'young'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let gone = [
+            crate::db::catalog_id(&pool, "lost").await,
+            crate::db::catalog_id(&pool, "young").await,
+        ];
+        sqlx::query("DELETE FROM catalog.catalog_state WHERE id = ANY($1)")
+            .bind(&gone[..])
+            .execute(&crate::db::store_pool(&pool))
+            .await
+            .unwrap();
+
+        run(Task::ProvisionCatalogs, &test.app).await.unwrap();
+
+        let rows: Vec<(String, bool)> =
+            sqlx::query_as("SELECT name, provisioned_at IS NOT NULL FROM catalogs ORDER BY name")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            rows,
+            [
+                ("finish".to_string(), true),
+                ("whole".to_string(), true),
+                ("young".to_string(), false),
+            ]
+        );
+        let removed = crate::store::audit::testing::entries(&pool, "catalog.deleted").await;
+        assert_eq!(removed.len(), 1, "{removed:?}");
+        assert_eq!(removed[0].target.as_deref(), Some("lost"));
+        assert_eq!(removed[0].details["failed_create"], true);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn half_made_catalogs_on_an_unreachable_store_do_not_starve_a_healthy_store() {
+        // Arrange: more than one batch of older half-made catalogs on `down`
+        // (no credential in the environment, so it cannot be opened), and a
+        // newer one on `main` whose store side committed.
+        let test = app_with(&[("ok", &[])], Config::default()).await;
+        let pool = test.app.accounts().executor().clone();
+        let now = test.app.clock().now();
+        sqlx::query(
+            "INSERT INTO stores (name, location_kind, host, port, database, credential_kind, \
+             credential_ref, created_at) \
+             VALUES ('down', 'host', 'db.example.internal', 5432, 'okf', 'env', \
+                     'UNSET_PASSWORD', now())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO catalogs (name, created_at, store, provisioned_at) \
+             SELECT 'lost-' || n, $1 + n * interval '1 second', 'down', NULL \
+             FROM generate_series(1, $2) AS n",
+        )
+        .bind(now - TimeDelta::hours(1))
+        .bind(catalogs::PENDING_BATCH + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE catalogs SET provisioned_at = NULL, created_at = $1 WHERE name = 'ok'")
+            .bind(now - TimeDelta::minutes(5))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Act
+        let outcome = run(Task::ProvisionCatalogs, &test.app).await;
+
+        // Assert: the down store's failure is the task's result, the healthy
+        // catalog is settled, and the down store's rows are untouched.
+        assert!(outcome.is_err(), "the unreachable store's failure is kept");
+        let counts: (bool, i64) = sqlx::query_as(
+            "SELECT bool_or(name = 'ok' AND provisioned_at IS DISTINCT FROM NULL), \
+                    count(*) FILTER (WHERE store = 'down' AND provisioned_at IS NULL) \
+             FROM catalogs",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(counts, (true, catalogs::PENDING_BATCH + 1));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn prune_oauth_deletes_stale_oauth_rows_and_old_housekeeping_jobs() {
         use crate::store::keys::Access;
         use crate::store::oauth::testing::{insert_client, insert_grant};
         let test = app_with(&[("main", &[])], Config::default()).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let now = Utc::now();
         let client = insert_client(
             &pool,
@@ -1374,7 +2035,9 @@ mod tests {
             (3, "Killed", Some(48)),
             (4, "Pending", None),
         ] {
-            schedule(&pool, Task::ClusterStats, slot).await.unwrap();
+            schedule(&pool, &Housekeeping::cluster(Task::ClusterStats, slot))
+                .await
+                .unwrap();
             sqlx::query(
                 "UPDATE apalis.jobs SET status = $2, done_at = $3 \
                  WHERE job_type = $4 AND idempotency_key = $1",
@@ -1421,7 +2084,7 @@ mod tests {
         let mut config = Config::default();
         config.oauth.idle_grant_revoke_after = Duration::from_secs(10 * 24 * 60 * 60);
         let test = app_with(&[("main", &[])], config).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let now = Utc::now();
         let client = insert_client(
             &pool,
@@ -1476,7 +2139,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn prune_oauth_deletes_old_sign_in_events_and_long_expired_emailed_links() {
         let test = app_with(&[("main", &[])], Config::default()).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         let now = Utc::now();
         let user: String = sqlx::query_scalar("SELECT id FROM users WHERE name = $1")
             .bind(crate::db::TEST_USER)
@@ -1525,7 +2188,7 @@ mod tests {
     async fn prune_audit_deletes_entries_past_the_retention_setting() {
         use crate::store::audit::{Action, Entry, Target};
         let test = app_with(&[("main", &[])], Config::default()).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         settings::set(
             &pool,
             settings::SettingKey::AuditRetentionDays,
@@ -1587,7 +2250,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn prune_workers_deletes_a_stale_worker_row_and_keeps_a_live_one() {
         let test = app_with(&[], Config::default()).await;
-        let pool = test.app.pool().clone();
+        let pool = test.app.accounts().executor().clone();
         for (id, seen) in [("stale", TimeDelta::hours(1)), ("live", TimeDelta::zero())] {
             sqlx::query(
                 "INSERT INTO apalis.workers (id, worker_type, storage_name, layers, last_seen) \
@@ -1610,3 +2273,6 @@ mod tests {
         assert_eq!(left, ["live"]);
     }
 }
+
+#[cfg(test)]
+mod store_tests;

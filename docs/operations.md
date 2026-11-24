@@ -119,6 +119,9 @@ unknown keys are ignored, so one file serves every version.
 | `time_server` | none | The NTP server for the clock check (`host`, `host:port` or an address). Without it there is no check |
 | `concept_outline_chars` | `20000` | `get_concept` returns an outline of the headings, not the body, for a body longer than this many characters, unless the call passes `full` or `section` |
 | `database_max_connections` | `16` | The most database connections one process opens (`serve` and every subcommand). Writers queued on one changeset wait without one; the writer whose turn it is, a publish, and a read that builds an overlay each hold one |
+| `store_max_connections` | `8` | The most connections one process opens to each catalog store, beside `database_max_connections` (the account database). Every store, `main` included, has a pool of its own, opened on its first use. A store on its own database also holds one more connection for its change-feed listener, outside this limit |
+| `store_idle_timeout` | `"10m"` | How long an idle connection to a catalog store is kept open before it is closed. A store's pool holds no connection while unused |
+| `store_connect_timeout` | `"5s"` | How long opening a store's pool, or waiting for a connection to begin a transaction on it, may take. Past it the request fails with `StoreUnavailable`, which never names the store. Loading a catalog from a store may take 6 times this before the store is reported unavailable |
 | `overlay_cache_bytes` | `"256MiB"` | The most memory the changeset overlays (an open changeset's view of its catalog) may take, estimated like a catalog snapshot (a fixed cost per file plus a multiple of the stored size, over the overlay's whole workspace, so many empty files count). Past it, an overlay is dropped and rebuilt on its next read; one larger than the whole budget is served but not kept. An overlay unused for `session_idle_timeout` is dropped too. `overlay_cache_size` is deprecated and ignored (a warning at start-up) |
 | `public_url` | none | The server's public origin, such as `"https://okf-mcp.example.com"` (no path, query or user info; a trailing `/` is dropped). Setting it turns on OAuth ("OAuth connectors") and console sign-in by account ("Signing in and self-service"); without it the OAuth and sign-in routes are 404. It must be `https`, except on a loopback host (such as `localhost`, `127.0.0.1` or `::1`) for local testing, and its host must be in `allowed_hosts` |
 | `oauth.access_token_ttl` | `"24h"` | How long an OAuth access token works. A revoked one stops working at once whatever its lifetime, so the long default costs little; each refresh is a chance for a client's processes to race (`oauth.refresh_reuse_grace`) |
@@ -173,7 +176,7 @@ unknown keys are ignored, so one file serves every version.
 
 The server refuses to start (and every subcommand refuses to run) with a zero
 `session_idle_timeout`, `worker_shutdown_grace`,
-`database_max_connections`, `overlay_cache_bytes`, `catalog_cache_bytes`, `catalog_directory_entries`, `catalog_ttl`,
+`database_max_connections`, `store_max_connections`, `store_idle_timeout`, `store_connect_timeout`, `overlay_cache_bytes`, `catalog_cache_bytes`, `catalog_directory_entries`, `catalog_ttl`,
 `credential_cache_entries`, `user_cache_entries` or `credential_ttl`, a `search_fanout_max` outside 1 to 999, an empty `allowed_hosts` or a blank
 entry in it, or a `time_server` that is blank or has surrounding whitespace.
 `maintenance_review_intervals` also rejects invalid catalog names, malformed
@@ -348,11 +351,16 @@ reads the same file as the server, with no extra flags.
   up to `database_max_connections` (16 by default) for requests, plus 1 for
   the change-feed listener (it holds one connection for the life of the
   process, on its own one-connection pool, so it never takes a request slot),
-  plus up to 3 for the worker pool that the mail and housekeeping workers
+  plus `store_max_connections` for the pool of the store `main`, which is in
+  the account database, plus up to 3 for the worker pool that the mail and housekeeping workers
   share (the feedback worker, if on, has its own 3). For N replicas that is
-  `N x (database_max_connections + 4)`, plus `3 x N` with the feedback worker
-  on. Keep the database's `max_connections` above that, with room for the
-  command line, `okf-mcp migrate` and your own tools.
+  `N x (database_max_connections + store_max_connections + 4)`, plus `3 x N`
+  with the feedback worker on, plus `N x (store_max_connections + 1)` on the
+  database of each separate store (its pool and its change-feed listener, held
+  while the pool is open and outside `store_max_connections`; a store inside
+  the account database has no listener, the account listener hears it). See
+  [Catalog stores](#catalog-stores). Keep the database's `max_connections` above that, with
+  room for the command line, `okf-mcp migrate` and your own tools.
 - **Two schemas.** okf's tables are in `public`; the mail queue is apalis'
   `apalis` schema, which `migrate` sets up after okf's migrations, with its
   own migration table (`apalis._sqlx_migrations`).
@@ -405,6 +413,208 @@ With a CloudNativePG `Cluster` named `okf-mcp-db`:
 Backups belong to the database, not the server. With CloudNativePG, use the
 barman-cloud plugin: WAL archiving and base backups to the site's object
 store (section 9).
+
+## Catalog stores
+
+A **store** is a named place where catalogs keep their data. The account
+database holds everything about people and access (users, teams, keys,
+grants, sessions, settings, the registry of catalogs and stores, and the
+audit of account actions). A store holds the catalogs' own data in a schema
+named `catalog`: documents and their revisions, changesets, maintenance
+runs, each catalog's generation and the catalog audit
+(`catalog.catalog_audit_entries`).
+
+- **`main`** is the store every deployment has. Its schema is inside the
+  account database, so a deployment that adds no store keeps one database.
+  Every existing catalog is on `main`.
+- A store on **its own database** (location `host`) keeps a team's catalog
+  data apart, for example on another Postgres cluster. Add one with
+  `POST /api/v1/stores` or `okf-mcp stores add` ([Adding a store](#adding-a-store)).
+- Each catalog is on exactly one store, chosen when it is created (see
+  [Placement](#placement)) and never changed. Nothing moves a catalog between
+  stores.
+- Every store, `main` included, has a connection pool of its own, opened on
+  its first use, and each pool's `search_path` is fixed at connect (`catalog`
+  for a store, `public` for the account database). A query for account tables
+  sent to a store, or the reverse, fails with "relation does not exist", even
+  when the store is inside the account database.
+
+### Adding a store
+
+`okf-mcp stores add NAME --host H [--port 5432] --database D
+--credential-kind KIND --credential-ref REF`, or `POST /api/v1/stores`
+([Catalog stores API](#catalog-stores-api)), needs an admin that reaches every
+catalog. Create the database and its login role first; the server creates the
+`catalog` schema and its tables itself. The add:
+
+1. refuses a name, or a host, port and database, that already has a row,
+   before the new database is touched (a refused request claims nothing);
+2. connects to the new database (a store that cannot be reached is refused,
+   and the reply names no host, port or credential; the log has the cause);
+3. refuses a database that holds the account tables (the account database
+   under another host name) or whose `catalog.store_identity` names another
+   registered store (an identity naming a store with no row is left by an
+   add that failed after step 4 and is replaced, so a retry works; adds of
+   one physical database take turns, whatever host name or store name they
+   use): each physical database answers to one store name, whatever host
+   name reached it, so adding the same database twice under two names is
+   refused;
+4. migrates it (`migrations/catalog/`: the baseline, then the identity row)
+   and stores the row. Every replica then drops any pool it had for that name.
+
+The stores table never holds a password. `credential_ref` says where to get
+it:
+
+| `credential_kind` | `credential_ref` | The login |
+|---|---|---|
+| `env` | The name of an environment variable holding the password. Set it on every replica and on the host that runs `okf-mcp stores migrate` | Host, port and database come from the row and the password from the variable; the user, TLS settings and other connection options are the account database's own (the account database's password is never sent to another host) |
+| `secrets-manager` | A secret's ARN, for example `arn:aws:secretsmanager:eu-west-1:111122223333:secret:okf/acme-AbCdEf`. The secret's value is JSON with `username` and `password` (the format RDS-managed secrets use) | The secret's `username` and `password`. Read when the pool opens, and again when the database refuses a login |
+| `iam` | The database user the token is signed for (the user must be allowed to log in with IAM) | The server signs a short-lived RDS IAM token with the AWS credentials it runs with (the same chain as the mail sender's SES client) and replaces the pool's token every 10 minutes and when a login is refused. The token is signed for the region in an RDS host name (`name.id.REGION.rds.amazonaws.com`); for any other host name (a proxy, a CNAME) the server's own region is used, and there is no per-store region setting |
+
+A refused login fails the request that met it with `StoreUnavailable`; the
+pool then takes the refreshed credential, so a later request works. A
+rotation can therefore cost one failed request per replica (issue #998
+tracks a retry). The AWS credentials are used only for `secrets-manager` and
+`iam` stores.
+
+### Placement
+
+A new catalog goes on its owner team's pin if the team has one, else on the
+**default store** (the `default_store` setting, `main` until changed).
+`okf-mcp stores set-default STORE`, `stores pin TEAM STORE` and `stores unpin
+TEAM` change that, and each change is audited. Changing the default or a pin
+affects catalogs created afterwards only: existing catalogs stay where they
+are. `stores list` shows each store, which one is the default, its credential
+kind and reference, and how many teams are pinned to it. There is no command
+or route to remove a store.
+
+### Migrating stores
+
+A store's schema migrations (`migrations/catalog/`, history in
+`catalog._sqlx_migrations`) run automatically the first time a process opens
+that store's pool, under an advisory lock, so replicas starting together
+migrate once. A store whose migration fails, or whose identity names another
+store, is `StoreUnavailable` for that process (logged with the store's name);
+nothing is cached, so the next request tries again, and no other store is
+affected.
+
+`okf-mcp stores migrate` migrates every store now, in name order, trying all
+of them. It prints one line per store: the name, a tab, then `up to date`,
+`<n> applied`, `adopted, <n> applied` or `failed: <error> (the log has the
+cause)`. If any failed, it exits with an error ending `<n> of <m> stores could
+not be migrated`. Run it as a deploy step beside `okf-mcp migrate` (which
+migrates the account database and adopts `main`) when you want a failure to
+stop a rollout instead of showing up on the first request.
+
+### Connections
+
+A process holds, at most:
+
+- on the account database: `database_max_connections` for requests, 1 for the
+  change-feed listener, up to 3 for the mail and housekeeping workers (3 more
+  for the feedback worker, when on), and **`store_max_connections` for the
+  pool of the store `main`**, which is inside it;
+- on each separate store's database it has opened: `store_max_connections`,
+  and 1 for that store's change-feed listener, which is outside that limit.
+
+For N replicas, each database must allow at least:
+
+| Database | Connections |
+|---|---|
+| Account | `N x (database_max_connections + store_max_connections + 4)`, plus `3 x N` with the feedback worker |
+| Each separate store | `N x (store_max_connections + 1)` |
+
+With the defaults (16 and 8) and 3 replicas, the account database needs 84 and
+a separate store 27. These are upper bounds: a store's pool opens on first
+use and closes a connection idle for `store_idle_timeout`. Leave room for the
+command line, `okf-mcp migrate`, `okf-mcp stores migrate` and your own tools.
+
+### Upgrading to the release with separate stores
+
+The release that moves the catalog tables from `public` to the `catalog`
+schema (account migrations `0041_catalog_schema` and `0042_catalog_audit`)
+removes tables and columns that older replicas still query. **It is not a
+rolling upgrade**; use a maintenance window:
+
+1. **Snapshot the database** (section 9). Migrations are forward-only; the
+   snapshot is the way back.
+2. **Scale `serve` to zero**, every replica, so no older binary runs against
+   the database.
+3. **Run `okf-mcp migrate`** with the new image. It applies the account
+   migrations, then adopts `main`: it records the catalog baseline as already
+   applied, because the moved tables exist, and writes `main`'s identity row.
+   Then run `okf-mcp stores migrate`; it should report `main` as `up to date`.
+4. **Start the new release.**
+
+Catalog audit entries written before the upgrade stay in the account audit
+table, and the audit log reads them and the newer ones as one list, each
+exactly once ([Audit API](#audit-api)). The earlier releases of the milestone
+(registry, placement) upgrade rolling as usual, because every catalog is still
+on `main`. To go back, restore the snapshot.
+
+### When a store cannot be reached
+
+A request that needs a store that does not answer within
+`store_connect_timeout` fails with `StoreUnavailable` (HTTP 503, MCP error
+`StoreUnavailable`: "the catalog's data is temporarily unavailable; retry
+later"). The message never names the store; the log does. Catalogs on other
+stores are unaffected. A call remembers a store it found down and does not
+spend another timeout on it (with the gaps below). Loading a catalog from a
+store may take up to 6 times the timeout before the store is reported
+unavailable.
+
+- **Writes** to a catalog on a lost store fail with `StoreUnavailable`.
+- **A changeset handle** does not say which store holds it, so a lookup asks
+  the stores in turn, `main` first, and stops at the one that has it. A handle
+  found before a lost store is reached still works. The lookup fails with
+  `StoreUnavailable` only when it meets a lost store before it finds the
+  handle, which includes a well-formed handle no store holds: it cannot be
+  ruled out while a store it must ask is down. A malformed handle is refused
+  without asking any store.
+- **Merging reads** return what they could and name the rest: `search`,
+  `list_catalogs`, `list_changesets` without `catalog`, `GET /api/v1/search`,
+  `GET /api/v1/catalogs`, `GET /api/v1/changesets` and the console's search
+  add `unavailable`, a sorted list of catalog ids (only catalogs the caller
+  reaches), omitted when every store answered.
+- **First-match reads** (`get_concept`, `read_document` and `history`
+  without `catalog`) walk the connection's selection in order. They answer
+  from a catalog before the first lost store; if none of those has the
+  document, they fail with `StoreUnavailable` instead of `NotFound` or an
+  answer from a later catalog, because the catalog on the lost store might
+  have held it. Catalogs after the lost one are not consulted.
+- **`cited_by`** fails with `StoreUnavailable` if any selected catalog's store
+  is lost; it does not merge.
+- A catalog in memory whose refresh finds its store lost is unavailable too;
+  it is not served from its stale copy.
+- **Housekeeping** runs per store, so a lost store fails only its own jobs;
+  `okf_changesets_open` carries its last count. `GET /healthz` checks the
+  account database only, so a lost store does not make a replica unready.
+
+Known gaps, each tracked as an issue: some reads on an already open store pool
+report a timeout as a database error (HTTP 500) instead of `StoreUnavailable`
+(#995), and two paths probe a store already found down again within one call
+(#1017). Treat a 500 from a catalog on a separate store whose database is
+down as the same outage.
+
+### What a separate store does and does not separate
+
+A catalog's content, history and catalog audit (paths, commit messages) are
+only in its store's database. That is all a store separates. These stay
+shared, so a store is not a secrecy boundary against whoever runs the server
+or the account database:
+
+- the **account database** holds users' names and emails, credential labels,
+  team and catalog **names**, who may reach them, and the audit of account
+  actions, which names catalogs and teams;
+- the **job queue** is in the account database; a housekeeping job names a
+  store and a slot, never a catalog's content;
+- every replica's **in-memory caches** hold the content of the catalogs it
+  has read, from whichever store;
+- **logs** name catalogs and stores (the local log names the store of a
+  `StoreUnavailable`); [Telemetry](#telemetry) says what is exported.
+
+Say which of these a deployment shares when you describe a store as
+segregated.
 
 ## Redis
 
@@ -724,11 +934,29 @@ two). What `[redis]` does not share:
   minutes), `prune_oauth` (idle OAuth grants, expired tokens and codes,
   unbound registered clients, sign-in events, emailed-link tokens, console
   sessions, mail jobs, finished housekeeping jobs and forwarded feedback,
-  hourly), `prune_audit` (the audit log, daily), `prune_workers` (hourly)
-  and `cluster_stats` (every minute). Every replica's ticker pushes each
+  hourly), `prune_audit` (the audit log, daily), `prune_workers` (hourly),
+  `cluster_stats` (every minute), `provision_catalogs` (every minute; see
+  [Half-created catalogs](#half-created-catalogs)) and `cleanup_stores` (every
+  minute; see [Store cleanup](#store-cleanup)). Every replica's ticker pushes each
   task's current slot once a minute; a unique key per slot makes the other
   replicas' pushes no-ops, so each slot runs once, on whichever replica's
-  worker takes it. A failed job is retried twice with a backoff; a slot
+  worker takes it. The work on catalog data runs as one job per catalog
+  store, keyed `<task>:<store>:<slot>` (cluster jobs are `<task>:<slot>`):
+  `prune_changesets`, the store half of `prune_audit` (each store's
+  catalog events, past the same `audit_retention_days`) and the open
+  changeset count of `cluster_stats`. The ticker reads the `stores` table on
+  every push, so a store added while the replicas run gets its jobs within a
+  minute. A store that is down fails only its own jobs, which are retried.
+  A store job's own prune, count and write statements run under a 20 s
+  `lock_timeout` and `statement_timeout`, so a held lock doesn't keep a
+  worker waiting. Each step of a job (opening the store, the prune, the
+  count, the account write) also has its own 30 s `tokio` backstop, so a
+  job of several steps can run longer than 30 s in all, but no one step
+  can. Finding and opening
+  the store is bounded by `store_connect_timeout` instead, a store's
+  first-open migrations by the backstop alone, since a migration can
+  legitimately run long, and `prune_audit`'s read of the retention setting
+  by its own timeout, outside the step backstops. A failed job is retried twice with a backoff; a slot
   missed while every replica was down is not caught up, and the next slot
   does the same work. `okf_housekeeping_runs_total` counts the runs. A
   replica looks a slot up before pushing it, so a slot already scheduled
@@ -737,9 +965,39 @@ two). What `[redis]` does not share:
   unique index: the Postgres log then shows one `duplicate key value
   violates unique constraint "idx_jobs_idempotency_key"` error, which the
   server ignores.
+- <a id="half-created-catalogs"></a>**Half-created catalogs.** Creating a
+  catalog takes three steps: the registry row is inserted with
+  `provisioned_at` empty, the store side (the starter files) is written under
+  the catalog's lock on its store, and `provisioned_at` is set. Until the
+  last step the catalog does not exist for any lookup, listing or
+  permission check, and its name is taken. A create that stops between the
+  steps (a crash, a failed store connection) leaves a row that the
+  `provision_catalogs` task, which looks at rows older than a minute, takes
+  the same lock for: if the store side is there it sets `provisioned_at`; if
+  not it records `catalog.deleted` with `failed_create: true` in the details
+  and removes the row, freeing the name. A create that was only slow is never
+  removed, because both sides take the lock, not because of the age: the
+  create either commits first (and the task finishes the catalog) or waits
+  behind the task, finds its row gone and fails with a retryable `Busy`.
+  Each recovery attempt is bounded: its transactions run with
+  `lock_timeout` and `statement_timeout` set to `store_connect_timeout`, and
+  the whole attempt, including the store's first open and migration, is
+  dropped after six times that (30 s by default). A store that stalls, or a
+  catalog lock another connection holds, fails that attempt; the task skips
+  that store's other rows for the rest of the run, keeps the first failure
+  as its result (so the job is retried), and goes on to the catalogs on
+  other stores. The row stays pending. There is no separate setting.
+  The first release that writes unprovisioned rows must run only after every
+  replica runs one that hides them (plan decision P11). Rows stuck for long
+  show up as `SELECT id, name, created_at FROM catalogs WHERE provisioned_at
+  IS NULL`; a failed job is logged as `recovering a half-created catalog
+  failed`.
 - **Cluster gauges.** `okf_changesets_open` and `okf_mail_queue_depth` come
   from the `cluster_stats` row, which every replica reads once a minute, so
   all replicas report the same value: use `max()` across replicas.
+  `okf_changesets_open` is the sum of each store's last count
+  (`cluster_store_stats`), so a store that cannot be reached contributes the
+  count it had when it was last reached.
 - **`okf_mcp_sessions_active`** counts the sessions each replica holds. A
   session restored on a second replica counts there too, so the sum over
   replicas can exceed the number of live sessions.
@@ -1398,7 +1656,7 @@ the dotted originals.
 | `okf_ratelimit_fallbacks_total` | counter | `limiter` | Decisions this replica's own bucket made because the shared (Redis) bucket failed, by the same `limiter` values. Any rate above 0 means the effective limit is the configured one times the replica count; alert on it. Only with `[redis]` |
 | `okf_mail_jobs_total` | counter | `provider`, `outcome` | Mail tries. `provider` is the configured one; `outcome` is `sent`, `retry` or `failed` |
 | `okf_mail_queue_depth` | gauge | `status` | Mail not yet sent, as of the last `cluster_stats` housekeeping job (the same on every replica): `pending`, `sending`, `retrying` or `failed` |
-| `okf_housekeeping_runs_total` | counter | `task`, `outcome` | Housekeeping jobs run on this replica. `task` is `prune_changesets`, `prune_oauth`, `prune_audit`, `prune_workers` or `cluster_stats`; `outcome` is `ok` or `error` (an error is retried) |
+| `okf_housekeeping_runs_total` | counter | `task`, `outcome` | Housekeeping jobs run on this replica. `task` is `prune_changesets`, `prune_oauth`, `prune_audit`, `prune_workers`, `cluster_stats`, `provision_catalogs` or `cleanup_stores`; `outcome` is `ok` or `error` (an error is retried) |
 | `okf_housekeeping_duration_seconds` | histogram | `task` | Housekeeping job duration |
 | `db_client_connection_count` | gauge | `state` | Postgres pool connections: `idle` and `used` sum to the pool's size |
 | `okf_clock_checks_total` | counter | `outcome` | Clock checks against `time_server` |
@@ -1727,7 +1985,7 @@ replica that took the request.
 | `okf-mcp team unsuspend NAME` | Lifts the suspension. Prints `lifted the suspension of team NAME`; no change when the team is active |
 | `okf-mcp catalog create NAME --owner TEAM [--display-name TEXT] [--description TEXT]` | `--owner` is required |
 | `okf-mcp catalog update NAME [--display-name TEXT] [--description TEXT]` | At least one flag is required; prints one `updated catalog NAME <field>: "old" -> "new"` line per flag given |
-| `okf-mcp catalog repair-indexes [NAME...] [--missing-only] [--dry-run] [--actor ACTOR]` | Adds the root `index.md`, `log.md`, folder indexes and listings the named catalogs are missing, rewrites old raw (unencoded) concept and folder listings, and publishes them at once. `--missing-only` keeps only catalogs without a root `index.md` (every such catalog when none is named); `--dry-run` writes nothing. Prints, per catalog, its summary, the files written and a note per created file and `TODO` placeholder, then `repaired N of M catalog(s)`. A failing catalog does not stop the others; the command then exits non-zero naming it. Revisions record `ACTOR` (default `okf-mcp/repair-indexes`) and the message `repair indexes` |
+| `okf-mcp catalog repair-indexes [NAME...] [--missing-only] [--dry-run] [--actor ACTOR]` | Adds the root `index.md`, `log.md`, folder indexes and listings the named catalogs are missing, rewrites old raw (unencoded) concept and folder listings, and publishes them at once. `--missing-only` keeps only catalogs without a root `index.md` (every such catalog when none is named); `--dry-run` writes nothing. Prints, per catalog, its summary, the files written and a note per created file and `TODO` placeholder, then `repaired N of M catalog(s)`. It visits every store and repairs each catalog on the store that holds it. A failing catalog or store does not stop the others; the command then exits non-zero naming it. Revisions record `ACTOR` (default `okf-mcp/repair-indexes`) and the message `repair indexes` |
 | `okf-mcp catalog set-owner NAME --team TEAM` | Moves a catalog to another team, or gives a legacy catalog its first owner. Prints `catalog C: owner OLD -> NEW` (`(none)` for a legacy catalog) |
 | `okf-mcp catalog set-member-access NAME --access none\|read\|write` | What members of the owner team reach through their own keys and grants (default `write`). Prints `catalog C: member access OLD -> NEW` |
 | `okf-mcp catalog set-maintenance NAME on\|off` | Lets the maintenance runner check the catalog (`on`, the default) or keeps it out (`off`); see [The maintenance runner](#unlock-before-access). Prints `catalog C: maintenance OLD -> NEW` |
@@ -1850,14 +2108,71 @@ forces the migration to finish: assigning is bookkeeping, and an unassigned
 credential authenticates as before (`whoami` shows `user: null`). Making the
 columns `NOT NULL` once nothing is unassigned is future work (#296).
 
+### Store cleanup
+
+A catalog or key deletion commits on the account database first and owes the
+rest to the store its data lives on: one row in `store_cleanups`, written in
+the same transaction. The `cleanup_stores` job (every minute, once per
+cluster) drains the rows store by store, up to 100 per store per run. For a
+deleted catalog it removes the store's rows (the cascade from
+`catalog_state`; the catalog's audit entries stay) and then the `catalogs`
+row; until then the name stays reserved and no reader sees the catalog. Until
+then, deleting the team or user that owns the catalog is refused (409) with
+`catalog "<name>" is still being deleted; try again shortly`; retry after the
+next run. For a
+deleted key it discards the key's open changesets (a `catalog.changeset_discarded`
+entry with `reason` `key_deleted` each) and clears the key from the store's
+changeset and maintenance-run history.
+
+A store that is down, or a cleanup that fails, is retried every run: the row
+counts its `attempts`, and a store that fails never holds up the others or the
+deletion itself, and a row that keeps failing is tried after the rows that
+have failed less, so it cannot starve the rest of its store. Past 20 attempts the job logs `a store cleanup keeps failing` at
+error level on every run and keeps the row; look at `store_cleanups` for the
+store, kind and subject, and fix the store (its credential, its reachability).
+If the store's commit fails after the account's, the catalog is gone from
+every lookup and its data stays unmarked until the cleanup removes it all the
+same.
+
+Each attempt is bounded, at the database first. Every statement the job
+issues, on the account database and on a store, runs in a transaction that
+sets `lock_timeout` and `statement_timeout` to 20 seconds (`LIMITS.wait`, a
+constant, not a setting), so PostgreSQL itself gives up on a row held under a
+lock (a changeset another session has `FOR UPDATE`, a catalog's `catalog_state`
+row, a default key's row) and rolls the transaction back. A `tokio` timeout of
+30 seconds per row (`LIMITS.attempt`) wraps the attempt as a backstop for what
+the database cannot bound, such as a store that stops answering; dropping a
+future does not cancel its statement, which is why the database bound comes
+first. An attempt that fails either way is counted as a failed try like any
+other, and the run goes on to the next row and store. A catalog's cleanup
+removes the store's data and commits that before it takes the account half, so
+no attempt holds a store connection while it waits for an account one, or the
+reverse. A user's keys are deleted with their `maintenance_runs` and
+changeset references cleared by the cleanup; a maintenance claim and a
+changeset open each hold the key's row `FOR KEY SHARE` until their store
+commit, so the deletion waits for them and the cleanup it owes then finds
+what they wrote.
+
+One failure never ends the run. The only error that stops it is the first
+read of which stores have rows (the account database cannot be reached).
+Everything else is tied to one store or one row and stays there: a store
+that cannot be opened, a store whose rows cannot be read, a row that fails,
+and even counting a failed try (say the row itself is locked by another
+session) are logged with the store and the row's `id` and the run goes on to
+the next row and store. A try that could not be counted is logged at error
+level as `a store cleanup failed and its try could not be counted`; the row
+keeps its old `attempts` and is tried on the next run.
+
 ### Deletion rules
 
 Deleting a user takes everything that is only theirs, in one transaction:
 its keys and OAuth grants (revoked ones too), sign-in codes, console
 sessions, passwords, passkeys, sign-in identities, emailed links, sign-in
 events, entitlements, team memberships and personal team. The open
-changesets of its keys and grants are discarded, each with a
-`catalog.changeset_discarded` audit entry. Catalogs, their history (whose
+changesets of its keys and grants are discarded a little later, each with a
+`catalog.changeset_discarded` audit entry, by the `cleanup_stores` job
+([Store cleanup](#store-cleanup)): the deletion owes it in the same
+transaction, so it is never lost. Catalogs, their history (whose
 `actor` text stays as written) and every audit entry are kept; the deletion
 is recorded as `user.deleted`, and from then on the log names the user
 `deleted user #N` and its credentials `credential #N`.
@@ -2105,7 +2420,7 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | Action | Recorded when | Details |
 |---|---|---|
 | **Users** | | |
-| `user.deleted` | A user is deleted (`user delete`, `DELETE /api/v1/users/{name}`, the console), or deletes their own account (`DELETE /api/v1/me`, with the person as the actor). A refused deletion records nothing | `keys` (keys and grants deleted), `codes` (sign-in codes deleted), `changesets_discarded` |
+| `user.deleted` | A user is deleted (`user delete`, `DELETE /api/v1/users/{name}`, the console), or deletes their own account (`DELETE /api/v1/me`, with the person as the actor). A refused deletion records nothing | `keys` (keys and grants deleted), `codes` (sign-in codes deleted) |
 | `user.created` | A user is created (`user create`, `POST /api/v1/users`, the console). A refused create records nothing | none |
 | `user.email_changed` | A user's email is set or cleared (`user set-email`, `PUT /api/v1/users/{name}/email`). A change of letter case only, or clearing an email that is not set, records nothing | `cleared` (never the address) |
 | `user.display_name_changed` | A user's display name changes. A provisioner is refused an admin user; the same text again, and a refused change, record nothing | `length` (in characters; never the text) |
@@ -2130,7 +2445,7 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | `catalog.display_name_changed` | A catalog's display name changes, by an admin on the catalog or an owner of its team. The same text again, and a refused change, record nothing | `length` (in characters; never the text) |
 | `catalog.member_access_changed` | A catalog's member access changes (`catalog set-member-access`, `PUT /api/v1/catalogs/{catalog}/member-access`). The same value again records nothing | `from`, `to` (`none`, `read` or `write`) |
 | `catalog.maintenance_changed` | A catalog's maintenance flag changes (`catalog set-maintenance`, `PUT /api/v1/catalogs/{catalog}/maintenance`), by an admin that reaches every catalog or an owner of its team signed in to the console. The same value again, and a refused change, record nothing | `from`, `to` (`on` or `off`) |
-| `catalog.deleted` | A catalog is deleted (`catalog delete`, `DELETE /api/v1/catalogs/{catalog}`), recorded before the row goes. A refused deletion records nothing | `forced` (unpublished changes were deleted with it), `generation` |
+| `catalog.deleted` | A catalog is deleted (`catalog delete`, `DELETE /api/v1/catalogs/{catalog}`), recorded in the deleting transaction, which also marks the catalog deleted and owes the store cleanup ([Store cleanup](#store-cleanup)). A refused deletion records nothing | `forced` (unpublished changes were deleted with it), `generation` |
 | `catalog.repaired` | `okf-mcp catalog repair-indexes` writes at least one file (a dry run, or a catalog with nothing missing, records nothing) | `files` (the paths written), `generation` (after the repair) |
 | `catalog.imported` | An import writes or deletes at least one file (`okf-mcp import`, `POST /catalogs/{name}/import` and its `/api/v1` twin, the console). An import that changes nothing, or is refused, records nothing | `replace`, `scope` (`everything` or `machinery`), `written` (files added or changed), `deleted`, `generation` (after the import) |
 | **Credentials** | | |
@@ -2144,10 +2459,14 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | **Settings** | | |
 | `setting.changed` | `settings set` or `PUT /api/v1/settings/{key}` changes a setting ([Settings](#settings)). Setting the value already stored records nothing | `from` (the stored value before, `null` without an override) and `to`; for `support_contact` only `set` (whether a contact is set now), never the address |
 | `setting.cleared` | `settings reset` or `DELETE /api/v1/settings/{key}` removes an override (with none, nothing is recorded) | `from`; nothing for `support_contact` |
+| **Catalog stores** | | |
+| `store.added` | `stores add` or `POST /api/v1/stores` adds a store (target kind `store`, named by the store). Refused additions record nothing | `location` (`host`) and `credential_kind`; never the host, port or credential reference |
+| `setting.default_store_changed` | `stores set-default` or `PUT /api/v1/settings/default_store` changes the default store (target: the setting `default_store`). The same store again records nothing | `from`, `to` (store names) |
+| `team.store_pinned`, `team.store_unpinned` | `stores pin` / `stores unpin` or `PUT` / `DELETE /api/v1/teams/{team}/store` changes a team's pin. An unchanged pin records nothing | `from`, `to` (store names, `null` for no pin) |
 | **Catalog writes** | | |
 | `catalog.published` | A publish (the `publish` tool, `POST /api/v1/changesets/{handle}/publish`, the console's Publish) writes at least one revision (one that changes nothing writes none and records nothing). Moves, splits and concept deletes are publishes and are recorded as such | `changeset` (the handle; the diff stays in the catalog's history), `files` (revisions written), `generation_from`, `generation_to` |
 | `catalog.reverted` | A `revert` succeeds: a document's old revision (or its deletion) goes into a changeset. A refused revert records nothing | `path`, `revision`, `changeset` |
-| `catalog.changeset_discarded` | An admin closes another key's changeset (`discard` without `paths`, or `DELETE /api/v1/changesets/{handle}`), or a user deletion discards an open changeset of one of the user's keys (the entry's person is that user). A key discarding its own changeset records nothing | `changeset`, `files` (entries dropped), `reason` (`admin` or `user_deleted`) |
+| `catalog.changeset_discarded` | An admin closes another key's changeset (`discard` without `paths`, or `DELETE /api/v1/changesets/{handle}`), or the store cleanup after a user deletion discards an open changeset of one of the deleted user's keys (`reason` `key_deleted`; the entry's person is the system). A key discarding its own changeset records nothing | `changeset`, `files` (entries dropped), `reason` (`admin` or `key_deleted`) |
 | **Data access** | | |
 | `catalog.exported` | Every export, whoever asks: `okf-mcp export` (source `cli`), `GET /catalogs/{name}/export` and its `/api/v1` twin, the console. Written before the archive is compressed; an export whose entry cannot be written fails. A refused export records nothing | `generation` (the one the archive holds), `files`, `catalog_id`; the entry belongs to the team that owned the catalog when it was read |
 | `catalog.admin_read` | An admin credential reads a catalog's contents (MCP read tools, a changeset read, the console's and the API's browse, history and search routes) and its user is not in the catalog's owner team; a key with no user always counts. One entry per credential (or session user), catalog identity, owning team and clock hour, with an exact request count; members' reads, writes (recorded as publishes) and paths that read no contents (listing catalogs or changesets, opening a changeset, the connection's catalog list) record nothing. Only the catalogs a call actually reads count: a read that answers from the first catalog of a connection's list records only that one | `hour` (its start), `catalog_id` (the catalog's immutable id), and the request count |
@@ -3818,6 +4137,30 @@ reaches every catalog.
 | `POST /api/v1/mail/queue/{id}/retry` | admin, every catalog | Sends failed mail again now, with a new 24-hour retry window; 204. 404 for an unknown id, 409 for mail that has not failed |
 | `DELETE /api/v1/mail/queue/{id}` | admin, every catalog | Deletes mail that is not being sent right now; 204. 404 for an unknown id, 409 while a worker is sending it |
 
+### Catalog stores API
+
+The routes behind `okf-mcp stores ...`. Reading needs any admin key; every
+change needs an admin key that reaches every catalog (403 for any other key,
+a provisioner key included). A change is recorded in the [audit
+log](#audit-log) in its own transaction and sent to every replica, which
+drops its pool for the changed store. None of these moves a catalog: a
+catalog's store is chosen when it is created (its owner team's pin, else the
+default store) and never changes.
+
+| Method and path | Key | Does |
+|---|---|---|
+| `GET /api/v1/stores` | admin | `{stores}` in name order: `name`, `location` (`account-database` or `host`), `host`, `port`, `database`, `credential_kind`, `credential_ref` (a variable name, secret ARN or IAM identity, never the credential; all `null` for `main`), `created_at`, `is_default`, `pinned_teams` (a count) |
+| `POST /api/v1/stores` | admin, every catalog | Body `{name, host, port, database, credential_kind, credential_ref}` (`credential_kind` is `env`, `secrets-manager` or `iam`). Opens a connection to the new store first and answers 201 with the store only if that works. 409 when it cannot be reached (the reply names no host, port or credential; the cause is in the server log), when a name or a host, port and database is already used (refused before the store's database is touched), or when the store's schema cannot be migrated (a retry is safe: a database left claimed by an add that failed is re-claimed by the next add); 422 for a malformed body |
+| `PUT /api/v1/settings/default_store` | admin, every catalog | Body `{value}`, a store's name. Answers `{key, value}`. 404 for an unknown store |
+| `PUT /api/v1/teams/{team}/store` | admin, every catalog | Body `{store}`. Pins the team: catalogs it owns are created there from now on. Answers `{team, store, changed}`. 404 for an unknown team or store |
+| `DELETE /api/v1/teams/{team}/store` | admin, every catalog | Removes the pin; answers `{team, store: null, changed}`. 404 for an unknown team |
+
+The command line has the same operations: `stores list`, `stores add NAME
+--host H [--port 5432] --database D --credential-kind env --credential-ref
+VAR`, `stores set-default STORE`, `stores pin TEAM STORE` and `stores unpin
+TEAM`. They have no console control yet, so `stores` is not in the parity
+table above. There is no command or route to remove a store.
+
 ### Audit API
 
 The routes behind reading the [audit log](#audit-log). Who reads what:
@@ -3854,12 +4197,31 @@ team by its user's name), `action` (one action name; 400 for an unknown
 one), `actor` (a person, credential id or actor label), `target` (a target
 name, a target person, or a credential id), `since` and `until` (RFC 3339;
 `since` inclusive, `until` exclusive; 400 otherwise), `after` (the cursor:
-entries older than this id; 400 when it is not an integer, or for an owner
-not a cursor issued for that team) and `limit` (1 to 500, default 100). A
-filter that can name nothing (a malformed team, a NUL) matches no entry.
+entries older than this position; 400 when it is not a cursor, a bare entry
+id included, or for an owner not a cursor issued for that team) and `limit`
+(1 to 500, default 100). A filter that can name nothing (a malformed team,
+a NUL) matches no entry.
 
-An entry is `{id, at, action, source, actor, ip, target, teams, details,
-requests}` (a team owner's has no `id`, below): `actor` is `{"kind": "operator"}` or `{"kind": "known", person,
+Where entries live: the six catalog events (`catalog.published`,
+`catalog.imported`, `catalog.repaired`, `catalog.reverted`,
+`catalog.changeset_discarded`, `catalog.maintenance_run`) are written in
+the store of the catalog they are about, in the transaction that makes the
+change, so an entry exists exactly when its change does. Every other action
+is written to the account database, and so are catalog events written
+before stores were split. The log reads the account database and every
+store together and merges them by time, then store, then id, newest
+first, so an entry appears once and a page never skips or repeats one. Ids
+are per source: an entry's `id` is only unique together with its `store`.
+Entries stay readable after their catalog is deleted or moved to another
+team, and names are read from the account database when the page is built,
+so deleting a user clears their name in store entries too. A store that
+cannot be reached fails the request (503) instead of returning a page
+without its entries.
+
+An entry is `{id, store, at, action, source, actor, ip, target, teams,
+details, requests}` (`store` is the name of the store the entry is on, left
+out for the account database; a team owner's has neither `id` nor `store`,
+below): `actor` is `{"kind": "operator"}` or `{"kind": "known", person,
 credential, label, operator}`; `ip` is `null` when not shown; `target` is
 `{kind, name, person}` (`name` is `null` for a user); `teams` are names,
 a personal team shown as its user; `requests` is a `catalog.admin_read`
@@ -3869,13 +4231,15 @@ A team owner never sees an entry id (issue #430). Ids are one sequence
 across the whole server, so the gaps between two of a team's entries would
 show how much every other team did in between. An owner's entries, on the
 page and in the export, have no `id` key, and an owner's `next_after` is an
-opaque string: the next entry's id and the owner's team, encrypted
+opaque string: the next entry's position (time, store and id) and the owner's team, encrypted
 (ChaCha20-Poly1305, a fresh random nonce each time, so two cursors for the
 same place look unrelated) under a server key. Pass it back unchanged as
-`?after=`. It is the only cursor an owner's request accepts: a raw id, an
-altered cursor, or one issued for another team the user owns is 400
-(`InvalidPath`, the same message whatever is wrong) and shows no entries.
-Admins and provisioners keep the integer `id` and an integer `next_after`.
+`?after=`. It is the only cursor an owner's request accepts: a readable
+cursor, an altered cursor, or one issued for another team the user owns is
+400 (`InvalidPath`, the same message whatever is wrong) and shows no
+entries. Admins and provisioners keep the integer `id` and get a readable
+`next_after`, `<microseconds>:<store>:<id>` (the store is empty for the
+account database); treat it as opaque and pass it back as `?after=`.
 
 The key is 32 random bytes the server creates the first time an owner
 reads the log, in the `server_keys` table (row `audit_cursor`), so every
@@ -3889,7 +4253,7 @@ from the first page with Refresh; no entry is lost or shown to anyone else.
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/audit` | admin, every catalog; a team owner's console session with `?team=`; a provisioner | `{entries, next_after, actions}`: entries newest first, at most `limit`; `next_after` is the last entry's id when the page is full (an owner's is an opaque string instead; pass either as `?after=`; a full last page is followed by an empty one), else `null`; `actions` lists every action name |
+| `GET /api/v1/audit` | admin, every catalog; a team owner's console session with `?team=`; a provisioner | `{entries, next_after, actions}`: entries newest first, at most `limit`; `next_after` is the last entry's cursor when the page is full (readable for an admin or a provisioner, sealed for an owner; pass it back as `?after=`; a full last page is followed by an empty one), else `null`; `actions` lists every action name |
 | `GET /api/v1/audit/export` | as `GET /api/v1/audit`, not a provisioner | Every entry the filters select (`after` starts it, an owner's opaque cursor for an owner; `limit` is ignored), newest first, as JSON Lines (`application/x-ndjson`, one entry per line, downloaded as `audit.jsonl`) |
 
 ```sh
@@ -3903,12 +4267,12 @@ as an every-catalog admin), taking the same filters as flags (`--team`,
 `--limit`) and refusing a bad one the same way:
 
 ```sh
-# Newest first, one tab-separated line per entry: id, time, action, actor
+# Newest first, one tab-separated line per entry: cursor, time, action, actor
 # (`person NAME`, else `credential ID`, else the actor label), target
 # (`user NAME`, or `KIND NAME`, then `person NAME` when the entry names one),
 # teams (comma-separated, `-` for none) and the details as JSON. Control
-# characters in names and labels are escaped. Pass a full page's last id as
-# --after for the next page.
+# characters in names and labels are escaped. Pass a full page's last cursor
+# (the first column) as --after for the next page.
 okf-mcp audit list --action user.created --limit 20
 
 # Every matching entry as JSON Lines, the records `GET /api/v1/audit/export`
@@ -4027,7 +4391,7 @@ whole body and scrolls to that heading.
 | `GET /api/v1/catalogs/{catalog}/revisions/{n}/{path}` | read | `text` at revision `n` (null for a deletion or non-text bytes) and a unified `diff` from revision `n-1` |
 | `GET /api/v1/catalogs/{catalog}/documents/{path}` | read | `read_document` (any `index.md` or `log.md`, the root `AGENTS.md`) plus `body_html` |
 | `GET /api/v1/catalogs/{catalog}/recent-changes?limit=&after=` | read | The catalog's published revisions, newest first: `{catalog, catalog_label, changes, next_after}`, each change `{path, title, description, revision, op, actor, actor_label, message, at}` (`title` and `description` as the catalog has the document now; null for a deletion or a document gone since), content left out. Revisions sharing a time come by path, then revision, both descending. `limit` 1..=200 (default 50; outside is 409); `after` is the previous page's `next_after` (an unknown or malformed one is 404); `next_after` is `null` on the last page |
-| `GET /api/v1/search?q=&catalogs=&limit=` | read | The `search` tool. `catalogs` is comma-separated and defaults to every catalog the key reaches, if it reaches at most `search_fanout_max` (25); past that, leaving `catalogs` out is a 400 (`InvalidPath`, "name the catalogs to search (at most 25 are searched by default)"). Naming more than `search_fanout_max` distinct catalogs is also a 400 (`InvalidPath`, "name at most 25 catalogs to search at once"); a repeated name counts once. A named catalog it does not reach is a 404. Each hit also has `snippet_text`: the text of the snippet's block from its line on, without markdown syntax, cut to 160 characters with an ellipsis (null without a snippet) |
+| `GET /api/v1/search?q=&catalogs=&limit=` | read | The `search` tool. `catalogs` is comma-separated and defaults to every catalog the key reaches, if it reaches at most `search_fanout_max` (25); past that, leaving `catalogs` out is a 400 (`InvalidPath`, "name the catalogs to search (at most 25 are searched by default)"). Naming more than `search_fanout_max` distinct catalogs is also a 400 (`InvalidPath`, "name at most 25 catalogs to search at once"); a repeated name counts once. A named catalog it does not reach is a 404. Each hit also has `snippet_text`: the text of the snippet's block from its line on, without markdown syntax, cut to 160 characters with an ellipsis (null without a snippet). `unavailable` lists the catalogs left out because their store could not be reached (absent when empty); the others still answer |
 
 A catalog the key does not reach, or that does not exist, is 404 on all
 eight.
@@ -4045,7 +4409,7 @@ curl -s -H "Authorization: Bearer $OKF_MCP_KEY" \
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/catalogs?after=&limit=` | any | One page of the catalogs the key reaches, by name (see [Catalog listings are paginated](#catalog-listings-are-paginated)), as `{catalogs, next}`, each catalog with `name`, `display_name`, `label` (the display name, else the description, else "Untitled catalog"), `description`, `owner_team` (`null` when unassigned), `owner_team_label`, `files`, `concepts`, `generation` (of the loaded snapshot, what `expect_generation` compares against), `last_change` (`null` when empty), `suspended` (`{team, notice}` while its owner team is suspended, otherwise `null`: a suspended catalog is listed, never hidden; see [Suspending a team](#suspending-a-team)) and `maintenance` (`on` or `off`) |
+| `GET /api/v1/catalogs?after=&limit=` | any | One page of the catalogs the key reaches, by name (see [Catalog listings are paginated](#catalog-listings-are-paginated)), as `{catalogs, next}`, each catalog with `name`, `display_name`, `label` (the display name, else the description, else "Untitled catalog"), `description`, `owner_team` (`null` when unassigned), `owner_team_label`, `files`, `concepts`, `generation` (of the loaded snapshot, what `expect_generation` compares against), `last_change` (`null` when empty), `suspended` (`{team, notice}` while its owner team is suspended, otherwise `null`: a suspended catalog is listed, never hidden; see [Suspending a team](#suspending-a-team)) and `maintenance` (`on` or `off`). When a store cannot be reached, `unavailable` lists the ids of this page's catalogs left out because of it ([When a store cannot be reached](#when-a-store-cannot-be-reached)); it is absent otherwise |
 | `POST /api/v1/catalogs` | admin, every catalog | `{name, display_name, description, owner}` (`display_name` and `description` optional, `display_name` checked as for users; `owner` required, a team's name). 201 with the new catalog's summary; 403 for a key granted named catalogs, since it would not reach the new one; 404 for an unknown owner; 409 for an invalid or taken name; 422 without `owner` or for a refused `display_name` |
 | `PATCH /api/v1/catalogs/{catalog}` | admin on the catalog; an owner of its owner team signed in to the console; a provisioner | `{display_name?, description?}`, at least one (`deny_unknown_fields`). Answers `{name, previous, description, previous_display_name, display_name, label}`. 422 for a refused `display_name`. The CLI is `catalog update` |
 | `GET /api/v1/labels?after=&limit=` | any credential; not a provisioner | `{users, teams, catalogs, next}`, each of the first three a map from id to label. `catalogs` is one page of the catalogs the caller reaches (paginated as `GET /api/v1/catalogs`; labels shared within a page are told apart). Every caller, an admin that reaches every catalog included, gets its own user, its teams and the owner teams of the catalogs on its page. The console reads it to show labels where an answer names something by id (see [Display names and labels](#display-names-and-labels)) |
@@ -4183,7 +4547,7 @@ a drawer opened again meanwhile.
 
 | Method and path | Key | Does |
 |---|---|---|
-| `GET /api/v1/changesets?catalog=` | read | The key's own open changesets; an admin's: every key's. `catalog` is optional (absent or empty: every catalog the key reaches; an unreached one is 404). As `list_changesets`: `changeset`, `catalog`, `key`, `key_name`, `actor`, `created`, `last_change`, `idle`, `paths` |
+| `GET /api/v1/changesets?catalog=` | read | The key's own open changesets; an admin's: every key's. `catalog` is optional (absent or empty: every catalog the key reaches; an unreached one is 404). As `list_changesets`: `changeset`, `catalog`, `key`, `key_name`, `actor`, `created`, `last_change`, `idle`, `paths`, plus `unavailable` (catalog ids on a store that could not be reached, absent when empty) |
 | `GET /api/v1/changesets/{handle}/diff` | owner or admin | As `pending_changes`: `{catalog, changeset, files}`, each file with its unified `diff`. 404 for another key's handle; 409 once published or discarded |
 | `POST /api/v1/changesets/{handle}/publish` | write (owner) or admin | As `publish`, with the body `{"message": "..."}`: `{catalog, catalog_label, changeset, published, revisions, warnings, replayed}`, each revision `{path, revision, op}`. `published: false` means the changeset held no entries and stays open; `published: true` with no revisions means every edit matched the published text, and it is closed. The revisions and the `catalog.published` entry are the caller's (an admin's own, when it publishes another key's changeset). 404 for another key's handle or an unknown one; 403 for a suspended or locked catalog, or the maintenance runner where maintenance is off; 409 for a blank message (`Refused`), a published or discarded handle (`Refused`) or a conflict (`Conflict`, with `files`: `path`, `base_revision`, `current_revision`); 422 for lint errors in the changed files (`LintFailed`, with `errors` and `warnings`) or a body without `message`. A refused publish leaves the changeset open and unchanged |
 | `DELETE /api/v1/changesets/{handle}` | write (owner) or admin | As `discard` without `paths`: drops every entry and closes the handle for good (`{catalog, changeset, removed, closed}`). An admin closing another key's changeset is recorded in the [audit log](#audit-log). 404 for another key's handle; 409 once published or discarded |
@@ -4638,6 +5002,10 @@ take the server out of service. Alert on the `error` log line, not on
    `RollingUpdate` (section 5), the new pod starts beside the old ones and
    each pod is replaced once the new one is ready.
 
+- **The release that adds separate catalog stores is not a rolling
+  upgrade.** It moves tables between schemas; follow [Upgrading to the
+  release with separate stores](#upgrading-to-the-release-with-separate-stores)
+  (snapshot, scale to zero, migrate, start).
 - **Migrations are forward-only.** Once a new version has migrated the
   database, an older binary refuses to start against it. To roll back past a
   migration, restore the database from a backup taken before the upgrade

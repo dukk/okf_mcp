@@ -658,7 +658,7 @@ async fn investigator_client_real_slice1_http_nine_tools() {
     )
     .await;
     let key = keys::create(
-        app.app.pool(),
+        app.app.accounts().executor(),
         &NewKey {
             name: "reporter",
             access: Access::Read,
@@ -738,7 +738,7 @@ async fn investigator_client_real_slice1_http_nine_tools() {
     assert_eq!(report["work"][0]["assessment"], "unverifiable");
     crate::invalidate::testing::applied(&app.app, async {
         keys::revoke(
-            app.app.pool(),
+            app.app.accounts().executor(),
             "reporter",
             &crate::store::audit::AuditActor::cli(),
             chrono::Utc::now(),

@@ -33,8 +33,10 @@ use crate::overlay::Overlays;
 use crate::shared;
 use crate::store::audit::{self, AccessKind, AccessRecord, ProvisionerUse};
 use crate::store::catalogs::{CatalogGeneration, CatalogRow};
+use crate::store::changesets::ChangesetKey;
 use crate::store::settings::{self, Settings};
 use crate::store::{catalogs, unlocks};
+use crate::stores::{AccountDb, CatalogDb, PoolSettings, StoreName, Stores};
 use crate::telemetry::metrics::{AnnouncementResult, Metrics, Outcome};
 use crate::telemetry::subscriber::split_event;
 
@@ -67,7 +69,12 @@ struct LoadedSettings {
 /// The state every route and tool shares. Built once by [`App::load`] and
 /// shared as an `Arc<App>`.
 pub struct App {
-    pool: PgPool,
+    // The account database: users, teams, keys, sessions and the catalog
+    // registry.
+    accounts: AccountDb,
+    // Every catalog store's pool, opened on first use. Never the account
+    // pool, even for `main` (plan decision P1).
+    stores: Stores,
     config: Config,
     // `Arc<dyn Clock>`: any clock (the real one, or a fixed one in tests),
     // shared between threads. `dyn Clock` is a trait object: Python's duck
@@ -87,7 +94,7 @@ pub struct App {
     overlays: Overlays,
     // Each changeset's writers, queued in this process before they take a
     // pooled connection (`write::apply`).
-    write_queue: KeyedLocks,
+    write_queue: KeyedLocks<ChangesetKey>,
     // The in-process half of each catalog's publish lock (design
     // "Publish"), by catalog id: here rather than in `CatalogState`, so
     // every state of one catalog shares it (M18 Decision 4).
@@ -282,8 +289,10 @@ impl App {
         .with_metrics(metrics.clone());
         // Shared with the credential cache, which resolves self-issued
         // credentials' ceilings against its rows (issue #728).
+        let stores = Stores::new(pool.clone(), PoolSettings::from_config(&config));
         let directory = Arc::new(CatalogDirectory::new(
             pool.clone(),
+            stores.clone(),
             config.catalog_directory_entries,
             config.catalog_ttl,
             metrics.clone(),
@@ -334,13 +343,14 @@ impl App {
             }
         }
         let catalog_cache = CatalogCache::new(
-            pool.clone(),
+            stores.clone(),
             config.catalog_cache_bytes.as_u64(),
             metrics.clone(),
         );
         let sign_in_limits = SignInLimits::new(redis.as_ref());
         let app = Arc::new(Self {
-            pool,
+            accounts: AccountDb::new(pool.clone()),
+            stores,
             config,
             clock,
             credentials,
@@ -403,7 +413,7 @@ impl App {
     /// * `admission` - how it was let in.
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn note_access(&self, record: AccessRecord, kind: AccessKind, admission: Admission) {
-        let pool = self.pool.clone();
+        let pool = self.accounts.executor().clone();
         #[cfg(test)]
         let hold = Arc::clone(&self.access_hold);
         let mut writes = self
@@ -449,7 +459,7 @@ impl App {
             tracing::debug!("a provisioner use was not recorded: too many writes pending");
             return;
         };
-        let pool = self.pool.clone();
+        let pool = self.accounts.executor().clone();
         #[cfg(test)]
         let hold = Arc::clone(&self.access_hold);
         let mut writes = self
@@ -524,16 +534,74 @@ impl App {
         &self.metrics
     }
 
-    /// The database.
+    /// The account database: users, teams, keys, sessions and the catalog
+    /// registry.
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
-        allow(
-            uninstrumented_fn,
-            reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
-        )
+        allow(uninstrumented_fn, reason = "one-line accessor")
     )]
-    pub fn pool(&self) -> &PgPool {
-        &self.pool
+    pub fn accounts(&self) -> &AccountDb {
+        &self.accounts
+    }
+
+    /// The registry of catalog stores.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "one-line accessor")
+    )]
+    pub fn stores(&self) -> &Stores {
+        &self.stores
+    }
+
+    /// The database holding `row`'s catalog data: its store, opened on first
+    /// use.
+    ///
+    /// # Arguments
+    /// * `row` - the catalog's directory row (`row.store`).
+    ///
+    /// # Returns
+    /// The store's handle.
+    ///
+    /// # Errors
+    /// As [`Stores::get`]: [`OkfError::StoreUnavailable`] when the store
+    /// cannot be reached.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn catalog_db(&self, row: &CatalogRow) -> Result<CatalogDb, OkfError> {
+        self.stores.get(&row.store).await
+    }
+
+    /// The database of the store called `store`, for a caller that holds a
+    /// loaded catalog ([`crate::catalog::CatalogState::store`]) or a
+    /// changeset's catalog and not its directory row.
+    ///
+    /// # Arguments
+    /// * `store` - the store's name.
+    ///
+    /// # Returns
+    /// The store's handle.
+    ///
+    /// # Errors
+    /// As [`Stores::get`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn store_db(&self, store: &StoreName) -> Result<CatalogDb, OkfError> {
+        self.stores.get(store).await
+    }
+
+    /// The `main` store's handle, for tests that import or read as another
+    /// replica or the command line would.
+    ///
+    /// # Returns
+    /// The handle.
+    #[cfg(test)]
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(uninstrumented_fn, reason = "a test helper")
+    )]
+    pub(crate) async fn main_db(&self) -> CatalogDb {
+        self.stores
+            .get(&StoreName::main())
+            .await
+            .expect("the main store opens")
     }
 
     /// The server's settings.
@@ -865,7 +933,7 @@ impl App {
             .expect("settings lock poisoned")
             .generation;
         let checking = async {
-            let generation = catalogs::admin_generation(&self.pool).await?;
+            let generation = catalogs::admin_generation(self.accounts.executor()).await?;
             if generation == loaded_generation {
                 return Ok(None);
             }
@@ -875,7 +943,7 @@ impl App {
             // `settings::load` falls back to the default.
             // The span and metric keep the key cache's name
             // (`okf.keycache.*`), which dashboards know them by.
-            let loaded = settings::load(&self.pool, &self.config.auth)
+            let loaded = settings::load(self.accounts.executor(), &self.config.auth)
                 .instrument(tracing::info_span!("okf.keycache.reload"))
                 .await;
             self.metrics.keycache_reload(if loaded.is_ok() {
@@ -981,7 +1049,7 @@ impl App {
     /// turn on one changeset hold no pooled connection.
     ///
     /// # Returns
-    /// The locks, keyed by changeset id.
+    /// The locks, keyed by [`ChangesetKey`] (store-local ids collide).
     #[cfg_attr(
         dylint_lib = "hyp_tracing",
         allow(
@@ -989,7 +1057,7 @@ impl App {
             reason = "trivial accessor or conversion: returns or maps a value, a span would record nothing new"
         )
     )]
-    pub fn write_queue(&self) -> &KeyedLocks {
+    pub fn write_queue(&self) -> &KeyedLocks<ChangesetKey> {
         &self.write_queue
     }
 
@@ -1304,6 +1372,9 @@ impl App {
                 .await;
             }
             Invalidation::Settings => self.reload_settings().await,
+            // Every replica reopens the store's pool on its next use, with
+            // the row as it is now.
+            Invalidation::Store { name } => self.stores.forget(name).await,
             Invalidation::CatalogMeta { id, name } => {
                 self.forget_if_deleted(*id, name).await;
             }
@@ -1333,8 +1404,10 @@ impl App {
             self.labels.apply(invalidation).await;
             // A mark, not a reload: the next request checks the settings
             // ([`App::fresh_settings`]) whatever their age.
-            if matches!(invalidation, crate::invalidate::Invalidation::Settings) {
-                self.mark_settings_stale();
+            match invalidation {
+                crate::invalidate::Invalidation::Settings => self.mark_settings_stale(),
+                crate::invalidate::Invalidation::Store { name } => self.stores.forget(name).await,
+                _ => {}
             }
         }
     }
@@ -1374,7 +1447,23 @@ impl App {
         self.catch_up_catalogs().await;
         self.credentials.mark_all_stale();
         self.labels.mark_all_stale();
+        // A `stores` change may have been missed: every pool reopens from
+        // its row on next use.
+        self.stores.forget_all().await;
         self.reload_settings().await;
+    }
+
+    /// What a store's change feed does when its connection was lost or a
+    /// payload could not be read: messages sent meanwhile are gone, so the
+    /// directory drops the rows of that store's catalogs and rereads them on
+    /// next use. Nothing else is touched: another store's catalogs, the
+    /// credentials, labels, settings and the pools stay as they are.
+    ///
+    /// # Arguments
+    /// * `store` - the store whose feed was interrupted.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn apply_store_reconnect(&self, store: &crate::stores::StoreName) {
+        self.directory.drop_store(store).await;
     }
 
     /// M16 bridge (spec Decision 14): remove in the release after 0.23.
@@ -1504,7 +1593,14 @@ mod tests {
             audit: &crate::store::audit::AuditActor::cli(),
             now: Utc::now(),
         };
-        import(pool, catalog, files, &options).await.unwrap();
+        import(
+            &crate::stores::CatalogDb::main_in(pool),
+            catalog,
+            files,
+            &options,
+        )
+        .await
+        .unwrap();
     }
 
     async fn new_key(pool: &PgPool, id: &str) -> String {
@@ -1559,7 +1655,7 @@ mod tests {
 
         // Written on the pool directly, as another replica would.
         import_files(&db.pool, "pg", &[("a.md", "# A\n")], false).await;
-        let generation = catalogs::list(&db.pool).await.unwrap()[0].generation;
+        let generation = catalogs::test_generation(&db.pool, "pg").await;
         assert!(generation > before);
         assert_eq!(
             app.catalog("pg")
@@ -1706,7 +1802,7 @@ mod tests {
 
         applied(
             invalidations_of(&db.pool, async {
-                catalogs::delete(&db.pool, "pg", false, &cli, Utc::now())
+                catalogs::delete_settled(&db.pool, "pg", false, &cli, Utc::now())
                     .await
                     .unwrap();
             })
@@ -1839,7 +1935,7 @@ mod tests {
         applied(&app, async {
             import_files(&db.pool, "pg", &[("a.md", "# A\n")], false).await;
             create(&db.pool, "work").await;
-            catalogs::delete(&db.pool, "gone", false, &AuditActor::cli(), Utc::now())
+            catalogs::delete_settled(&db.pool, "gone", false, &AuditActor::cli(), Utc::now())
                 .await
                 .unwrap();
         })
@@ -1940,7 +2036,7 @@ mod tests {
         assert_eq!(old.id(), first.id);
 
         applied(&app, async {
-            catalogs::delete(&db.pool, "pg", false, &AuditActor::cli(), Utc::now())
+            catalogs::delete_settled(&db.pool, "pg", false, &AuditActor::cli(), Utc::now())
                 .await
                 .unwrap();
             create(&db.pool, "pg").await;
@@ -1961,18 +2057,18 @@ mod tests {
         assert!(app.catalog("pg").await.unwrap().is_some());
 
         applied(&app, async {
-            catalogs::delete(&db.pool, "pg", false, &AuditActor::cli(), Utc::now())
+            catalogs::delete_settled(&db.pool, "pg", false, &AuditActor::cli(), Utc::now())
                 .await
                 .unwrap();
             let again = create(&db.pool, "pg").await;
             // A row no workspace accepts (a path escaping the catalog).
             sqlx::query(
-                "INSERT INTO documents (catalog_id, path, content, executable, revision, \
+                "INSERT INTO catalog.documents (catalog_id, path, content, executable, revision, \
                                         updated_at, updated_by) \
                  VALUES ($1, '../escape.md', '', false, 1, now(), 'test')",
             )
             .bind(again.id)
-            .execute(&db.pool)
+            .execute(&crate::db::store_pool(&db.pool))
             .await
             .unwrap();
         })
@@ -2259,7 +2355,7 @@ mod tests {
         mark: impl FnOnce(&App),
     ) -> (usize, Vec<u32>, usize) {
         // The app's pool, closed: every check fails at once.
-        app.pool().close().await;
+        app.accounts().executor().close().await;
         mark(app);
         let checks_before = app.settings_checks.load(Ordering::Relaxed);
         // Hold the check's lock so all ten queue behind it first.
@@ -2675,7 +2771,13 @@ mod tests {
         let (test, registry) =
             crate::mcp::testing::app_with_metrics(&[("pg", &[])], Config::default()).await;
         // One connection held out of the pool, so `used` is not zero.
-        let _held = test.app.pool().acquire().await.expect("a connection");
+        let _held = test
+            .app
+            .accounts()
+            .executor()
+            .acquire()
+            .await
+            .expect("a connection");
 
         let text = crate::mcp::testing::render(&registry);
 
@@ -2688,7 +2790,11 @@ mod tests {
         };
         let (idle, used) = (sample("idle"), sample("used"));
         assert!(used >= 1.0, "{text}");
-        assert_eq!(idle + used, f64::from(test.app.pool().size()), "{text}");
+        assert_eq!(
+            idle + used,
+            f64::from(test.app.accounts().executor().size()),
+            "{text}"
+        );
     }
 
     #[tokio::test]

@@ -128,6 +128,8 @@ async fn row_by_id_reads_that_incarnation_only() {
     delete(&db.pool, "pg", false, &AuditActor::cli(), now())
         .await
         .unwrap();
+    // The name is free once the cleanup has removed the registry row.
+    crate::store::cleanups::settle_for_tests(&db.pool).await;
     seed(&db.pool, "pg", TEST_TEAM).await;
     let second = row_by_name(&db.pool, "pg").await.unwrap().unwrap();
 
@@ -186,4 +188,61 @@ async fn page_walks_three_pages_of_five_in_name_order() {
     assert_eq!(seen, expected);
     // A cursor that cannot name a catalog ends the list rather than failing.
     assert!(page(&db.pool, Some("c\0"), 5).await.unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unprovisioned_row_is_hidden_from_lookups_and_listings() {
+    let db = test_db().await;
+    seed(&db.pool, "alpha", TEST_TEAM).await;
+    seed(&db.pool, "half", TEST_TEAM).await;
+    seed(&db.pool, "omega", TEST_TEAM).await;
+    // A create that has not finished its store side (task 10b) leaves the
+    // registry row with no `provisioned_at`.
+    sqlx::query("UPDATE catalogs SET provisioned_at = NULL WHERE name = 'half'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let half_id: i64 = sqlx::query_scalar("SELECT id FROM catalogs WHERE name = 'half'")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let team_id: String = sqlx::query_scalar("SELECT id FROM teams WHERE name = $1")
+        .bind(TEST_TEAM)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let names = |rows: Vec<CatalogRow>| rows.into_iter().map(|row| row.name).collect::<Vec<_>>();
+
+    assert_eq!(row_by_name(&db.pool, "half").await.unwrap(), None);
+    assert_eq!(row_by_id(&db.pool, half_id).await.unwrap(), None);
+    let by_names = rows_by_names(&db.pool, &["alpha".into(), "half".into(), "omega".into()])
+        .await
+        .unwrap();
+    assert_eq!(names(by_names), ["alpha", "omega"]);
+    let listed = page(&db.pool, None, 10).await.unwrap();
+    assert_eq!(names(listed), ["alpha", "omega"]);
+    // A page of one steps over the hidden row instead of ending early.
+    let second = page(&db.pool, Some("alpha"), 1).await.unwrap();
+    assert_eq!(names(second), ["omega"]);
+    // By team (the ceiling's listing) and by entitlement.
+    let by_team = ceiling_page(&db.pool, std::slice::from_ref(&team_id), &[], None, 10)
+        .await
+        .unwrap();
+    assert_eq!(names(by_team), ["alpha", "omega"]);
+    let entitled = ceiling_page(&db.pool, &[], &[half_id], None, 10)
+        .await
+        .unwrap();
+    assert!(entitled.is_empty());
+    let stepping = ceiling_page(&db.pool, &[team_id], &[], Some("alpha"), 1)
+        .await
+        .unwrap();
+    assert_eq!(names(stepping), ["omega"]);
+
+    // Once provisioned it appears, with the store it is on.
+    sqlx::query("UPDATE catalogs SET provisioned_at = now() WHERE name = 'half'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let shown = row_by_name(&db.pool, "half").await.unwrap().unwrap();
+    assert_eq!(shown.store, StoreName::main());
 }

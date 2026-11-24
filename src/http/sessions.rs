@@ -443,7 +443,7 @@ mod tests {
             )
             .await;
             let key = keys::create(
-                test.app.pool(),
+                test.app.accounts().executor(),
                 &NewKey {
                     name: "reader",
                     access: Access::Read,

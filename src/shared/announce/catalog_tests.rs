@@ -140,10 +140,12 @@ async fn until_read(ctx: &ToolContext, path: &str, text: &str) -> bool {
 
 /// The catalog's generation in the database.
 async fn stored_generation(app: &App, name: &str) -> CatalogGeneration {
-    let row = catalogs::find(app.pool(), name).await.expect("the catalog");
+    let row = catalogs::find(app.accounts().executor(), name)
+        .await
+        .expect("the catalog");
     CatalogGeneration {
         catalog_id: row.id,
-        generation: row.generation,
+        generation: catalogs::test_generation(app.accounts().executor(), name).await,
     }
 }
 
@@ -480,8 +482,8 @@ async fn pending_changes_refuses_a_snapshot_behind_a_base_it_cannot_catch_up_to(
     let on_a = writer(&a, "alice", "pg").await;
     let handle = open(&on_a).await;
     edit(&on_a, &handle, "/index.md", "- systems", "- the systems").await;
-    sqlx::query("UPDATE changeset_entries SET base_revision = base_revision + 5")
-        .execute(a.app.pool())
+    sqlx::query("UPDATE catalog.changeset_entries SET base_revision = base_revision + 5")
+        .execute(&crate::db::store_pool(a.app.accounts().executor()))
         .await
         .expect("move the base ahead");
 
@@ -530,11 +532,11 @@ async fn an_edit_on_a_lagging_replica_records_the_fresh_base_and_publishes_clean
     edit(&on_b, &handle, "/index.md", "# PG", "# Postgres").await;
 
     let base: Option<i32> = sqlx::query_scalar(
-        "SELECT e.base_revision FROM changeset_entries e \
-         JOIN changesets c ON c.id = e.changeset_id WHERE c.handle = $1",
+        "SELECT e.base_revision FROM catalog.changeset_entries e \
+         JOIN catalog.changesets c ON c.id = e.changeset_id WHERE c.handle = $1",
     )
     .bind(&handle)
-    .fetch_one(a.app.pool())
+    .fetch_one(&crate::db::store_pool(a.app.accounts().executor()))
     .await
     .expect("the entry");
     assert_eq!(
@@ -569,12 +571,13 @@ async fn racing_announcements_and_refreshes_rebuild_once_and_never_go_back() {
     let change = stored_generation(&a.app, "pg").await;
 
     let raced = tokio::time::timeout(WAIT, async {
+        let db = b.main_db().await;
         tokio::join!(
             b.apply_catalog_announcement(change),
             b.apply_catalog_announcement(change),
             b.apply_catalog_announcement(change),
-            state.refresh(b.pool(), b.rebuild_locks()),
-            state.refresh(b.pool(), b.rebuild_locks()),
+            state.refresh(&db, b.rebuild_locks()),
+            state.refresh(&db, b.rebuild_locks()),
         )
     })
     .await
@@ -659,7 +662,7 @@ async fn an_announcement_of_a_catalog_not_loaded_or_deleted_loads_nothing() {
     let (a, b, _redis) = pair().await;
     let pg = stored_generation(&a.app, "pg").await;
     let created = catalogs::create(
-        a.app.pool(),
+        a.app.accounts().executor(),
         &catalogs::NewCatalog {
             name: "work",
             display_name: &crate::labels::DisplayName::default(),
@@ -680,8 +683,8 @@ async fn an_announcement_of_a_catalog_not_loaded_or_deleted_loads_nothing() {
 
     let none = b.apply_catalog_announcement(unknown).await;
     let new = b.apply_catalog_announcement(work).await;
-    catalogs::delete(
-        a.app.pool(),
+    catalogs::delete_settled(
+        a.app.accounts().executor(),
         "pg",
         true,
         &AuditActor::cli(),

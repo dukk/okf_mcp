@@ -47,7 +47,7 @@ impl Served {
         )
         .await;
         let key = keys::create(
-            test.app.pool(),
+            test.app.accounts().executor(),
             &NewKey {
                 name: "reader",
                 access: Access::Read,
@@ -118,7 +118,7 @@ async fn every_tool_call_opens_one_mcp_span() {
             .await;
         assert!(unloaded.get("result").is_some(), "{unloaded}");
         let key_id: String = sqlx::query_scalar("SELECT id FROM api_keys")
-            .fetch_one(served.test.app.pool())
+            .fetch_one(served.test.app.accounts().executor())
             .await
             .expect("the one key");
         probe.close().await;
