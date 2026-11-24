@@ -186,7 +186,7 @@ async fn owe_deleted_catalogs(conn: &mut PgConnection, now: DateTime<Utc>) -> Re
 }
 
 /// Drains `store_cleanups`: for each store with rows, opens it and settles
-/// up to [`BATCH_PER_STORE`] of them. A store that cannot be opened, or a
+/// up to 100 of them (`BATCH_PER_STORE`). A store that cannot be opened, or a
 /// row that fails, is logged, counted in `attempts` and left for the next
 /// run; it never stops another store or row.
 ///

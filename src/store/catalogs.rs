@@ -1753,6 +1753,21 @@ pub(crate) mod delete_pause {
 
     use tokio::sync::Barrier;
 
+    /// The longest either side waits at a barrier.
+    pub(crate) const LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+    impl Pause {
+        /// The test's meeting with the delete at `barrier`, bounded.
+        ///
+        /// # Panics
+        /// When the delete does not arrive within [`LIMIT`].
+        pub(crate) async fn meet(barrier: &Barrier) {
+            tokio::time::timeout(LIMIT, barrier.wait())
+                .await
+                .expect("the delete met the barrier in time");
+        }
+    }
+
     /// The two barriers one catalog's delete meets: it arrives at `reached`
     /// and then waits at `resume`; the test waits at `reached`, does its
     /// work, and waits at `resume`.
@@ -1800,8 +1815,10 @@ pub(crate) mod delete_pause {
             .expect("the pauses lock")
             .remove(&(database, id));
         if let Some(pause) = pause {
-            pause.reached.wait().await;
-            pause.resume.wait().await;
+            // Bounded: a test that failed before it met the barriers must
+            // not leave this delete (and the runtime) waiting for ever.
+            let _ = tokio::time::timeout(LIMIT, pause.reached.wait()).await;
+            let _ = tokio::time::timeout(LIMIT, pause.resume.wait()).await;
         }
         Ok(())
     }

@@ -33,6 +33,15 @@ async fn until_a_lock_is_awaited(pool: &PgPool) {
     assert!(waited.is_ok(), "no lock request was ever blocked");
 }
 
+/// Awaits a spawned task for at most a minute, so a lock cycle fails the test
+/// where it would otherwise hang it.
+async fn finish<T>(task: tokio::task::JoinHandle<T>) -> T {
+    tokio::time::timeout(std::time::Duration::from_secs(60), task)
+        .await
+        .expect("the task finished: no lock cycle")
+        .expect("the task did not panic")
+}
+
 fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 11, 23, 12, 0, 0).unwrap()
 }
@@ -255,7 +264,7 @@ async fn an_edit_racing_a_delete_either_lands_first_and_blocks_it_or_fails_after
     let pool = db.pool.clone();
     let deleting =
         tokio::spawn(async move { delete(&pool, "pg", false, &AuditActor::cli(), now()).await });
-    pause.reached.wait().await;
+    delete_pause::Pause::meet(&pause.reached).await;
     let store = CatalogDb::main_of(&db.pool);
     let editing = tokio::spawn(async move {
         let mut tx = store.begin().await.unwrap();
@@ -264,9 +273,9 @@ async fn an_edit_racing_a_delete_either_lands_first_and_blocks_it_or_fails_after
     until_a_lock_is_awaited(&db.pool).await;
 
     // Act
-    pause.resume.wait().await;
-    let deleted = deleting.await.unwrap();
-    let edited = editing.await.unwrap();
+    delete_pause::Pause::meet(&pause.resume).await;
+    let deleted = finish(deleting).await;
+    let edited = finish(editing).await;
 
     // Assert: the edit that queued behind the delete finds the catalog gone.
     deleted.unwrap();
@@ -285,7 +294,7 @@ async fn an_edit_racing_a_delete_either_lands_first_and_blocks_it_or_fails_after
 
     // Act
     writing.commit().await.unwrap();
-    let refused = deleting.await.unwrap();
+    let refused = finish(deleting).await;
 
     // Assert: the delete saw the edit and refused; nothing was lost.
     assert!(
@@ -315,7 +324,7 @@ async fn a_delete_without_force_never_discards_work_written_during_it() {
 
     // Act
     writing.commit().await.unwrap();
-    let refused = deleting.await.unwrap();
+    let refused = finish(deleting).await;
 
     // Assert: refused, and the work is still open, with its entry, on a
     // catalog that is not marked.
