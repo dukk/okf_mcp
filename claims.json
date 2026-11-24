@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1089,
+  "next_claim_seq": 1110,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "7484230f9ab8af145bfb1738a96f9ab52b9cd1280a4f060291147acf1fd8a408"
+    "mac": "01b960ce5fe73af9281819b8cadfe679bda21e17b1ea14b982b535420271ff9a"
   },
-  "next_evidence_seq": 1609,
+  "next_evidence_seq": 1642,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "c52fae57f08cffe3efc799da81d8111a2ed1e5c611661b65565b1f89d77a871d"
+    "mac": "ad0963d7026c5be9e786ee28a548f118e1fd7c302132ad4db993c51e2185a77f"
   },
   "claims": [
     {
@@ -13984,6 +13984,28 @@
             "by": "server",
             "mac": "74abbd08b82be4d279d5b3988784beee5a663b484a32813e5ecf476f64b97a27"
           }
+        },
+        {
+          "id": "EVD-1632",
+          "kind": "inspection",
+          "locator": "src/cli.rs:520-590",
+          "summary": "Recheck on d879b05: the diff to src/cli.rs only adds the StoresCommand::Migrate variant; the commands the claim lists (user list --email, key create --provisioner, audit, unlock, catalog set-maintenance) are untouched.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli.rs",
+              "lines": {
+                "start": 575,
+                "end": 590
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:46:46.524152335Z",
+          "seal": {
+            "by": "server",
+            "mac": "050093a33c3491cca9f6b0fe4f3e03d683e3e1f7f6884c6538f0d1f8455ce755"
+          }
         }
       ],
       "verdicts": [
@@ -14025,13 +14047,26 @@
             "by": "server",
             "mac": "9b343ca8c371df02e02e6da407fd9907b544330715fd8036d233f859c0db16a1"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited: the diff only adds a stores subcommand.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1632"
+          ],
+          "recorded_at": "2026-11-24T04:47:02.100612095Z",
+          "seal": {
+            "by": "server",
+            "mac": "60ccbaebf633e7f9847ac3658d5e0b6cc017b9816413482743acdc1013eab870"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:06.412184286Z",
-      "updated_at": "2026-11-23T18:59:30.893475041Z",
+      "updated_at": "2026-11-24T04:47:02.100612095Z",
       "seal": {
         "by": "server",
-        "mac": "3b3e93becb26d8ed5e2bac9da8e798730accee6fa128242e8bf632cc08da4992"
+        "mac": "e3f99bb078d318317ced98e1da4f9b1a48e1dd355fc03252e4d7ef6c17e92efd"
       }
     },
     {
@@ -22206,6 +22241,28 @@
             "by": "server",
             "mac": "2087ba3560872de081149899f436994a44e91a3683d94a7f90efe638190f131f"
           }
+        },
+        {
+          "id": "EVD-1631",
+          "kind": "inspection",
+          "locator": "src/db.rs:121-178 (migrate)",
+          "summary": "Recheck on d879b05: migrate still runs the account migrations, then (new) main's adoption, then apalis' setup, documented as keeping apalis._sqlx_migrations apart; the claim's content is unaffected, its old anchor lines only shifted by the new code above.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 121,
+                "end": 178
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:46:46.461210816Z",
+          "seal": {
+            "by": "server",
+            "mac": "8f13f7f1cf1fb8783690967cdafe8c4435bf556f64e5ceffe83543bcc2c83c71"
+          }
         }
       ],
       "verdicts": [
@@ -22221,13 +22278,26 @@
             "by": "server",
             "mac": "d4452ed717bbe59faa0760a72e682326512233064fac93cf8dc89100cb700b7f"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited: apalis keeps its own schema and history; migrate still runs it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1631"
+          ],
+          "recorded_at": "2026-11-24T04:47:02.038689031Z",
+          "seal": {
+            "by": "server",
+            "mac": "1540960172b76fd1df4d785ad637e022e97cd71c782ace14ed039c8861b795a9"
+          }
         }
       ],
       "created_at": "2026-11-21T19:07:50.360239770Z",
-      "updated_at": "2026-11-21T19:12:18.717635635Z",
+      "updated_at": "2026-11-24T04:47:02.038689031Z",
       "seal": {
         "by": "server",
-        "mac": "e9b560f610129965f66cb0ff8869f3214747444ef5b62b157b4c825a4dba65a0"
+        "mac": "25c9c4ccbcbf49c67156c4409212fdb6d6bed65b4d55f76323180ec15eaee5c5"
       }
     },
     {
@@ -70302,6 +70372,28 @@
             "by": "server",
             "mac": "7a40d827c4ed0db5155294463ab8f37e6995754180292b4a97a566971ff9a93a"
           }
+        },
+        {
+          "id": "EVD-1628",
+          "kind": "inspection",
+          "locator": "src/db.rs:28; tests/support/pg.rs:94",
+          "summary": "Recheck on d879b05: MIGRATOR is still sqlx::migrate!(\"./migrations/accounts\") (only the type path was shortened to Migrator); this PR adds migrations/catalog beside it and touches no account migration file.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 26,
+                "end": 28
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:46:46.237732039Z",
+          "seal": {
+            "by": "server",
+            "mac": "2ca9dbbbf7c9e4963cc039bab5a32153b98a599b0daa1c321c69472bcec250d2"
+          }
         }
       ],
       "verdicts": [
@@ -70331,13 +70423,26 @@
             "by": "server",
             "mac": "97eb2d4195715efdb73fd46eee489d691a79e18e683ab588b300fc47ac0fa839"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on the head commit: the accounts migrator and files are unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1628"
+          ],
+          "recorded_at": "2026-11-24T04:47:01.829719501Z",
+          "seal": {
+            "by": "server",
+            "mac": "b457746f74cd88ecf12e6dbf19148c6b17e09dd73a843d1e99fa72a52ed2c2f3"
+          }
         }
       ],
       "created_at": "2026-11-23T16:24:37.683722557Z",
-      "updated_at": "2026-11-23T16:40:11.440381503Z",
+      "updated_at": "2026-11-24T04:47:01.829719501Z",
       "seal": {
         "by": "server",
-        "mac": "4bc08fb0a9330415d53ff23ca427bd3de93a7ef9e9c2d682c97f557b45613e98"
+        "mac": "965235d42908fe3a9c0e7e01caa805eeb8457c876be40b1663000d65e0fc6edc"
       }
     },
     {
@@ -70474,6 +70579,28 @@
             "by": "server",
             "mac": "f4beb9506263eeb4e08084585d470ec3f70816fbc5510559e5b3fd68ce7648f8"
           }
+        },
+        {
+          "id": "EVD-1629",
+          "kind": "inspection",
+          "locator": "src/db.rs:28; tests/support/pg.rs:94; build.rs:1-8",
+          "summary": "Recheck on d879b05: both migrate! calls for accounts still point at ./migrations/accounts; build.rs header comment now names accounts and catalog and its rerun-if-changed=migrations watch still covers both.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "build.rs",
+              "lines": {
+                "start": 1,
+                "end": 8
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:46:46.325684832Z",
+          "seal": {
+            "by": "server",
+            "mac": "46e499532cfa0b1101e2c209cc9f6480bd9b7e930b659d9a28adeb66a49770f4"
+          }
         }
       ],
       "verdicts": [
@@ -70502,13 +70629,26 @@
             "by": "server",
             "mac": "ad168045f762c80568df8ac05c870f612e8a9a5c1089a517522e5ad0cfdc7f4a"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on the head commit: references are intact and build.rs still watches the folder.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1629"
+          ],
+          "recorded_at": "2026-11-24T04:47:01.896483713Z",
+          "seal": {
+            "by": "server",
+            "mac": "5b38558d16166ba0a5073b5d70c0bb7de174e2c51b412dcdccb694911874a8f6"
+          }
         }
       ],
       "created_at": "2026-11-23T16:24:37.683722557Z",
-      "updated_at": "2026-11-23T16:40:11.489181686Z",
+      "updated_at": "2026-11-24T04:47:01.896483713Z",
       "seal": {
         "by": "server",
-        "mac": "2bc9d3b5e6e8d85bff20fc2e93f1315be12d77af00ba8236919d2cc43893c3c4"
+        "mac": "fe77c04dbb59dc7a516dff1212aad92a8dc28373881ba359660e6fd6cb871ac3"
       }
     },
     {
@@ -70597,6 +70737,31 @@
             "by": "server",
             "mac": "2da0f8a34902792601156b64217cac67ef4bfaf2a1eb591147705ef53ab6d501"
           }
+        },
+        {
+          "id": "EVD-1630",
+          "kind": "analysis",
+          "locator": "git grep -nE 'migrations/' -- src build.rs tests README.md Dockerfile* scripts, minus accounts|catalog",
+          "summary": "Recheck on d879b05: the only reference to a bare 'migrations/' folder left is a test comment (src/db.rs:2534) that describes the old folder on purpose; every other comment names migrations/accounts/ or the new migrations/catalog/.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "migrations/",
+              "scope": [
+                "README.md",
+                "build.rs",
+                "src",
+                "tests/support"
+              ],
+              "hits": 48,
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:46:46.394365540Z",
+          "seal": {
+            "by": "server",
+            "mac": "1f7673ca0895fb49028c327adb4b57edc8a49c563daac4403233104279383998"
+          }
         }
       ],
       "verdicts": [
@@ -70638,13 +70803,26 @@
             "by": "server",
             "mac": "4d0ad94c1b630b913c5ad857f52c0862ad1b78eb4eaacc9af8f97410dcff84b7"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited on the head commit: no comment names the old folder as current; new comments name migrations/catalog/.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1630"
+          ],
+          "recorded_at": "2026-11-24T04:47:01.968884657Z",
+          "seal": {
+            "by": "server",
+            "mac": "9eb76f68bdb30621d44d7f312873920b51130245f82df879fdc55cdce1e092d2"
+          }
         }
       ],
       "created_at": "2026-11-23T16:24:37.683722557Z",
-      "updated_at": "2026-11-23T16:40:11.538165060Z",
+      "updated_at": "2026-11-24T04:47:01.968884657Z",
       "seal": {
         "by": "server",
-        "mac": "a83dae29c87abf6cea2303ed16b58656b7a42b0fb59fbf803245410eb4bd1282"
+        "mac": "168d97000d94c86f6bc36d8245612c0140a043c0d772c1c572e4dc93ccb1a692"
       }
     },
     {
@@ -73145,6 +73323,28 @@
             "by": "server",
             "mac": "27cc1add0ece5730eae5df20901ce4108a449be21f32cb353270884afabce1f5"
           }
+        },
+        {
+          "id": "EVD-1633",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:306, 375, 386, 397, 488-501",
+          "summary": "Recheck on d879b05: get, all, forget and forget_all still exist; get is now entry().db.clone(), and open_row still builds the pool from the stores row (connect_with_credential) before the new migration. The pool settings code is not in the diff.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 300,
+                "end": 310
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:46:46.590832690Z",
+          "seal": {
+            "by": "server",
+            "mac": "276385d891fb1ca5abcdf8b3e2ebfdee6bc0a5f48380554c092b9552c97cac5c"
+          }
         }
       ],
       "verdicts": [
@@ -73200,13 +73400,26 @@
             "by": "server",
             "mac": "962dfd953e03d8d6cba4db8cbe5d7a8fdaec68ee2fad9045fa00b6f72aecb0d2"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited: the registry API and pool settings are unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1633"
+          ],
+          "recorded_at": "2026-11-24T04:47:02.171092041Z",
+          "seal": {
+            "by": "server",
+            "mac": "c24a64a62d8b451dc53325e8180173f4452c77eb6aef6ccffdffe22f8b544c85"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T19:00:29.155813789Z",
+      "updated_at": "2026-11-24T04:47:02.171092041Z",
       "seal": {
         "by": "server",
-        "mac": "9e812af004e31de48b77bb29555550ba93e78dab456cc6a02b5ef9e8a9cc7dc6"
+        "mac": "609c9306bc196c635a56b2cf1aa5c64e63c90c31e1b993f4eb3eca5a090c08cf"
       }
     },
     {
@@ -73462,6 +73675,28 @@
             "by": "server",
             "mac": "97e3d4359cc1f098fb951ec2b28b7de6527648ea39c1334998555a3a2bc36e3d"
           }
+        },
+        {
+          "id": "EVD-1634",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:386-400, 340-365",
+          "summary": "Recheck on d879b05: forget and the forgets-counter logic are unchanged; entry() still skips caching an open that a forget overtook. The new Stores::get returns the same CatalogDb handle, so an old handle's transaction is unaffected.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 386,
+                "end": 400
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:46:46.654178401Z",
+          "seal": {
+            "by": "server",
+            "mac": "b97d75e591e968fb760babf49baa985461001777a0323ffe2b2b34e0e3b08bff"
+          }
         }
       ],
       "verdicts": [
@@ -73503,13 +73738,26 @@
             "by": "server",
             "mac": "54b29533064f8288e752a7f778b6f5b250d020c32ccf06e60af662e8dd50ba93"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited: forget logic unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1634"
+          ],
+          "recorded_at": "2026-11-24T04:47:02.234438591Z",
+          "seal": {
+            "by": "server",
+            "mac": "2e3a7c7b40c0c0bc64549a4562ab3ffdf85876b82c1429759c2cf5fde6689241"
+          }
         }
       ],
       "created_at": "2026-11-23T17:38:45.641740074Z",
-      "updated_at": "2026-11-23T19:00:29.280639552Z",
+      "updated_at": "2026-11-24T04:47:02.234438591Z",
       "seal": {
         "by": "server",
-        "mac": "ee12616cc2c5a52fab1688d556672472d2df8d66b14999bd41314cab9aa8b3ae"
+        "mac": "f311805dc4a28e7907f266acb279e32eaac14a3c9913364ea19c015c8256c100"
       }
     },
     {
@@ -75193,6 +75441,28 @@
             "by": "server",
             "mac": "e0421cd2e601ebd28583a8d96793828e2810e15f972de0a074d89022d7233817"
           }
+        },
+        {
+          "id": "EVD-1635",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:296-320",
+          "summary": "Recheck on d879b05: add still calls Stores::check first (through unreachable_refused, which keeps the StoreUnavailable to Refused mapping) before any write; prepare, which writes to the new store's own database, comes after check and after the P8 refusal, and the stores row insert is last.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 296,
+                "end": 320
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:46:46.720063381Z",
+          "seal": {
+            "by": "server",
+            "mac": "ba89bad5755a9e0fbc64efd2d3fce46a9ca252c1f97e476d6e4f06a85f445bd8"
+          }
         }
       ],
       "verdicts": [
@@ -75209,13 +75479,26 @@
             "by": "server",
             "mac": "a094f31e15dd321b8ceab843f208b65f27b396052c1a002325dbb96e203d285a"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited: check still precedes every write.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1635"
+          ],
+          "recorded_at": "2026-11-24T04:47:02.297725450Z",
+          "seal": {
+            "by": "server",
+            "mac": "31984e273f1e26d6d4158d484ac79aa6e5f20a0409d1d8643ec8553dfa0aa52d"
+          }
         }
       ],
       "created_at": "2026-11-23T18:55:41.188670885Z",
-      "updated_at": "2026-11-23T18:58:11.776842908Z",
+      "updated_at": "2026-11-24T04:47:02.297725450Z",
       "seal": {
         "by": "server",
-        "mac": "4baa21624b303c903d45036654e59dc3ac4eda97bdd2f313bedb15c0d208583a"
+        "mac": "36d8ace30d0f74538730ee16fcd38e4183061f5b1466e4ef881655df22a086db"
       }
     },
     {
@@ -75352,6 +75635,28 @@
             "by": "server",
             "mac": "de13e33c79f664ab4f1a11512bf3cc3f795916d74f5778d241c3f92f9cda49b6"
           }
+        },
+        {
+          "id": "EVD-1637",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:451-468; src/store/stores.rs:306-320; src/cli/stores.rs:100-124",
+          "summary": "Recheck on d879b05: new log calls carry only the store name and the OkfError text (migration or database error), the add path maps to a fixed refusal message, and the CLI line prints the error's variant text. The migration code handles no password; the credential still comes from the unchanged open path. The CLI test asserts no port or variable name in the report.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 448,
+                "end": 470
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:46:46.849670694Z",
+          "seal": {
+            "by": "server",
+            "mac": "d7815d65ed9ec8390fe641168e15f81f9dbaea9f01b2c7ff216f926b822ea3be"
+          }
         }
       ],
       "verdicts": [
@@ -75367,13 +75672,26 @@
             "by": "server",
             "mac": "8c3f72e14adf45dcdecf5ff098d2795c400d192ad405749a7bc13765695a64a0"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited: the new log lines and messages carry no credential, host or port.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1637"
+          ],
+          "recorded_at": "2026-11-24T04:47:02.429056306Z",
+          "seal": {
+            "by": "server",
+            "mac": "570f7a8de0121d982825481d66e6a0e5f3fc7377790ea90f5e0595e18f84fd19"
+          }
         }
       ],
       "created_at": "2026-11-23T18:55:41.188670885Z",
-      "updated_at": "2026-11-23T18:58:11.968234136Z",
+      "updated_at": "2026-11-24T04:47:02.429056306Z",
       "seal": {
         "by": "server",
-        "mac": "8df63d30fb08057db7c166de1f22c2341c2c935b258e9d2229d8cb594e70f0c2"
+        "mac": "f22cdbe3d335bff6dd4143db6306e383b9d153d2bf3716f4902981077cfaa7d3"
       }
     },
     {
@@ -76207,6 +76525,28 @@
             "by": "server",
             "mac": "0f92dc4459b1e6d8cb7e1a4ff9b84d446ebeba713d4cba2bc4b51bb0b774f0c0"
           }
+        },
+        {
+          "id": "EVD-1636",
+          "kind": "inspection",
+          "locator": "src/store/stores.rs:296-320; src/stores/registry.rs:725-740",
+          "summary": "Recheck on d879b05: check and prepare open the store's pool and use a store connection only; no account begin occurs before the insert (the insert opens its own transaction). The registry reads by_name on the account pool outside any transaction.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 296,
+                "end": 320
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:46:46.787672232Z",
+          "seal": {
+            "by": "server",
+            "mac": "64e71427337b1348ae95e711843ab9a4b2888c31b7ce0b3174cf0c311d60553c"
+          }
         }
       ],
       "verdicts": [
@@ -76222,13 +76562,26 @@
             "by": "server",
             "mac": "a084f93bcd278ae19e54e7097d742674d7186e00ee471ea1957f405c90c0aa52"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited: no account transaction spans the check or the migration.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1636"
+          ],
+          "recorded_at": "2026-11-24T04:47:02.364532142Z",
+          "seal": {
+            "by": "server",
+            "mac": "4fc3248bcd8b396718198d1d3e43a16fd6a1a22367e48e527fd3f5233bc66e6e"
+          }
         }
       ],
       "created_at": "2026-11-23T18:55:41.188670885Z",
-      "updated_at": "2026-11-23T18:58:12.796621958Z",
+      "updated_at": "2026-11-24T04:47:02.364532142Z",
       "seal": {
         "by": "server",
-        "mac": "76df95e602c3520deb19142c95b843f99e406fe0b1dfaed40554948a77be3b45"
+        "mac": "f6de26a4285db9becd357fff6752ee407ea7fcf68e5c9e5698d13eed1e3ec6ff"
       }
     },
     {
@@ -89058,6 +89411,1406 @@
       "seal": {
         "by": "server",
         "mac": "d0b5eb26289e1cf24c14093611a6664548087b0b1e84502fc0fed2cb48b92d8d"
+      }
+    },
+    {
+      "id": "CLM-1089",
+      "statement": "Issue #973 (M21.14, plan Task 14) is delivered: each store's catalog schema has its own migration history in catalog._sqlx_migrations, a new store is built from a catalog baseline, the account database adopts the baseline unrun, each database records its one store, and okf-mcp stores migrate migrates every store.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/973; plan Task 14",
+      "derived_from": [],
+      "artifacts": [
+        "src/db.rs",
+        "migrations/catalog/",
+        "src/stores/registry.rs",
+        "src/store/stores.rs",
+        "src/cli/stores.rs"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1627",
+          "kind": "analysis",
+          "locator": "children of CLM-1089",
+          "summary": "All behavior children (schema equivalence, adoption, identity, migrate_store, registry, add, CLI, test template) are supported. The one refuted child is CLM-1102 (the PR body says follow-up comments exist on #974/#978/#979; none do), and CLM-1103 (the 'dump' wording) is not_enough_info. Delivery of the code is shown; the PR description overstates the follow-ups.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-24T04:45:37.021669289Z",
+          "seal": {
+            "by": "server",
+            "mac": "64f673cddaca4894b247fb368b072591fd71314a41dbd9c2635fff97c0f2b979"
+          }
+        },
+        {
+          "id": "EVD-1641",
+          "kind": "analysis",
+          "locator": "children of CLM-1089",
+          "summary": "At 83792ec (docs-only change after d879b05) every active child is supported except CLM-1109, a not_enough_info on the unrepeatable one-off pg_dump check, which the PR now words as such. CLM-1102, the earlier refuted child, is supported.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T04:48:24.135940860Z",
+          "seal": {
+            "by": "server",
+            "mac": "1f6d7b4b23700d9d2b785cfc5a83b23f7cc44a26516403142e358e2430264e84"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Rolled up from children: the code requirements are all supported; the only refuted child is the PR-description follow-up-comments statement (CLM-1102), which is not code. Fix: post the three follow-up comments on #974, #978 and #979 (or reword the PR line) and re-audit CLM-1102; then this roll-up can be re-recorded supported.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1627"
+          ],
+          "recorded_at": "2026-11-24T04:45:49.627440906Z",
+          "seal": {
+            "by": "server",
+            "mac": "6618b38f19a59b27a8d3aaebfc742fa06205c0ea4cd9801b6ed474915a5faf5e"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Every code requirement child is supported, the PR-description children are supported, and the only open item is a non-blocking not_enough_info on a one-off check the PR now describes as unrepeatable.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1641"
+          ],
+          "recorded_at": "2026-11-24T04:48:27.638654438Z",
+          "seal": {
+            "by": "server",
+            "mac": "674ea559febca4c3871e98f64edbcd3a587bf9c53ad5752b332186b1fe60ee5d"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:48:27.638654438Z",
+      "seal": {
+        "by": "server",
+        "mac": "69388a2988f4db88722d035adb1577f1a8fb8a599b18df80a1e3a1a9f5e759ec"
+      }
+    },
+    {
+      "id": "CLM-1090",
+      "statement": "A database built from migrations/catalog (0001 baseline, then 0002) has the same catalog schema (columns, constraints, indexes, sequences, triggers, functions, relations) as the account database migrated through 0042 and then adopted, and both have catalog.store_identity.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"A dump of a database built from the baseline matches a dump of one migrated through 0042.\"; plan Task 14 test adopted_schema_equals_a_fresh_store_schema",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "migrations/catalog/0001_baseline.sql",
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1609",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- adopted_schema_equals_a_fresh_store_schema (9 passed, 0 failed; target/i973-logs/audit-tests.log)",
+          "summary": "Test passes. It adopts an account-migrated db (history and identity dropped, then db::migrate) and migrates an empty db as shared-1, then compares sorted lists of columns, constraints, indexes, sequences, triggers, functions and relations of schema catalog; the lists are equal and non-trivial (catalog_audit_entries present). Comparison uses pg_catalog queries, not pg_dump text.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 2373,
+                "end": 2423
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:29.928453313Z",
+          "seal": {
+            "by": "server",
+            "mac": "9f5297d0e18562454896dc4a44cfac9437b22a97336f84febdaf92b278cf4da9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The passing test compares the full catalog schema of an adopted account database with a baseline-built one and finds them equal and non-trivial.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1609"
+          ],
+          "recorded_at": "2026-11-24T04:45:27.008000440Z",
+          "seal": {
+            "by": "server",
+            "mac": "29d8be6f187fdf24b9991e3058b3a781b5f23cddecf6168fe4957d9cf205f6ae"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:27.008000440Z",
+      "seal": {
+        "by": "server",
+        "mac": "6ace9aef923d35dbe17fa53babcc8bd4788562a69f23a93d5dc27b1fa3d1b4e8"
+      }
+    },
+    {
+      "id": "CLM-1091",
+      "statement": "Adoption records the baseline in catalog._sqlx_migrations with the checksum embedded in the binary and execution_time -1 (recorded, not run), when catalog.catalog_state exists and the history is empty.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"the baseline is recorded but not run\"",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1610",
+          "kind": "test",
+          "locator": "cargo test --lib adopted_schema_equals_a_fresh_store_schema (passed); src/db.rs:2405-2423",
+          "summary": "After adoption the test reads version 1 from catalog._sqlx_migrations: checksum equals the embedded baseline's checksum and execution_time is -1. Code: adoption branch at src/db.rs:326-340 runs run_direct(Some(1), conn, skip=true) only when has_state && history empty. Also confirmed on the test template with psql: history row 1 has execution_time -1, row 2 has a real time.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 2405,
+                "end": 2423
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:30.024082693Z",
+          "seal": {
+            "by": "server",
+            "mac": "ada8de35607f6536179e0130e7e2ae1c6a6f8bd1e0689f0bf70d5c7bb5633caf"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test asserts embedded checksum and execution_time -1 for version 1 after adoption; the code path only skips.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1610"
+          ],
+          "recorded_at": "2026-11-24T04:45:27.093111696Z",
+          "seal": {
+            "by": "server",
+            "mac": "2e4acd5c8eae761d33f775cb23442f37919c3da5894dcf10b8cc463d9b8652f3"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:27.093111696Z",
+      "seal": {
+        "by": "server",
+        "mac": "1484477b10677108a3b42dafa9088b1d0aa7322f0b45b3becb3990f992526c40"
+      }
+    },
+    {
+      "id": "CLM-1092",
+      "statement": "Adoption runs once when several starts migrate the same store at once: exactly one reports adopted, the history ends equal to the embedded versions and the identity row is one row naming main.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR test list: adoption_runs_once_under_concurrent_starts",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1611",
+          "kind": "test",
+          "locator": "cargo test --lib adoption_runs_once_under_concurrent_starts (passed in the 9-test run)",
+          "summary": "Four concurrent migrate_store calls, each on its own connection, then migrate(): the test asserts exactly one outcome has adopted, versions equal the embedded versions, and store_identity holds exactly [main]. Read the assertions at src/db.rs:2453-2462.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 2425,
+                "end": 2463
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:30.100292720Z",
+          "seal": {
+            "by": "server",
+            "mac": "1c1615cc4396681a92bb5541fed407e4b674509cbbcc43a51c3fdc2153e2e4e3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Concurrent-start test passed and asserts one adoption, full history and one identity row.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1611"
+          ],
+          "recorded_at": "2026-11-24T04:45:27.186534360Z",
+          "seal": {
+            "by": "server",
+            "mac": "395b0386501d40f9b8f6b39f2a8332f91d4841c541d1d8457f3f8573013d3864"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:27.186534360Z",
+      "seal": {
+        "by": "server",
+        "mac": "5179333ad3688bfd5027077c23d1ca86183894ed599871625d36fba066c8f48d"
+      }
+    },
+    {
+      "id": "CLM-1093",
+      "statement": "migrations/catalog/0002_store_identity.sql creates catalog.store_identity with a unique index on ((true)), so the table holds at most one row.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"catalog.store_identity, at most one row, naming the store the database belongs to\"",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "migrations/catalog/0002_store_identity.sql"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1612",
+          "kind": "inspection",
+          "locator": "migrations/catalog/0002_store_identity.sql:15-18",
+          "summary": "Creates catalog.store_identity (name text PK) and CREATE UNIQUE INDEX store_identity_one_row ON catalog.store_identity ((true)); every row has the same indexed value, so a second row is rejected.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/catalog/0002_store_identity.sql",
+              "lines": {
+                "start": 12,
+                "end": 18
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:30.171099547Z",
+          "seal": {
+            "by": "server",
+            "mac": "8a82320e9f7ee4d60a39f7ad6d75737ece968a2cc6ae0da7a88ccfd2bae1f677"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The SQL has the constant-expression unique index that bounds the table to one row.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1612"
+          ],
+          "recorded_at": "2026-11-24T04:45:27.277902874Z",
+          "seal": {
+            "by": "server",
+            "mac": "80350f4aee246668a8ac9435ad536e4cf07d597acf999cebbcf0b9000b67b626"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:27.277902874Z",
+      "seal": {
+        "by": "server",
+        "mac": "93a95b573cf547590119dd55eb598bf4b8a64c74a643ca8c06493221ae9f9e9f"
+      }
+    },
+    {
+      "id": "CLM-1094",
+      "statement": "db::migrate_store on a store that is already current (history equals the embedded migrations with matching checksums and success, and the identity names the store) uses only reads and does not take the advisory lock.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"If the store is already current, the check uses reads only.\"",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1613",
+          "kind": "inspection",
+          "locator": "src/db.rs:233-250 (migrate_store), src/db.rs:260-300 (store_is_current)",
+          "summary": "migrate_store calls store_is_current first and returns StoreMigration::default() before pg_advisory_lock. store_is_current runs only SELECTs (to_regclass, history rows, identity via store_owner) and compares version, checksum and success with the embedded migrations. The a_store_opened_under_another_name test also shows a repeat call with the owning name returns the default.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 233,
+                "end": 300
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:30.243432819Z",
+          "seal": {
+            "by": "server",
+            "mac": "dcf5df23760a88d550f1ba4c0f45891a6817bd1d9c8347ddbe786efef42219c0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The early return precedes the lock and the check holds only SELECTs.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1613"
+          ],
+          "recorded_at": "2026-11-24T04:45:27.368183233Z",
+          "seal": {
+            "by": "server",
+            "mac": "b587ce092e7e2b24ae7218ccd9c9ad8603894ce520956fc964223c0e6afa3bee"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:27.368183233Z",
+      "seal": {
+        "by": "server",
+        "mac": "fda275ce64df0e0597ae58c257a934a07adb89af8246bbe4e4a32fdfbb5a5d2e"
+      }
+    },
+    {
+      "id": "CLM-1095",
+      "statement": "When a store is not current, migrate_store works under the existing advisory lock on the store's own connection in this order: create schema catalog if missing, adopt if catalog_state exists and history is empty, run the remaining migrations, then write the identity row or refuse (OkfError::Refused) one that names another store; a fresh store ends with every migration run and its identity row.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: Changes, db::migrate_store steps 1-4",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1614",
+          "kind": "test",
+          "locator": "cargo test --lib a_fresh_store_gets_the_baseline a_store_opened_under_another_name_is_refused_and_keeps_its_identity (both passed)",
+          "summary": "Code at src/db.rs:312-380 does the steps in the stated order inside the lock taken at 233-250 (unlock on every path). a_fresh_store_gets_the_baseline: an empty database (no catalog schema) ends adopted=false, applied=all, history rows all with execution_time >= 0, identity row naming shared-1. The refusal test: a second name gets OkfError::Refused 'belongs to store shared-1' and the identity is kept.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 312,
+                "end": 375
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:30.322471787Z",
+          "seal": {
+            "by": "server",
+            "mac": "3b422d35d6cb030f1c7fc2c3bdb238f864d99e1e4bce99aef93a64ea6c177df3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code order matches and the fresh-store and refusal tests pass.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1614"
+          ],
+          "recorded_at": "2026-11-24T04:45:27.465491944Z",
+          "seal": {
+            "by": "server",
+            "mac": "7a0af6ec3569354ea7d9c057425703cd6a4e7f01da014d9f51fd92514a4fabbf"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:27.465491944Z",
+      "seal": {
+        "by": "server",
+        "mac": "b9eaf33a3f37e5d67f0e6cb24f0efe547ddeab970ed11c9e7068cdf94eb5d935"
+      }
+    },
+    {
+      "id": "CLM-1096",
+      "statement": "db::migrate adopts the account database as main after the account migrations, inside the same advisory-lock hold on the same connection, so a pool of one connection works.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"db::migrate adopts the account database as main ... in the same lock hold, on the same connection, so a pool of one connection still works.\"",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "src/db.rs"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1615",
+          "kind": "inspection",
+          "locator": "src/db.rs:139-178",
+          "summary": "migrate takes pg_advisory_lock on one acquired connection, runs MIGRATOR on it, then on Ok calls migrate_store_locked(&mut conn, &StoreName::main()) on the same connection, and unlocks afterwards on every path. No second connection is needed, so a pool of one suffices. No test uses a pool of one for this; adopted_schema and concurrent tests call migrate on a normal pool.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/db.rs",
+              "lines": {
+                "start": 139,
+                "end": 178
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:30.407820879Z",
+          "seal": {
+            "by": "server",
+            "mac": "d09fa69cef40e47fbd0596d61e2bf7e181e8e207acb8f22a63993f6e61a4ad03"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The code runs adoption on the lock-holding connection; no extra connection is acquired (not exercised with a pool of one, noted in the evidence).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1615"
+          ],
+          "recorded_at": "2026-11-24T04:45:27.556074845Z",
+          "seal": {
+            "by": "server",
+            "mac": "310d0e624ae78c6b453728c21afa0db992b293bbbc82b39173ed60ccd5e527e5"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:27.556074845Z",
+      "seal": {
+        "by": "server",
+        "mac": "1bd32b1eeb776d2730efa1ab0a4c421a4fb0ff8173988ade5ec35feec23c9f65"
+      }
+    },
+    {
+      "id": "CLM-1097",
+      "statement": "Stores::get migrates a store the first time its pool opens (a later open of a current store is a no-op) and starts the credential task only after the migration succeeds.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"Stores::get migrates a store the first time its pool opens, and starts the credential task only after that.\"",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1616",
+          "kind": "test",
+          "locator": "cargo test --lib a_fresh_store_gets_the_baseline (passed); src/stores/registry.rs:434-470, 160-175",
+          "summary": "open() calls open_row (no credential task), then migrate_on, and only on Ok calls opened.keep(migration), which spawns the keeper (spawn_keeper is called only inside keep). Test: first migration() reports all applied; after forget, a second open reports StoreMigration::default(). The keeper ordering itself has no test, only the code.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 434,
+                "end": 470
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:57.441703673Z",
+          "seal": {
+            "by": "server",
+            "mac": "57473e9bd9f3c0ae8e6b309d4cefc10969e9cf1ef37d0c307d5aedb196825101"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code ordering and the fresh-store test (first open applies, second is a no-op).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1616"
+          ],
+          "recorded_at": "2026-11-24T04:45:27.672009468Z",
+          "seal": {
+            "by": "server",
+            "mac": "55489f8ca2085dd90c457f022a205e23daa872171319e6978bdd99a5002e8dcc"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:27.672009468Z",
+      "seal": {
+        "by": "server",
+        "mac": "e9db1afd35bded09728f993534839c91bf968c2496870150777611c4a97b686f"
+      }
+    },
+    {
+      "id": "CLM-1098",
+      "statement": "If a store's migration fails, or its database names another store, Stores::get returns StoreUnavailable, logs the detail locally, closes the pool and caches nothing, so the next request retries and other stores still open.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"If the migration fails, or the database names another store, the request gets StoreUnavailable. The detail is logged locally, the pool is closed, and nothing is cached. Other stores are not affected, and the next request tries again.\"",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1617",
+          "kind": "test",
+          "locator": "cargo test --lib a_store_whose_database_belongs_to_another_is_unavailable_and_others_still_open (passed); src/stores/registry.rs:451-468",
+          "summary": "The Err arm logs with split_event (local detail), closes the pool, returns OpenFailure::Unmigrated, mapped to StoreUnavailable at the entry() match. Test: shared-1 pointing at main's database gets StoreUnavailable twice (retried, not cached), main still opens, identity still main. The pool-closed step is by code only.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 448,
+                "end": 470
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:57.510934824Z",
+          "seal": {
+            "by": "server",
+            "mac": "2f4012eff33f9947149cc3c32ec0299af16d645dd6f3839286e784a0e23df247"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Test shows StoreUnavailable, retry, and main unaffected; the log and pool close are in the code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1617"
+          ],
+          "recorded_at": "2026-11-24T04:45:27.771716129Z",
+          "seal": {
+            "by": "server",
+            "mac": "6f40b763cc4ed2e37e5dde81877d5d8ae743dff93963764c5c20469fc994c2c2"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:27.771716129Z",
+      "seal": {
+        "by": "server",
+        "mac": "cee7e3d9a6c38ea1ef24799f6d5605d74e0ce722ccf7d611af96e03eb4bbe682"
+      }
+    },
+    {
+      "id": "CLM-1099",
+      "statement": "stores::add runs Stores::check, then the P8 host-store refusal, then Stores::prepare (which migrates), then the insert; check refuses the account database reached under another host name and a database whose identity names another store, and a P8 refusal leaves the target database unmigrated.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"stores::add runs Stores::check, then the P8 refusal, then Stores::prepare ..., then the insert.\"",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "src/store/stores.rs",
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1618",
+          "kind": "test",
+          "locator": "cargo test --lib adding_the_account_database_as_a_host_store_is_refused adding_a_store_that_aliases_another_is_refused adding_a_host_store_is_refused_until_enabled (all passed); src/store/stores.rs:296-320",
+          "summary": "add() calls check, then refuse_host_stores_until_task_20, then prepare, then insert, in that order. Tests: account database as host store is Refused mentioning 'account database', no row, no audit entry; an alias of a registered store is Refused 'already belongs to store shared-1' and identity kept; under P8 refusal the target's store_owner is None (unmigrated).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 296,
+                "end": 322
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:57.579253021Z",
+          "seal": {
+            "by": "server",
+            "mac": "d6ebd756ccd6befd8201afb129d81117792598f11b6a6047c8bcda614ed6f36c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Order is in the code and the three tests assert each refusal and the untouched target.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1618"
+          ],
+          "recorded_at": "2026-11-24T04:45:27.870711637Z",
+          "seal": {
+            "by": "server",
+            "mac": "2a4ab0d4af4b04750e3c36ce3b0a957388fbe0cef3921763642c39b6d01f1098"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:27.870711637Z",
+      "seal": {
+        "by": "server",
+        "mac": "d453c47624a4a624ddb473ce29c399926063c85d4b2737001dfaa4bc3d620652"
+      }
+    },
+    {
+      "id": "CLM-1100",
+      "statement": "okf-mcp stores migrate migrates every store in name order, prints one line per store, keeps going past a store that fails, then exits with an error that counts the failures, and the report names no host, port or credential.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"okf-mcp stores migrate migrates every store in name order and prints one line per store. It keeps going past a store that fails, then exits with an error that counts the failures.\"",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "src/cli/stores.rs",
+        "src/cli.rs"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1619",
+          "kind": "test",
+          "locator": "cargo test --lib migrate_stores_reports_an_unreachable_store_and_continues (passed); src/cli/stores.rs:100-124; src/store/stores.rs:199",
+          "summary": "Test: stores a-down (closed port), main, shared-2. Report has 4 lines in name order: 'a-down\\tfailed: ...', 'main\\tup to date', 'shared-2\\t<n> applied', then '1 of 3 stores could not be migrated' as the error; the report contains neither the port nor STORE_PASSWORD; shared-2's database got its identity. Names come from names() with ORDER BY name.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli/stores.rs",
+              "lines": {
+                "start": 100,
+                "end": 124
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:57.646807266Z",
+          "seal": {
+            "by": "server",
+            "mac": "40b94179d4152c03b8154ced1c135a35077ea8c7742ef540bfa2cdb29a219645"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test asserts order, per-store lines, continuing after a failure, the count error and no leaked host data.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1619"
+          ],
+          "recorded_at": "2026-11-24T04:45:27.979439458Z",
+          "seal": {
+            "by": "server",
+            "mac": "02470fdf77c6cfeff11f7ef3bdb01c88cb2ce2906bf84e74c89bd06edfbc48f6"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:27.979439458Z",
+      "seal": {
+        "by": "server",
+        "mac": "115524fd7cd9c84826d347008f7d12db2ced35fe1ae879c67308ecd8f5b12bf7"
+      }
+    },
+    {
+      "id": "CLM-1101",
+      "statement": "The migrated test template in tests/support/pg.rs adopts the baseline and runs the later catalog migrations and writes no store_identity row.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "demonstration",
+      "source": "PR body: \"tests/support/pg.rs: the migrated template adopts the baseline and runs the later catalog migrations. It writes no identity row\"",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "tests/support/pg.rs"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1620",
+          "kind": "demonstration",
+          "locator": "tests/support/pg.rs:104-122, 210-216, 407-411; psql on template okf_tpl_3d132885eef1299a: select count(*) from catalog.store_identity; select version, execution_time from catalog._sqlx_migrations",
+          "summary": "adopt_catalog runs run_direct(Some(1), skip=true) then run_direct(None) and writes no identity; it is called after MIGRATOR in both the template build and the non-template path. The built template database holds 0 identity rows and history rows (1,-1) and (2, real time).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "tests/support/pg.rs",
+              "lines": {
+                "start": 104,
+                "end": 122
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:57.716762719Z",
+          "seal": {
+            "by": "server",
+            "mac": "8e194c55450893941ab7fd552864c3cceeb16258c1038a331560f0d2e57bf138"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and the actual template database agree.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1620"
+          ],
+          "recorded_at": "2026-11-24T04:45:28.074634139Z",
+          "seal": {
+            "by": "server",
+            "mac": "ef7de68892a9c5cd174cd87c19534ce95b54d1abd204702c2644abe4b58be2e4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:28.074634139Z",
+      "seal": {
+        "by": "server",
+        "mac": "698a14e0faf7c0523b2f241a993ac19e6b541411c5b31b8f0fc8ce726f0659aa"
+      }
+    },
+    {
+      "id": "CLM-1102",
+      "statement": "PR body: \"Follow-ups are commented on #974 (Task 15, the store template), #978 (docs: the command name) and #979 (Task 20: what a_host_store_can_be_added should assert).\" - a comment about this task exists on each of the three issues.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body, Changes, last bullet",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1621",
+          "kind": "log",
+          "locator": "gh issue view 974|978|979 --repo hypotheosis/okf_mcp --json comments (at 2026-11-24T04:43Z)",
+          "summary": "Comments on #974 (one, 2026-11-24T02:16Z, from #972), #978 (one, 2026-11-23T19:01Z, from PR #996) and #979 (three, latest 2026-11-23T22:37Z) are all from other tasks. None mentions #973, Task 14, the identity row, the command name or a_host_store_can_be_added. The claimed follow-up comments are not posted yet.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-24T04:44:57.782512427Z",
+          "seal": {
+            "by": "server",
+            "mac": "79c7419a4518a3f1bb9ce9f87c6820ac44e4bc2c9a7ac3007a6369fcc124d4f1"
+          }
+        },
+        {
+          "id": "EVD-1638",
+          "kind": "log",
+          "locator": "gh issue view 974|978|979 --repo hypotheosis/okf_mcp --json comments (re-check at HEAD 83792ec)",
+          "summary": "Comments citing Task 14 (#973) now exist: #974 at 2026-11-24T04:47:31Z (store identity and template), #978 at 04:47:31Z (stores migrate command name, output lines), #979 at 04:47:32Z (stores::add order, P8 lift). Each matches the topic the PR names.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T04:48:11.305154428Z",
+          "seal": {
+            "by": "server",
+            "mac": "fd149b16206574b1bab8ba68bb04421821b98bdd030c6b94a291e8c318da945f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "No comment about this task exists on #974, #978 or #979 as of now; their comments are from earlier tasks. Fix: post the three follow-up comments (the Task 15 template note on #974, the command-name note on #978, the a_host_store_can_be_added note on #979) before opening the PR, or reword the PR line to say they are to be posted.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1621"
+          ],
+          "recorded_at": "2026-11-24T04:45:28.158353169Z",
+          "seal": {
+            "by": "server",
+            "mac": "6f5a904c84539a4a6de1873ce2a0099bcb9af8af86daba9e87e104f90b401f5f"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-audited: a Task 14 comment now exists on each of #974, #978 and #979 and matches the PR's description of it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1638"
+          ],
+          "recorded_at": "2026-11-24T04:48:23.950846679Z",
+          "seal": {
+            "by": "server",
+            "mac": "642e28ef616555932be24bfb0e2d0eb59ffcc227a32dd13998b6d9c4dffdb8fa"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:48:23.950846679Z",
+      "seal": {
+        "by": "server",
+        "mac": "8f22283e38557b6ef48d5d0a769de920f0a0fdb062251ebf4ad199e3369c39ff"
+      }
+    },
+    {
+      "id": "CLM-1103",
+      "statement": "PR body: \"A dump of a database built from the baseline matches a dump of one migrated through 0042.\" - the repository checks this with pg_dump output, as the baseline header and changelog say.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "PR body, Changes; changelog 2026-11-24T04-38-13Z",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "migrations/catalog/0001_baseline.sql"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "The PR body, changelog and plan note were reworded in 83792ec; the old sentence ('a dump matches a dump', checked by the repository) is gone. Replaced by two claims on the new wording.",
+        "retired_at": "2026-11-24T04:48:11.168969227Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1622",
+          "kind": "log",
+          "locator": "pg_dump --schema-only --schema=catalog (not runnable here); migrations/catalog/0001_baseline.sql:1-10; src/db.rs:2370-2423",
+          "summary": "pg_dump 16.13 refuses the test server (17.9: version mismatch), so no dump comparison could be repeated. The baseline header says it was generated from a dump; the shipped test compares pg_catalog-derived lines (not dump text) and passes. Schema equivalence is shown by that test; the dump-text comparison itself is not reproducible by me.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T04:44:57.849315609Z",
+          "seal": {
+            "by": "server",
+            "mac": "3392c5577c065ef688ccb7eb493343d8d09966670fb9ddc83ad08b54dceec815"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "pg_dump 16 cannot talk to the 17.9 test server, so the dump-text comparison was not repeatable. The equivalent catalog-query test passes, so the schemas match; only the 'dump' wording and the baseline's provenance are unverified. Fix: reword the PR sentence to say the schemas are compared through pg_catalog queries in adopted_schema_equals_a_fresh_store_schema, or run pg_dump 17 on both databases and record the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1622"
+          ],
+          "recorded_at": "2026-11-24T04:45:28.235353830Z",
+          "seal": {
+            "by": "server",
+            "mac": "0755b7938f24dccf7bd9d1b3abb1a222d805269a5ed96b2a323fb9a1e85321c7"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:48:11.168969227Z",
+      "seal": {
+        "by": "server",
+        "mac": "087663a4080b1cb59b1387b6b33a76edb6f6262f8b53500b8341fbb1b982d367"
+      }
+    },
+    {
+      "id": "CLM-1104",
+      "statement": "The registry lookup in Stores::open still runs on the account pool before the new migration step, and the migration runs on the store's own pool with no account connection held.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body Notes: #1006 (not changed here)",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1623",
+          "kind": "inspection",
+          "locator": "src/stores/registry.rs:434-470, 725-740",
+          "summary": "open() reads stores::by_name on self.inner.accounts (unchanged lines 435-447) and finishes that await before open_row and migrate_on; migrate_on acquires a connection from the store's pool (db.executor()) and returns it to the pool. The diff does not touch the by_name call. No account connection or transaction spans the migration.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/registry.rs",
+              "lines": {
+                "start": 434,
+                "end": 470
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:57.918988681Z",
+          "seal": {
+            "by": "server",
+            "mac": "fb4b83c2421b26db380a777f7c9495cbba6430bd7de0c40e84c88500076298e0"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Registry lookup lines are unchanged and complete before the migration step, which uses only the store pool.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1623"
+          ],
+          "recorded_at": "2026-11-24T04:45:28.318725039Z",
+          "seal": {
+            "by": "server",
+            "mac": "55653c226786a82b2c741fb35f0adbb6d7f42406834cd62ea27c0ea0f93843d5"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:28.318725039Z",
+      "seal": {
+        "by": "server",
+        "mac": "93d19d6e37ccd710d2d8dbccb6c6cfa50405cc7c450a0b6ffd1bdfb64f157181"
+      }
+    },
+    {
+      "id": "CLM-1105",
+      "statement": "The plan carries a dated 'Corrected (issue #973' note under Task 14 describing what shipped, and the plan's file table says stores migrate; the Task 14 heading and the spec still say migrate-stores, as the PR notes.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #973 comment and PR body Notes: Command name",
+      "source_anchor": {
+        "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "lines": {
+          "start": 576,
+          "end": 589
+        },
+        "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+      },
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1624",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:128, 565, 576; spec lines 244, 326; git grep migrate-stores",
+          "summary": "Line 576 is the note '> **Corrected (issue #973, 2026-11-24).**' under Task 14, listing the differences. Line 128 (file table) now says 'stores migrate'. The Task 14 heading (565) and the spec (244, 326) still say migrate-stores; the only other hit is the note's own parenthetical. As the PR states.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "migrate-stores",
+              "scope": [
+                "README.md",
+                "docs",
+                "src"
+              ],
+              "hits": 4,
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:58.001748503Z",
+          "seal": {
+            "by": "server",
+            "mac": "778fe4022441c9e08f923a75cfb6be3ebf63f2a395a2aa9f812ab2ddd5ebfd62"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Note present at plan line 576; heading and spec still use the old name as the PR says.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1624"
+          ],
+          "recorded_at": "2026-11-24T04:45:28.410324634Z",
+          "seal": {
+            "by": "server",
+            "mac": "630168165410dc32980e7ae14910550a2dfb8d7062c4352c07f148fe477d4123"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:28.410324634Z",
+      "seal": {
+        "by": "server",
+        "mac": "ed6d6896aeb477dc73a8bcc838d0e1e58e4e1a085b6f27eb341255470d95d3d4"
+      }
+    },
+    {
+      "id": "CLM-1106",
+      "statement": "The baseline includes catalog.catalog_audit_entries (created by account migration 0042), as the issue's comment requires.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #973 comment: the Task 14 baseline must create catalog_audit_entries",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "migrations/catalog/0001_baseline.sql"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1625",
+          "kind": "test",
+          "locator": "migrations/catalog/0001_baseline.sql:313; cargo test --lib adopted_schema_equals_a_fresh_store_schema (passed)",
+          "summary": "The baseline creates catalog.catalog_audit_entries (line 313) with its constraints. The schema-equivalence test asserts a 'relation catalog_audit_entries ' line exists in the fresh store's and adopted database's schema and that the two schemas are equal.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/catalog/0001_baseline.sql",
+              "lines": {
+                "start": 313,
+                "end": 335
+              },
+              "commit": "d879b05e9212e1a5c5d0f5466b59fcbf28ad9881"
+            }
+          },
+          "recorded_at": "2026-11-24T04:44:58.070243711Z",
+          "seal": {
+            "by": "server",
+            "mac": "f7d70d698808a032413261356867a312e09f45e64e9cabc9b23acc1b7c2a4fb4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Baseline creates the table and the equivalence test covers it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1625"
+          ],
+          "recorded_at": "2026-11-24T04:45:28.516764615Z",
+          "seal": {
+            "by": "server",
+            "mac": "047bb170061c757db15dc28c29e67ee58eb66cc077dbadb8548a44fa6cbd0ed7"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:28.516764615Z",
+      "seal": {
+        "by": "server",
+        "mac": "8a4d9b985fcc2f03302738af83cbce2243230b4cf825311332dfc450871534b2"
+      }
+    },
+    {
+      "id": "CLM-1107",
+      "statement": "PR body Validation: the eight new tests it lists exist and pass.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: New tests list",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1626",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --jobs 4 --lib -- <nine filters> : 9 passed, 0 failed (target/i973-logs/audit-tests.log)",
+          "summary": "All eight listed tests ran and passed, by name: adopted_schema_equals_a_fresh_store_schema, adoption_runs_once_under_concurrent_starts, a_store_opened_under_another_name_is_refused_and_keeps_its_identity, a_fresh_store_gets_the_baseline, a_store_whose_database_belongs_to_another_is_unavailable_and_others_still_open, adding_a_store_that_aliases_another_is_refused, adding_the_account_database_as_a_host_store_is_refused, migrate_stores_reports_an_unreachable_store_and_continues (plus adding_a_host_store_is_refused_until_enabled). I did not run fmt beyond gate.sh fmt (exit 0), nor lint, dylint or the full suite.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T04:44:58.135463747Z",
+          "seal": {
+            "by": "server",
+            "mac": "11eb5734e5a855f4ad090a7e64fb828009a87c9b8c2e33666e313912248aa943"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "I ran all eight named tests (plus one related); 9 passed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1626"
+          ],
+          "recorded_at": "2026-11-24T04:45:28.618379004Z",
+          "seal": {
+            "by": "server",
+            "mac": "0f624a84c5253e20fad3099c43101df4ed10d355e671fdccef8ba60077b77776"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:44:08.942132253Z",
+      "updated_at": "2026-11-24T04:45:28.618379004Z",
+      "seal": {
+        "by": "server",
+        "mac": "d1cb1f625d6e63e7d3a23f8229250ff0aa361f556bc8d8c12bd7baec4acda268"
+      }
+    },
+    {
+      "id": "CLM-1108",
+      "statement": "PR body (reworded): adopted_schema_equals_a_fresh_store_schema checks that the adopted and the freshly built catalog schemas are equal through pg_catalog queries, as the changelog and the plan note also say.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body Changes, 0001_baseline bullet; changelog 04-38-13Z; plan note line 578",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "changelog/2026-11-24T04-38-13Z-m21-task-14-store-migrators-and-adoption.md",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1639",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T04-38-13Z-m21-task-14-store-migrators-and-adoption.md:11-16; plan line 578; src/db.rs:2373-2423; PR body line 7",
+          "summary": "At 83792ec the changelog, plan note and PR body all say the schemas are checked equal through catalog queries by adopted_schema_equals_a_fresh_store_schema. The test (passed earlier; 83792ec changes only the changelog and plan) builds its comparison from pg_attribute, pg_constraint, pg_indexes, pg_sequences, pg_trigger and pg_proc.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "changelog/2026-11-24T04-38-13Z-m21-task-14-store-migrators-and-adoption.md",
+              "lines": {
+                "start": 11,
+                "end": 16
+              },
+              "commit": "83792ecc2d929d98ac58e7823d82c45ade8c7b21"
+            }
+          },
+          "recorded_at": "2026-11-24T04:48:16.617992345Z",
+          "seal": {
+            "by": "server",
+            "mac": "d815bcc86dc60bb2b578672133bdb4db95cf4c8e74e33ab228f162fe2ac5bf5b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All three texts now describe the catalog-query comparison, and the test does that.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1639"
+          ],
+          "recorded_at": "2026-11-24T04:48:24.013694874Z",
+          "seal": {
+            "by": "server",
+            "mac": "7f2b0fa92690c73cd307f23e4c8d0e05552612619efa0c4f59933e8c276d3d1e"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:48:11.242846186Z",
+      "updated_at": "2026-11-24T04:48:24.013694874Z",
+      "seal": {
+        "by": "server",
+        "mac": "4d62ff6cafd4d45971ebd5d90e16adb229c9361de4d08afd95a36f7220f3505d"
+      }
+    },
+    {
+      "id": "CLM-1109",
+      "statement": "PR body (reworded): when the baseline was written, a pg_dump 17 schema dump of a database built from it matched the dump of one migrated through 0042 (a one-off check, not repeatable in the test environment).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "analysis",
+      "source": "PR body Changes, 0001_baseline bullet",
+      "derived_from": [
+        "CLM-1089"
+      ],
+      "artifacts": [
+        "migrations/catalog/0001_baseline.sql"
+      ],
+      "tags": [
+        "from-issue:973"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1640",
+          "kind": "log",
+          "locator": "pg_dump 16.13 against the 17.9 test server: version mismatch",
+          "summary": "The statement describes a past one-off pg_dump 17 run. The PR says it is not repeatable here, and I could not repeat it (pg_dump 16 only), so I can neither confirm nor refute it.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T04:48:16.799256200Z",
+          "seal": {
+            "by": "server",
+            "mac": "e5a8647784498bc3ee587ddf51902e8da16efaac943f6a320acc1bc0ddd36f5a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "A past one-off pg_dump 17 run cannot be repeated in this environment (pg_dump 16 only). The wording is now honest about that; it does not block. Fix: run pg_dump 17 on a database built from migrations/catalog and one migrated through 0042, and record the empty diff, if the claim must be verified.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1640"
+          ],
+          "recorded_at": "2026-11-24T04:48:24.074957992Z",
+          "seal": {
+            "by": "server",
+            "mac": "d318eec15dccf0804a186f1b703e999f47cb9903669e1f806962b62e0f3bc107"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T04:48:11.242846186Z",
+      "updated_at": "2026-11-24T04:48:24.074957992Z",
+      "seal": {
+        "by": "server",
+        "mac": "9864c158679d9a5e64b4f74b07bfcf2c875bd140f7cf084718aa2b6e38311f37"
       }
     }
   ]
