@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1300,
+  "next_claim_seq": 1301,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "f9637288128b971115bb82f995b63a0daad3f8f33091e36823ef4faf9024e544"
+    "mac": "4de56c1659e2906e990dffd8d0439735cb42285033f9196117e11688424da1e7"
   },
-  "next_evidence_seq": 1907,
+  "next_evidence_seq": 1912,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "0147e0e5e70f90d37123431201a6d2f2c3563ea3f9f2c59516bea1a4173e9fca"
+    "mac": "7474e87fafce3f1aa302053ad9ef8138257dc0fb05e7fd1f678d097ab22b3edb"
   },
   "claims": [
     {
@@ -100297,6 +100297,28 @@
             "by": "server",
             "mac": "f257e9512206b5926f10d4f324b2f069ee16499b8ac93efd452fd6c86df32f6b"
           }
+        },
+        {
+          "id": "EVD-1907",
+          "kind": "inspection",
+          "locator": "docs/operations.md:449-463 at 8e2a5db; src/store/stores.rs:309-336",
+          "summary": "The step list now starts with the name/location refusal, then connect, then the identity refusal naming 'another registered store', then migrate and store the row. This matches the code order in add. (Line 458 is long but accurate.)",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 449,
+                "end": 463
+              },
+              "commit": "8e2a5db5660af510d425f846810af82fcf52f535"
+            }
+          },
+          "recorded_at": "2026-11-24T21:05:35.939582820Z",
+          "seal": {
+            "by": "server",
+            "mac": "66f8d67ec01ff91035a16a31e3144b0d5599b3e809c8e970507ff23e1d799001"
+          }
         }
       ],
       "verdicts": [
@@ -100325,13 +100347,26 @@
             "by": "server",
             "mac": "32c0aaa5db3377d5dc9b92ea9bfdd373d0804823faea1bdb3d337d8ec9ab498e"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Docs step order and wording now match add, check and prepare at 8e2a5db.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1907"
+          ],
+          "recorded_at": "2026-11-24T21:05:50.397158325Z",
+          "seal": {
+            "by": "server",
+            "mac": "bbb64f5dc4240a7b12f09688ea1b6c97fd8496996a5ff3d2f6c875b8069efbfb"
+          }
         }
       ],
       "created_at": "2026-11-24T16:23:19.118447111Z",
-      "updated_at": "2026-11-24T21:02:07.657726269Z",
+      "updated_at": "2026-11-24T21:05:50.397158325Z",
       "seal": {
         "by": "server",
-        "mac": "558ad614132744fab872968838c6ea23eee782de024307301a92314e88de406f"
+        "mac": "1b771f00b5b494192d2be3b9a1088b3722cf4096ecee06dcab3669a5a1eb91b3"
       }
     },
     {
@@ -104721,6 +104756,18 @@
             "by": "server",
             "mac": "31dfb9662c4790d40c924a2a4b848ec0a6a88a0f296747ef1caa018a143c0365"
           }
+        },
+        {
+          "id": "EVD-1911",
+          "kind": "analysis",
+          "locator": "children of CLM-1288",
+          "summary": "Every active child (CLM-1289 to CLM-1297, CLM-1299, CLM-1300) is supported; CLM-1298 is retired and replaced by CLM-1300, and CLM-1299 was fixed in the description. Together they cover the issue's acceptance and the description's facts.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T21:05:55.700946728Z",
+          "seal": {
+            "by": "server",
+            "mac": "4b2f4ce0fded86779a6c6c1bc9ed05be11cd400d1007c08da57b39a514325e46"
+          }
         }
       ],
       "verdicts": [
@@ -104736,13 +104783,26 @@
             "by": "server",
             "mac": "0171ebca80bcabbb6f4f6db0aceb164ac9164f02b7c439d07897c2cefc2c02c4"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "All active children supported after the docs and description fixes (EVD-1911).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1911"
+          ],
+          "recorded_at": "2026-11-24T21:05:59.051571959Z",
+          "seal": {
+            "by": "server",
+            "mac": "c2b195398f890bb4002555e0fe0472d401e7c9ff0f17ae793086353d517f2122"
+          }
         }
       ],
       "created_at": "2026-11-24T21:00:24.152214997Z",
-      "updated_at": "2026-11-24T21:02:10.695201142Z",
+      "updated_at": "2026-11-24T21:05:59.051571959Z",
       "seal": {
         "by": "server",
-        "mac": "166e01e715838ce3153db568b701ea57230b371a693d9b27d345b7944d7de6ce"
+        "mac": "176b4de21e99255659f4677bcdf1367abd1db4481095e87a21d94a91c7a4d08e"
       }
     },
     {
@@ -105399,7 +105459,9 @@
         "from-issue:1026"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "The PR description no longer makes the unconditional guarantee (it was refuted); replaced by CLM-1300 with the corrected scope.",
+        "retired_at": "2026-11-24T21:05:44.180392360Z"
       },
       "evidence": [
         {
@@ -105423,6 +105485,18 @@
             "by": "server",
             "mac": "2be173552cda7c140c92e0095294088375011690456177ccf10c12c391e057d7"
           }
+        },
+        {
+          "id": "EVD-1908",
+          "kind": "inspection",
+          "locator": "target/i1026-logs/pr-1026-body.md:6; src/store/stores.rs add doc comment; src/stores/registry.rs prepare doc comment",
+          "summary": "The unconditional sentence is gone. The PR body now says the locks exclude other adds of the same name or same host, port and database, and names the alias-spelling window as a known untested gap; both doc comments say the same. The statement as originally quoted is no longer made, and the replacement is accurate.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T21:05:36.019843141Z",
+          "seal": {
+            "by": "server",
+            "mac": "2d85dd437240ed69d2bb61b1b8752d5037286fff92b9888c4414d32d84655040"
+          }
         }
       ],
       "verdicts": [
@@ -105441,10 +105515,10 @@
         }
       ],
       "created_at": "2026-11-24T21:00:24.152214997Z",
-      "updated_at": "2026-11-24T21:01:22.667821514Z",
+      "updated_at": "2026-11-24T21:05:44.180392360Z",
       "seal": {
         "by": "server",
-        "mac": "be8ee85724152e2bff295bb6e3cf9135aabf85274e9dce0ad0aac24ddcb1576b"
+        "mac": "4884a939a1bd1921013b05e0fef4e3cd0af4fb07632cd6a6911bc574ec7a7a99"
       }
     },
     {
@@ -105489,6 +105563,28 @@
             "by": "server",
             "mac": "09256bf481897c220a3b3598e69f02bc81b80a9a81b1043db2b07a0beff57842"
           }
+        },
+        {
+          "id": "EVD-1909",
+          "kind": "inspection",
+          "locator": "target/i1026-logs/pr-1026-body.md:13; docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:589",
+          "summary": "PR body now says 'Task 14 \"Adding a store\" note (plan line 589)'; the note is at line 589 in the Task 14 section.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 588,
+                "end": 589
+              },
+              "commit": "8e2a5db5660af510d425f846810af82fcf52f535"
+            }
+          },
+          "recorded_at": "2026-11-24T21:05:36.103809508Z",
+          "seal": {
+            "by": "server",
+            "mac": "e4cce6bfe46cc3cd0bea1b3ab9c225e8291f1d09a6a95d75c0548091e066ccd1"
+          }
         }
       ],
       "verdicts": [
@@ -105504,13 +105600,93 @@
             "by": "server",
             "mac": "5575fccb0e5a20625bff0da9182ccebd53f045eba01a5255d50946dac564bd27"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The PR body now names Task 14 and line 589, which is where the note is.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1909"
+          ],
+          "recorded_at": "2026-11-24T21:05:50.481662596Z",
+          "seal": {
+            "by": "server",
+            "mac": "4abd7c9f099238e1ef6589fe7e5d15d954a33f44dd678f269672d7b594206241"
+          }
         }
       ],
       "created_at": "2026-11-24T21:00:24.152214997Z",
-      "updated_at": "2026-11-24T21:01:22.741798602Z",
+      "updated_at": "2026-11-24T21:05:50.481662596Z",
       "seal": {
         "by": "server",
-        "mac": "6d99ab5261f7a7067ad50eaab64cce08e36ef095cefe93756786a00baa6fcf25"
+        "mac": "cc6641b835874ea1244f27f5396cfb16eeafd70bcef0e1171cc4247097ad8ff6"
+      }
+    },
+    {
+      "id": "CLM-1300",
+      "statement": "PR body: 'The locks exclude other adds of the same name or the same host, port and database while one is re-claimed. Known gap: two adds of one physical database under different host spellings and names take different locks (a narrow window; not tested).'",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body Design Recover (revised draft), replacing the retired CLM-1298",
+      "derived_from": [
+        "CLM-1288"
+      ],
+      "artifacts": [
+        "src/store/stores.rs",
+        "src/stores/registry.rs"
+      ],
+      "tags": [
+        "from-issue:1026"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1910",
+          "kind": "analysis",
+          "locator": "src/store/stores.rs:357-373 (lock keys) at 8e2a5db; target/i1026-logs/pr-1026-body.md:6",
+          "summary": "The name lock and the lowercased host/port/database lock are advisory transaction locks taken before the EXISTS checks, so adds of the same name or same location serialize; adds under different host spellings and names take different keys, as the statement says. No test covers the gap, which the statement also says.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/stores.rs",
+              "lines": {
+                "start": 357,
+                "end": 375
+              },
+              "commit": "8e2a5db5660af510d425f846810af82fcf52f535"
+            }
+          },
+          "recorded_at": "2026-11-24T21:05:50.279591250Z",
+          "seal": {
+            "by": "server",
+            "mac": "3037f2db81345a40be6ff96b0880d6d1595dfaf1c62892c99297cc60e6b96770"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The corrected scope matches the lock keys and states the alias gap.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1910"
+          ],
+          "recorded_at": "2026-11-24T21:05:55.616940899Z",
+          "seal": {
+            "by": "server",
+            "mac": "d2abeb151018c0c90ca4aab0e480dc8a4861b48148548d30e11108025f74b89f"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T21:05:44.263205305Z",
+      "updated_at": "2026-11-24T21:05:55.616940899Z",
+      "seal": {
+        "by": "server",
+        "mac": "9f8257da235cb640d07180e8eddeaad75708101dcb39a5e016cc1bf29c231781"
       }
     }
   ]
