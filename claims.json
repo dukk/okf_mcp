@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1029,
+  "next_claim_seq": 1054,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "42044c86f93e3555bf47f2e9cf87d623aeb9e67cb995e54503017957105ee2a3"
+    "mac": "7e1798c84639f4427770d648c9aa0ce8bb495e8381bdcb2a7c97ef7e0a097dbb"
   },
-  "next_evidence_seq": 1490,
+  "next_evidence_seq": 1545,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "42fc2b39b27c76b9c24de54ec9fe117751f8b14897003e8d335db09ec44647ac"
+    "mac": "044922ad33257a9d2f5c4b2a13f770769bb050b8afc88dae4888df04f4565990"
   },
   "claims": [
     {
@@ -53684,6 +53684,28 @@
             "by": "server",
             "mac": "f363af3e85e5aa90cc9b0d05515cec1d1cde7f087e9c2e37774bfd293da749fc"
           }
+        },
+        {
+          "id": "EVD-1526",
+          "kind": "inspection",
+          "locator": "src/write.rs:162-197 at 7feff65",
+          "summary": "Snapshot refresh (state.refresh then refreshed_if_moved) still follows the write queue and precedes both the account begin and the store db.begin(); Task 12 only added lines after it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/write.rs",
+              "lines": {
+                "start": 162,
+                "end": 200
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:44:04.483703130Z",
+          "seal": {
+            "by": "server",
+            "mac": "660c250dd8a036a5b0beff231f6ffe2a5c717e8b105df0581db194e2acf93e1a"
+          }
         }
       ],
       "verdicts": [
@@ -53725,13 +53747,26 @@
             "by": "server",
             "mac": "126ee859592074e92ace3e17e74758ab7178bb0597102978662d3da26fa929fa"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at head: refresh precedes begins.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1526"
+          ],
+          "recorded_at": "2026-11-24T00:44:16.058299684Z",
+          "seal": {
+            "by": "server",
+            "mac": "897ff0672dc4aa558f85f17a5846910447e45b7a4cd7c529d5efd78d7893af3f"
+          }
         }
       ],
       "created_at": "2026-11-23T08:12:15.185449087Z",
-      "updated_at": "2026-11-23T13:55:09.370552562Z",
+      "updated_at": "2026-11-24T00:44:16.058299684Z",
       "seal": {
         "by": "server",
-        "mac": "d2a35a7ad64391343c61b39c0f8beb3c59af52249adddb282d5345cd6f587ee9"
+        "mac": "40c5690d0fb49638fdc8f3c5083e692564774c5535644ce86cb160bdf6aeb304"
       }
     },
     {
@@ -60743,6 +60778,28 @@
             "by": "server",
             "mac": "d1db91dd6330c476d313b3bec6c4f3ff8a1698d12505dc5934b41df410cb3886"
           }
+        },
+        {
+          "id": "EVD-1528",
+          "kind": "inspection",
+          "locator": "src/store/import.rs:168-195; src/store/repair.rs:91-114 at 7feff65",
+          "summary": "import and repair still take &CatalogDb and call db.begin() for their store transaction; only the audit write moved onto it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/import.rs",
+              "lines": {
+                "start": 168,
+                "end": 196
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:44:04.610757104Z",
+          "seal": {
+            "by": "server",
+            "mac": "64091fd6f7f8f9dd22e9aefc2c564c7d79a2e271d2c915f6a3df8f35fb7b5f5c"
+          }
         }
       ],
       "verdicts": [
@@ -60759,13 +60816,26 @@
             "by": "server",
             "mac": "477ea65249b0f20720599003ef57e37e178062f256f5c6b05e74b000f63e7da0"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at head: import and repair still begin on CatalogDb.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1528"
+          ],
+          "recorded_at": "2026-11-24T00:44:16.174527888Z",
+          "seal": {
+            "by": "server",
+            "mac": "0469996f8f89316f24d8f7ca9407c1fa351ba67cafbcaf8367644bbab29931d2"
+          }
         }
       ],
       "created_at": "2026-11-23T13:17:22.860036306Z",
-      "updated_at": "2026-11-23T13:18:18.654597590Z",
+      "updated_at": "2026-11-24T00:44:16.174527888Z",
       "seal": {
         "by": "server",
-        "mac": "cbc76fa148b5bba92a58cd373f00fb126cb674c089bc0e7e2594d2b01ec445d3"
+        "mac": "cab1e0f26d3f82b198a2ec351a89a2e7660425f8aa837bb3b43caaa0f5cdc9c4"
       }
     },
     {
@@ -81843,6 +81913,28 @@
             "by": "server",
             "mac": "d9a010f2f8c0e0f1985e8625e9baaf951c1f2d57a62e5daeb548ebd7195934bc"
           }
+        },
+        {
+          "id": "EVD-1523",
+          "kind": "test",
+          "locator": "gate.sh narrow --jobs 4 --lib -- maintenance_run (7 passed) on 7feff65",
+          "summary": "maintenance_run_end_is_audited_after_the_trigger_is_gone passes after Task 12; its helper now reads catalog.catalog_audit_entries and still finds one entry per ended run, none for the replayed close. Entries are written from Rust (RunWatch::commit) in the store tx, not after the store commit as the claim's source line said; the statement itself holds.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/mod.rs",
+              "lines": {
+                "start": 216,
+                "end": 256
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:44:04.293489319Z",
+          "seal": {
+            "by": "server",
+            "mac": "5406bf4887c30c9e050702eda1200a707ef2810b86e7a379cee42b8f6988598d"
+          }
         }
       ],
       "verdicts": [
@@ -81872,13 +81964,26 @@
             "by": "server",
             "mac": "f443db925f8ca3822b41c3655fecdd88296871e2e17e262c57d55f40dae64b3e"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 7feff65: the test passes against the store table.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1523"
+          ],
+          "recorded_at": "2026-11-24T00:44:15.881848222Z",
+          "seal": {
+            "by": "server",
+            "mac": "6b04304a96195a5ebcc96d9ffe1c08ddc26ee31204524f631cced978560ed3c3"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T23:48:38.684051689Z",
+      "updated_at": "2026-11-24T00:44:15.881848222Z",
       "seal": {
         "by": "server",
-        "mac": "df64f8ebbd59c5cdca819b396ef03e9d43f0e5af06fb2122295b29f93456597e"
+        "mac": "4e92ccc20f81d40dd7d4ad0b048477145d5f78c0f0037aeb60ebdd4ae74db010"
       }
     },
     {
@@ -81969,6 +82074,28 @@
             "by": "server",
             "mac": "5b419fdee5f99bd1a21af49e9b9aeb271fa916b5bc10178a445a7ad7bb7f1d88"
           }
+        },
+        {
+          "id": "EVD-1524",
+          "kind": "test",
+          "locator": "gate.sh narrow --jobs 4 --lib -- maintenance_run (7 passed) on 7feff65: an_empty_maintenance_run_is_audited_after_the_trigger_is_gone",
+          "summary": "Passes on head with entries read from the store table.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/tests.rs",
+              "lines": {
+                "start": 2573,
+                "end": 2640
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:44:04.355965534Z",
+          "seal": {
+            "by": "server",
+            "mac": "75d3afb8af24b2395a8a70eac1c1f43966dce173d51947c4f028e3ac904788f2"
+          }
         }
       ],
       "verdicts": [
@@ -81998,13 +82125,26 @@
             "by": "server",
             "mac": "901bd19cccea55900adf3c3a7873add20f655ff462d4c513dd7fb0e6eca6195b"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 7feff65: the empty-run test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1524"
+          ],
+          "recorded_at": "2026-11-24T00:44:15.939906514Z",
+          "seal": {
+            "by": "server",
+            "mac": "97e52086a314421a3aab04624240e2dbfabd53e5ab3ae3a87f0134f100a2f3bf"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T23:48:38.741055591Z",
+      "updated_at": "2026-11-24T00:44:15.939906514Z",
       "seal": {
         "by": "server",
-        "mac": "2efd7ccc2d9c454a67f0116b2d37a157aeda62f6ac62991b9d36fef100ffc83e"
+        "mac": "b371ad9141466b693bc050298221f862b6c3a0f12fc310e05b6c5de64786389b"
       }
     },
     {
@@ -82727,6 +82867,28 @@
             "by": "server",
             "mac": "c84899afc509ff39c4c2c024b5eee65f8f33ca1f9758197e774d5fe35ebd9417"
           }
+        },
+        {
+          "id": "EVD-1527",
+          "kind": "inspection",
+          "locator": "src/store/publish.rs:215-235,323-324 at 7feff65",
+          "summary": "Publish still begins account_tx, lock_people, resolve_actor, then db.begin(), and commits tx then account_tx.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 215,
+                "end": 235
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:44:04.547361927Z",
+          "seal": {
+            "by": "server",
+            "mac": "32043cb27857e4d9288b6e1d981290ab1ccab1c483e113df900c1d491dd73fa4"
+          }
         }
       ],
       "verdicts": [
@@ -82755,13 +82917,26 @@
             "by": "server",
             "mac": "c76a832905c845ecd20e6bd97bd401d1a4ea6f587d8170611bc08fc27e4c7d02"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at head: order and commit order unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1527"
+          ],
+          "recorded_at": "2026-11-24T00:44:16.116993358Z",
+          "seal": {
+            "by": "server",
+            "mac": "d3f7ac5eb1b3f25d08d6026df89e75c7be82ac5260c84c94ea4f3e924ff30972"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T23:23:47.814551377Z",
+      "updated_at": "2026-11-24T00:44:16.116993358Z",
       "seal": {
         "by": "server",
-        "mac": "4a02aa600f6fbdeea6948bad13e79d855c4c99a7ff4bdcac3f9fa1d9e7a4707d"
+        "mac": "776fb3698eb314ce3ec76bceada55d7fcbd422e7aeef6dc4d2b0d7d1297948aa"
       }
     },
     {
@@ -83343,6 +83518,28 @@
             "by": "server",
             "mac": "7f3392a64186c8696ac8099bfff53a2571e513ec3029204d780af568b52d95bc"
           }
+        },
+        {
+          "id": "EVD-1525",
+          "kind": "analysis",
+          "locator": "src/write.rs:184-197; src/mcp/changesets.rs:655-672; src/store/import.rs:179-195; src/store/repair.rs:97-114 at 7feff65",
+          "summary": "At head each path still runs lock_people on the account tx and only then db.begin(); the Task 12 diff adds resolve_actor after lock_people and does not move any begin.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/write.rs",
+              "lines": {
+                "start": 184,
+                "end": 197
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:44:04.419818781Z",
+          "seal": {
+            "by": "server",
+            "mac": "2a5acaeb663064dc8c91e8aaa02d5202ecd0559202baa9adba73c19c292759c4"
+          }
         }
       ],
       "verdicts": [
@@ -83359,13 +83556,26 @@
             "by": "server",
             "mac": "58be12be47673c1046b65580731f2907fee8ae4ddb64a227820c20417d39a605"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at head: begin order unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1525"
+          ],
+          "recorded_at": "2026-11-24T00:44:16.000147172Z",
+          "seal": {
+            "by": "server",
+            "mac": "c4ad52de91847d78e65156b79e21cc9fc71c615fa117d972375e060f4ed2d3cb"
+          }
         }
       ],
       "created_at": "2026-11-23T23:47:48.251916715Z",
-      "updated_at": "2026-11-23T23:48:38.376527410Z",
+      "updated_at": "2026-11-24T00:44:16.000147172Z",
       "seal": {
         "by": "server",
-        "mac": "c874935adfc803fa3ad1984f7bb3aa003cb393bad00341a69476e65a96109d11"
+        "mac": "9442c1f209a8d3b3c423997409051cc8d73deb710cc60d2fb30f54d9f2ccb2a6"
       }
     },
     {
@@ -83452,7 +83662,9 @@
         "from-issue:970"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "superseded by Task 12 (record_ended_run removed)",
+        "retired_at": "2026-11-24T00:46:08.339931172Z"
       },
       "evidence": [
         {
@@ -83476,6 +83688,28 @@
             "by": "server",
             "mac": "08c89f2eee84e22ec1dc17145c2aca4e1067305bbad607dafc4b2b82dfa94202"
           }
+        },
+        {
+          "id": "EVD-1522",
+          "kind": "analysis",
+          "locator": "git grep -n record_ended_run -- '*.rs' (0 hits); src/store/maintenance/mod.rs:216-256",
+          "summary": "The claim's second half names record_ended_run, which this change deleted; the entry is now written by audit::record_catalog from RunWatch::commit on the store tx using a ResolvedActor. The first half still holds (AuditTarget read before the store tx, now by AuditTarget::read opening a read-only account tx), but the statement as written no longer describes the code.",
+          "stance": "refutes",
+          "anchor": {
+            "search": {
+              "pattern": "record_ended_run",
+              "scope": [
+                "src"
+              ],
+              "hits": 0,
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:44:04.212159492Z",
+          "seal": {
+            "by": "server",
+            "mac": "4d0616cc0139917d96de5a64ff8e70afc2b2e9b8558b5e5d4564603154211463"
+          }
         }
       ],
       "verdicts": [
@@ -83491,13 +83725,26 @@
             "by": "server",
             "mac": "532e84e0c411ba9270d74012d0751c4c833c021f488b2665dd43dcbb4335216e"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "Task 12 deleted record_ended_run and writes the entry through audit::record_catalog with a ResolvedActor, so the statement no longer describes the code. Fix: retire CLM-1026 with reason \"superseded by Task 12 (record_ended_run removed)\" and rely on the claim that RunWatch writes ended-run entries in the store transaction.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1522"
+          ],
+          "recorded_at": "2026-11-24T00:44:15.788882012Z",
+          "seal": {
+            "by": "server",
+            "mac": "ee9f575b6e341f8c8e2cf93dab015fbef987683dfd666317b1fa5e0af4909003"
+          }
         }
       ],
       "created_at": "2026-11-23T23:47:48.251916715Z",
-      "updated_at": "2026-11-23T23:48:38.513891477Z",
+      "updated_at": "2026-11-24T00:46:08.339931172Z",
       "seal": {
         "by": "server",
-        "mac": "e3b8884bda6f47ad2de5fd9dc5a0b1f9fb2ae78189158bfe946037781be0531e"
+        "mac": "1cb1a5f5344e2f305b6310e37fdc9ec7295ab95e1759a17765a0d433818e6e29"
       }
     },
     {
@@ -83633,6 +83880,2157 @@
       "seal": {
         "by": "server",
         "mac": "f578facbac5b3e577f21c4aabebc39b3edca9d1556e707d4f12ec572c19255bf"
+      }
+    },
+    {
+      "id": "CLM-1029",
+      "statement": "Issue #971 (M21.12, Task 12 of the catalog stores plan) is delivered: the six catalog audit events are written in the store's own transaction to catalog.catalog_audit_entries and the audit view merges the account database with every store.",
+      "kind": "functional",
+      "level": "system",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "https://github.com/hypotheosis/okf_mcp/issues/971; plan Task 12",
+      "derived_from": [],
+      "artifacts": [
+        "migrations/accounts/0042_catalog_audit.sql",
+        "src/store/audit.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1529",
+          "kind": "analysis",
+          "locator": "children of CLM-1029",
+          "summary": "Every functional child is supported (migration, trigger, write sites, publish commit and rollback, RunWatch, merged view, paging, cursors, pre-split, retention prune, nine tests). One documentation child is refuted: CLM-1051 (plan note says resolve_actor runs before db.begin(), false for import and repair; code behavior is fine). CLM-1046 and CLM-1047 (full-suite totals, mutation checks) are not_enough_info.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-24T00:44:21.675868662Z",
+          "seal": {
+            "by": "server",
+            "mac": "1d237513c99102e1798e4d819de119b61d5a498b8dc089c50b58b1ae40ceb88f"
+          }
+        },
+        {
+          "id": "EVD-1537",
+          "kind": "analysis",
+          "locator": "children of CLM-1029",
+          "summary": "Re-roll after re-audit. The behaviour children (migration, trigger, write sites, publish commit and rollback, RunWatch, merged view, paging, cursors, pre-split, retention, nine tests, mutation checks, lock order) are supported, so the delivery itself is sound. Two children are not: CLM-1051 is refuted (it quotes superseded plan wording that was false for import and repair; the plan is already corrected) and CLM-1046 is not_enough_info (3501 holds at 7feff65, head 37dd190 has one more test and no full run). Neither shows a behaviour defect, but the rule requires every active child supported.",
+          "stance": "refutes",
+          "recorded_at": "2026-11-24T00:48:00.184586315Z",
+          "seal": {
+            "by": "server",
+            "mac": "fedbf6d8f1fd7f61b3d41f6d4b200c329770f8d765e37e08b086a7089f0cb5c7"
+          }
+        },
+        {
+          "id": "EVD-1544",
+          "kind": "analysis",
+          "locator": "children of CLM-1029",
+          "summary": "Re-roll after CLM-1046 and CLM-1051 were retired and replaced by CLM-1053 and CLM-1052. list_claims for tag from-issue:971 shows all 20 other active children supported, none refuted or unverified. Children cover the migration, trigger, write sites, publish commit and rollback, RunWatch, merged view and cursors, pre-split entries, retention, the nine tests with mutation checks, lock order, docs, lint, and the full-suite state with its one unrelated timing-sensitive failure.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T00:55:12.369406240Z",
+          "seal": {
+            "by": "server",
+            "mac": "6c4b1b20dd286517fd10926124a0f80e52a6426cf27ea4b0d6779720523a2560"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "Roll-up: all behavior children hold; the only refuted child is a plan-wording inaccuracy (CLM-1051). Fix: correct the plan note's \"before db.begin()\" wording for import and repair, then re-audit CLM-1051 and this parent.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1529"
+          ],
+          "recorded_at": "2026-11-24T00:44:24.537327414Z",
+          "seal": {
+            "by": "server",
+            "mac": "91d1c77a75b82024c920728413ef10b4cefa7d9770e7e34550a9854c365d13c6"
+          }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "Every behaviour child is supported, but CLM-1051 (superseded plan wording, false for import and repair) is refuted and CLM-1046 (full-suite total on head) is undecided, so the roll-up cannot be supported. Fix: retire CLM-1051 and replace it with a claim on the reworded plan note, rerun just test and just dylint on the final head (expect 3502) or reword the PR body to name 7feff65, then re-roll this parent.",
+          "auditor": "claude-sonnet-5-5 (independent re-audit)",
+          "evidence_ids": [
+            "EVD-1537"
+          ],
+          "recorded_at": "2026-11-24T00:48:03.165106327Z",
+          "seal": {
+            "by": "server",
+            "mac": "91c890a91eb95456fc47d770d13fd4af5ccc2086ef5e0e0cc83a5dfb744bd606"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Every active child (21, including CLM-1052 and CLM-1053) is supported; none is refuted or undecided, and together they cover the migration, write sites, merged view, cursors, tests, docs and gates.",
+          "auditor": "claude-sonnet-5-5 (independent audit)",
+          "evidence_ids": [
+            "EVD-1544"
+          ],
+          "recorded_at": "2026-11-24T00:55:15.877953988Z",
+          "seal": {
+            "by": "server",
+            "mac": "e171b896b17da05c2e4ad9e73ae542247f3618bfa56bc64c162c89a591b973ab"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:55:15.877953988Z",
+      "seal": {
+        "by": "server",
+        "mac": "bf5b0749d8bd61639c63317b624b578d52b194007cd37c904b450498951adce3"
+      }
+    },
+    {
+      "id": "CLM-1030",
+      "statement": "Migration migrations/accounts/0042_catalog_audit.sql creates catalog.catalog_audit_entries with the identity columns (actor_credential_ref, actor_person_id, teams, target_person_id) as plain values and no foreign key to any other table.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"Migration `0042_catalog_audit.sql`: `catalog.catalog_audit_entries` with plain-value ids (no cross-schema foreign keys)\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "migrations/accounts/0042_catalog_audit.sql"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1490",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0042_catalog_audit.sql:28-48",
+          "summary": "Table definition: plain bigint identity columns, table in schema catalog, migration number 0042 follows 0041_catalog_schema.sql (ls migrations/accounts).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0042_catalog_audit.sql",
+              "lines": {
+                "start": 28,
+                "end": 48
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:41:18.822648114Z",
+          "seal": {
+            "by": "server",
+            "mac": "36d47390bcf74578b29852e8831fb867ff34a93aeb707beb35d0758eae8db180"
+          }
+        },
+        {
+          "id": "EVD-1493",
+          "kind": "analysis",
+          "locator": "git grep -iE 'REFERENCES' migrations/accounts/0042_catalog_audit.sql (0 hits)",
+          "summary": "No REFERENCES clause anywhere in the migration; the only foreign-key mention is a comment saying none crosses the line.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "REFERENCES",
+              "case_insensitive": true,
+              "scope": [
+                "migrations/accounts/0042_catalog_audit.sql"
+              ],
+              "hits": 0,
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:41:27.811513013Z",
+          "seal": {
+            "by": "server",
+            "mac": "3ec646ea469d4f526291e0bfd3f068d5908111f55f0705ae3a20e68298ac0bf8"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Plain bigint columns and no REFERENCES in the file.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1490",
+            "EVD-1493"
+          ],
+          "recorded_at": "2026-11-24T00:43:38.250322506Z",
+          "seal": {
+            "by": "server",
+            "mac": "0de5afbbe8431f110fb8d3f14ee43cfdc8d52e1fa2adafbdaa7c2e4eecde7bce"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:38.250322506Z",
+      "seal": {
+        "by": "server",
+        "mac": "e8d38f3c16aeb20e8961f78f63acf79edfd7b90ad1ba53d52f5041db78a510ed"
+      }
+    },
+    {
+      "id": "CLM-1031",
+      "statement": "The table's trigger refuses every UPDATE and TRUNCATE, and refuses a DELETE of an entry inside the retention period, which is read from the transaction-local okf.audit_retention_days, defaults to 400 days and is never less than 30.",
+      "kind": "security",
+      "level": "unit",
+      "integrity_level": 4,
+      "verification_method": "test",
+      "source": "PR body: \"an append-only trigger (UPDATE and TRUNCATE refused; DELETE refused inside the retention period, passed in `okf.audit_retention_days`, default 400, floor 30)\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "migrations/accounts/0042_catalog_audit.sql",
+        "src/store/audit/catalog_tests.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1491",
+          "kind": "inspection",
+          "locator": "migrations/accounts/0042_catalog_audit.sql:55-84",
+          "summary": "Trigger function raises for any TG_OP other than DELETE (covers UPDATE and, via the BEFORE TRUNCATE statement trigger, TRUNCATE); for DELETE reads okf.audit_retention_days (non-numeric treated as none), retention = GREATEST(30, COALESCE(x, 400)), refuses if OLD.at >= now() - retention.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "migrations/accounts/0042_catalog_audit.sql",
+              "lines": {
+                "start": 55,
+                "end": 84
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:41:18.904839791Z",
+          "seal": {
+            "by": "server",
+            "mac": "5b35683e97c90d03a3e01775417de07b8be5fe64402e2d337510a940ad7f2620"
+          }
+        },
+        {
+          "id": "EVD-1492",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --jobs 4 --lib -- store::audit::catalog_tests (7 passed)",
+          "summary": "store_audit_refuses_update_and_recent_delete and store_audit_prune_honours_the_passed_retention_and_its_floor passed on head 7feff65; prune cases at retention 60 and 5 (floor 30) assert what goes and what stays (catalog_tests.rs:158-210).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit/catalog_tests.rs",
+              "lines": {
+                "start": 109,
+                "end": 210
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:41:18.973247794Z",
+          "seal": {
+            "by": "server",
+            "mac": "1b5562ce9e7a358dbef183d1121648ed559b557bb020f1f3f4fdf1b65219da31"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The trigger text implements each clause and the two named tests pass on head.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1491",
+            "EVD-1492"
+          ],
+          "recorded_at": "2026-11-24T00:43:38.320518611Z",
+          "seal": {
+            "by": "server",
+            "mac": "f9e0c7e573cf8d146df60b519e0b6e2e928cded567fef8ef8b9393a36fe43e9e"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:38.320518611Z",
+      "seal": {
+        "by": "server",
+        "mac": "757aecdb64509395fef84afc39419d41455ff26ab7c67f31631e771b4723c353"
+      }
+    },
+    {
+      "id": "CLM-1032",
+      "statement": "Every write site of catalog.published, catalog.imported, catalog.repaired, catalog.reverted, catalog.changeset_discarded and catalog.maintenance_run records through audit::record_catalog on the store transaction, and no code still writes those six actions to the account audit_entries.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "Plan Task 12: \"The P4 write sites switch to it, including Task 11's maintenance-run write\"; PR body: \"the six catalog audit events ... are written in the store's own transaction\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/store/publish.rs",
+        "src/store/import.rs",
+        "src/store/repair.rs",
+        "src/write.rs",
+        "src/mcp/changesets.rs",
+        "src/store/users.rs",
+        "src/store/maintenance/mod.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1494",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:789-827 (record_catalog), 567-578 (is_catalog_event)",
+          "summary": "record_catalog inserts into catalog_audit_entries on the passed store connection and returns Refused for any action outside the six, so the six cannot be written there from elsewhere and others cannot be written to the store.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 789,
+                "end": 827
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:41:27.912987271Z",
+          "seal": {
+            "by": "server",
+            "mac": "3ab7d132de2d48fa339b89e6661d3ebf198e0fffc42cc20360fef6148d22934f"
+          }
+        },
+        {
+          "id": "EVD-1495",
+          "kind": "analysis",
+          "locator": "git grep -nE 'Action::Catalog(Published|Imported|Repaired|Reverted|ChangesetDiscarded|MaintenanceRun)' src",
+          "summary": "Outside tests and the is_catalog_event definition, each action appears once or twice and always inside a CatalogEntry handed to audit::record_catalog on the store tx (publish.rs:295, import.rs:310, repair.rs:166, changesets.rs:692 and :780 through write.rs:292, users.rs:1680, maintenance/mod.rs:240). No account-side audit::record call names them; old catalogs::record_catalog (catalogs.rs) is used only for catalog.created/deleted/etc.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "Action::Catalog(Published|Imported|Repaired|Reverted|ChangesetDiscarded|MaintenanceRun)",
+              "scope": [
+                "src"
+              ],
+              "hits": 19,
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:41:37.478016706Z",
+          "seal": {
+            "by": "server",
+            "mac": "d5ef46afdeab93a863471a83a3617af7e3938499d8e5beb4c1507e5145b3b90c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "A whole-repo search of the six actions shows every non-test use goes through record_catalog, and record_catalog refuses other actions.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1494",
+            "EVD-1495"
+          ],
+          "recorded_at": "2026-11-24T00:43:38.379659284Z",
+          "seal": {
+            "by": "server",
+            "mac": "5109f58e8c61f617c1f383a1fe29211cc6ed51cb66c27077f2920bb07ff92e02"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:38.379659284Z",
+      "seal": {
+        "by": "server",
+        "mac": "63b37e71b2bb15db14626d7dc7cbe12dd88b032315cecb229e15fedd2ffb2aba"
+      }
+    },
+    {
+      "id": "CLM-1033",
+      "statement": "A successful publish writes its catalog.published entry on the store and none on the account database, and a publish that fails writes no entry (the entry rolls back with the change).",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Plan Task 12 tests a_publish_writes_its_audit_entry_on_the_store and a_failed_publish_writes_no_audit_entry",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/mcp/changesets.rs",
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1496",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib -- publish_writes_its_audit_entry_on_the_store failed_publish_writes_no_audit_entry maintenance audit (241 passed, 0 failed)",
+          "summary": "mcp::changesets::publish_tests::a_publish_writes_its_audit_entry_on_the_store asserts (account, store) entry counts == (0, 1); a_failed_publish_writes_no_audit_entry injects a failure on catalog.changesets update and asserts (0, 0), the publish errs and the changeset stays Open. Both ok.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets.rs",
+              "lines": {
+                "start": 1942,
+                "end": 1975
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:41:37.540935812Z",
+          "seal": {
+            "by": "server",
+            "mac": "bfc7653d10de94afc3817011968a7e66a0e2428c09b650e11b6cd64fe2351def"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both tests pass and their assertions are the claimed counts (0,1) and (0,0) with the changeset still open.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1496"
+          ],
+          "recorded_at": "2026-11-24T00:43:38.439754300Z",
+          "seal": {
+            "by": "server",
+            "mac": "80c1551d03f647fe3248219e610fad94266aa1d0e9bdf51425caf4e245d5602e"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:38.439754300Z",
+      "seal": {
+        "by": "server",
+        "mac": "92fd175d250cf08c4f02eb770ea926eb7ea944be7c3736932fab85e069a419ac"
+      }
+    },
+    {
+      "id": "CLM-1034",
+      "statement": "Writers resolve the actor on the account transaction they already hold (audit::resolve_actor after lock_people, before the store connection is begun), write the entry in the store transaction, and commit the store before the account transaction, so lock order is unchanged.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"Writers resolve the actor on the account transaction they already hold (`audit::resolve_actor`, `audit::record_catalog`). Lock order is unchanged.\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/store/publish.rs",
+        "src/store/import.rs",
+        "src/store/repair.rs",
+        "src/write.rs",
+        "src/mcp/changesets.rs",
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Compound: joined the PR body's statement (resolve on the held account tx, order unchanged) with the plan note's timing detail (before the store connection begins). Split into two claims.",
+        "retired_at": "2026-11-24T00:41:55.388105724Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1497",
+          "kind": "analysis",
+          "locator": "src/store/publish.rs:224-226,307,323-324; src/store/import.rs:196-200,306,337-338; src/store/repair.rs:114-118,162,185-186; src/write.rs:184-192,292; src/mcp/changesets.rs:660-672,701; src/store/users.rs:1673",
+          "summary": "In every writer resolve_actor runs on the held account tx after lock_people; the store tx (db.begin) is opened afterwards or at the same place as before (git diff shows only the added resolve_actor line and the record call swap; no begin moved); publish/import/repair commit tx then account_tx. In users.rs the discard uses the deletion's account conn and the store tx it already held.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 222,
+                "end": 232
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:41:37.605041284Z",
+          "seal": {
+            "by": "server",
+            "mac": "9c368d5b47f822efe0386ad276cade87e46616ce424200eceabd6fb40222f489"
+          }
+        }
+      ],
+      "verdicts": [],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:41:55.388105724Z",
+      "seal": {
+        "by": "server",
+        "mac": "98adddd9d2553642b6e269d28c6bd8aefa4c5ab21b7bd08d53f369bbbb4912d2"
+      }
+    },
+    {
+      "id": "CLM-1035",
+      "statement": "RunWatch writes each ended run's catalog.maintenance_run entry in the store transaction, and record_ended_run is removed from the code base.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"`RunWatch` writes ended-run entries in the store transaction; `record_ended_run` is removed.\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/store/maintenance/mod.rs",
+        "src/store/maintenance/tests.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1500",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/mod.rs:216-256",
+          "summary": "RunWatch::commit selects the ended runs on the store tx, resolves each with audit::resolve_run on target.account_tx (read-only, opened before), calls audit::record_catalog(&mut tx, ..) and then commits the store tx and then the account tx. record_ended_run: git grep finds it only in changelog/plan text, not in any .rs file.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/mod.rs",
+              "lines": {
+                "start": 216,
+                "end": 256
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:09.218324433Z",
+          "seal": {
+            "by": "server",
+            "mac": "0c00947dcf51749610c10623bf1678efdaa4b44fa0be2b590d59574ecccd08fa"
+          }
+        },
+        {
+          "id": "EVD-1501",
+          "kind": "analysis",
+          "locator": "git grep record_ended_run -- '*.rs' (0 hits)",
+          "summary": "No Rust file names record_ended_run.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "record_ended_run",
+              "scope": [
+                "src",
+                "tests"
+              ],
+              "hits": 0,
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:09.291244304Z",
+          "seal": {
+            "by": "server",
+            "mac": "8d845f163a85d835d23ba86486ff62ff1738ebc83639a8e184529a2375661ebc"
+          }
+        },
+        {
+          "id": "EVD-1502",
+          "kind": "test",
+          "locator": "gate.sh narrow --jobs 4 --lib -- maintenance_run (7 passed)",
+          "summary": "maintenance_run_end_is_audited_after_the_trigger_is_gone and an_empty_maintenance_run_is_audited_after_the_trigger_is_gone pass; the test helper now selects from catalog.catalog_audit_entries (tests.rs diff), so entries are read from the store table.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/tests.rs",
+              "lines": {
+                "start": 2431,
+                "end": 2569
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:09.350042380Z",
+          "seal": {
+            "by": "server",
+            "mac": "4f458158f050b9202ec94d98a8b64eb662662e25a2394d2b4c269f9d4380f59a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "RunWatch::commit calls record_catalog on the store tx, no Rust file names record_ended_run, and both maintenance_run audit tests pass reading the store table.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1500",
+            "EVD-1501",
+            "EVD-1502"
+          ],
+          "recorded_at": "2026-11-24T00:43:38.614687556Z",
+          "seal": {
+            "by": "server",
+            "mac": "46e5a3c5e92c2c80dd91a21d340118b968cdb1839139501245f3b80a047e2fd3"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:38.614687556Z",
+      "seal": {
+        "by": "server",
+        "mac": "da6187a931e033efdc104bcc5a2ffbd21eb0f5fb9f32dbc4d655b144906b8552"
+      }
+    },
+    {
+      "id": "CLM-1036",
+      "statement": "audit::list and audit::export_lines take &Stores, read the account database and every store concurrently, and merge by (at, store, id) descending.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"`audit::list` and `export_lines` take `&Stores`, read the account database and every store concurrently, and merge by `(at, store, id)` descending.\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/store/audit.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1503",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:2272-2312 (list); export_lines at 2612",
+          "summary": "list(stores: &Stores, ..) runs tokio::try_join!(account_rows(stores.accounts()..), store_rows(stores..)), extends the rows, sort_unstable_by (at, store, id) descending and truncates to the page size. export_lines also takes &Stores (signature at 2612). A store failure fails the page (StoreUnavailable).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 2272,
+                "end": 2312
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:25.239579872Z",
+          "seal": {
+            "by": "server",
+            "mac": "1fb2422a78de7073e089d1d6cef37c0cc23f755206397d1ef948cadacf2c243a"
+          }
+        },
+        {
+          "id": "EVD-1504",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:2612-2640",
+          "summary": "export_lines signature takes the stores argument rather than a pool.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 2612,
+                "end": 2640
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:25.365912654Z",
+          "seal": {
+            "by": "server",
+            "mac": "ae3c11c36b74fd4293e4fcbaf97d5e48f8795100087785ed60fc4b247aa97ecf"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "list joins both reads concurrently and sorts by (at, store, id) descending; export_lines takes the stores argument too.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1503"
+          ],
+          "recorded_at": "2026-11-24T00:43:38.672593233Z",
+          "seal": {
+            "by": "server",
+            "mac": "50ea138657a68b0ddbca453eb3d34be26cfa7dcfbcfff0fca2dbf64795f22514"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:38.672593233Z",
+      "seal": {
+        "by": "server",
+        "mac": "244f179b0d5f5020f1616a5f472f9a7dced6318f56f9a18a33d426758ebde207"
+      }
+    },
+    {
+      "id": "CLM-1037",
+      "statement": "A page of the audit view across two stores and the account database has no gaps and no repeats when paged by cursor.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Plan Task 12 test audit_view_pages_across_two_stores_and_accounts_without_gaps_or_repeats",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/store/audit/catalog_tests.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1505",
+          "kind": "test",
+          "locator": "gate.sh narrow --jobs 4 --lib -- store::audit::catalog_tests (7 passed)",
+          "summary": "audit_view_pages_across_two_stores_and_accounts_without_gaps_or_repeats passed on head (catalog_tests.rs:252-336).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit/catalog_tests.rs",
+              "lines": {
+                "start": 252,
+                "end": 336
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:25.422964833Z",
+          "seal": {
+            "by": "server",
+            "mac": "ec01ce2388cfb53550c6d4718a51b35cfb76c29c53df44fcda679e2b62319848"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The named test passes on head.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1505"
+          ],
+          "recorded_at": "2026-11-24T00:43:38.732714730Z",
+          "seal": {
+            "by": "server",
+            "mac": "a1dd375f215980ef04933c83f26458d339bcfe6c527ffb71fdc4d5032957485f"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:38.732714730Z",
+      "seal": {
+        "by": "server",
+        "mac": "5f6c6cce71569cbbe5e4158255c3e11dbf390056c132b5dc3c37eda01931c1d3"
+      }
+    },
+    {
+      "id": "CLM-1038",
+      "statement": "Owners get a sealed cursor (sealed, bound to the audit team), and admins, provisioners and the CLI get the readable cursor <microseconds>:<store>:<id>.",
+      "kind": "interface",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"Owners get a sealed cursor, admins and the CLI a readable `<microseconds>:<store>:<id>`\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/http/api/audit.rs",
+        "src/http/api/audit/cursor.rs",
+        "src/store/audit.rs",
+        "src/cli/audit.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1506",
+          "kind": "inspection",
+          "locator": "src/cli/audit.rs:99,228; src/store/audit.rs:1895-1897",
+          "summary": "CLI prints record.cursor.to_plain() as its first column and builds cursors with AuditCursor::new(..).to_plain(); to_plain formats \"{at_micros}:{store}:{id}\". CLI filters go through parse_filters which uses parse_plain for --after.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cli/audit.rs",
+              "lines": {
+                "start": 90,
+                "end": 102
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:25.533245423Z",
+          "seal": {
+            "by": "server",
+            "mac": "436e1192884e3523d46bdb6b202a0664d3909cdd0a596f7aac5b365f493b1432"
+          }
+        },
+        {
+          "id": "EVD-1509",
+          "kind": "test",
+          "locator": "gate.sh narrow --jobs 4 --lib -- http::api::audit cli::audit (25 passed); tests.rs:756,902",
+          "summary": "an_owner_pages_through_every_entry_once_with_sealed_cursors and an_admin_pages_by_a_readable_cursor_and_refuses_an_owners_cursor both ok: the admin test asserts next_after ends with \"::<id>\", pages with it, the export starts after it, and an owner's sealed cursor is 400 for an admin. http/api/audit.rs:92-111 dispatches owner to cursor::open (sealed, key + audit team) and admin or credential to parse_plain.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/audit/tests.rs",
+              "lines": {
+                "start": 902,
+                "end": 962
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:42.392677294Z",
+          "seal": {
+            "by": "server",
+            "mac": "a8009e851d7d13330acbadf8d7cd7720cca3ac93ebeeaa7998a45b5664bc98ab"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Tests show the owner sealed and admin readable forms; the CLI's cursor column is to_plain.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1506",
+            "EVD-1509"
+          ],
+          "recorded_at": "2026-11-24T00:43:38.790346195Z",
+          "seal": {
+            "by": "server",
+            "mac": "92bdee336f4f855822df67c3cbf0480a38a48c30f00f65134514f8f47218844c"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:38.790346195Z",
+      "seal": {
+        "by": "server",
+        "mac": "88303120bcdf5774bc2de85586997799023363d7d2c7b77cb11ab92a22eadcb4"
+      }
+    },
+    {
+      "id": "CLM-1039",
+      "statement": "A bare entry id given as the audit cursor is refused (400) for owners, admins and the CLI.",
+      "kind": "interface",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"a bare id is refused\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/store/audit.rs",
+        "src/http/api/audit/tests.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1507",
+          "kind": "test",
+          "locator": "src/http/api/audit/tests.rs:803-865 a_tampered_raw_or_foreign_cursor_is_refused_and_shows_nothing (passed)",
+          "summary": "For an owner on /audit and /audit/export, after=<raw entry id> is 400 InvalidPath with no entries.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/audit/tests.rs",
+              "lines": {
+                "start": 803,
+                "end": 865
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:25.658176629Z",
+          "seal": {
+            "by": "server",
+            "mac": "ed3593ce04066d5c5cdd70d71725cbfec1344850ef28dda0eabfe7d7274fa2b7"
+          }
+        },
+        {
+          "id": "EVD-1508",
+          "kind": "inspection",
+          "locator": "src/store/audit.rs:1909-1929, 2067-2070",
+          "summary": "AuditCursor::parse_plain splits on ':' into exactly three parts and returns InvalidPath otherwise, so \"5\" is refused; parse_filters (used by admins' HTTP path, provisioners and the CLI) calls it. No test passes a bare id as an admin or through the CLI (grep of tests found none), so that half rests on this reading.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 1909,
+                "end": 1929
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:25.721376376Z",
+          "seal": {
+            "by": "server",
+            "mac": "db6f0a3e154d364913e353136f4c89a99fc56f93ebacc373ad4fa5f182d6f43a"
+          }
+        },
+        {
+          "id": "EVD-1510",
+          "kind": "inspection",
+          "locator": "src/http/api/audit.rs:92-111",
+          "summary": "Admin and provisioner viewers call AuditCursor::parse_plain on the after value; owners call cursor::open, which refuses plain values (\"a plain one included\").",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/http/api/audit.rs",
+              "lines": {
+                "start": 92,
+                "end": 111
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:42.456111722Z",
+          "seal": {
+            "by": "server",
+            "mac": "355cd46bc209de6694076fc0942e58201336b4cfb00f0f48b8f1c0d75b210d8f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Owner refusal is tested; the admin, provisioner and CLI refusal follows from parse_plain, which requires three colon-separated parts (read, not tested). The missing direct test is noted as a gap, not a refutation.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1507",
+            "EVD-1508",
+            "EVD-1510"
+          ],
+          "recorded_at": "2026-11-24T00:43:38.847493888Z",
+          "seal": {
+            "by": "server",
+            "mac": "519ddd973cef84d2e9908c1b35e943aa32b95c6b3775e57d6a4e3408eb52837f"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:38.847493888Z",
+      "seal": {
+        "by": "server",
+        "mac": "7ae79c8bd0c4c9eed43c37d9f03e7e85a1944ae7c9e4eccd13efc75d749c0d32"
+      }
+    },
+    {
+      "id": "CLM-1040",
+      "statement": "Entries written before the split stay in the account audit_entries table and appear exactly once in the view.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"Pre-split entries stay in the account table and appear once.\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/store/audit.rs",
+        "src/store/audit/catalog_tests.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1511",
+          "kind": "test",
+          "locator": "gate.sh narrow --jobs 4 --lib -- store::audit::catalog_tests (7 passed)",
+          "summary": "entries_from_before_the_split_appear_once_in_the_view passed (catalog_tests.rs:211-250). Code: account_rows reads public.audit_entries including pre-split catalog events; store_rows skips non-catalog actions only (audit.rs:2456-2470), so no entry is read from both.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit/catalog_tests.rs",
+              "lines": {
+                "start": 211,
+                "end": 250
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:42.515311259Z",
+          "seal": {
+            "by": "server",
+            "mac": "77db5d99e56ba228a564968fc6fa09c12a659dcfbe860203bba742b3796b5251"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The named test passes and the sources split by action so nothing is read twice.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1511"
+          ],
+          "recorded_at": "2026-11-24T00:43:38.905196214Z",
+          "seal": {
+            "by": "server",
+            "mac": "11a2d1aa5f1465276dd822e056cca40204fb618d48fe6d9e90245c7f4c0b2164"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:38.905196214Z",
+      "seal": {
+        "by": "server",
+        "mac": "e1c691dec3b812698abc3ed78a898a4e29c70033d761475373365917f8b0bc94"
+      }
+    },
+    {
+      "id": "CLM-1041",
+      "statement": "Entries stay visible in the view after the last catalog on a store is deleted and after a catalog is transferred, and forgetting a person clears their name in store entries too.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Plan Task 12 tests audit_view_keeps_entries_after_the_last_catalog_on_a_store_is_deleted, audit_view_keeps_entries_after_a_catalog_is_transferred, forgetting_a_person_clears_their_name_in_store_entries_too",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/store/audit/catalog_tests.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1512",
+          "kind": "test",
+          "locator": "gate.sh narrow --jobs 4 --lib -- store::audit::catalog_tests (7 passed)",
+          "summary": "audit_view_keeps_entries_after_the_last_catalog_on_a_store_is_deleted, audit_view_keeps_entries_after_a_catalog_is_transferred and forgetting_a_person_clears_their_name_in_store_entries_too all passed (catalog_tests.rs:338-480).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit/catalog_tests.rs",
+              "lines": {
+                "start": 338,
+                "end": 476
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:42.579024498Z",
+          "seal": {
+            "by": "server",
+            "mac": "d2f28313d0d0bddaff43cd71b986d0d25421f7f1d048a7bf96f129cd460d862b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The three named tests pass on head.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1512"
+          ],
+          "recorded_at": "2026-11-24T00:43:38.962814669Z",
+          "seal": {
+            "by": "server",
+            "mac": "e2f134bd2af7e3480636400e5b7bae476dca86d21ca0f286c86924033ed056e7"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:38.962814669Z",
+      "seal": {
+        "by": "server",
+        "mac": "568a978118f0ab601a365d082ed029e4f2efc52d9081810f9360d8453ebef517"
+      }
+    },
+    {
+      "id": "CLM-1042",
+      "statement": "audit::prune_catalog(store, before, retention_days) deletes a store's entries older than the cut-off under SET LOCAL okf.audit_retention_days, and is not scheduled anywhere in Task 12.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"`audit::prune_catalog(store, before, retention_days)`; scheduling stays with Task 16.\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/store/audit.rs",
+        "src/store/audit/catalog_tests.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1513",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib -- store::audit::catalog_tests (7 passed); src/store/audit.rs:1268-1295",
+          "summary": "prune_catalog sets okf.audit_retention_days via set_config(..., true) (SET LOCAL) and runs DELETE ... WHERE at < $1 in one tx; the store_audit_prune_honours... test (catalog_tests.rs:158-210) calls it with retention 60 and 5 and asserts the rows removed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit.rs",
+              "lines": {
+                "start": 1268,
+                "end": 1295
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:42.642574446Z",
+          "seal": {
+            "by": "server",
+            "mac": "4563092e64273802588e0fc61cb6c4347a8a6bf740ca0aa67881b8e4feb0481b"
+          }
+        },
+        {
+          "id": "EVD-1514",
+          "kind": "analysis",
+          "locator": "git grep -n prune_catalog src (callers)",
+          "summary": "prune_catalog is referenced only by its definition (audit.rs:1268, and the instrument attribute) and catalog_tests.rs: no housekeeping job calls it.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "prune_catalog",
+              "scope": [
+                "src"
+              ],
+              "hits": 6,
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:43:01.503122581Z",
+          "seal": {
+            "by": "server",
+            "mac": "89bfcf063ecf9383854bc32f42b38c26dd7743413e244a74a0216b9f64b05d2a"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The function does what is claimed, its test passes, and only tests call it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1513",
+            "EVD-1514"
+          ],
+          "recorded_at": "2026-11-24T00:43:39.022171603Z",
+          "seal": {
+            "by": "server",
+            "mac": "0d7d204ca63c577bf04abc30e61c45efcf603e0cb675877719e638a130e3da6c"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:39.022171603Z",
+      "seal": {
+        "by": "server",
+        "mac": "2934ba5a2b2f1f21a73941a3838469a73363ca9609f3546265d7bb6f57a13d90"
+      }
+    },
+    {
+      "id": "CLM-1043",
+      "statement": "The plan carries a dated correction note under Task 12, and the Task 14 and Task 16 text now name catalog_audit_entries and audit::prune_catalog.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"Plan corrected (dated note under Task 12; Task 14 and Task 16 text fixed)\"",
+      "source_anchor": {
+        "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "lines": {
+          "start": 531,
+          "end": 538
+        },
+        "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+      },
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1515",
+          "kind": "inspection",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD -- docs/superpowers/plans; plan lines 531-538",
+          "summary": "A \"Corrected (issue #971, 2026-11-23)\" blockquote follows Task 12's tests bullet. The diff changes one Task 14 bullet (baseline names catalog_audit_entries with its trigger function and triggers) and one Task 16 bullet (store prune is audit::prune_catalog from Task 12). Date matches the repository session date, 2026-11-23.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 531,
+                "end": 538
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:43:01.567313134Z",
+          "seal": {
+            "by": "server",
+            "mac": "0ff4d244be7b73e97d7da7a2fa67a7e87e2465bf02d340948f7ba6f7bdac2d78"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The correction note and both text fixes are in the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1515"
+          ],
+          "recorded_at": "2026-11-24T00:43:39.080400771Z",
+          "seal": {
+            "by": "server",
+            "mac": "52310e112a6bb35b64b614adb91c870d2759cfd4aad49fde665428be0eb35e2e"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:39.080400771Z",
+      "seal": {
+        "by": "server",
+        "mac": "8ffd34740fabb59991e3faa1afa52a79d22149558ea3225c4068d6b02f7847ec"
+      }
+    },
+    {
+      "id": "CLM-1044",
+      "statement": "docs/operations.md and a dated changelog entry describe the change (where the six events live, the cursor forms, the store field).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"docs and changelog updated\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "changelog/2026-11-24T00-12-22Z-m21-task-12-catalog-audit-on-the-store.md"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1516",
+          "kind": "inspection",
+          "locator": "docs/operations.md:3905-3950 (diff); changelog/2026-11-24T00-12-22Z-m21-task-12-catalog-audit-on-the-store.md",
+          "summary": "operations.md gains a \"Where entries live\" paragraph naming the six events, the merge order, per-source ids, the store field and both cursor forms; the API table and CLI comments say cursor. A dated changelog file exists listing added, changed and the nine tests.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 3905,
+                "end": 3950
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:43:01.630147601Z",
+          "seal": {
+            "by": "server",
+            "mac": "77f413ca5d023430efa0e9e34c75fd8d25c19e72f8d36b87ea2d171fc75eff82"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both docs changes are present and match the code read.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1516"
+          ],
+          "recorded_at": "2026-11-24T00:43:39.137999296Z",
+          "seal": {
+            "by": "server",
+            "mac": "1802a4500227e5c2bc735592dfcf4c48a6e90310e0d3b77402a0095ae5a0d4b7"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:39.137999296Z",
+      "seal": {
+        "by": "server",
+        "mac": "ea6075919c20f7dd4d0c68828985faeb4cb787c3ed8d2fedaaec9cddc6f7e0cd"
+      }
+    },
+    {
+      "id": "CLM-1045",
+      "statement": "just fmt and just lint pass on the head commit.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"`just fmt`, `just lint`, `just dylint`, `just test` all green through `tools/agentic/gate.sh`\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/store/audit.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1517",
+          "kind": "test",
+          "locator": "cargo fmt --all --check (exit 0); tools/agentic/gate.sh lint (exit 0; log target/i971-logs/aud-lint.log)",
+          "summary": "I reran both on head 7feff65: fmt check exits 0, and the lint gate (clippy --all-targets -D warnings plus cargo doc -D warnings) exits 0 and ends with the generated docs.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T00:43:01.689714505Z",
+          "seal": {
+            "by": "server",
+            "mac": "364f4d3afddcb1b604a1aeb14fb8b51a914d00460c337e3145d156bf3bc8e2fa"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "I reran fmt and lint on head; both exit 0.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1517"
+          ],
+          "recorded_at": "2026-11-24T00:43:39.205454918Z",
+          "seal": {
+            "by": "server",
+            "mac": "70cbba8d06f6974e50f5fba0e30e20b73b65076a7749d9e9ff8391a9e2526787"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:39.205454918Z",
+      "seal": {
+        "by": "server",
+        "mac": "9d2880c3d1b1aeec123b89e89e034816dda0872f9cea31a97ca309b2f1dfd8de"
+      }
+    },
+    {
+      "id": "CLM-1046",
+      "statement": "just dylint and just test pass on the head commit with 3501 tests passed and 0 failed.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"`just dylint` and `just test` all green through `tools/agentic/gate.sh` (3501 tests passed, 0 failed)\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/store/audit.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Logs predated the head; replaced by a claim with full-suite results on the final head.",
+        "retired_at": "2026-11-24T00:54:12.667826666Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1518",
+          "kind": "log",
+          "locator": "target/i971-logs/test2.log (producer's log; sum of \"test result\" lines); target/i971-logs/dylint.log",
+          "summary": "The author's full-run log sums to 3501 passed and 0 failed across targets, and the dylint log ends Finished; an earlier log (test.log) records a failed lib run (exit 101). I did not rerun the full suite or dylint (barred), so I cannot confirm these on the head commit; I did pass 241 + 7 + 25 narrow tests on head.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T00:43:01.748257846Z",
+          "seal": {
+            "by": "server",
+            "mac": "8ee422c56b165ce9f5f1f54d1ab9a401c2e30043bc30d0a5e2ef979af673f658"
+          }
+        },
+        {
+          "id": "EVD-1531",
+          "kind": "log",
+          "locator": "target/i971-logs/test2.log, dylint.log (code head 7feff65; later commits only docs and one added test)",
+          "summary": "Full cargo test run on code head 7feff65: sum of \"test result\" lines is 3501 passed, 0 failed; dylint finished clean.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T00:46:19.861937284Z",
+          "seal": {
+            "by": "server",
+            "mac": "a1bdddd510b4c182af51afa1c8c2f96eae2683726fed5e6e6f2238eb5343b5b1"
+          }
+        },
+        {
+          "id": "EVD-1535",
+          "kind": "log",
+          "locator": "target/i971-logs/n5.log; git log 7feff65..HEAD; target/i971-logs/test2.log (lib line 3128: 2995 passed, 2 ignored)",
+          "summary": "Independent re-sum of test2.log gives 3501 passed, 0 failed, but that run (ended 19:37:24) and dylint.log (19:29:18) precede or equal code commit 7feff65 (19:37:30). Head 37dd190 adds one test (a_bare_entry_id_is_not_a_readable_cursor, src/store/audit/catalog_tests.rs) that passes alone (n5.log, 1 passed of 2998 lib tests), so a full run on head would print 3502, not 3501. No full test or dylint run exists on head itself; dylint covers the added test code unrun.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T00:47:49.689012361Z",
+          "seal": {
+            "by": "server",
+            "mac": "9c31d5c70b9b944a6eedc7bfdba5065b3fd49f11b7305f6c389ad202a82e96c1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Only the author's log shows 3501 passed; the full suite and dylint were out of scope for this audit and an earlier author run failed. Fix: before opening the PR, rerun tools/agentic/gate.sh test and gate.sh dylint on the final head and paste the printed totals.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1518"
+          ],
+          "recorded_at": "2026-11-24T00:43:39.266142478Z",
+          "seal": {
+            "by": "server",
+            "mac": "fddc75277693068ea9f35de4f9364a5e447852761b604aa9b49e286b66e22f15"
+          }
+        },
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The 3501 passed / 0 failed total and the clean dylint hold for code head 7feff65 only; head 37dd190 adds one passing test, so a full run there would print 3502, and no full test or dylint run exists on head. Fix: rerun just test and just dylint through tools/agentic/gate.sh on the final head and quote the printed total (expected 3502), or reword the PR body to \"3501 tests passed at 7feff65, plus one test added since that passes\".",
+          "auditor": "claude-sonnet-5-5 (independent re-audit)",
+          "evidence_ids": [],
+          "recorded_at": "2026-11-24T00:47:56.679522407Z",
+          "seal": {
+            "by": "server",
+            "mac": "c26135d7acfb1eb0e9e65b46af4c7734dc8d75afab5ce57595917918d6093119"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:54:12.667826666Z",
+      "seal": {
+        "by": "server",
+        "mac": "afa546e9e1608dbd2c7598583f7105c5433848589f76a5730aa636af4368b003"
+      }
+    },
+    {
+      "id": "CLM-1047",
+      "statement": "Each of the nine tests the plan names was checked to fail when its change is broken.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "demonstration",
+      "source": "PR body: \"Each of the nine named tests was checked to fail when its change is broken.\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/store/audit/catalog_tests.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1519",
+          "kind": "log",
+          "locator": "target/i971-logs/mutA.log, mutB.log, mutB2.log, mutC.log (producer's logs)",
+          "summary": "Mutation logs exist from the author, but breaking the code to see each of the nine tests fail would need source edits, which this audit may not make; no independent evidence either way.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T00:43:01.806249454Z",
+          "seal": {
+            "by": "server",
+            "mac": "aadc19c567a2743f58b20acb21f76f02c3c482791a17f809e71bbd218f3bb76f"
+          }
+        },
+        {
+          "id": "EVD-1532",
+          "kind": "log",
+          "locator": "target/i971-logs/mutA.log, mutB.log, mutB2.log, mutC.log; changelog \"Mutation checks\"",
+          "summary": "Each named test was run against a deliberately broken source (diff-checked restore afterwards) and failed (exit 101); the changelog records the eight mutations.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T00:46:19.921510742Z",
+          "seal": {
+            "by": "server",
+            "mac": "abdab5c070b25b8d9e1430aa2d6aa0db693775439f802c8c88754e500048b2c4"
+          }
+        },
+        {
+          "id": "EVD-1536",
+          "kind": "log",
+          "locator": "target/i971-logs/mutA.log, mutB.log, mutB2.log, mutC.log",
+          "summary": "Read the raw logs. Together they show every one of the nine plan-named tests FAILED at least once with exit 101 under some mutation: mutA fails 6 (entries_from_before_the_split, forgetting_a_person, prune, transferred, last_catalog_deleted, pages_across) ; mutB fails prune, store_audit_refuses_update_and_recent_delete, pages_across; mutB2 fails a_publish_writes_its_audit_entry_on_the_store (assertion 'the entry is on the store and none is written to the account database', changesets.rs:1950); mutC fails a_failed_publish_writes_no_audit_entry (changesets.rs:1975, left (0,1) right (0,0)). The assertion failures are behavioural, not compile errors. Limits: the logs do not contain the mutation diffs, and test refuses_update_and_recent_delete passed under mutA, so its failing relies on mutB; the mapping of changelog mutations to tests is inferred, not recorded per test.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T00:47:49.751183668Z",
+          "seal": {
+            "by": "server",
+            "mac": "fcc32b239393d4e3e5abe6430b03ed779e9d46b416f772832e744ddd6bf30015"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "Checking that a test fails when its change is broken needs source edits, which this audit may not make. Fix: have the author rerun the mutation check for each of the nine tests and keep the per-test result (test name, mutation, failing output) in the changelog or log folder.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1519"
+          ],
+          "recorded_at": "2026-11-24T00:43:39.325642872Z",
+          "seal": {
+            "by": "server",
+            "mac": "bb1bfd74160f72082162716707e5933e5d1fd2f4ea3a5e009d7d7b819b07129a"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Mutation runs failed as expected; logs and changelog record them.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1532"
+          ],
+          "recorded_at": "2026-11-24T00:46:32.126601764Z",
+          "seal": {
+            "by": "server",
+            "mac": "9ed745fd28950adbe76f015fd41ea3504aa30297a36771ab6520f6e932fb1f9a"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Independent read of the raw mutation logs shows all nine plan-named tests failing with behavioural assertion messages under at least one mutation (mutA, mutB, mutB2, mutC); supersedes the author-recorded verdict. Caveat: logs lack the mutation diffs and the per-test mapping is inferred.",
+          "auditor": "claude-sonnet-5-5 (independent re-audit)",
+          "evidence_ids": [
+            "EVD-1536"
+          ],
+          "recorded_at": "2026-11-24T00:47:56.769661579Z",
+          "seal": {
+            "by": "server",
+            "mac": "41b9b51203abd4373854dafdadc975d25d48bbd0fbb00756cef982c5d2090edf"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:47:56.769661579Z",
+      "seal": {
+        "by": "server",
+        "mac": "62e40fcc9a38985f0b6dc13ca3c224455c66d329c0cfa9b4eea9fa0640095020"
+      }
+    },
+    {
+      "id": "CLM-1048",
+      "statement": "The nine tests the plan names for Task 12 exist and pass on the head commit.",
+      "kind": "functional",
+      "level": "artifact",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Plan Task 12 Tests bullet; changelog Tests section",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/store/audit/catalog_tests.rs",
+        "src/mcp/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1520",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib -- store::audit::catalog_tests (7 passed) + publish_writes_its_audit_entry_on_the_store failed_publish_writes_no_audit_entry (both ok in 241-test run)",
+          "summary": "The seven tests in src/store/audit/catalog_tests.rs (refuses_update_and_recent_delete, prune_honours..., pre-split once, pages across two stores, last catalog deleted, transferred, forgetting a person) and the two in mcp::changesets::publish_tests all exist and pass; 9 of 9.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/audit/catalog_tests.rs",
+              "lines": {
+                "start": 109,
+                "end": 476
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:43:01.867972677Z",
+          "seal": {
+            "by": "server",
+            "mac": "89d71d2c655a67a75c7fa26596fdaeac388fae8b928d79c0545f221219fcec75"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All nine exist and pass on head.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1520"
+          ],
+          "recorded_at": "2026-11-24T00:43:39.384575154Z",
+          "seal": {
+            "by": "server",
+            "mac": "894ac73e45a45f88b31b84f7aecbfeae93d5decf3701227e944ee4c5a263ebd8"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:39.384575154Z",
+      "seal": {
+        "by": "server",
+        "mac": "e8b4249f7d5532013d9aae8c3e1db6b3cbb6d205ce478b4cfec0e1db4e230e1d"
+      }
+    },
+    {
+      "id": "CLM-1049",
+      "statement": "The change touches no chart or image, so a kind smoke test is not needed.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"Kind smoke test not run (not a chart or image change).\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1521",
+          "kind": "analysis",
+          "locator": "git diff --name-only origin/milestone/958-catalog-stores..HEAD | grep -Ei 'chart|image|png|Dockerfile|helm' (no output)",
+          "summary": "The 24 changed files are Rust sources, one SQL migration, docs, a changelog and the plan; none is a chart, image or Dockerfile.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T00:43:01.926297866Z",
+          "seal": {
+            "by": "server",
+            "mac": "fd1a759434c891fbdb71d0b8da67129282551ffdebe450664a5cae61ca9ec0f9"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "No changed file is a chart, image or Dockerfile.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1521"
+          ],
+          "recorded_at": "2026-11-24T00:43:39.443161063Z",
+          "seal": {
+            "by": "server",
+            "mac": "75524c066e864b55a13353d8bd1125e053cbd9a5fdc151951177e29076e12ccc"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:01.964850055Z",
+      "updated_at": "2026-11-24T00:43:39.443161063Z",
+      "seal": {
+        "by": "server",
+        "mac": "3aaa55e7906abd936fe0dc6fe5588d0371e87e0f3277cf3ecbcd3a69f4c32ea6"
+      }
+    },
+    {
+      "id": "CLM-1050",
+      "statement": "Each P4 writer resolves the actor on the account transaction it already holds (audit::resolve_actor after lock_people), writes the entry on the store transaction, and commits the store before the account transaction, leaving the account-then-store acquisition order as it was before the change.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"Writers resolve the actor on the account transaction they already hold (`audit::resolve_actor`, `audit::record_catalog`). Lock order is unchanged.\"",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/store/publish.rs",
+        "src/store/import.rs",
+        "src/store/repair.rs",
+        "src/write.rs",
+        "src/mcp/changesets.rs",
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1498",
+          "kind": "analysis",
+          "locator": "git diff origin/milestone/958-catalog-stores..HEAD -- src/store/publish.rs src/store/import.rs src/store/repair.rs; src/store/publish.rs:224-226,323-324; src/write.rs:184-192; src/mcp/changesets.rs:660-672",
+          "summary": "The diff for publish/import/repair adds only a resolve_actor call on the already-held account_tx and swaps the record call from account_tx to the store tx; no begin() or lock call moves. Commit order tx then account_tx kept at publish.rs:323-324, repair.rs:185-186, import.rs:337-338. write.rs and the discard take account tx, lock_people, resolve_actor, then store begin; store commits first.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 222,
+                "end": 232
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:09.067650100Z",
+          "seal": {
+            "by": "server",
+            "mac": "43692bbcc29df7a47ce88ab7b01f891b119c06d93b5cb79b554c6fb00d22740b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The diff only adds resolve_actor on the held account tx and moves the record call to the store tx; begin and commit order are unchanged.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1498"
+          ],
+          "recorded_at": "2026-11-24T00:43:38.498266750Z",
+          "seal": {
+            "by": "server",
+            "mac": "d41e55161d7e37501053f9c81bafedde9fadaaf2c4eaf4d9682490e877096afe"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:55.477896681Z",
+      "updated_at": "2026-11-24T00:43:38.498266750Z",
+      "seal": {
+        "by": "server",
+        "mac": "b80a9b51e932f80e6db1faed1bce5f4372d3b7e374fba13f9e6e274a96ab6c89"
+      }
+    },
+    {
+      "id": "CLM-1051",
+      "statement": "The plan's dated correction under Task 12 says every P4 writer calls audit::resolve_actor \"after lock_people and before db.begin()\"; this holds in the code for every writer.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md Task 12 correction, second bullet",
+      "source_anchor": {
+        "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "lines": {
+          "start": 534,
+          "end": 534
+        },
+        "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+      },
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "src/store/import.rs",
+        "src/store/repair.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Quoted plan wording was corrected in 37dd190; replaced by a claim on the reworded note.",
+        "retired_at": "2026-11-24T00:54:12.589291349Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1499",
+          "kind": "inspection",
+          "locator": "src/store/import.rs:187-200; src/store/repair.rs:108-118",
+          "summary": "In import and repair `let mut tx = db.begin().await?` (import.rs:195, repair.rs:114) precedes catalogs::lock_by_name and audit::resolve_actor (import.rs:200, repair.rs:118): resolve_actor needs found.id, which lock_by_name returns. So for these two writers resolve_actor runs after db.begin(), not before. (publish.rs:226 and write.rs:192 do run before the begin.)",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/store/repair.rs",
+              "lines": {
+                "start": 108,
+                "end": 118
+              },
+              "commit": "7feff656696eac7ba8d26df9ee59478dab3cfa3b"
+            }
+          },
+          "recorded_at": "2026-11-24T00:42:09.152971797Z",
+          "seal": {
+            "by": "server",
+            "mac": "790f7a891a5fb7403da8e88ad4f49ccf0ce5f1e8b8bf524346d93976b773942d"
+          }
+        },
+        {
+          "id": "EVD-1530",
+          "kind": "inspection",
+          "locator": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:534",
+          "summary": "The plan note now says resolve_actor runs after lock_people and before the entry is written, with publish/edit/discard before db.begin() and import/repair right after lock_by_name; no longer claims db.begin() for every writer.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 534,
+                "end": 534
+              },
+              "commit": "37dd1905fa6f1a0d4427b4ba7c4a68ec863f0071"
+            }
+          },
+          "recorded_at": "2026-11-24T00:46:19.758733613Z",
+          "seal": {
+            "by": "server",
+            "mac": "316927c81c7f969bacb8fcb381a4bdc1b479389efd17a8c434032138d91d3d17"
+          }
+        },
+        {
+          "id": "EVD-1533",
+          "kind": "inspection",
+          "locator": "src/store/import.rs:195-200; src/store/repair.rs:114-118 at head 37dd190",
+          "summary": "Re-read at head. In import and repair the store connection is opened by `let mut tx = db.begin().await?` and only then lock_by_name and audit::resolve_actor (which needs found.id) run, so \"before db.begin()\" is false for these two writers. The quoted phrase \"before db.begin()\" no longer appears in the plan (grep count 0 at head).",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/store/import.rs",
+              "lines": {
+                "start": 195,
+                "end": 200
+              },
+              "commit": "37dd1905fa6f1a0d4427b4ba7c4a68ec863f0071"
+            }
+          },
+          "recorded_at": "2026-11-24T00:47:49.554271565Z",
+          "seal": {
+            "by": "server",
+            "mac": "90f7b7330fa46b85c7dfd030eaef1bd5567233c75cbb4b67bef44e8028fcaa34"
+          }
+        },
+        {
+          "id": "EVD-1534",
+          "kind": "inspection",
+          "locator": "src/store/publish.rs:224-227; src/write.rs:192-200; src/mcp/changesets.rs:663-673",
+          "summary": "For publish, edit and discard, resolve_actor (publish.rs:226, write.rs:192, changesets.rs:665) does run before the store's db.begin() (publish.rs:227, write.rs:200, changesets.rs:673), so the old wording held for those three only.",
+          "stance": "neutral",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 224,
+                "end": 227
+              },
+              "commit": "37dd1905fa6f1a0d4427b4ba7c4a68ec863f0071"
+            }
+          },
+          "recorded_at": "2026-11-24T00:47:49.630722661Z",
+          "seal": {
+            "by": "server",
+            "mac": "afca234e2830c0ff3050fd7af2b5b808f9254353e65257201e5f75d27207ed70"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "In import.rs and repair.rs resolve_actor is called after db.begin() because it needs the catalog id from lock_by_name; the plan's \"before db.begin()\" is true only for publish and write. Behavior matches the old order (the account audit write also followed db.begin()), so this is a wording error in the plan note. Fix: edit the second bullet of the Task 12 correction in docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md to say \"after lock_people (and, in import and repair, after lock_by_name has returned the catalog id), and before the entry is written\", dropping \"before db.begin()\" for those two.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1499"
+          ],
+          "recorded_at": "2026-11-24T00:43:38.556815250Z",
+          "seal": {
+            "by": "server",
+            "mac": "32a45e16d181ff362e687949e2ca0c3d2867558cd8010cc97d3f53db693e60dd"
+          }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "As worded, the claim quotes plan text that says resolve_actor runs \"before db.begin()\" for every writer; in import.rs and repair.rs db.begin() precedes resolve_actor, so it does not hold. The plan note was reworded in 37dd190 and the quote is gone, so this claim now describes superseded text. Fix: retire this claim and add one on the reworded note (publish, edit and discard resolve before db.begin(); import and repair right after lock_by_name), which holds.",
+          "auditor": "claude-sonnet-5-5 (independent re-audit)",
+          "evidence_ids": [
+            "EVD-1533"
+          ],
+          "recorded_at": "2026-11-24T00:47:56.590349759Z",
+          "seal": {
+            "by": "server",
+            "mac": "75fe9c90eba284d87c70b95661c686078818670aab5c9d6f174fc2df5fec858e"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:41:55.543492929Z",
+      "updated_at": "2026-11-24T00:54:12.589291349Z",
+      "seal": {
+        "by": "server",
+        "mac": "81b981e810abfa8e31900ea85e301814a5e0cd76471b4e696f959ea988eea543"
+      }
+    },
+    {
+      "id": "CLM-1052",
+      "statement": "The plan's Task 12 correction (second bullet) says resolve_actor runs after lock_people and before the entry is written, before db.begin() in publish, edit and discard, and right after lock_by_name in import and repair; this matches the code.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source_anchor": {
+        "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "lines": {
+          "start": 534,
+          "end": 534
+        },
+        "commit": "37dd1905fa6f1a0d4427b4ba7c4a68ec863f0071"
+      },
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "src/store/import.rs",
+        "src/store/repair.rs",
+        "src/store/publish.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1538",
+          "kind": "inspection",
+          "locator": "src/store/publish.rs:219-227; src/write.rs:184-200; src/mcp/changesets.rs:657-673",
+          "summary": "publish: lock_people (224), resolve_actor (226), then db.begin (227). edit (write.rs): lock_people (190), resolve_actor (192), db.begin (200). discard (changesets.rs): lock_people (663), resolve_actor (665), store begin (673). All match the plan's claim for publish, edit and discard.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/publish.rs",
+              "lines": {
+                "start": 219,
+                "end": 227
+              },
+              "commit": "37dd1905fa6f1a0d4427b4ba7c4a68ec863f0071"
+            }
+          },
+          "recorded_at": "2026-11-24T00:55:04.101225322Z",
+          "seal": {
+            "by": "server",
+            "mac": "c9eb32bac3606e16cda7a9b608888e9f9481763b5e95b8fae87d30a1f2508d0a"
+          }
+        },
+        {
+          "id": "EVD-1539",
+          "kind": "inspection",
+          "locator": "src/store/import.rs:179-200; src/store/repair.rs:98-118",
+          "summary": "import: lock_people (180), db.begin (195), lock_by_name (197), resolve_actor immediately after (200). repair: lock_people (99), db.begin (114), lock_by_name (115), resolve_actor (118). So for import and repair resolve_actor is right after lock_by_name (after db.begin), exactly as the plan note says; the note does not claim they precede db.begin.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/import.rs",
+              "lines": {
+                "start": 179,
+                "end": 200
+              },
+              "commit": "37dd1905fa6f1a0d4427b4ba7c4a68ec863f0071"
+            }
+          },
+          "recorded_at": "2026-11-24T00:55:04.167956730Z",
+          "seal": {
+            "by": "server",
+            "mac": "e3e89652ca68add1dda28e9e4be5acf04798c3693137ced230a8110d069657c5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code order matches the note at line 534 in all five writers: publish, edit and discard resolve before db.begin; import and repair resolve right after lock_by_name.",
+          "auditor": "claude-sonnet-5-5 (independent audit)",
+          "evidence_ids": [
+            "EVD-1538",
+            "EVD-1539"
+          ],
+          "recorded_at": "2026-11-24T00:55:08.916848928Z",
+          "seal": {
+            "by": "server",
+            "mac": "9bf99100b37f1857888b9fbf50b6fb3c84d86eda8d670f5ab7745804b5466fb2"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:54:19.555730895Z",
+      "updated_at": "2026-11-24T00:55:08.916848928Z",
+      "seal": {
+        "by": "server",
+        "mac": "36eff533d9281a96d98159c625c40a6b6f5a3829aa2b4901e57d4a9a1c913a1e"
+      }
+    },
+    {
+      "id": "CLM-1053",
+      "statement": "On head 37dd190, just lint and just dylint pass, and the lib test suite passes (2995 passed) except the timing-sensitive cache::directory::tests::an_absent_name_is_forgotten_after_its_lifetime, which is outside this change and passes when run alone.",
+      "kind": "non_functional",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "derived_from": [
+        "CLM-1029"
+      ],
+      "artifacts": [
+        "src/cache/directory.rs"
+      ],
+      "tags": [
+        "from-issue:971"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1540",
+          "kind": "log",
+          "locator": "target/i971-logs/test3.log:3141, test4.log:3142",
+          "summary": "Two full lib runs on head 37dd190: each 2995 passed; 1 failed; 2 ignored. The only failure both times is cache::directory::tests::an_absent_name_is_forgotten_after_its_lifetime, panicking at src/cache/directory.rs:841 (second resolve within the 100 ms absent TTL still returned none under load). just test stopped there (lib suite only).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T00:55:04.227441659Z",
+          "seal": {
+            "by": "server",
+            "mac": "3bc8eb42b59b088ffa380b93496a39c77c597f1fb80a42e4565e4ce6f35964f1"
+          }
+        },
+        {
+          "id": "EVD-1541",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --jobs 4 --lib -- an_absent_name_is_forgotten_after_its_lifetime",
+          "summary": "Ran on head 37dd190 alone: 1 passed; 0 failed (2.09 s). Also n6.log shows the same. The test's TTL is 100 ms, so the full-suite failure is load timing.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T00:55:04.287269040Z",
+          "seal": {
+            "by": "server",
+            "mac": "52e04cc64c2a915138199f632506ac8199c467b14ca257a623da139d325deab3"
+          }
+        },
+        {
+          "id": "EVD-1542",
+          "kind": "analysis",
+          "locator": "git diff 3dc8314 HEAD --stat | grep cache/  (0 hits)",
+          "summary": "Against the milestone base 3dc8314 this change touches no file under src/cache, so the flaky test and src/cache/directory.rs are outside it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/cache/directory.rs",
+              "lines": {
+                "start": 825,
+                "end": 845
+              },
+              "commit": "37dd1905fa6f1a0d4427b4ba7c4a68ec863f0071"
+            }
+          },
+          "recorded_at": "2026-11-24T00:55:04.351706406Z",
+          "seal": {
+            "by": "server",
+            "mac": "911c3ce67ad9741a4e74f91e6614bbe3d83e535090428e1262bc0342bc20fbb9"
+          }
+        },
+        {
+          "id": "EVD-1543",
+          "kind": "log",
+          "locator": "target/i971-logs/lint2.log, dylint2.log",
+          "summary": "lint2.log: cargo clippy --all-targets -D warnings and cargo doc with -D warnings finish with no warnings or errors. dylint2.log: Checking okf_mcp v0.28.0 in the 971 worktree finishes with no diagnostics. Logs are from the 971 worktree path; I did not rerun them.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T00:55:04.412674273Z",
+          "seal": {
+            "by": "server",
+            "mac": "08f0ba7927f50d4932677f5c1fba1f135726c75704938187feaa2ac686fb8b1c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Both full lib runs give 2995 passed with only the named cache test failing; it passes alone (rerun), sits in code this change does not touch, and clippy, doc and dylint logs are clean. Caveat: lint and dylint logs were not rerun by me; just test stops after the lib suite.",
+          "auditor": "claude-sonnet-5-5 (independent audit)",
+          "evidence_ids": [
+            "EVD-1540",
+            "EVD-1541",
+            "EVD-1542",
+            "EVD-1543"
+          ],
+          "recorded_at": "2026-11-24T00:55:08.995935052Z",
+          "seal": {
+            "by": "server",
+            "mac": "db6a44f74a0e907b040f8360fe792878657629ee3d3ed1c1697675ea70fffe8b"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T00:54:19.661707759Z",
+      "updated_at": "2026-11-24T00:55:08.995935052Z",
+      "seal": {
+        "by": "server",
+        "mac": "d50eeeb5fb86baa5d108b26b629706609d0fab20cdd1066259e5a2673dd42b4a"
       }
     }
   ]
