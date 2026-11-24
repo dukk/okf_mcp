@@ -40,6 +40,7 @@ async fn half_made(pool: &PgPool, name: &str) -> (Catalog, Pending) {
         id: catalog.id,
         name: catalog.name.clone(),
         store: store.to_string(),
+        created_at: catalog.created_at,
     };
     (catalog, pending)
 }
@@ -168,7 +169,7 @@ async fn provisioning_job_finishes_a_catalog_whose_store_side_exists() {
 }
 
 async fn pending_rows(pool: &PgPool) -> Vec<Pending> {
-    pending(pool, now() + chrono::TimeDelta::days(1))
+    pending(pool, now() + chrono::TimeDelta::days(1), None, &[])
         .await
         .unwrap()
 }
@@ -218,13 +219,56 @@ async fn pending_lists_only_old_unprovisioned_rows_oldest_first() {
         .await
         .unwrap();
 
-    let found = pending(&db.pool, now() - chrono::TimeDelta::minutes(1))
+    let found = pending(&db.pool, now() - chrono::TimeDelta::minutes(1), None, &[])
         .await
         .unwrap();
 
     let names: Vec<&str> = found.iter().map(|row| row.name.as_str()).collect();
     assert_eq!(names, ["first", "second"]);
     assert_eq!(found[0].store, "main");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_pages_after_a_cursor_and_leaves_out_skipped_stores() {
+    let db = test_db().await;
+    let mut rows = Vec::new();
+    for (name, minutes) in [("a", 4), ("b", 3), ("c", 2)] {
+        let at = now() - chrono::TimeDelta::minutes(minutes);
+        let (catalog, _) = register(&db.pool, &new_catalog(name), &AuditActor::cli(), at)
+            .await
+            .unwrap();
+        rows.push(catalog.id);
+    }
+    sqlx::query(
+        "INSERT INTO stores (name, location_kind, host, port, database, credential_kind, \
+         credential_ref, created_at) \
+         VALUES ('elsewhere', 'host', 'db.example.internal', 5432, 'okf', 'env', 'UNSET', now())",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE catalogs SET store = 'elsewhere' WHERE id = $1")
+        .bind(rows[1])
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let cutoff = now();
+
+    let after_first = pending(
+        &db.pool,
+        cutoff,
+        Some((now() - chrono::TimeDelta::minutes(4), rows[0])),
+        &[],
+    )
+    .await
+    .unwrap();
+    let skipping = pending(&db.pool, cutoff, None, &["elsewhere".to_string()])
+        .await
+        .unwrap();
+
+    let ids = |found: &[Pending]| found.iter().map(|row| row.id).collect::<Vec<_>>();
+    assert_eq!(ids(&after_first), [rows[1], rows[2]]);
+    assert_eq!(ids(&skipping), [rows[0], rows[2]]);
 }
 
 #[tokio::test(flavor = "multi_thread")]

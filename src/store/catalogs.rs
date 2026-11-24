@@ -493,20 +493,42 @@ pub struct Pending {
     pub name: String,
     /// The store it was placed on.
     pub store: String,
+    /// When its registry row was written; with `id`, its place in the
+    /// recovery order ([`PendingCursor`]).
+    pub created_at: DateTime<Utc>,
 }
 
-/// How many half-created catalogs one recovery run looks at: a bound, so a
-/// run's work stays small; the next run takes the rest.
+/// How many half-created catalogs one query returns: a bound on a query's
+/// size. A recovery run pages through the rest ([`pending`]).
 pub const PENDING_BATCH: i64 = 100;
+
+/// Where the last page of [`pending`] ended, in `(created_at, id)` order.
+pub type PendingCursor = (DateTime<Utc>, i64);
+
+impl Pending {
+    /// This row's place in the recovery order: the cursor that makes the next
+    /// page start after it.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub fn cursor(&self) -> PendingCursor {
+        (self.created_at, self.id)
+    }
+}
 
 /// The half-created catalogs created before `created_before`, oldest first
 /// (an index scan of `catalogs_unprovisioned`, migration 0040). The age is
 /// an efficiency filter only: it keeps the task off creates still running.
 /// Safety is the catalog's lock ([`recover`]), not this.
 ///
+/// One page is at most [`PENDING_BATCH`] rows. A recovery run pages with
+/// `after` and leaves out a store it found unreachable (`skip_stores`), so
+/// rows on a lost store neither fill the page nor hide the rows behind them
+/// (a lost store costs only its own catalogs).
+///
 /// # Arguments
 /// * `executor` - the account database.
 /// * `created_before` - the newest `created_at` to include.
+/// * `after` - the last row of the previous page, or `None` for the first.
+/// * `skip_stores` - stores whose rows are left out.
 ///
 /// # Errors
 /// [`OkfError::Database`].
@@ -514,13 +536,21 @@ pub const PENDING_BATCH: i64 = 100;
 pub async fn pending<'e>(
     executor: impl PgExecutor<'e>,
     created_before: DateTime<Utc>,
+    after: Option<PendingCursor>,
+    skip_stores: &[String],
 ) -> Result<Vec<Pending>, OkfError> {
+    let (after_at, after_id) = after.unzip();
     Ok(sqlx::query_as::<_, Pending>(
-        "SELECT id, name, store FROM catalogs \
+        "SELECT id, name, store, created_at FROM catalogs \
          WHERE provisioned_at IS NULL AND created_at < $1 \
-         ORDER BY created_at, id LIMIT $2",
+           AND ($2::timestamptz IS NULL OR (created_at, id) > ($2, $3)) \
+           AND NOT (store = ANY($4)) \
+         ORDER BY created_at, id LIMIT $5",
     )
     .bind(created_before)
+    .bind(after_at)
+    .bind(after_id)
+    .bind(skip_stores)
     .bind(PENDING_BATCH)
     .fetch_all(executor)
     .await?)
