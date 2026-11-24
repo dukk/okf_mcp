@@ -29,6 +29,7 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use futures_util::StreamExt as _;
 use sqlx::PgPool;
 
 use crate::auth::{Principal, Reach};
@@ -36,7 +37,7 @@ use crate::cache::{Bounded, CacheName, Limit};
 use crate::error::OkfError;
 use crate::invalidate::Invalidation;
 use crate::store::catalogs::{self, CatalogRow};
-use crate::stores::{StoreName, Stores};
+use crate::stores::{StoreName, Stores, READ_CONCURRENCY};
 use crate::telemetry::metrics::Metrics;
 
 /// How long a name with no catalog is remembered (spec Decision 6).
@@ -53,6 +54,20 @@ struct Loaded {
     seen: u64,
 }
 
+/// A store's answer to the generation probe: `(catalog id, generation)`.
+type Generations = Vec<(i64, i64)>;
+
+/// A catalog's directory row, and whether its store could be reached to
+/// complete it ([`CatalogDirectory::resolve_or_unavailable`]).
+#[derive(Debug, Clone)]
+pub(crate) enum Lookup {
+    /// The row, with its generation.
+    Available(Arc<CatalogRow>),
+    /// The row as the account database has it, generation 0: the store
+    /// holding the catalog's data cannot be reached.
+    Unavailable(Arc<CatalogRow>),
+}
+
 /// How many rows a listing page holds when the client names no `limit`
 /// (spec Decision 7).
 pub const DEFAULT_PAGE: u32 = 100;
@@ -67,6 +82,12 @@ pub struct Page<T> {
     pub items: Vec<T>,
     /// What to send as `after` for the next page; `None` on the last page.
     pub next: Option<String>,
+    /// The names of the catalogs among `items` whose store could not be
+    /// reached (sorted, each once): their rows are listed as the account
+    /// database has them, with generation 0, and a caller that loads their
+    /// data leaves them out and names them instead. Only rows the listing
+    /// returns, so a catalog the caller does not reach is never named.
+    pub unavailable: Vec<String>,
 }
 
 impl Page<Arc<CatalogRow>> {
@@ -86,7 +107,11 @@ impl Page<Arc<CatalogRow>> {
         let next = more
             .then(|| rows.last().map(|row| cursor_of(&row.name)))
             .flatten();
-        Self { items: rows, next }
+        Self {
+            items: rows,
+            next,
+            unavailable: Vec::new(),
+        }
     }
 }
 
@@ -250,32 +275,78 @@ impl CatalogDirectory {
     /// Sets each row's `generation` from its store's `catalog_state`: the
     /// registry rows no longer carry it. A catalog with no state row keeps 0.
     ///
+    /// The stores are asked together, at most [`READ_CONCURRENCY`] at a time,
+    /// each within `store_connect_timeout` ([`Stores::connect_timeout`]). A
+    /// store that cannot be reached, or does not answer in that time, does
+    /// not fail the others: its rows keep generation 0 and the store is
+    /// returned, so the caller decides whether that fails the read (a
+    /// single-catalog lookup) or only names the catalogs (a listing).
+    ///
+    /// # Returns
+    /// The stores that could not be reached.
+    ///
     /// # Errors
-    /// [`OkfError::StoreUnavailable`] if a store cannot be opened;
-    /// [`OkfError::Database`].
+    /// [`OkfError::Database`] when a reachable store's query fails.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn fill_generations(&self, rows: &mut [CatalogRow]) -> Result<(), OkfError> {
+    async fn fill_generations(
+        &self,
+        rows: &mut [CatalogRow],
+    ) -> Result<HashSet<StoreName>, OkfError> {
         let mut by_store: HashMap<StoreName, Vec<i64>> = HashMap::new();
         for row in rows.iter() {
             by_store.entry(row.store.clone()).or_default().push(row.id);
         }
+        let bound = self.stores.connect_timeout();
+        // `buffer_unordered(n)` runs at most `n` of these futures at once,
+        // like a thread pool of size `n`, and yields each result as it
+        // finishes. The stores sit behind `&self`, so the futures borrow it.
+        let answers: Vec<(StoreName, Result<Generations, OkfError>)> =
+            futures_util::stream::iter(by_store)
+                .map(|(store, ids)| async move {
+                    let read = async {
+                        // Boxed: opening a pool is a deep future, and this
+                        // sits on every request's path.
+                        let db = Box::pin(self.stores.get(&store)).await?;
+                        catalogs::generations(db.executor(), &ids).await.map_err(
+                            |error| match error {
+                                // A connection that failed mid-query is the
+                                // store being unreachable, as for a connect.
+                                OkfError::Database { source } => db.classify(source),
+                                other => other,
+                            },
+                        )
+                    };
+                    let answer = tokio::time::timeout(bound, read)
+                        .await
+                        .unwrap_or_else(|_| Err(OkfError::store_unavailable(&store)));
+                    (store, answer)
+                })
+                .buffer_unordered(READ_CONCURRENCY)
+                .collect()
+                .await;
         let mut generations: HashMap<i64, i64> = HashMap::with_capacity(rows.len());
-        for (store, ids) in by_store {
-            // Boxed: opening a pool is a deep future, and this sits on every
-            // request's path.
-            let db = Box::pin(self.stores.get(&store)).await?;
-            generations.extend(catalogs::generations(db.executor(), &ids).await?);
+        let mut down = HashSet::new();
+        for (store, answer) in answers {
+            match answer {
+                Ok(found) => generations.extend(found),
+                Err(OkfError::StoreUnavailable { .. }) => {
+                    down.insert(store);
+                }
+                Err(error) => return Err(error),
+            }
         }
         for row in rows.iter_mut() {
             row.generation = generations.get(&row.id).copied().unwrap_or(0);
         }
-        Ok(())
+        Ok(down)
     }
 
-    /// [`CatalogDirectory::fill_generations`] for one row.
+    /// [`CatalogDirectory::fill_generations`] for one row, which must be
+    /// reachable.
     ///
     /// # Errors
-    /// As [`CatalogDirectory::fill_generations`].
+    /// [`OkfError::StoreUnavailable`] if the row's store cannot be reached;
+    /// otherwise as [`CatalogDirectory::fill_generations`].
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn with_generation(
         &self,
@@ -283,9 +354,57 @@ impl CatalogDirectory {
     ) -> Result<Option<CatalogRow>, OkfError> {
         let Some(row) = row else { return Ok(None) };
         let mut rows = [row];
-        self.fill_generations(&mut rows).await?;
+        let down = self.fill_generations(&mut rows).await?;
         let [row] = rows;
+        if down.contains(&row.store) {
+            return Err(OkfError::store_unavailable(&row.store));
+        }
         Ok(Some(row))
+    }
+
+    /// [`CatalogDirectory::resolve`] that does not fail for a catalog whose
+    /// store cannot be reached: the row (read from the account database,
+    /// with generation 0, and not cached) comes back marked
+    /// [`Lookup::Unavailable`], so the caller can still decide whether the
+    /// key may see the catalog before naming it as unavailable.
+    ///
+    /// # Arguments
+    /// * `name` - the catalog's name.
+    /// * `known_down` - stores already found unreachable in this call: a
+    ///   row on one of them is not probed again, so a call pays one
+    ///   connect timeout per store, not one per catalog.
+    ///
+    /// # Returns
+    /// The lookup, or `None` if there is no such catalog.
+    ///
+    /// # Errors
+    /// As [`CatalogDirectory::resolve`], but never
+    /// [`OkfError::StoreUnavailable`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn resolve_or_unavailable(
+        &self,
+        name: &str,
+        known_down: &HashSet<StoreName>,
+    ) -> Result<Option<Lookup>, OkfError> {
+        let loaded = self
+            .resolve_by(name, || async {
+                let row = catalogs::row_by_name(&self.pool, name).await?;
+                if let Some(row) = row.as_ref().filter(|row| known_down.contains(&row.store)) {
+                    return Err(OkfError::store_unavailable(&row.store));
+                }
+                Ok(self.with_generation(row).await?.map(Arc::new))
+            })
+            .await;
+        match loaded {
+            Ok(row) => Ok(row.map(Lookup::Available)),
+            Err(OkfError::StoreUnavailable { .. }) => {
+                // The failed read was not cached; the account row is enough.
+                Ok(catalogs::row_by_name(&self.pool, name)
+                    .await?
+                    .map(|row| Lookup::Unavailable(Arc::new(row))))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// The row of catalog `name`, read from the database once however many
@@ -388,12 +507,17 @@ impl CatalogDirectory {
     ///   no catalog add nothing.
     ///
     /// # Returns
-    /// The rows found, ordered by name.
+    /// The rows found, ordered by name, and the stores that could not be
+    /// reached (each is probed within `store_connect_timeout`): their rows are in
+    /// the list with generation 0.
     ///
     /// # Errors
     /// [`OkfError::Database`] if the read fails.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn resolve_many(&self, names: &[String]) -> Result<Vec<Arc<CatalogRow>>, OkfError> {
+    pub async fn resolve_many(
+        &self,
+        names: &[String],
+    ) -> Result<(Vec<Arc<CatalogRow>>, HashSet<StoreName>), OkfError> {
         let mut seen: HashSet<&str> = HashSet::with_capacity(names.len());
         let mut found: Vec<Arc<CatalogRow>> = Vec::new();
         let mut missing: Vec<String> = Vec::new();
@@ -408,13 +532,14 @@ impl CatalogDirectory {
                 Some(Loaded { row: None, .. }) | None => missing.push(name.clone()),
             }
         }
+        let mut down = HashSet::new();
         if !missing.is_empty() {
             let mut rows = catalogs::rows_by_names(&self.pool, &missing).await?;
-            self.fill_generations(&mut rows).await?;
+            down = self.fill_generations(&mut rows).await?;
             found.extend(rows.into_iter().map(Arc::new));
         }
         found.sort_by(|left, right| left.name.cmp(&right.name));
-        Ok(found)
+        Ok((found, down))
     }
 
     /// The catalogs `principal` reaches, one page at a time, by name (spec
@@ -499,9 +624,9 @@ impl CatalogDirectory {
                 (None, Reach::Catalogs(levels)) => Some(levels.keys().cloned().collect()),
                 (None, Reach::All | Reach::Ceiling) => None,
             };
-        let rows = match (names, &principal.reach) {
+        let (rows, down) = match (names, &principal.reach) {
             (Some(names), _) => {
-                let mut rows = self.resolve_many(&names).await?;
+                let (mut rows, down) = self.resolve_many(&names).await?;
                 // `retain` keeps the rows after the cursor (sorted by name)
                 // that the principal reaches.
                 rows.retain(|row| {
@@ -510,7 +635,7 @@ impl CatalogDirectory {
                             .as_deref()
                             .is_none_or(|after| row.name.as_str() > after)
                 });
-                rows
+                (rows, down)
             }
             // A session's ceiling, a page at a time per owner team (issue
             // #728), from the teams and entitlements its checks use.
@@ -523,22 +648,33 @@ impl CatalogDirectory {
                 let mut rows =
                     catalogs::ceiling_page(&self.pool, &teams, &entitled, after.as_deref(), fetch)
                         .await?;
-                self.fill_generations(&mut rows).await?;
-                rows.into_iter()
+                let down = self.fill_generations(&mut rows).await?;
+                let rows = rows
+                    .into_iter()
                     .map(Arc::new)
                     // Each row checked as every access check does: the
                     // query and `level_on` agree, and this keeps it so.
                     .filter(|row| principal.reaches_row(row))
-                    .collect()
+                    .collect();
+                (rows, down)
             }
             (None, Reach::All | Reach::Catalogs(_)) => {
                 let mut rows = catalogs::page(&self.pool, after.as_deref(), fetch).await?;
-                self.fill_generations(&mut rows).await?;
-                rows.into_iter().map(Arc::new).collect()
+                let down = self.fill_generations(&mut rows).await?;
+                (rows.into_iter().map(Arc::new).collect(), down)
             }
         };
         // A `u32` always fits a `usize` on the 64-bit targets this builds for.
-        Ok(Page::cut(rows, limit as usize))
+        let mut page = Page::cut(rows, limit as usize);
+        // Named after the cut and the reach checks: only a catalog this page
+        // lists, so one the caller does not reach is never named.
+        page.unavailable = page
+            .items
+            .iter()
+            .filter(|row| down.contains(&row.store))
+            .map(|row| row.name.clone())
+            .collect();
+        Ok(page)
     }
 
     /// Applies a change-feed message. Only [`Invalidation::CatalogMeta`] and
@@ -864,7 +1000,7 @@ mod tests {
         let directory = directory(&db.pool);
 
         let gone = directory.resolve("gone").await.unwrap();
-        let many = directory
+        let (many, _) = directory
             .resolve_many(&["gone".to_string(), "kept".to_string()])
             .await
             .unwrap();
@@ -1137,7 +1273,8 @@ mod tests {
             .map(|name| (*name).to_owned())
             .collect();
 
-        let rows = directory.resolve_many(&ask).await.unwrap();
+        let (rows, down) = directory.resolve_many(&ask).await.unwrap();
+        assert!(down.is_empty());
 
         let seen: Vec<(&str, &str)> = rows
             .iter()

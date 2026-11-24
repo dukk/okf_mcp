@@ -63,6 +63,9 @@ pub(crate) struct WebSearch {
     pub hits: Vec<WebHit>,
     /// As [`SearchResult::skipped`].
     pub skipped: Vec<SkippedCatalog>,
+    /// As [`SearchResult::unavailable`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unavailable: Vec<String>,
 }
 
 /// The tool's result with each hit's plain snippet moved beside it.
@@ -87,6 +90,7 @@ fn with_plain_snippets(result: SearchResult) -> WebSearch {
     WebSearch {
         hits,
         skipped: result.skipped,
+        unavailable: result.unavailable,
     }
 }
 
@@ -148,10 +152,24 @@ async fn every_reachable(app: &App, ctx: &ToolContext) -> Result<Vec<String>, Ok
     let now = app.clock().now();
     let mut names = Vec::with_capacity(page.items.len());
     for row in &page.items {
-        if principal.check_open(row, Access::Read, now).is_ok()
-            && ctx.listed_state(row).await?.is_some()
-        {
+        if principal.check_open(row, Access::Read, now).is_err() {
+            continue;
+        }
+        // One on an unreachable store is kept, unloaded: the search names
+        // it in its `unavailable` list instead of failing for it.
+        if page.unavailable.contains(&row.name) {
+            // The page spent a timeout on this store: the search's
+            // selection and loads must not spend another.
+            ctx.mark_down(row);
             names.push(row.name.clone());
+            continue;
+        }
+        match ctx.listed_state(row).await {
+            Ok(Some(_)) => names.push(row.name.clone()),
+            Ok(None) => {}
+            // The store went away since the page was read.
+            Err(OkfError::StoreUnavailable { .. }) => names.push(row.name.clone()),
+            Err(error) => return Err(error),
         }
     }
     Ok(names)

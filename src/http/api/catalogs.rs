@@ -18,6 +18,8 @@ use crate::auth::{CredentialKind, Principal};
 use crate::catalog::CatalogState;
 use crate::clock::format_timestamp;
 use crate::error::OkfError;
+use crate::http::api::context;
+use crate::http::requester::Requester;
 use crate::http::{archives, AppError};
 use crate::labels::directory::{Labels, Wanted};
 use crate::labels::{catalog_label, DisplayName};
@@ -149,6 +151,10 @@ pub(crate) struct CatalogListing {
     /// The `after` of the next page; absent on the last page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    /// The ids of catalogs on this page left out because the store holding
+    /// them could not be reached (sorted); absent when every store answered.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unavailable: Vec<String>,
 }
 
 /// `POST /catalogs`' body.
@@ -245,12 +251,18 @@ pub(crate) struct CatalogDeleted {
 ///
 /// # Errors
 /// 400 for a malformed `after`; 500 if the directory read or a load fails.
+/// A catalog whose store cannot be reached is left out and named in
+/// `unavailable`.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn list_catalogs(
     State(app): State<Arc<App>>,
     Extension(principal): Extension<Arc<Principal>>,
+    requester: Requester,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<CatalogListing>, AppError> {
+    // The call's context remembers which stores are down, so a store that
+    // fails once costs this request one bound, not one per catalog on it.
+    let ctx = context(&app, Arc::clone(&principal), requester);
     let page = reachable_page(&app, &principal, &query).await?;
     let mut wanted = Wanted::default();
     for row in &page.items {
@@ -260,14 +272,28 @@ async fn list_catalogs(
     }
     let labels = app.labels().labels_for(&wanted).await?;
     let mut catalogs = Vec::with_capacity(page.items.len());
+    let mut unavailable = page.unavailable;
     for row in &page.items {
-        if let Some(state) = app.listed_state(row).await? {
-            catalogs.push(CatalogSummary::of(row, &state, &principal, &labels));
+        if unavailable.contains(&row.name) {
+            ctx.mark_down(row);
+            continue;
+        }
+        match ctx.listed_state(row).await {
+            Ok(Some(state)) => catalogs.push(CatalogSummary::of(row, &state, &principal, &labels)),
+            Ok(None) => {}
+            // The store went away since the page was read.
+            Err(OkfError::StoreUnavailable { .. }) => {
+                ctx.mark_down(row);
+                unavailable.push(row.name.clone());
+            }
+            Err(error) => return Err(error.into()),
         }
     }
+    unavailable.sort();
     Ok(Json(CatalogListing {
         catalogs,
         next: page.next,
+        unavailable,
     }))
 }
 

@@ -86,6 +86,14 @@ pub struct CatalogList {
     pub write_target: Option<String>,
     /// Why there is no selection, when there is none.
     pub selection_error: Option<String>,
+    /// The ids of catalogs on this page left out of `catalogs` because the
+    /// store holding them could not be reached (sorted, each once): their
+    /// file counts and last changes cannot be read now, so retry. Absent
+    /// when every store answered.
+    // Left out of the JSON when empty, as the other optional fields are.
+    // `default` keeps the key optional in the output schema, as it is in the JSON.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable: Vec<String>,
 }
 
 /// Lists one page of the catalogs `ctx` offers ([`ToolContext::offers`])
@@ -101,7 +109,8 @@ pub struct CatalogList {
 /// since this is the tool to diagnose it with. A suspended catalog is
 /// listed with `suspended` set, and the selection leaves it out of a
 /// connection's list ([`crate::selection::resolve`]). A catalog whose
-/// stored data does not build is left out of its page.
+/// stored data does not build is left out of its page, and so is one whose
+/// store cannot be reached, which is named in `unavailable` instead.
 ///
 /// # Errors
 /// [`OkfError::InvalidPath`] for a malformed `after`;
@@ -115,11 +124,27 @@ pub(crate) async fn list(ctx: &ToolContext, after: Option<&str>) -> Result<Catal
         .offered_page(ctx.principal(), ctx.connection(), after, DEFAULT_PAGE)
         .await?;
     let mut catalogs = Vec::with_capacity(page.items.len());
+    // Only rows of this page, so only catalogs the key reaches are named.
+    let mut unavailable = page.unavailable;
     for row in &page.items {
+        if unavailable.contains(&row.name) {
+            // The page spent a timeout on this store: the selection below
+            // must not spend another.
+            ctx.mark_down(row);
+            continue;
+        }
         // A listing's snapshot fields; a catalog whose data does not build
         // is left out of its page.
-        let Some(state) = ctx.app().listed_state(row).await? else {
-            continue;
+        let state = match ctx.listed_state(row).await {
+            Ok(Some(state)) => state,
+            Ok(None) => continue,
+            // The store went away since the page was read.
+            Err(OkfError::StoreUnavailable { .. }) => {
+                ctx.mark_down(row);
+                unavailable.push(row.name.clone());
+                continue;
+            }
+            Err(error) => return Err(error),
         };
         let loaded = state.current();
         catalogs.push(CatalogInfo {
@@ -142,12 +167,14 @@ pub(crate) async fn list(ctx: &ToolContext, after: Option<&str>) -> Result<Catal
         }
         Err(error) => (Vec::new(), None, Some(error.to_string())),
     };
+    unavailable.sort();
     Ok(CatalogList {
         catalogs,
         next: page.next,
         selection,
         write_target,
         selection_error,
+        unavailable,
     })
 }
 
@@ -176,7 +203,8 @@ impl OkfServer {
                        `?catalogs=`, else the key's or the server's default catalog, else the \
                        only catalog the key reaches (a key granted every catalog has no such \
                        fallback). When the selection is empty, `selection_error` says why: \
-                       pass `catalog`.",
+                       pass `catalog`. A catalog whose store cannot be reached is left out of \
+                       `catalogs` and listed in `unavailable`.",
         annotations(
             title = "List Catalogs",
             read_only_hint = true,

@@ -1409,7 +1409,7 @@
   {
     "name": "search",
     "title": "Search Concepts",
-    "description": "Search concepts across this connection's catalogs (or `catalogs`). Every term of `query` must occur, as a case-insensitive substring, in a concept's title or aliases, tags, description or body; free text matches tags by substring. The `tags` filter matches whole tags only. Returns catalog, path, title, description, a snippet and the concept's size (`lines` and `chars` of the whole file, as a read returns it), best first: check the size before a `get_concept`, since a large concept stays in context once read. With `changeset` (a handle from open_changeset), its catalog is searched through that changeset's drafts, and is listed in `skipped` if they cannot be applied. Reference: https://github.com/hypotheosis/okf_mcp/blob/main/docs/reference/tools.md#search",
+    "description": "Search concepts across this connection's catalogs (or `catalogs`). Every term of `query` must occur, as a case-insensitive substring, in a concept's title or aliases, tags, description or body; free text matches tags by substring. The `tags` filter matches whole tags only. Returns catalog, path, title, description, a snippet and the concept's size (`lines` and `chars` of the whole file, as a read returns it), best first: check the size before a `get_concept`, since a large concept stays in context once read. With `changeset` (a handle from open_changeset), its catalog is searched through that changeset's drafts, and is listed in `skipped` if they cannot be applied. A catalog whose store cannot be reached is left out and listed in `unavailable`; the others still answer. Reference: https://github.com/hypotheosis/okf_mcp/blob/main/docs/reference/tools.md#search",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "required": [
@@ -1421,7 +1421,7 @@
           "type": "string"
         },
         "catalogs": {
-          "description": "The catalog ids to search (the `name`s from `list_catalogs`; default: this connection's selection, which may be the only catalog the key reaches; when `list_catalogs` shows an empty selection, pass `catalogs`).",
+          "description": "The catalog ids to search (the `name`s from `list_catalogs`; default: this connection's selection, which may be the only catalog the key reaches; when `list_catalogs` shows an empty selection, pass `catalogs`). At most the server's `search_fanout_max` (default 25) distinct catalogs may be named; more is refused.",
           "type": [
             "array",
             "null"
@@ -1573,6 +1573,13 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/SkippedCatalog"
+          }
+        },
+        "unavailable": {
+          "description": "The ids of selected catalogs left out because the store holding them\ncould not be reached (sorted, each once); every other catalog still\nanswered, so retry for these. Absent when every store answered.",
+          "type": "array",
+          "items": {
+            "type": "string"
           }
         }
       }

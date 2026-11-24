@@ -26,6 +26,8 @@ mod restructure;
 pub(crate) mod search;
 #[cfg(test)]
 pub(crate) mod testing;
+#[cfg(test)]
+mod unavailable_tests;
 pub(crate) mod whoami;
 pub(crate) mod writes;
 

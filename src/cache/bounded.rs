@@ -156,7 +156,10 @@ struct InFlight {
 /// waited on the one load.
 enum Load<V> {
     /// The loader failed (the leader keeps the error; see `load_once`).
-    Failed,
+    /// `outage` names the store when the failure was
+    /// [`OkfError::StoreUnavailable`], so the callers that shared the load
+    /// are told the store is unavailable too, not a generic `Busy` retry.
+    Failed { outage: Option<String> },
     /// The loader succeeded but its value must not be kept.
     Uncached(V),
     /// The loader found nothing, which is never cached
@@ -425,7 +428,10 @@ where
     /// # Errors
     /// The loader's error for the caller that ran it. A caller that shared
     /// that load gets [`OkfError::Busy`] (the error itself cannot be
-    /// cloned): it should retry. A failed load is never cached.
+    /// cloned): it should retry. The one exception is a loader failure of
+    /// [`OkfError::StoreUnavailable`], which the sharing callers get too
+    /// (an outage is not a reason to retry at once). A failed load is never
+    /// cached.
     #[tracing::instrument(level = "trace", skip_all)]
     pub async fn get_or_load<F, Fut>(&self, key: K, load: F) -> Result<V, OkfError>
     where
@@ -887,8 +893,12 @@ where
                     Ok(Some(value)) => value,
                     Ok(None) => return Err(Load::Absent),
                     Err(error) => {
+                        let outage = match &error {
+                            OkfError::StoreUnavailable { store } => Some(store.clone()),
+                            _ => None,
+                        };
                         *locked(&own_error) = Some(error);
-                        return Err(Load::Failed);
+                        return Err(Load::Failed { outage });
                     }
                 };
                 if !flight.current() || self.too_heavy(&key, &value) {
@@ -909,9 +919,16 @@ where
             Err(shared) => match &*shared {
                 Load::Uncached(value) => Ok(Some(value.clone())),
                 Load::Absent => Ok(None),
-                Load::Failed => Err(locked(&own_error).take().unwrap_or_else(|| OkfError::Busy {
-                    reason: "a load this request shared failed".to_string(),
-                })),
+                Load::Failed { outage } => {
+                    Err(locked(&own_error).take().unwrap_or_else(|| match outage {
+                        Some(store) => OkfError::StoreUnavailable {
+                            store: store.clone(),
+                        },
+                        None => OkfError::Busy {
+                            reason: "a load this request shared failed".to_string(),
+                        },
+                    }))
+                }
             },
         }
     }
