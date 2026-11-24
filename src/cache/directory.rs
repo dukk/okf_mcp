@@ -822,6 +822,29 @@ mod tests {
         assert_eq!(found.id, id);
     }
 
+    /// Issue #972: a deleted catalog stays in the registry until its store
+    /// cleanup, and the directory serves no reader a row that is marked.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_deleted_catalog_resolves_to_nothing_before_its_cleanup() {
+        let db = test_db().await;
+        seed(&db.pool, "gone").await;
+        seed(&db.pool, "kept").await;
+        crate::store::catalogs::delete(&db.pool, "gone", false, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+        let directory = directory(&db.pool);
+
+        let gone = directory.resolve("gone").await.unwrap();
+        let many = directory
+            .resolve_many(&["gone".to_string(), "kept".to_string()])
+            .await
+            .unwrap();
+
+        assert!(gone.is_none());
+        let names: Vec<&str> = many.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(names, ["kept"]);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn an_absent_name_is_forgotten_after_its_lifetime() {
         let db = test_db().await;

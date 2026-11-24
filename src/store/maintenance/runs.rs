@@ -17,7 +17,7 @@ use crate::maintenance::types::{new_id, Disposition};
 use crate::maintenance::types::{
     Actor, Assessment, ClaimResult, Evidence, Lane, Lease, RevisionPin, RunState, WorkOutcome,
 };
-use crate::stores::{AccountDb, CatalogDb};
+use crate::stores::CatalogDb;
 
 /// A deterministic page (ascending unless a run listing asks for newest
 /// first); the cursor is the last returned row ID.
@@ -435,21 +435,20 @@ async fn summary(
 ///
 /// The run records the claiming key's id in `maintenance_runs.key_id` when the
 /// key still exists, else NULL (the credential id and actor are recorded
-/// either way). Whether it exists is read on the account database (`accounts`)
-/// as its own statement, before the store transaction begins, because
-/// `api_keys` is an account table, no statement may name both sides (plan
-/// decision P1, issue #963), and no connection may wait for another while a
-/// transaction holds the catalog's locks. In release 1 a key deleted between
-/// that read and the insert (a window as long as the transaction's lock waits
-/// and selection) fails the claim with a foreign-key error, which a retry
-/// resolves; Task 11 drops the foreign key.
+/// either way). The key's row is on the account database, so no statement
+/// names both sides (plan decision P1, issue #963). It is read `FOR KEY SHARE`
+/// in the account transaction that `AuditTarget::read` opens BEFORE the
+/// store's connection (`CatalogDb::begin`'s order), and that transaction
+/// lasts until after the store commits: the deletion of the key (a user's),
+/// which locks the row `FOR UPDATE`, waits for the claim, and the cleanup it
+/// owes then finds the run and clears the key from it; a claim that comes
+/// after the deletion finds no key and records NULL (issue #972;
+/// `maintenance_runs.key_id` has no foreign key now).
 ///
 /// # Errors
 /// Refuses invalid limits or conflicting idempotency; propagates database failures.
-#[allow(clippy::too_many_arguments)]
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "runs.claim", catalog_id = catalog_id))]
 pub async fn claim(
-    accounts: &AccountDb,
     db: &CatalogDb,
     catalog_id: i64,
     actor: &Actor,
@@ -468,17 +467,10 @@ pub async fn claim(
         ));
     }
     let payload = json!({"limit": limit});
-    // The key's row, on the account side: `None` records a NULL `key_id`.
-    // Read before the store transaction begins, so no connection is held
-    // (with the catalog's locks) while this one waits for another: in
-    // release 1 both handles share one pool, and a pool of one connection
-    // would otherwise wait on itself.
-    let recorded_key: Option<String> = sqlx::query_scalar("SELECT id FROM api_keys WHERE id=$1")
-        .bind(&actor.key_id)
-        .fetch_optional(accounts.executor())
-        .await?;
-    // Read before the store transaction: see `AuditTarget`.
-    let target = AuditTarget::read(db, catalog_id).await?;
+    // The audit target's account transaction first, then the key's row in it
+    // (`None` records a NULL `key_id`), then the store's connection.
+    let mut target = AuditTarget::read(db, catalog_id).await?;
+    let recorded_key = target.lock_key(&actor.key_id).await?;
     let mut tx = db.begin().await?;
     lock(&mut tx, catalog_id, now).await?;
     let watch = RunWatch::open(&mut tx, catalog_id, target).await?;

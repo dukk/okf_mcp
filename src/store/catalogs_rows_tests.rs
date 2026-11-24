@@ -128,6 +128,8 @@ async fn row_by_id_reads_that_incarnation_only() {
     delete(&db.pool, "pg", false, &AuditActor::cli(), now())
         .await
         .unwrap();
+    // The name is free once the cleanup has removed the registry row.
+    crate::store::cleanups::settle_for_tests(&db.pool).await;
     seed(&db.pool, "pg", TEST_TEAM).await;
     let second = row_by_name(&db.pool, "pg").await.unwrap().unwrap();
 

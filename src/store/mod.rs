@@ -8,6 +8,7 @@ pub mod audit;
 pub mod catalogs;
 pub mod ceiling;
 pub mod changesets;
+pub mod cleanups;
 pub mod documents;
 pub mod email_tokens;
 pub mod export;

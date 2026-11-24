@@ -320,9 +320,28 @@ pub(crate) async fn open_changeset(
     // catalog incarnation, and one of a catalog created again under its
     // name must not open a changeset in the replacement (PR #442).
     ctx.require_contents(Access::Write, &state).await?;
+    let db = ctx.app().store_db(state.store()).await?;
+    // The interlock with a deletion of the key (a user's, issue #972): its
+    // row `FOR KEY SHARE` on the account connection, taken BEFORE the
+    // store's connection (`CatalogDb::begin`'s order) and kept until after
+    // the store commits. `changesets.key_id` has no foreign key now, so
+    // this is what makes the deletion (which locks the key `FOR UPDATE`)
+    // wait for the open, and the cleanup it owes then find the changeset;
+    // an open that comes after the deletion finds no key and is refused.
+    let mut account_tx = db.accounts().begin().await?;
+    let held: Option<String> =
+        sqlx::query_scalar("SELECT id FROM api_keys WHERE id = $1 FOR KEY SHARE")
+            .bind(&principal.key_id)
+            .fetch_optional(&mut *account_tx)
+            .await?;
+    if held.is_none() {
+        return Err(OkfError::Forbidden {
+            reason: "this key no longer exists".to_string(),
+        });
+    }
     // The lock order of every changeset write: the catalog row first, so a
     // concurrent `catalog delete` either waits for this or is seen here.
-    let mut tx = ctx.app().store_db(state.store()).await?.begin().await?;
+    let mut tx = db.begin().await?;
     changesets::lock_catalog(&mut tx, state.id()).await?;
     let opened = changesets::open(
         &mut tx,
@@ -332,7 +351,8 @@ pub(crate) async fn open_changeset(
         now,
     )
     .await?;
-    tx.commit().await?;
+    tx.commit().await.map_err(|error| db.classify(error))?;
+    account_tx.commit().await?;
     Ok(Opened {
         changeset: opened.handle,
         catalog: state.name().to_string(),

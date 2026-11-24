@@ -844,7 +844,7 @@ pub(crate) async fn catalog_ids(
     // the caller's order with a NULL id for each unknown name.
     let rows: Vec<(String, Option<i64>)> = sqlx::query_as(
         "SELECT n.name, c.id FROM unnest($1::text[]) WITH ORDINALITY AS n (name, ord) \
-         LEFT JOIN catalogs c ON c.name = n.name AND c.provisioned_at IS NOT NULL \
+         LEFT JOIN catalogs c ON c.name = n.name AND c.provisioned_at IS NOT NULL AND c.deleted_at IS NULL \
          ORDER BY n.ord",
     )
     .bind(names)
@@ -2612,7 +2612,7 @@ mod tests {
         )
         .await;
 
-        catalogs::delete(
+        catalogs::delete_settled(
             &db.pool,
             "pg",
             false,

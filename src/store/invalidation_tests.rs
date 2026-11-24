@@ -208,7 +208,7 @@ async fn deleting_a_catalog_invalidates_it_and_its_owner() {
     let main = catalog(&db.pool, "main").await;
     let owner = team_id(&db.pool, TEST_TEAM).await;
     let got = invalidations_of(&db.pool, async {
-        catalogs::delete(&db.pool, "main", false, &cli(), now())
+        catalogs::delete_settled(&db.pool, "main", false, &cli(), now())
             .await
             .unwrap();
     })

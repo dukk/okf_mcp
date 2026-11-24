@@ -4543,7 +4543,7 @@ mod tests {
             .unwrap();
         read(1).await;
         read(2).await;
-        catalogs::delete(&db.pool, "main", true, &cli, now())
+        catalogs::delete_settled(&db.pool, "main", true, &cli, now())
             .await
             .unwrap();
         catalogs::create(&db.pool, &main(TEST_TEAM), &cli, now())

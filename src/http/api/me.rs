@@ -48,7 +48,6 @@ use crate::store::keys::{
 };
 use crate::store::passwords::{self, NewPassword, SessionChange, SignInOutcome};
 use crate::store::{identities, passkeys, sign_in_events, teams, user_sessions, users};
-use crate::stores::StoreName;
 use crate::telemetry::subscriber::split_event;
 use webauthn_rs::prelude::PublicKeyCredential;
 
@@ -1406,19 +1405,12 @@ async fn delete_account(
         session_id: &session.id,
         proof,
     };
-    let deleted = users::delete_own_on(
-        app.accounts().executor(),
-        &app.store_db(&StoreName::main()).await?,
-        &own,
-        &actor,
-        now,
-    )
-    .await?;
+    let deleted = users::delete_own_on(app.accounts().executor(), &own, &actor, now).await?;
     // M16 bridge (spec Decision 14): remove in the release after 0.23.
     app.bridge_to_m16();
     split_event!(
         info,
-        { keys = deleted.keys, codes = deleted.codes, discarded = deleted.discarded, },
+        { keys = deleted.keys, codes = deleted.codes, },
         { user = %user.name, },
         "account deleted from the account page"
     );

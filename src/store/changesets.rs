@@ -676,7 +676,8 @@ async fn listed(
         Some(names) => {
             let found: Vec<i64> = sqlx::query_scalar(
                 "SELECT id FROM catalogs \
-                 WHERE name = ANY($1) AND ($2::bigint[] IS NULL OR id = ANY($2))",
+                 WHERE name = ANY($1) AND deleted_at IS NULL \
+                   AND ($2::bigint[] IS NULL OR id = ANY($2))",
             )
             .bind(names)
             .bind(catalog_ids)
@@ -1431,7 +1432,7 @@ mod tests {
         ready_rx.await.unwrap();
         let pool = db.pool.clone();
         let deleting = tokio::spawn(async move {
-            catalogs::delete(
+            catalogs::delete_settled(
                 &pool,
                 "pg",
                 false,

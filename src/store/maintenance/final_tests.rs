@@ -8,7 +8,7 @@ use crate::maintenance::select::select;
 use crate::maintenance::types::*;
 use crate::okf::workspace::StoredFile;
 use crate::store::import::{import, ImportOptions, ImportScope};
-use crate::stores::{AccountDb, CatalogDb};
+use crate::stores::CatalogDb;
 use crate::test_locks::wait_waiter;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -109,7 +109,6 @@ async fn replacement_import_race(submit: bool) {
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md", "b.md"]).await;
     let claimed = runs::claim(
-        &AccountDb::of(&db.pool),
         &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
@@ -208,7 +207,6 @@ async fn replacement_import_race(submit: bool) {
             assert!(receipt.outdated);
         } else {
             let result = runs::claim(
-                &AccountDb::of(&pool),
                 &CatalogDb::main_of(&pool),
                 catalog,
                 &actor("one"),
@@ -352,7 +350,6 @@ async fn maintenance_final_recreated_hint_skips_null_history() {
     let text = "---\ntype: Note\nverified:\n  - at: '2026-11-06T12:00:00Z'\n---\nBody\n";
     revision(&db.pool, catalog, "a.md", 3, t0(), text).await;
     let result = runs::claim(
-        &AccountDb::of(&db.pool),
         &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
@@ -396,7 +393,6 @@ async fn maintenance_final_edits_preserve_attempt_fairness() {
         revision(&db.pool, catalog, path, 2, t0(), text).await;
     }
     let batch = runs::claim(
-        &AccountDb::of(&db.pool),
         &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
@@ -464,7 +460,6 @@ async fn maintenance_final_completed_close_acknowledges_without_rewriting_histor
     let db = test_db().await;
     let catalog = setup(&db.pool, &["a.md"]).await;
     let batch = runs::claim(
-        &AccountDb::of(&db.pool),
         &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),
@@ -489,7 +484,6 @@ async fn maintenance_final_completed_close_acknowledges_without_rewriting_histor
     .await
     .unwrap();
     let empty = runs::claim(
-        &AccountDb::of(&db.pool),
         &CatalogDb::main_of(&db.pool),
         catalog,
         &actor("one"),

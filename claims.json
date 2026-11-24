@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1054,
+  "next_claim_seq": 1089,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "7e1798c84639f4427770d648c9aa0ce8bb495e8381bdcb2a7c97ef7e0a097dbb"
+    "mac": "7484230f9ab8af145bfb1738a96f9ab52b9cd1280a4f060291147acf1fd8a408"
   },
-  "next_evidence_seq": 1545,
+  "next_evidence_seq": 1609,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "044922ad33257a9d2f5c4b2a13f770769bb050b8afc88dae4888df04f4565990"
+    "mac": "c52fae57f08cffe3efc799da81d8111a2ed1e5c611661b65565b1f89d77a871d"
   },
   "claims": [
     {
@@ -82720,7 +82720,9 @@
         "from-issue:970"
       ],
       "status": {
-        "state": "active"
+        "state": "retired",
+        "reason": "Closed by issue #972: open_changeset now takes FOR KEY SHARE on the key row before the store connection, so a key deletion and an open serialise, and the test documenting the gap was replaced by a_changeset_opened_while_its_key_is_deleted_is_refused_and_leaves_nothing.",
+        "retired_at": "2026-11-24T02:26:19.219134944Z"
       },
       "evidence": [
         {
@@ -82766,6 +82768,28 @@
             "by": "server",
             "mac": "d83d4795c8286361b07f9186ee280cec5aa6f274d26a0cb1a7418c1c9e60a64f"
           }
+        },
+        {
+          "id": "EVD-1572",
+          "kind": "analysis",
+          "locator": "src/store/users.rs:1392-1411; src/mcp/changesets.rs:320-358",
+          "summary": "This change restores the interlock the claim says is absent: open_changeset holds its key FOR KEY SHARE until after the store commit and delete_in locks the keys FOR UPDATE, so a deletion now waits for an open in flight and a later open is refused. The test a_changeset_opened_while_a_deletion_runs no longer exists (search finds 0 hits at head); the deletion also no longer returns a discarded count.",
+          "stance": "refutes",
+          "anchor": {
+            "search": {
+              "pattern": "a_changeset_opened_while_a_deletion_runs",
+              "scope": [
+                "src"
+              ],
+              "hits": 0,
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:24:40.159725738Z",
+          "seal": {
+            "by": "server",
+            "mac": "667ac39e9e01b1c9a5fdcd96857a03f34957b19e0183b9483e897e3467e4a55c"
+          }
         }
       ],
       "verdicts": [
@@ -82794,13 +82818,26 @@
             "by": "server",
             "mac": "b9e758162652a03df084cf83c67c4635b9ac04b76300090411859bd0f253bef2"
           }
+        },
+        {
+          "verdict": "refuted",
+          "rationale": "The described gap (deletion does not wait for an open, key id left dangling) was closed by this change, which removed the test; the claim is superseded. Fix: retire CLM-1015 with a reason ('closed by issue #972; interlock restored, see the key-open claim') rather than leaving it marked refuted.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1572"
+          ],
+          "recorded_at": "2026-11-24T02:24:45.036726723Z",
+          "seal": {
+            "by": "server",
+            "mac": "17e4d333be4bb4916076790cd380e6c5338228f5bad1db6b726f500c83b7d55a"
+          }
         }
       ],
       "created_at": "2026-11-23T22:41:05.762109873Z",
-      "updated_at": "2026-11-23T23:23:47.758638720Z",
+      "updated_at": "2026-11-24T02:26:19.219134944Z",
       "seal": {
         "by": "server",
-        "mac": "d2bca2953f88c849c3e041fa8a08bd57f820adc0c662bcfb904a6a47623af3ec"
+        "mac": "f647a43cefdc4bc1051ed0e777db24fcff0c9cf88393962b5478b5db498e8b86"
       }
     },
     {
@@ -83619,6 +83656,28 @@
             "by": "server",
             "mac": "6aca405ef520716462160389d68826dfe955d9364d793d9ba65139fe20d93092"
           }
+        },
+        {
+          "id": "EVD-1573",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:1966-1996",
+          "summary": "At head delete_on still locks the default-catalog keys (ORDER BY id FOR UPDATE) on the account transaction before db.begin() at 1996; the lock-order test passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 1966,
+                "end": 1996
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:24:40.322624600Z",
+          "seal": {
+            "by": "server",
+            "mac": "d16b1257744f0936d41370d8d7ce7386a7e6f96b1125cc001fa355588f6ba476"
+          }
         }
       ],
       "verdicts": [
@@ -83634,13 +83693,26 @@
             "by": "server",
             "mac": "9e87a86021412387d6913b1b8d66beaaebf60d424b26229613187da53a479b33"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 5232c0f: the key lock still precedes db.begin() in delete_on.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1573"
+          ],
+          "recorded_at": "2026-11-24T02:24:45.154957088Z",
+          "seal": {
+            "by": "server",
+            "mac": "47dfc173ba334e172b8e9412770094c29dc8b030e928cc360030c826c7616293"
+          }
         }
       ],
       "created_at": "2026-11-23T23:47:48.251916715Z",
-      "updated_at": "2026-11-23T23:48:38.456758524Z",
+      "updated_at": "2026-11-24T02:24:45.154957088Z",
       "seal": {
         "by": "server",
-        "mac": "e7f2989d626c3f8acbaeb9dec79fa7ca5c2283b17c63cb77b109db619cb735bc"
+        "mac": "d3735dd475d127cc59d0b37e0b628bb6bf045b95f7911bb23dd3af01076f3461"
       }
     },
     {
@@ -86031,6 +86103,2961 @@
       "seal": {
         "by": "server",
         "mac": "d50eeeb5fb86baa5d108b26b629706609d0fab20cdd1066259e5a2673dd42b4a"
+      }
+    },
+    {
+      "id": "CLM-1054",
+      "statement": "Deleting a catalog hides it from every lookup at once, marks it deleted in the registry and on its store, and leaves its store data in place until the CleanupStores task removes it.",
+      "kind": "functional",
+      "level": "component",
+      "verification_method": "test",
+      "source": "issue #972 / plan Task 13",
+      "source_anchor": {
+        "path": "src/store/catalogs.rs",
+        "commit": "7a3740cbae7ceec05d7345864a3f29a15067104a",
+        "dirty": true
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/catalogs.rs",
+        "src/store/catalogs_delete_tests.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1545",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:2035-2086",
+          "summary": "delete_on sets catalog_state.deleted_at (store tx), catalogs.deleted_at and the store_cleanups row (account tx), commits the account tx, then the store tx; no data is deleted. Registry readers (find, row_by_name, list, page, ceiling, labels, keys) all add deleted_at IS NULL, so lookups miss the catalog at once. Data removal is only in cleanups::clean_catalog.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 2035,
+                "end": 2086
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:30.263071580Z",
+          "seal": {
+            "by": "server",
+            "mac": "6146685c3f0b62011428851cb2f3793c914e34892bdeb93308c4c5b39a9a9b84"
+          }
+        },
+        {
+          "id": "EVD-1546",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- store::catalogs::delete_tests (a_deleted_catalog_disappears_before_its_store_data_is_gone, cleanup_removes_the_store_data_then_the_registry_row)",
+          "summary": "Both tests passed. The first asserts find/list miss the catalog, catalog_state.deleted_at is set, documents are still present and one store_cleanups row (main, catalog, id) is owed; the second asserts that after one cleanup run catalog_state, documents, revisions, the registry row and the cleanup row are all gone. Also cache::directory test a_deleted_catalog_resolves_to_nothing_before_its_cleanup (src/cache/directory.rs:825).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs_delete_tests.rs",
+              "lines": {
+                "start": 102,
+                "end": 170
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:30.403105994Z",
+          "seal": {
+            "by": "server",
+            "mac": "d66a00587ccbec0c5637f2cd10a18559d81074904c16c127c3016ea06a37aaa2"
+          }
+        },
+        {
+          "id": "EVD-1578",
+          "kind": "test",
+          "locator": "store::catalogs::delete_tests::a_deleted_catalog_disappears_before_its_store_data_is_gone",
+          "summary": "The test deletes a catalog, asserts the lookups no longer see it and the store data is still present until cleanup. Passes in the 10x repeat run and the full gate at the final head (re-anchored on a clean tree).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs_delete_tests.rs",
+              "lines": {
+                "start": 103,
+                "end": 141
+              },
+              "commit": "9f1e9021aff019da510ed0c069bfb6ffb8e1ed10"
+            }
+          },
+          "recorded_at": "2026-11-24T02:48:25.435470760Z",
+          "seal": {
+            "by": "server",
+            "mac": "5687f3a2d22c6a50f56b8876126deb387b05609c37e85f9c4dc237602403d568"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code marks both rows and owes cleanup without deleting data; tests show lookups miss it, data persists, then cleanup removes data and row.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1545",
+            "EVD-1546"
+          ],
+          "recorded_at": "2026-11-24T02:23:49.555457297Z",
+          "seal": {
+            "by": "server",
+            "mac": "668d6813c1c2320c5703a98638a7cffbe574559aa32318f30e781450ca2f59ed"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:11:41.769345711Z",
+      "updated_at": "2026-11-24T02:48:25.435470760Z",
+      "seal": {
+        "by": "server",
+        "mac": "27c7d3ba766d0a4de1198ca662a190cd6a17dcc6f31153c36d52eaab65df3776"
+      }
+    },
+    {
+      "id": "CLM-1055",
+      "statement": "catalogs::delete_on takes its locks in the global order: the account connection and its row locks first, the store connection after, and commits the account transaction before the store transaction.",
+      "kind": "constraint",
+      "level": "unit",
+      "verification_method": "inspection",
+      "source": "issue #972, #1001",
+      "source_anchor": {
+        "path": "src/store/catalogs.rs",
+        "commit": "7a3740cbae7ceec05d7345864a3f29a15067104a",
+        "dirty": true
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1547",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:1948-2090",
+          "summary": "Order in delete_on: account tx begin, audit::lock_people, default-catalog keys FOR UPDATE, catalogs row FOR UPDATE, stores row FOR KEY SHARE, audit::resolve_actor (all before line 1996 db.begin()); then store tx (advisory lock, catalog_state FOR UPDATE, changesets); account writes; account_tx.commit() (2075) before tx.commit() (2079).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 1948,
+                "end": 2090
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:30.508892319Z",
+          "seal": {
+            "by": "server",
+            "mac": "7117ef64083ec824c0339797fa0e9d360f1c9f1c9c8ff93134ea890e402d9238"
+          }
+        },
+        {
+          "id": "EVD-1548",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_forced_catalog_deletion_and_a_users_deletion_never_wait_on_each_other",
+          "summary": "1 passed (single-connection store, bounded waits; a wrong order would deadlock where Postgres cannot see it). Plus the module run of delete_tests where the two race tests exercise the order.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets/lock_order_tests.rs",
+              "lines": {
+                "start": 475,
+                "end": 560
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:30.649046573Z",
+          "seal": {
+            "by": "server",
+            "mac": "ae5cfadec506813ab5173bc34e654588577beb49e02476e562cc86f8a2665292"
+          }
+        },
+        {
+          "id": "EVD-1579",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs delete_on",
+          "summary": "delete_on's doc comment states the global lock order and the body takes account row locks, commits the account transaction, then opens the store connection. Re-anchored on a clean tree at the final head.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 1976,
+                "end": 2114
+              },
+              "commit": "9f1e9021aff019da510ed0c069bfb6ffb8e1ed10"
+            }
+          },
+          "recorded_at": "2026-11-24T02:48:25.501366079Z",
+          "seal": {
+            "by": "server",
+            "mac": "2260b8d77e00e35e3f2340bb11200f64550dbb6e3de4baee0426b0ac835ec2fc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Reading delete_on shows account connection and every account row lock precede db.begin(), and account commit precedes store commit; the single-connection lock-order test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1547",
+            "EVD-1548"
+          ],
+          "recorded_at": "2026-11-24T02:23:49.760069906Z",
+          "seal": {
+            "by": "server",
+            "mac": "e5b847f0545f5f7e210ca228dededcdb93e6cf0f9a43e73b4fd6c5d4cb32e3b1"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:11:41.769345711Z",
+      "updated_at": "2026-11-24T02:48:25.501366079Z",
+      "seal": {
+        "by": "server",
+        "mac": "6fbff374d3abf18577d0437bc57ea8b6f348f4dc6b69aa423f14ee6ff6cf7b55"
+      }
+    },
+    {
+      "id": "CLM-1056",
+      "statement": "A user deletion opens no store connection: it writes one store_cleanups row per deleted key per store in its own account transaction.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "source": "issue #972 / plan P13",
+      "source_anchor": {
+        "path": "src/store/users.rs",
+        "commit": "7a3740cbae7ceec05d7345864a3f29a15067104a"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/users.rs",
+        "src/store/cleanups.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1549",
+          "kind": "inspection",
+          "locator": "src/store/users.rs:1271-1415; src/store/cleanups.rs:115-134",
+          "summary": "users::delete_in no longer takes a CatalogDb (parameter removed from delete, delete_on, delete_own_on, delete_in, CLI and HTTP callers) and calls cleanups::owe_keys on its own account transaction; owe_keys is one INSERT ... SELECT s.name, 'key', k.id FROM stores s CROSS JOIN unnest(keys), i.e. one row per key per store.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 1396,
+                "end": 1415
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:30.843487035Z",
+          "seal": {
+            "by": "server",
+            "mac": "e26219a8f9464eb39b12eb1690a1a6ee2bcaae0df42dd733648a1a56dc617504"
+          }
+        },
+        {
+          "id": "EVD-1550",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- store::cleanups::tests (deleting_a_key_discards_its_changesets_on_every_store, owing_a_cleanup_twice_writes_one_row)",
+          "summary": "6 passed in the module. The first deletes alice with two stores registered and asserts exactly 2 store_cleanups rows before any cleanup runs (one per store) and that the changesets are still open until the run; the second asserts one row per key per store and idempotence.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 109,
+                "end": 150
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:31.015465352Z",
+          "seal": {
+            "by": "server",
+            "mac": "bc628b4e50acd83e610f81471d447f27a2b01ef06fe4b70386f9d432828c30e1"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "users::delete_in has no store handle at all and calls owe_keys on its own account transaction; the test sees 2 rows for 2 stores and the changeset still open until the run.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1549",
+            "EVD-1550"
+          ],
+          "recorded_at": "2026-11-24T02:23:49.934942107Z",
+          "seal": {
+            "by": "server",
+            "mac": "bfcacad0ee13ae0a8fc274728dc52efa9ad54730f346f1b95c7fb2b7e02a0d0a"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:11:41.769345711Z",
+      "updated_at": "2026-11-24T02:23:49.934942107Z",
+      "seal": {
+        "by": "server",
+        "mac": "5a73eebfba577aff3a29c0ee06973c208d7ddcfc32cc1f6d50976160c245dd06"
+      }
+    },
+    {
+      "id": "CLM-1057",
+      "statement": "CleanupStores retries a failing store or row on each run, counts attempts, logs at error level each run past 20 attempts and keeps the row, and never stops another store's cleanup.",
+      "kind": "functional",
+      "level": "component",
+      "verification_method": "test",
+      "source": "issue #972 / plan P13",
+      "source_anchor": {
+        "path": "src/store/cleanups.rs",
+        "commit": "7a3740cbae7ceec05d7345864a3f29a15067104a"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/cleanups.rs",
+        "src/store/cleanups_tests.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1551",
+          "kind": "inspection",
+          "locator": "src/store/cleanups.rs:205-285",
+          "summary": "run() loops every store with rows; an unopenable store makes each of its rows call note_failure and the loop goes on to the next store; a failing row increments attempts and the loop continues with the row's siblings. note_failure logs split_event!(error, ...) when attempts > GIVE_UP_ATTEMPTS (20), else warn; failed rows are never deleted (only settle() deletes on success), so rows are retried every run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 205,
+                "end": 285
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:46.375205233Z",
+          "seal": {
+            "by": "server",
+            "mac": "d679b051e8413cf5de9e2862579742453189492bbeea5cce0a890598ce911101"
+          }
+        },
+        {
+          "id": "EVD-1552",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- store::cleanups::tests::cleanup_retries_an_unreachable_store_without_blocking_others (module run: 6 passed)",
+          "summary": "Store 'down' cannot be opened: run 1 gives done 1 failed 1, run 2 done 0 failed 1, main's changeset is discarded, and the 'down' row remains with attempts 2. Covers retry, attempt counting and other-store isolation. No test reaches 20 attempts or asserts the error-level log (code reading only).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 152,
+                "end": 187
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:46.511494163Z",
+          "seal": {
+            "by": "server",
+            "mac": "8aa4be772dadfae6caf0ebaf68270343760c848eb46cc0927d346ec168e7f4ad"
+          }
+        },
+        {
+          "id": "EVD-1607",
+          "kind": "inspection",
+          "locator": "src/store/cleanups.rs:268-411, 472-508; git grep -n \"note_failure\" src/store/cleanups.rs",
+          "summary": "Re-judged at 96d4881. note_failure returns () and has no `.await?` at any call site (lines 384 and 407 are bare awaits); a failure to count a try is logged at error and the row is kept. run_store contains no early return beyond the rows_of failure of that same store, and run_bounded's only `?` is the read of which stores have rows (an account database failure, not a store's or row's failure). The round-2 defect (note_failure(...).await? propagating) is gone. Retry/attempt count: note_failure UPDATE attempts+1; error-level log past GIVE_UP_ATTEMPTS (20) in the Ok(()) if attempts > 20 arm; rows are deleted only by settle on success. Both uncounted-failure tests pass and fail against round-2 code. Caveat: no test reaches 20 attempts (code reading only).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 362,
+                "end": 411
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:02:15.488547562Z",
+          "seal": {
+            "by": "server",
+            "mac": "a18205c350b7ca0675e8084bc8977c5f41c97d1be3db54d47de81ac3bd93b624"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code and the retry test show per-run retry, attempt counting and isolation between stores; the error-level log past 20 attempts and keeping the row are established by reading note_failure and settle (rows are only deleted on success), but no test reaches 20 attempts. Within-store starvation is judged under a separate claim.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1551",
+            "EVD-1552"
+          ],
+          "recorded_at": "2026-11-24T02:23:50.060999242Z",
+          "seal": {
+            "by": "server",
+            "mac": "56bbbc664ab11041a19555536fe51a031df2adcfdfe7da8abc8feee5a6a0241c"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 96d4881: note_failure no longer propagates (bare awaits, returns ()), and no store or row failure reaches a `?`; only the account-level read of which stores have rows ends a run, which is not another store's failure. Retry, attempt counting and keep-the-row hold; the error log past 20 attempts is code-read only.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1607"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.641323351Z",
+          "seal": {
+            "by": "server",
+            "mac": "b8835a8e2ed8528eebd2e262ba999be897dab6007b45a971b891b831b02dd1a4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:11:41.769345711Z",
+      "updated_at": "2026-11-24T04:02:32.641323351Z",
+      "seal": {
+        "by": "server",
+        "mac": "c021dacfc2e63c408d464b60389ad3c43209fbdc12a3ac8ce9d5f394f80de523"
+      }
+    },
+    {
+      "id": "CLM-1058",
+      "statement": "A deleted catalog's name cannot be reused until its cleanup has removed the registry row.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "source": "issue #972 / plan P6",
+      "source_anchor": {
+        "path": "src/store/catalogs_delete_tests.rs",
+        "commit": "7a3740cbae7ceec05d7345864a3f29a15067104a",
+        "dirty": true
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/catalogs_delete_tests.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1553",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- store::catalogs::delete_tests::a_deleted_catalogs_name_is_reserved_until_cleanup (module run, passed)",
+          "summary": "After delete, creating the same name is refused with Refused 'already exists'; after one cleanup run the same create succeeds. Code: delete_on only sets deleted_at (catalogs.rs:2059) and the registry row is removed only in cleanups::clean_catalog (cleanups.rs:323-346).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs_delete_tests.rs",
+              "lines": {
+                "start": 172,
+                "end": 191
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:46.731066004Z",
+          "seal": {
+            "by": "server",
+            "mac": "9b484280971888e2fa84e470409216e59a2dceff271bf3718f625836bde8e052"
+          }
+        },
+        {
+          "id": "EVD-1580",
+          "kind": "test",
+          "locator": "store::catalogs::delete_tests::a_deleted_catalogs_name_is_reserved_until_cleanup",
+          "summary": "The test deletes a catalog, shows creating the same name is refused, then after cleanup it succeeds. Re-anchored on a clean tree.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs_delete_tests.rs",
+              "lines": {
+                "start": 173,
+                "end": 191
+              },
+              "commit": "9f1e9021aff019da510ed0c069bfb6ffb8e1ed10"
+            }
+          },
+          "recorded_at": "2026-11-24T02:48:25.566727015Z",
+          "seal": {
+            "by": "server",
+            "mac": "7876adaa4ce6b85627143b5f97054c352fab81a3d1e359148481a7624d7430ef"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test shows the create refused before and accepted after cleanup, and the code removes the registry row only in clean_catalog.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1553"
+          ],
+          "recorded_at": "2026-11-24T02:23:50.161405438Z",
+          "seal": {
+            "by": "server",
+            "mac": "411d2166161ab8420de1db4ab00f92a99dcf5fd024c32e8fe774c1525d8d2a40"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:11:41.769345711Z",
+      "updated_at": "2026-11-24T02:48:25.566727015Z",
+      "seal": {
+        "by": "server",
+        "mac": "1e2dd4dfbc453fe6d374cfbe92ecb30170f8c0ff1d163c9d0a3097183116de7c"
+      }
+    },
+    {
+      "id": "CLM-1059",
+      "statement": "The catalog's audit entries on the store survive the catalog's deletion and cleanup.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "source": "issue #972 / plan P5",
+      "source_anchor": {
+        "path": "src/store/catalogs_delete_tests.rs",
+        "commit": "7a3740cbae7ceec05d7345864a3f29a15067104a",
+        "dirty": true
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/catalogs_delete_tests.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1554",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- store::catalogs::delete_tests::catalog_audit_survives_catalog_deletion (module run, passed)",
+          "summary": "Writes a real catalog_audit_entries row on the store, deletes the catalog and runs the cleanup; catalog_state count for the id is 0 while the audit entry count is still 1. Code: clean_catalog deletes only catalog_state (cleanups.rs:323-346), and the entry table has no FK to it.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs_delete_tests.rs",
+              "lines": {
+                "start": 193,
+                "end": 247
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:46.835266100Z",
+          "seal": {
+            "by": "server",
+            "mac": "6768073ac35173ae4e71d208374d4c966f4d719fcf627e470df22d68c9b6d4d8"
+          }
+        },
+        {
+          "id": "EVD-1581",
+          "kind": "test",
+          "locator": "store::catalogs::delete_tests::catalog_audit_survives_catalog_deletion",
+          "summary": "The test checks the catalog's audit entries are still on the store after delete and after cleanup (outcome check; the append-only guard and cleanup not touching the table enforce it). Re-anchored on a clean tree.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs_delete_tests.rs",
+              "lines": {
+                "start": 199,
+                "end": 251
+              },
+              "commit": "9f1e9021aff019da510ed0c069bfb6ffb8e1ed10"
+            }
+          },
+          "recorded_at": "2026-11-24T02:48:25.631755500Z",
+          "seal": {
+            "by": "server",
+            "mac": "e51d73ab566e03e3fd1d1689ac997b277170341251fbe14944c51bd4b651327f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "A real audit entry count stays at 1 after delete and cleanup while catalog_state is gone.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1554"
+          ],
+          "recorded_at": "2026-11-24T02:23:50.298572784Z",
+          "seal": {
+            "by": "server",
+            "mac": "110c4c326252db52f93cc8681ef53f3efe7f457c1f9dd9eda66b02b820bb4cfa"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:11:41.769345711Z",
+      "updated_at": "2026-11-24T02:48:25.631755500Z",
+      "seal": {
+        "by": "server",
+        "mac": "d41814ebc5fede1772d9e88985fb93e66a60ee2a4a51466461c5c152ac7a9806"
+      }
+    },
+    {
+      "id": "CLM-1060",
+      "statement": "open_changeset locks its key's row on the account connection before the store connection and refuses a key that has been deleted, leaving no changeset under it.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "source": "issue #972 / Task 11 hand-off",
+      "source_anchor": {
+        "path": "src/mcp/changesets.rs",
+        "commit": "7a3740cbae7ceec05d7345864a3f29a15067104a"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/mcp/changesets.rs",
+        "src/mcp/changesets/lock_order_tests.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1555",
+          "kind": "inspection",
+          "locator": "src/mcp/changesets.rs:320-358",
+          "summary": "open_changeset takes db, begins an account tx, runs SELECT id FROM api_keys WHERE id=$1 FOR KEY SHARE, returns Forbidden 'this key no longer exists' when no row, and only then calls db.begin() (the store connection); the store tx commits, then the account tx commits.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets.rs",
+              "lines": {
+                "start": 320,
+                "end": 358
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:46.950198203Z",
+          "seal": {
+            "by": "server",
+            "mac": "a880f9e9f491573106cc992a806882185c60bff29b07cfbba27cf1de44701165"
+          }
+        },
+        {
+          "id": "EVD-1556",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- a_changeset_opened_while_its_key_is_deleted_is_refused_and_leaves_nothing",
+          "summary": "1 passed. With a one-connection store, a holder locks the key row FOR UPDATE; the open waits holding no store connection; after the key is deleted and committed the open returns Forbidden 'no longer exists' and count(catalog.changesets WHERE key_id) is 0.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/changesets/lock_order_tests.rs",
+              "lines": {
+                "start": 636,
+                "end": 689
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:57.245183346Z",
+          "seal": {
+            "by": "server",
+            "mac": "5ac48df496a7296b197392b072881104c3e3e56ca5f2d5db161cab29ee6b8588"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Code takes the key row FOR KEY SHARE on an account transaction before db.begin() and refuses a missing key; the test with a one-connection store shows the wait, the refusal and no changeset left.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1555",
+            "EVD-1556"
+          ],
+          "recorded_at": "2026-11-24T02:23:50.425966525Z",
+          "seal": {
+            "by": "server",
+            "mac": "607dc8f57c898dc51e09365e2481b3602e6ca5ba959fe04fe3b87dc475076175"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:11:41.769345711Z",
+      "updated_at": "2026-11-24T02:23:50.425966525Z",
+      "seal": {
+        "by": "server",
+        "mac": "d5d1ef3d19f49efbb9be02c5df66e795d948e8b0a786fe76a45d1eabcd930d34"
+      }
+    },
+    {
+      "id": "CLM-1061",
+      "statement": "Every registry read that filters on provisioned_at IS NOT NULL also filters on deleted_at IS NULL, and a test fails when one does not.",
+      "kind": "constraint",
+      "level": "software",
+      "verification_method": "test",
+      "source": "issue #972",
+      "source_anchor": {
+        "path": "src/store/cleanups_tests.rs",
+        "commit": "7a3740cbae7ceec05d7345864a3f29a15067104a"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/cleanups_tests.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1557",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- every_registry_filter_on_provisioned_also_filters_deleted (1 passed)",
+          "summary": "The test walks every non-_tests.rs source under src/ and fails on any 'provisioned_at IS NOT NULL' that is neither a select-list use nor followed by 'AND ... deleted_at IS NULL' within 40 chars. It passed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 262,
+                "end": 299
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:57.353178515Z",
+          "seal": {
+            "by": "server",
+            "mac": "3697159bb8a5c67f69433a257585d6ffaf412047bf8a13adc8f291672cf258cd"
+          }
+        },
+        {
+          "id": "EVD-1558",
+          "kind": "analysis",
+          "locator": "git grep 'provisioned_at IS NOT NULL' src tests, minus deleted_at",
+          "summary": "Searching src and tests at head, every match without deleted_at is a select-list use (housekeeping.rs:1500, db.rs:2151, db.rs:2406, catalogs.rs:338), not a filter; migrations/accounts/0041_catalog_schema.sql:36 is a one-time seed. The search anchor shows the filtered count.",
+          "stance": "supports",
+          "anchor": {
+            "search": {
+              "pattern": "WHERE[^;]*provisioned_at IS NOT NULL",
+              "scope": [
+                "src",
+                "tests"
+              ],
+              "hits": 23,
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:57.556744184Z",
+          "seal": {
+            "by": "server",
+            "mac": "36e2bc86663f2d7d75a9d41ef807dfd8e5e2c8de17e93d4c7a87b04abe10d200"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The guard test passes and my own grep finds only select-list uses without the filter. The guard scans only non-_tests.rs files under src.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1557",
+            "EVD-1558"
+          ],
+          "recorded_at": "2026-11-24T02:23:50.569844122Z",
+          "seal": {
+            "by": "server",
+            "mac": "57190e3fc54a8a654a78ea2cec5cba8c4af5ccd6b8463cdfa1c3cffe1245313e"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:11:41.769345711Z",
+      "updated_at": "2026-11-24T02:23:50.569844122Z",
+      "seal": {
+        "by": "server",
+        "mac": "a369fc001d83824d5ce28eb64194b84a624d0e20c4b21a082e6f7227c7938dd3"
+      }
+    },
+    {
+      "id": "CLM-1062",
+      "statement": "docs/operations.md documents the cleanup_stores housekeeping job, its retry and give-up behaviour, and the changed user.deleted and changeset_discarded audit fields.",
+      "kind": "documentation",
+      "level": "artifact",
+      "verification_method": "inspection",
+      "source": "issue #972",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "commit": "7a3740cbae7ceec05d7345864a3f29a15067104a"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1559",
+          "kind": "inspection",
+          "locator": "docs/operations.md:728-733, 1877-1896, 1898-1910, 1425, 2155, 2201",
+          "summary": "The job list names cleanup_stores (every minute) and the metric label list adds it; a new 'Store cleanup' section gives retry per run, attempts, give-up past 20 with error log and kept row; user.deleted lists only keys and codes; changeset_discarded lists reason admin or key_deleted. All named items are documented (accuracy of surrounding text is judged under separate claims).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 1877,
+                "end": 1896
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:22:57.672288772Z",
+          "seal": {
+            "by": "server",
+            "mac": "bd31050dbd11f3eb256a4499d9bce135d9feec24fb0b80bf0cacedd49e745bcd"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The named items (cleanup_stores job, retry and give-up behaviour, user.deleted fields, changeset_discarded reason) are all documented. Two inaccurate sentences in the same edit are recorded as separate refuted claims.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1559"
+          ],
+          "recorded_at": "2026-11-24T02:23:50.756548739Z",
+          "seal": {
+            "by": "server",
+            "mac": "487af7ed547d6144bfe5d03738eff1d774086ef2c4dcf3387b75906d315568c2"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:11:41.769345711Z",
+      "updated_at": "2026-11-24T02:23:50.756548739Z",
+      "seal": {
+        "by": "server",
+        "mac": "4244f2183907ae12098b7c8eecabc1942a6f4efbb6028f34abdf02abf1684a8e"
+      }
+    },
+    {
+      "id": "CLM-1063",
+      "statement": "A cleanup row that keeps failing never keeps the other rows of its store from being tried.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "analysis",
+      "source": "PR body: \"a failing store or row counts an attempt and never blocks others\"; docs/operations.md: \"a store that fails never holds up the others\"",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/cleanups.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1560",
+          "kind": "analysis",
+          "locator": "src/store/cleanups.rs:214-222",
+          "summary": "Each run selects a store's rows with ORDER BY id LIMIT 100 and no regard to attempts. A row that fails every run is selected again every run, so 100 permanently failing rows with the lowest ids fill the whole batch and rows with higher ids on that same store are never selected. No test covers more than one failing row in a reachable store.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 214,
+                "end": 222
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:23:13.607037197Z",
+          "seal": {
+            "by": "server",
+            "mac": "2799ae19608491a9f7cd88a6d717239c2a64a46ff0d8b476bf7b8ab15f789071"
+          }
+        },
+        {
+          "id": "EVD-1574",
+          "kind": "analysis",
+          "locator": "src/store/cleanups.rs:214-222; src/store/cleanups_tests.rs:190-238",
+          "summary": "At head 68d7d15 the per-store select is ORDER BY attempts, id LIMIT $2, so rows that failed less go first; a failing row cannot starve the rest. Test rows_that_keep_failing_do_not_starve_the_rest_of_their_store (100 failing + 1 good) passes; failing note_failure also loops on to the next row and store.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 214,
+                "end": 222
+              },
+              "commit": "68d7d1559bbda8e1372885f8816893f10bf500da"
+            }
+          },
+          "recorded_at": "2026-11-24T02:38:39.827411209Z",
+          "seal": {
+            "by": "server",
+            "mac": "5e821c31504f01bde5327a3e75fe46ad5233389d583ec14d34a12ef8150e71f5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The per-store query is ORDER BY id LIMIT 100 with no attempts ordering, so 100 persistently failing rows starve every later row of that store; the PR body and docs say a failing row never blocks others. Fix: order the per-store select by attempts then id (or otherwise rotate past failing rows) and add a test with 101 rows where the first 100 fail and the last one is still settled; alternatively reword the PR body and docs to say only a failing store, not a failing row, is isolated.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1560"
+          ],
+          "recorded_at": "2026-11-24T02:24:16.015795090Z",
+          "seal": {
+            "by": "server",
+            "mac": "a3ed193f020466f22daadc44743eaaf57f6f7547887e033d7bcfd64c74855ad6"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Query now orders by attempts, id; starvation test passes.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1574"
+          ],
+          "recorded_at": "2026-11-24T02:38:45.769525656Z",
+          "seal": {
+            "by": "server",
+            "mac": "f0866014f0255363ec3f79dc0db51ca39f68e911a0565972a2bc9c61a0839970"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:22:13.867680269Z",
+      "updated_at": "2026-11-24T02:38:45.769525656Z",
+      "seal": {
+        "by": "server",
+        "mac": "3bf20a825ff7b2b285147782257522d2a124b3101573faf583f446a007c0e07b"
+      }
+    },
+    {
+      "id": "CLM-1064",
+      "statement": "The `team.deleted` row of the audit-action table in docs/operations.md describes only what a team deletion records.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "PR body: \"Docs (docs/operations.md)\" changes; issue #972 plan Task 13 (team deletion owes nothing)",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 2169,
+          "end": 2169
+        },
+        "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1561",
+          "kind": "inspection",
+          "locator": "docs/operations.md:2169 vs src/store/teams.rs:825",
+          "summary": "The team.deleted row now says the deletion is 'recorded in the deleting transaction, which also marks the catalog deleted and owes the store cleanup'. A team deletion marks no catalog and owes no cleanup (a team that owns a catalog is refused; the plan note says team deletion owes nothing). The sentence belongs to catalog deletion and was misapplied to this row.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2169,
+                "end": 2169
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:23:13.788456500Z",
+          "seal": {
+            "by": "server",
+            "mac": "6e53b508e400260ca518bcb0ff275087c69ea8063bff00bb2b847abaae22b123"
+          }
+        },
+        {
+          "id": "EVD-1575",
+          "kind": "inspection",
+          "locator": "docs/operations.md:2171",
+          "summary": "At head the team.deleted row reads: a shared team is deleted, recorded before the row goes; a refused deletion records nothing; extra none. No catalog or cleanup wording remains (that sits only in catalog.deleted, line 2182).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 2171,
+                "end": 2171
+              },
+              "commit": "68d7d1559bbda8e1372885f8816893f10bf500da"
+            }
+          },
+          "recorded_at": "2026-11-24T02:38:39.936895061Z",
+          "seal": {
+            "by": "server",
+            "mac": "4fe4a4709eada0349b22ce92d72af4529ba3ce82d3a49cc512991dbb0b237455"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The team.deleted row of the audit table was given a sentence about marking a catalog deleted and owing store cleanup, which describes catalog deletion; team deletion does neither. Fix: restore docs/operations.md line 2169 to its previous wording (a shared team is deleted ... recorded before the row goes), without the catalog and store cleanup clause.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1561"
+          ],
+          "recorded_at": "2026-11-24T02:24:16.128411480Z",
+          "seal": {
+            "by": "server",
+            "mac": "56258ea2f616b4d75c165c694017937515346d321b0eaa7cfc1a0bb5627cfb75"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Row restored to team-only wording.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1575"
+          ],
+          "recorded_at": "2026-11-24T02:38:45.837988637Z",
+          "seal": {
+            "by": "server",
+            "mac": "1726726333a1f56d02b379e624dca0bf98dd036e5d8cf4804ec15e0197092550"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:22:13.867680269Z",
+      "updated_at": "2026-11-24T02:38:45.837988637Z",
+      "seal": {
+        "by": "server",
+        "mac": "f0e8b2f07e5e23f60d8a94c09e80560d2a4883c4f75c12fe43e5c1a9e4d1c716"
+      }
+    },
+    {
+      "id": "CLM-1065",
+      "statement": "The 'Store cleanup' section of docs/operations.md states only behaviour the code has.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "analysis",
+      "source": "PR body: \"Docs (docs/operations.md)\"; issue #972 plan Task 13",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 1877,
+          "end": 1896
+        },
+        "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "docs/operations.md",
+        "src/store/catalogs.rs",
+        "src/store/cleanups.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1562",
+          "kind": "analysis",
+          "locator": "docs/operations.md:1895-1896 vs src/store/catalogs.rs:2075-2088",
+          "summary": "The section says 'A catalog deleted while its store was down is marked on the store as soon as the store is back, but its data is removed only after that.' delete_on needs the store connection (db.begin, line 1996) before it commits anything, so a delete with the store down fails. The only store-side failure is the store commit failing after the account commit; then the store row stays unmarked and nothing marks it later: clean_catalog just deletes catalog_state. So the described marking never happens.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 1894,
+                "end": 1896
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:23:13.942664872Z",
+          "seal": {
+            "by": "server",
+            "mac": "f3d0357d01687a4a18fd784737308db653bbac3af884f2decfdefc3bffddec51"
+          }
+        },
+        {
+          "id": "EVD-1576",
+          "kind": "inspection",
+          "locator": "docs/operations.md:1877-1900",
+          "summary": "The false 'marked on the store when it is back' sentence is gone; the section now says that if the store commit fails after the account commit, the data stays unmarked until cleanup removes it. The 100-per-store, attempts ordering, and 20-attempt wording match cleanups.rs (BATCH_PER_STORE, ORDER BY attempts, id).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 1877,
+                "end": 1900
+              },
+              "commit": "68d7d1559bbda8e1372885f8816893f10bf500da"
+            }
+          },
+          "recorded_at": "2026-11-24T02:38:40.091223610Z",
+          "seal": {
+            "by": "server",
+            "mac": "d1cf09c6607ec7da9fc8b1428226edf30fa9bfd402764c30907203ae714b4f85"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "The last sentence of the Store cleanup section says a catalog deleted while its store was down is marked on the store when the store returns; delete_on cannot run with the store down and nothing marks the store row later, because cleanup just deletes it. Fix: delete that sentence from docs/operations.md (around lines 1894-1896), or replace it with 'If the store commit fails after the account commit, the data stays unmarked and the cleanup removes it all the same'.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1562"
+          ],
+          "recorded_at": "2026-11-24T02:24:16.245305194Z",
+          "seal": {
+            "by": "server",
+            "mac": "66b8513eb3a13491640584a1d9bbc74a7918750a7237a6bb6b8200914a1d6f17"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "False store-marking sentence removed; remaining statements match the code.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1576"
+          ],
+          "recorded_at": "2026-11-24T02:38:45.923604754Z",
+          "seal": {
+            "by": "server",
+            "mac": "50a9113214ac099de7475c09f4822de562ad3440c5de9716001786139ca5320c"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:22:13.867680269Z",
+      "updated_at": "2026-11-24T02:38:45.923604754Z",
+      "seal": {
+        "by": "server",
+        "mac": "99969a73715b2963a7a50b0e6b52de8e1a15102b296aa51350cc41340238da76"
+      }
+    },
+    {
+      "id": "CLM-1066",
+      "statement": "The `user.deleted` audit entry no longer carries `changesets_discarded`, and DeletedUser has no discarded count.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "source": "PR body: \"`user.deleted` no longer carries `changesets_discarded`.\"",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/users.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1563",
+          "kind": "test",
+          "locator": "src/store/users.rs:2740 and :2783 (user deletion tests)",
+          "summary": "The tests now assert DeletedUser { keys: 2, codes: 1 } and details == json!({\"keys\":2,\"codes\":1}); the struct field and the details key are removed from delete_in (diff). The module shared with the delete tests compiles and the cleanup tests passed. I did not run the users tests individually.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/users.rs",
+              "lines": {
+                "start": 2783,
+                "end": 2783
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:23:14.086878343Z",
+          "seal": {
+            "by": "server",
+            "mac": "d1651cf13249cca3c864296aee7f990b8d682e3c4aac45991fd58b8fe1b85e2e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The struct field, the details key and the test expectations were all changed; the tests' new shape matches the code. The user-deletion tests were not run by me, only read.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1563"
+          ],
+          "recorded_at": "2026-11-24T02:24:16.362242608Z",
+          "seal": {
+            "by": "server",
+            "mac": "a8e09a2682cdbf899f00be6770de5c469002683bbce7bf24477aeba503a07fc6"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:22:13.867680269Z",
+      "updated_at": "2026-11-24T02:24:16.362242608Z",
+      "seal": {
+        "by": "server",
+        "mac": "fc90fc462f3f3198a5eceafa7c134389c8f5389c2bb2140c925a5a93d232eecf"
+      }
+    },
+    {
+      "id": "CLM-1067",
+      "statement": "A key's cleanup on a store discards the key's open changesets with a `catalog.changeset_discarded` audit entry (reason `key_deleted`), and clears the key id from that store's changesets and maintenance runs.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "PR body: \"A key's cleanup discards its open changesets (audited, reason `key_deleted`) and clears the key id from store changesets and maintenance runs.\"; issue comment: \"your store_cleanups work should clean them\"",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/cleanups.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1564",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- store::cleanups::tests (a_key_cleanup_clears_the_key_from_the_stores_history, deleting_a_key_discards_its_changesets_on_every_store; 6 passed)",
+          "summary": "The history test deletes alice, runs the cleanup, asserts the changeset is discarded and that count of catalog.changesets and catalog.maintenance_runs rows naming the key is 0. clean_key (cleanups.rs:356-410) writes the entry with reason key_deleted, and users.rs:2857 asserts details reason == key_deleted after a cleanup.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 356,
+                "end": 460
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:23:14.206627076Z",
+          "seal": {
+            "by": "server",
+            "mac": "616e6769b1189a90101985465d61b995781b32cb98f6ffb7e2cee22ab38f1b24"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "clean_key discards and audits with reason key_deleted and clears both tables in batches; the history test asserts no row of either table names the key afterwards.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1564"
+          ],
+          "recorded_at": "2026-11-24T02:24:16.466790067Z",
+          "seal": {
+            "by": "server",
+            "mac": "a8bdd17c0a01c6165baceca52aaa13b775a8bd918bc9119ae5aa187e5179a705"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:22:13.867680269Z",
+      "updated_at": "2026-11-24T02:24:16.466790067Z",
+      "seal": {
+        "by": "server",
+        "mac": "24ceef4c2c508786e70ab9bfb5e73dbe04cafde982a3d3634b53f1cb91a94985"
+      }
+    },
+    {
+      "id": "CLM-1068",
+      "statement": "The CleanupStores housekeeping task is scheduled every minute and settles at most 100 rows per store per run.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"the new `CleanupStores` housekeeping job (every minute)\"; \"100 rows per store per run\"",
+      "derived_from": [],
+      "artifacts": [
+        "src/housekeeping.rs",
+        "src/store/cleanups.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1565",
+          "kind": "inspection",
+          "locator": "src/housekeeping.rs:140-190, 436-440, 561-575; src/store/cleanups.rs:41, 214-222",
+          "summary": "Task::CleanupStores is in ALL, named cleanup_stores, its interval arm is Duration::from_secs(60), run() dispatches it to cleanup_stores which calls cleanups::run; BATCH_PER_STORE = 100 bound as LIMIT per store. The housekeeping test lists cleanup_stores among the names.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/housekeeping.rs",
+              "lines": {
+                "start": 140,
+                "end": 190
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:23:14.316675112Z",
+          "seal": {
+            "by": "server",
+            "mac": "efce4054cc47b3c58b7febb6c5ed9f75ec556e0d384d0171166a23f473ece7b4"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The 60-second interval and the 100-row per-store limit are in the code and wired into the task dispatch.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1565"
+          ],
+          "recorded_at": "2026-11-24T02:24:16.558406655Z",
+          "seal": {
+            "by": "server",
+            "mac": "4c6ff73e76b000779ddff07a3fedba5f483e73c32bed2665a84173e0ddc8e833"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:22:13.867680269Z",
+      "updated_at": "2026-11-24T02:24:16.558406655Z",
+      "seal": {
+        "by": "server",
+        "mac": "d9c692ce5882f97c2700aafc543add08c958618d5ea8dd6d715f61b842a6087c"
+      }
+    },
+    {
+      "id": "CLM-1069",
+      "statement": "The nine tests named in issue #972 exist in the change and pass reliably.",
+      "kind": "functional",
+      "level": "software",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #972 Validation: named tests list",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/catalogs_delete_tests.rs",
+        "src/store/cleanups_tests.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1566",
+          "kind": "test",
+          "locator": "tools/agentic/gate.sh narrow --lib -- store::catalogs::delete_tests (run 4 times) and store::cleanups::tests (once)",
+          "summary": "All nine named tests exist (six in src/store/catalogs_delete_tests.rs, three in src/store/cleanups_tests.rs). cleanups::tests: 6 passed. delete_tests module: runs 1 and 4 FAILED on an_edit_racing_a_delete_either_lands_first_and_blocks_it_or_fails_after (panic 'no lock request was ever blocked' at catalogs_delete_tests.rs:33 after the 60 s bounded wait, total about 64 s); runs 2 and 3 passed 6/6. Run alone twice it passed (4-5 s). Machine load average was 86 at the time, so load may trigger it, but the test is not reliable as shipped.",
+          "stance": "refutes",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs_delete_tests.rs",
+              "lines": {
+                "start": 15,
+                "end": 36
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:23:30.229051369Z",
+          "seal": {
+            "by": "server",
+            "mac": "07a5f31c82cfbe39993aceb1b75cef43e9bd3fdbea7179df5a8c7f07be7e67d4"
+          }
+        },
+        {
+          "id": "EVD-1577",
+          "kind": "test",
+          "locator": "cargo test --lib store::catalogs::delete_tests (x3), store::cleanups::tests (x1)",
+          "summary": "At 68d7d15 the delete_tests module passed 6/6 in three consecutive runs (3.5-4.7 s) and cleanups::tests passed 7/7. The pause registry is now keyed by SERVER_IDENTITY (database plus postmaster start time) rather than the bare database name, which fixes the cross-server collision that likely caused the earlier flake. Three runs is a small sample.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 1782,
+                "end": 1820
+              },
+              "commit": "68d7d1559bbda8e1372885f8816893f10bf500da"
+            }
+          },
+          "recorded_at": "2026-11-24T02:38:40.196591483Z",
+          "seal": {
+            "by": "server",
+            "mac": "510a3ac706125b9af152a03466f9781fdac6a7ff5c01b10a7e90d47cc134c7ad"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "refuted",
+          "rationale": "All nine tests exist, eight passed every time, but an_edit_racing_a_delete_either_lands_first_and_blocks_it_or_fails_after failed in 2 of 3 runs of the delete_tests module (not 2 of 4 as the evidence text miscounts) with 'no lock request was ever blocked' after its 60 s wait, and passed alone twice; the machine was heavily loaded. Fix: find why the lock waiter is not observed when the module runs in parallel (check whether the test pool's connections are exhausted by the paused delete, the edit and the polling query, since the 60 s timeout also covers a pool acquire wait) and make the test deterministic, then rerun the module at least 10 times.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1566"
+          ],
+          "recorded_at": "2026-11-24T02:24:16.650666029Z",
+          "seal": {
+            "by": "server",
+            "mac": "de4f0739a5c38073210aefd95ff9a09828e623f401783b50ffde0ce11d2b62f1"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Tests exist; module passed 3 of 3 runs after the pause-key fix (small sample).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1577"
+          ],
+          "recorded_at": "2026-11-24T02:38:45.998692944Z",
+          "seal": {
+            "by": "server",
+            "mac": "552602bcbb3bd28b8a1fc21da54f718b75c672301852e93b45bb5c5b5d102f78"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:22:13.867680269Z",
+      "updated_at": "2026-11-24T02:38:45.998692944Z",
+      "seal": {
+        "by": "server",
+        "mac": "9f501a14c6c818da55cefcc940975d83cc1189a7ebebc7b4372b56938d948ae1"
+      }
+    },
+    {
+      "id": "CLM-1070",
+      "statement": "Each new test was checked to fail with its change reverted (mutation runs).",
+      "kind": "non_functional",
+      "level": "software",
+      "integrity_level": 1,
+      "verification_method": "demonstration",
+      "source": "PR body: \"Each new test was checked to fail with its change reverted (mutation runs).\"",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/cleanups_tests.rs",
+        "src/store/catalogs_delete_tests.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Replaced by checkable claims: the PR body no longer says each test was mutation-checked; per-test results are in the changelog.",
+        "retired_at": "2026-11-24T02:28:59.624093012Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1567",
+          "kind": "other",
+          "locator": "PR body, Validation section",
+          "summary": "The statement is a record of a manual procedure with no committed log or script; reverting each change and rerunning would be needed to decide it, and was not done here (a manual check one cannot repeat is not_enough_info).",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T02:23:30.351123051Z",
+          "seal": {
+            "by": "server",
+            "mac": "582470afb83388a9fef678ed178fa7131858a31daae80b70895b21f6bcd2c275"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "The mutation runs left no repeatable record. Fix: either delete the sentence from the PR body, or revert each non-test hunk in turn and show the corresponding test failing, with the commands and counts in the PR body.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1567"
+          ],
+          "recorded_at": "2026-11-24T02:24:16.722185643Z",
+          "seal": {
+            "by": "server",
+            "mac": "3919baeb78a16f3050b5f62215c4f18d985beae34018f07d35782d9430b1c0c9"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:22:13.867680269Z",
+      "updated_at": "2026-11-24T02:28:59.624093012Z",
+      "seal": {
+        "by": "server",
+        "mac": "3b5a553f4a54a67c7050b3b316be2e21159d47ff4f53fffa7be15d1d866d4340"
+      }
+    },
+    {
+      "id": "CLM-1071",
+      "statement": "gate.sh fmt, lint and dylint pass on the head commit.",
+      "kind": "non_functional",
+      "level": "software",
+      "integrity_level": 1,
+      "verification_method": "demonstration",
+      "source": "PR body: \"`gate.sh fmt`, `lint`, `dylint` green\"",
+      "derived_from": [],
+      "artifacts": [
+        "src"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "retired",
+        "reason": "Replaced by a claim naming the gate results with counts, recorded after the final run.",
+        "retired_at": "2026-11-24T02:28:59.991788189Z"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1568",
+          "kind": "other",
+          "locator": "gate.sh fmt / lint / dylint",
+          "summary": "Not run: this audit was told not to run the project gates, and no gate output is committed. The narrow test build compiled the crate without warnings shown in the tail only.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T02:23:30.444029289Z",
+          "seal": {
+            "by": "server",
+            "mac": "f4ee2fbbc7897d8a1ce56e3a028167db2cce14937de85b2bc979b87781d5a3cf"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "not_enough_info",
+          "rationale": "I was told not to run the gates and no gate output is committed. Fix: the caller runs tools/agentic/gate.sh fmt, lint and dylint on the head commit and records the counts as evidence on this claim.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1568"
+          ],
+          "recorded_at": "2026-11-24T02:24:16.800980921Z",
+          "seal": {
+            "by": "server",
+            "mac": "a567f1c846a49e003b01f8230bf0c7fc81c5d5baa9b15b34d11657d7fdac874a"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:22:13.867680269Z",
+      "updated_at": "2026-11-24T02:28:59.991788189Z",
+      "seal": {
+        "by": "server",
+        "mac": "7ceaf31b887c0b38783c7011146cc369a3cf6392d9d37442f39223be00544106"
+      }
+    },
+    {
+      "id": "CLM-1072",
+      "statement": "A changelog entry for the change exists and plan Task 13 carries a dated 'Corrected (issue #972)' note.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "Issue #972 Validation: \"A changelog entry, and plan corrections (with a dated note) in the same PR\"",
+      "derived_from": [],
+      "artifacts": [
+        "changelog",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1569",
+          "kind": "inspection",
+          "locator": "changelog/2026-11-24T01-45-00Z-m21-task-13-two-step-delete-and-store-cleanup.md; docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md:554",
+          "summary": "The changelog file for issue #972 is in the diff, and Task 13 of the plan carries a blockquote 'Corrected (issue #972, 2026-11-23)' listing the differences (lock order, P13, key interlock, CleanupStores shape, registry reads, test names).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+              "lines": {
+                "start": 554,
+                "end": 561
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:23:30.566133781Z",
+          "seal": {
+            "by": "server",
+            "mac": "422340b53ba6c406b0ef4f97efdaae418fd96bf771e36a0dc0773d692beb8bd8"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The changelog file and the dated correction note are both present in the diff.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1569"
+          ],
+          "recorded_at": "2026-11-24T02:24:16.890748600Z",
+          "seal": {
+            "by": "server",
+            "mac": "e149e7d072ab6772cbee5d24f1d588e586b1568ba19a4a6d31e4d8d6c4ee5a72"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:22:13.867680269Z",
+      "updated_at": "2026-11-24T02:24:16.890748600Z",
+      "seal": {
+        "by": "server",
+        "mac": "cd85ef85cebada1eb0055fcfc292ad0387a6ba9a813d05ea56592926790abb54"
+      }
+    },
+    {
+      "id": "CLM-1073",
+      "statement": "catalogs::delete_on records the `catalog.deleted` audit entry in the account transaction, before that transaction commits.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "PR body: \"writes `catalog.deleted` and the cleanup row in the account transaction\"",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/catalogs.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1570",
+          "kind": "inspection",
+          "locator": "src/store/catalogs.rs:2044-2075",
+          "summary": "record_catalog(&mut account_tx, actor, ...) with the deletion's action is called at 2046-2058 on the account transaction, before UPDATE catalogs SET deleted_at, owe_catalog, and account_tx.commit() at 2075.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/catalogs.rs",
+              "lines": {
+                "start": 2044,
+                "end": 2075
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:23:30.717298216Z",
+          "seal": {
+            "by": "server",
+            "mac": "a07aeca46f8ee3a9a9f42287aa7d298f158bc63cfca29a25548f7b43da5a193b"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "record_catalog runs on account_tx before its commit.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1570"
+          ],
+          "recorded_at": "2026-11-24T02:24:16.982929294Z",
+          "seal": {
+            "by": "server",
+            "mac": "86ab96175e133a9b208c6a9b527f65cbe9d68d36410613f225e61673b9aa776a"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:22:13.867680269Z",
+      "updated_at": "2026-11-24T02:24:16.982929294Z",
+      "seal": {
+        "by": "server",
+        "mac": "bbea06fd6f318f30115e6b88f7874478ad4059bc7449849e4d71fba2adadf3a8"
+      }
+    },
+    {
+      "id": "CLM-1074",
+      "statement": "changesets::lock_catalog refuses with CATALOG_GONE a catalog whose catalog_state row is marked deleted, so a writer that waited behind a delete fails once the delete commits.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Issue #972 plan Task 13: \"A writer that waited ... sees deleted_at\"; PR body: \"`catalog_state.deleted_at`\"",
+      "derived_from": [],
+      "artifacts": [
+        "src/store/changesets.rs"
+      ],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1571",
+          "kind": "test",
+          "locator": "src/store/changesets.rs:244-257; an_edit_racing_a_delete_either_lands_first_and_blocks_it_or_fails_after (passed alone twice and in 2 of 4 module runs)",
+          "summary": "lock_catalog selects catalog_state FOR KEY SHARE with deleted_at IS NULL and returns Refused CATALOG_GONE when no row. The test pauses a delete after its store locks, queues an edit's lock_catalog behind it, and when the delete commits asserts the edit got Refused CATALOG_GONE; the other order asserts the delete refuses with --force advice and leaves the changeset open. Flakiness of that test is recorded under the tests claim.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/changesets.rs",
+              "lines": {
+                "start": 244,
+                "end": 257
+              },
+              "commit": "5232c0fd2f9dfbd56fb834a45665f306cf46ce15"
+            }
+          },
+          "recorded_at": "2026-11-24T02:23:30.839272247Z",
+          "seal": {
+            "by": "server",
+            "mac": "1c0d62a88c3c08302c71e3b5adb678046b35e0b3b6db1abd3cddba1abe219ab5"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The code refuses a marked row, and the race test asserts CATALOG_GONE when it reaches its assertions (it passed alone twice and in 1 of 3 module runs); its flakiness is judged under the tests claim.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1571"
+          ],
+          "recorded_at": "2026-11-24T02:24:17.083722755Z",
+          "seal": {
+            "by": "server",
+            "mac": "e666a2e327b1ac06cee509c1a8aff57043dc51b8b7718fc58c223ccb1b8abf2e"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:22:13.867680269Z",
+      "updated_at": "2026-11-24T02:24:17.083722755Z",
+      "seal": {
+        "by": "server",
+        "mac": "d65111638971b8eb1a7188afe03a8e079129793ee4fd9263d730a9495a7040d5"
+      }
+    },
+    {
+      "id": "CLM-1075",
+      "statement": "At commit 9f1e902, gate.sh fmt, lint (clippy and rustdoc) and dylint exit 0 and gate.sh test passes with 3517 tests passed, 0 failed and 21 ignored across all test binaries.",
+      "kind": "non_functional",
+      "level": "software",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1582",
+          "kind": "log",
+          "locator": "target/i972-logs/full-test2.log (gate.sh test, rc=0); gate.sh fmt and lint rc=0 (final-fmt.log, final-lint.log); dylint ran clean after the last source edit",
+          "summary": "Summing every \"test result\" line of the full gate.sh test log gives 3517 passed, 0 failed, 21 ignored; the log ends \"finished rc=0\". fmt and lint were re-run on the final tree and exited 0. dylint passed after the final edit (the tracing allow on still_deleting_reason).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T02:53:26.728561585Z",
+          "seal": {
+            "by": "server",
+            "mac": "2197098721df849ace470e51d2f99a93650d966ccd3457652c45d180ba085f5c"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The full test log sums to 3517 passed, 0 failed and ends rc=0; fmt and lint were re-run on the final tree; dylint passed after the last source edit.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1582"
+          ],
+          "recorded_at": "2026-11-24T02:53:34.925082953Z",
+          "seal": {
+            "by": "server",
+            "mac": "c3fc3040ed84bf4624b76cf45c8a7f797c7e5675925bb5fafbf5192033c94610"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T02:52:52.753609780Z",
+      "updated_at": "2026-11-24T02:53:34.925082953Z",
+      "seal": {
+        "by": "server",
+        "mac": "75c241a7800ad018c028ef3e3b63d7c9851baf6ec4e14fcd62d1882c25f4b031"
+      }
+    },
+    {
+      "id": "CLM-1076",
+      "statement": "A cleanup attempt that waits on a held row lock is abandoned after the attempt timeout, counted as a failed try, and does not stop the next row or store from being cleaned.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1583",
+          "kind": "test",
+          "locator": "store::cleanups::tests::a_cleanup_attempt_stuck_on_a_lock_fails_without_holding_up_another_store",
+          "summary": "The test holds a changeset row FOR UPDATE from another connection, runs a cleanup bounded to 2 s on two stores, and asserts the stuck row has attempts 1 and stays, the second store's changeset is discarded, and a later run settles the row once the lock is released. It passes; with the attempt timeout removed and the database bound set to 0 it fails at its 60 s limit (mutation recorded in the changelog).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 345,
+                "end": 407
+              },
+              "commit": "12f8313dc45b21e8e16223a84c1e174be093ea20"
+            }
+          },
+          "recorded_at": "2026-11-24T03:02:37.056527157Z",
+          "seal": {
+            "by": "server",
+            "mac": "a0fd18c19ad5cd37a8c9aeb0f2c8ca9620b937cf28173b77e8113599973e2893"
+          }
+        },
+        {
+          "id": "EVD-1584",
+          "kind": "inspection",
+          "locator": "src/store/cleanups.rs run_bounded",
+          "summary": "run_bounded wraps each settle in tokio::time::timeout and maps an elapsed timeout to an error that note_failure counts; the loop then continues.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 255,
+                "end": 285
+              },
+              "commit": "12f8313dc45b21e8e16223a84c1e174be093ea20"
+            }
+          },
+          "recorded_at": "2026-11-24T03:02:37.122036662Z",
+          "seal": {
+            "by": "server",
+            "mac": "777885c8e4b349acf0df5b50b0ae2640df10025499a76cc51d0e130a338eeb53"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test passes and the code wraps every attempt in a timeout counted through note_failure; the mutation without the bounds fails the test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1583",
+            "EVD-1584"
+          ],
+          "recorded_at": "2026-11-24T03:02:43.252217290Z",
+          "seal": {
+            "by": "server",
+            "mac": "778f9bc37dec096f07fbaec229e4c47eec5a2f66102fa22f74e0868681274986"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:02:27.089398716Z",
+      "updated_at": "2026-11-24T03:02:43.252217290Z",
+      "seal": {
+        "by": "server",
+        "mac": "dad9537633f84560166d02307e18d16d5f0b1bfb1f81fac9fc8e333fc39b7da1"
+      }
+    },
+    {
+      "id": "CLM-1077",
+      "statement": "A key's cleanup keeps the store's published changesets and maintenance runs that name the key and sets their key_id to NULL.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1585",
+          "kind": "test",
+          "locator": "store::cleanups::tests::a_key_cleanup_keeps_the_stores_history_and_clears_the_key_from_it",
+          "summary": "The test seeds a published changeset and a maintenance run naming the key, asserts both reference it before, then after cleanup asserts neither names it, the changeset is still published and the run row count is 1. With the maintenance_runs clearing statement removed the test fails (mutation recorded in the changelog).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 264,
+                "end": 317
+              },
+              "commit": "12f8313dc45b21e8e16223a84c1e174be093ea20"
+            }
+          },
+          "recorded_at": "2026-11-24T03:02:37.194519836Z",
+          "seal": {
+            "by": "server",
+            "mac": "ac9cd02885f283bd1c02f1ee8b694b55a3ed6b026e6384781bd53fc1abfff2a2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test seeds both history rows, asserts the references before and their absence after, and fails when the maintenance_runs clearing is removed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1585"
+          ],
+          "recorded_at": "2026-11-24T03:02:43.328973871Z",
+          "seal": {
+            "by": "server",
+            "mac": "de445ab9358e0ea7372bb4dd5d3dd019ef38cbbb219d904a032cf02b022797b2"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:02:27.089398716Z",
+      "updated_at": "2026-11-24T03:02:43.328973871Z",
+      "seal": {
+        "by": "server",
+        "mac": "6e41c3291e7e52f0c6d349dee8e242c25ce3727f9a33445b6809f9226ddd59ec"
+      }
+    },
+    {
+      "id": "CLM-1078",
+      "statement": "At commit 12f8313 (before the ledger commit), gate.sh fmt, lint and dylint exit 0 and gate.sh test passes with 3519 tests passed, 0 failed and 21 ignored across all test binaries.",
+      "kind": "non_functional",
+      "level": "software",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1586",
+          "kind": "log",
+          "locator": "target/i972-logs/full-test4.log (gate.sh test, rc=0); r1-fmt.log, r1-lint.log, r1-dylint.log (rc=0)",
+          "summary": "The sum of every \"test result\" line of full-test4.log is 3519 passed, 0 failed, 21 ignored, and the log ends \"finished rc=0\". An earlier run of the same head failed once in tests/ui_e2e browse::an_empty_choice_is_kept_and_searches_nothing (left Number(2), right Number(1) at tests/ui_e2e/browse.rs:277), and passed on the re-run.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T03:11:37.172777794Z",
+          "seal": {
+            "by": "server",
+            "mac": "e309b5374116a2139e42ddf5987527254bd14137400c7dddc88c55baef6a767f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The full test log sums to 3519 passed, 0 failed with rc=0; fmt, lint and dylint exited 0.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1586"
+          ],
+          "recorded_at": "2026-11-24T03:11:40.607614039Z",
+          "seal": {
+            "by": "server",
+            "mac": "3bdcd88be2668c12a5d01f4804c121d20f51a541cf703c2745e4c603f58ebf65"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:11:33.986999166Z",
+      "updated_at": "2026-11-24T03:11:40.607614039Z",
+      "seal": {
+        "by": "server",
+        "mac": "df0230988ddd9cda0488352757ecbc18d53857077a9b10e54775f8b8da1ce643"
+      }
+    },
+    {
+      "id": "CLM-1079",
+      "statement": "Every statement of the store cleanup job, on the account database and on each store, runs inside a transaction that sets lock_timeout and statement_timeout to LIMITS.wait (20 s), including note_failure; a 30 s tokio timeout per row is only a backstop.",
+      "kind": "non_functional",
+      "level": "component",
+      "verification_method": "test",
+      "source": "PR #1005 review round 2, threads T3 and T5",
+      "source_anchor": {
+        "path": "src/store/cleanups.rs",
+        "commit": "54ea0cf025c292253f01283d45e9f6a9a2c6a670"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:972",
+        "round-2"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1587",
+          "kind": "test",
+          "locator": "src/store/cleanups_tests.rs: a_store_row_lock_fails_that_cleanup_at_the_database_and_another_store_settles; a_held_default_key_lock_fails_a_catalog_cleanup_and_leaves_a_one_connection_pool_usable",
+          "summary": "Both tests pass at 54ea0cf; with the store half or the account half of clean_catalog run in an unbounded begin(), each fails at its 15 s limit (mutation runs, changelog round 2). bound_waits sets both timeouts via set_config in every account_tx and store_tx; LIMITS.wait is 20 s and LIMITS.attempt 30 s.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "commit": "54ea0cf025c292253f01283d45e9f6a9a2c6a670"
+            }
+          },
+          "recorded_at": "2026-11-24T03:38:55.695094998Z",
+          "seal": {
+            "by": "server",
+            "mac": "ccef2baf03e7d48776d507b392a75d7eb56049294949133c2a2ef0e06e50a8e3"
+          }
+        },
+        {
+          "id": "EVD-1590",
+          "kind": "inspection",
+          "locator": "src/store/cleanups.rs:251-361 (run_bounded, account_tx, store_tx, bound_waits), 369-381 (note_failure), 418-474 (settle, clean_catalog), 484-589 (clean_key, discard_one)",
+          "summary": "Independent read of every sqlx call in the job. bound_waits (353-361) runs set_config('lock_timeout') and set_config('statement_timeout') = wait ms with is_local=true, and is the first statement in both account_tx (322-329) and store_tx (337-344), the only two transaction openers in the job. Account side: run_bounded store-name listing (257-263) and per-store due-row listing (266-275), note_failure UPDATE (376-381), settle DELETE (428-433), clean_catalog api_keys FOR UPDATE and catalogs DELETE (460-472), discard_one name lookup and audit::resolve_actor (546-551) all use account_tx. Store side: clean_catalog catalog_state DELETE (450-455), clean_key open-changeset listing (489-499) and clear_key batches (510-518), discard_one lock/set_state/record_catalog (552-587) all use store_tx. Only a bare begin() is in the two helpers, followed at once by bound_waits. LIMITS (65-68) is wait 20 s, attempt 30 s; the attempt is applied as tokio::time::timeout around settle(row) at line 288, as a backstop, and wait is threaded via Attempt.wait. No statement on a bare pool found. Caveats, not refutations: the pool acquire in begin() and Stores::get are not statements and are bounded by pool connect timeouts, and the run_bounded listing and note_failure sit outside the 30 s per-row timeout (but inside the 20 s database bound).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 251,
+                "end": 589
+              },
+              "commit": "1df569df021c8cb288f51a5916826023e829eb8b"
+            }
+          },
+          "recorded_at": "2026-11-24T03:40:51.422071760Z",
+          "seal": {
+            "by": "server",
+            "mac": "d1edb4a9a293c58654599f149c827bccc988d85554a0d67340624f6af518f0cc"
+          }
+        },
+        {
+          "id": "EVD-1591",
+          "kind": "analysis",
+          "locator": "git grep over src/store/cleanups.rs for .begin( and bare-pool executors; src/stores/mod.rs:153,252",
+          "summary": "AccountDb::begin and CatalogDb::begin (src/stores/mod.rs:153, 252) only call pool.begin() and run no statement, so there is no unbounded statement hidden in them. Within cleanups.rs the only .begin() calls are lines 326 and 341 (inside account_tx and store_tx). Every .execute/.fetch_* in lines 251-589 takes &mut *tx (a bound transaction); the pool-taking owe_keys, owe_catalog and owe_deleted_catalogs (142-210) take a connection supplied by callers and, in the job, owe_deleted_catalogs runs on the bound tx at line 258. I did not run the two named tests; the structural reading alone supports the claim.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/stores/mod.rs",
+              "lines": {
+                "start": 150,
+                "end": 158
+              },
+              "commit": "1df569df021c8cb288f51a5916826023e829eb8b"
+            }
+          },
+          "recorded_at": "2026-11-24T03:40:51.519477205Z",
+          "seal": {
+            "by": "server",
+            "mac": "919302a19fbc28d34282aff4c9f9c092c29240287d1132d42f47310e7c133f46"
+          }
+        },
+        {
+          "id": "EVD-1608",
+          "kind": "inspection",
+          "locator": "src/store/cleanups.rs: git grep -n \"begin()\\|account_tx(\\|store_tx(\" at 96d4881",
+          "summary": "Re-judged at 96d4881 after the round-3 changes. The only begin() calls are inside account_tx (422) and store_tx (437), each followed by bound_waits (set_config lock_timeout and statement_timeout = LIMITS.wait 20 s, is_local true). owe_deleted_catalogs (210), stores_with_rows (317), rows_of (331), count_failure (516, used by note_failure) and Attempt::settle/clean_key/discard_one (551-675) all open transactions through those two helpers; every execute/fetch in 205-715 runs on those transactions. owe_keys/owe_catalog (142-190) run on a caller's connection and are not part of the job. LIMITS.attempt is 30 s as a tokio timeout around settle per row (396) and around each account step (backstop), as a backstop. The new rows_of, stores_with_rows and count_failure follow the same pattern. Tests a_store_row_lock_fails_that_cleanup_at_the_database_and_another_store_settles and a_held_default_key_lock_fails_a_catalog_cleanup_and_leaves_a_one_connection_pool_usable pass in the 14-test narrow run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 416,
+                "end": 457
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:02:15.555445764Z",
+          "seal": {
+            "by": "server",
+            "mac": "73fd0511f51ccafe8218fd78b5aefdb60c6e81909377555e054a3850d8332cfc"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Tests and mutation runs show both halves bounded at the database; code inspection shows account_tx/store_tx call bound_waits and note_failure uses account_tx.",
+          "auditor": "claude-sonnet-5-5 (implementer self-check; no fresh auditor in round 2)",
+          "evidence_ids": [
+            "EVD-1587"
+          ],
+          "recorded_at": "2026-11-24T03:39:04.068152421Z",
+          "seal": {
+            "by": "server",
+            "mac": "8881b505a56d2e7002d060646b1bc97eeb7a0f132c53bf65df4b18200ec95629"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Every statement in the job runs on a transaction from account_tx or store_tx, whose first statement sets lock_timeout and statement_timeout to LIMITS.wait (20 s); note_failure uses account_tx; the 30 s tokio timeout wraps settle per row as a backstop. No statement on a bare pool found.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor)",
+          "evidence_ids": [
+            "EVD-1590",
+            "EVD-1591"
+          ],
+          "recorded_at": "2026-11-24T03:41:03.167332454Z",
+          "seal": {
+            "by": "server",
+            "mac": "8c3f18129f248cabe3294e81782fe0e114e40ecd043869dd3e36581095b1a10d"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 96d4881: the only begin() calls are in account_tx and store_tx, which apply bound_waits first; every job statement, including note_failure's count_failure and the new owe_deleted_catalogs/stores_with_rows/rows_of, goes through them; the 30 s tokio timeout wraps as a backstop. Both named lock tests pass.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1608"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.703967695Z",
+          "seal": {
+            "by": "server",
+            "mac": "2bce1c25382c86583bb169fa2163cf0452149a48e3292be4b3a4de111403c7d3"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:38:48.209900929Z",
+      "updated_at": "2026-11-24T04:02:32.703967695Z",
+      "seal": {
+        "by": "server",
+        "mac": "f6e25d5a8ea6f104799008a3509d32341a214479aafe96b4bf771eef5bef1f51"
+      }
+    },
+    {
+      "id": "CLM-1080",
+      "statement": "runs::claim reads the claiming key's row FOR KEY SHARE in the account transaction opened before the store connection and held until after the store commit, so a user deletion waits for a claim and the cleanup it owes then clears the key from the run.",
+      "kind": "functional",
+      "level": "unit",
+      "verification_method": "test",
+      "source": "PR #1005 review round 2, thread T4",
+      "source_anchor": {
+        "path": "src/store/maintenance/runs.rs",
+        "commit": "54ea0cf025c292253f01283d45e9f6a9a2c6a670"
+      },
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:972",
+        "round-2"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1588",
+          "kind": "test",
+          "locator": "src/store/cleanups_tests.rs: a_maintenance_claim_paused_after_its_key_read_never_leaves_a_deleted_key_behind",
+          "summary": "The regression passes at 54ea0cf and fails when lock_key's FOR KEY SHARE is removed (mutation run). claim calls AuditTarget::lock_key after AuditTarget::read and before db.begin(), and the account transaction ends in watch.commit.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/mod.rs",
+              "commit": "54ea0cf025c292253f01283d45e9f6a9a2c6a670"
+            }
+          },
+          "recorded_at": "2026-11-24T03:38:55.768568707Z",
+          "seal": {
+            "by": "server",
+            "mac": "dbe419483f9bfd1e3cc49fdc874e5b60575b55d8874903a0b971f11b4267097a"
+          }
+        },
+        {
+          "id": "EVD-1592",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/runs.rs:477-479 and 551; src/store/maintenance/mod.rs:139-143, 167-175, 224-277",
+          "summary": "runs::claim line 477 calls AuditTarget::read, which opens db.accounts().begin() (mod.rs:139) and reads the catalog; line 478 calls target.lock_key, which runs SELECT id FROM api_keys WHERE id = $1 FOR KEY SHARE on that account transaction (mod.rs:167-175); only then line 479 db.begin() opens the store connection. The AuditTarget is moved into RunWatch::open (line 490s) and held to line 551 watch.commit, which commits the store tx (mod.rs:274) and then the account tx (mod.rs:276). So the key row lock is taken before the store connection and held until after the store commit. The recorded_key (None if the key is gone) is used for maintenance_runs.key_id at the INSERT. An early return drops both transactions. The doc comment at runs.rs:440-449 states the same design. Deleter side (FOR UPDATE on the key) conflicts with FOR KEY SHARE, so it waits.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/runs.rs",
+              "lines": {
+                "start": 474,
+                "end": 481
+              },
+              "commit": "1df569df021c8cb288f51a5916826023e829eb8b"
+            }
+          },
+          "recorded_at": "2026-11-24T03:40:51.578536607Z",
+          "seal": {
+            "by": "server",
+            "mac": "78dae36cbdc9b95c3147f78cfc70387596222621f6d62ee037293dbfcec875c7"
+          }
+        },
+        {
+          "id": "EVD-1593",
+          "kind": "inspection",
+          "locator": "src/store/cleanups_tests.rs:563-630 a_maintenance_claim_paused_after_its_key_read_never_leaves_a_deleted_key_behind; log target/i972-logs/g2-test.log",
+          "summary": "The test holds the catalog advisory lock so claim blocks after its key read, spawns delete_alice and waits for a second blocked lock request (the deletion waiting on the claim), releases, then asserts the claim succeeded and no maintenance_runs row names the deleted key after cleanup. Its logic exercises the claimed interlock (deletion waits for the claim; the owed cleanup then clears the key). The full-suite gate log shows 0 failures at this head. I did not rerun the test or the mutation run the author reports.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 563,
+                "end": 630
+              },
+              "commit": "1df569df021c8cb288f51a5916826023e829eb8b"
+            }
+          },
+          "recorded_at": "2026-11-24T03:40:51.635878132Z",
+          "seal": {
+            "by": "server",
+            "mac": "bb2770448e8bdd8254e08d6ffa60034f3f5a3136b4fc702af07a07f4c4a5385e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The regression passes and fails without the lock.",
+          "auditor": "claude-sonnet-5-5 (implementer self-check; no fresh auditor in round 2)",
+          "evidence_ids": [
+            "EVD-1588"
+          ],
+          "recorded_at": "2026-11-24T03:39:04.192963522Z",
+          "seal": {
+            "by": "server",
+            "mac": "d7969a5f28c8231fd695b1fdc0c8d2ec6deac4699a1639f7e1bb3bd0db763f97"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "claim opens the account transaction, takes the key row FOR KEY SHARE, then opens the store connection, and the account transaction is committed in RunWatch::commit after the store commit. The regression test exercises the interlock.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor)",
+          "evidence_ids": [
+            "EVD-1592",
+            "EVD-1593"
+          ],
+          "recorded_at": "2026-11-24T03:41:03.229230428Z",
+          "seal": {
+            "by": "server",
+            "mac": "8e8be2164070a94f84ccba01fd79044a2d4579b821944cfe5ebb542d5ad097d1"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:38:48.209900929Z",
+      "updated_at": "2026-11-24T03:41:03.229230428Z",
+      "seal": {
+        "by": "server",
+        "mac": "55f7a05bdb4c161b63ad775a75e1bf7721068057c1c10f8d45c047cbe2dbc725"
+      }
+    },
+    {
+      "id": "CLM-1081",
+      "statement": "At head 54ea0cf the full test gate passes with 3522 passed, 0 failed, 21 ignored, and fmt, lint and dylint pass.",
+      "kind": "constraint",
+      "level": "artifact",
+      "verification_method": "test",
+      "source": "tools/agentic/gate.sh test log target/i972-logs/g2-test.log",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:972",
+        "round-2"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1589",
+          "kind": "log",
+          "locator": "target/i972-logs/g2-test.log; g2-lint.log; g2-dylint.log; g2-fmt.log",
+          "summary": "gate.sh test finished rc=0 with the summed test results at 3522 passed, 0 failed, 21 ignored; fmt, lint and dylint exited 0 at this code head.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T03:38:55.829416173Z",
+          "seal": {
+            "by": "server",
+            "mac": "f3f2aed68e63f07b9c86788a4aa78f2ac125cc5174cd9a2ae5c6e501fade8d71"
+          }
+        },
+        {
+          "id": "EVD-1594",
+          "kind": "log",
+          "locator": "target/i972-logs/g2-test.log (28 'test result:' lines, last line 'finished rc=0')",
+          "summary": "I summed the 28 'test result:' lines with awk: 3522 passed, 0 failed, 21 ignored; every one of the 28 lines reads 'ok.'; the final line is 'finished rc=0'. The log was last written 22:38:39, after commit 54ea0cf (22:33:26), the last code change; HEAD 1df569d changes only claims.json since then. The file is untracked, so no anchor.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T03:40:56.742470725Z",
+          "seal": {
+            "by": "server",
+            "mac": "2f1d68c5310b2405ed7a26dba10daa98009b890bc5937409c08e60704852695a"
+          }
+        },
+        {
+          "id": "EVD-1595",
+          "kind": "log",
+          "locator": "target/i972-logs/g2-lint.log, g2-dylint.log, g2-fmt.log",
+          "summary": "g2-lint.log (clippy --all-targets -D warnings, then cargo doc with -D warnings) ends 'Finished dev profile' and generated docs, with no error or warning lines; g2-dylint.log ends 'Finished dev profile' with no error. g2-fmt.log holds only the command line 'cargo fmt --all --check' (no output means no diff). Caveat: these three logs carry no explicit 'rc=' line, so exit codes are inferred from clean output, not recorded; the fmt log (22:31:13) predates 54ea0cf, which changed one doc-comment line in src/store/maintenance/runs.rs, while lint (22:33:26) and dylint (22:33:38) came after it. Consistent with pass but not proof of exit code 0 for those three.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T03:40:56.811141788Z",
+          "seal": {
+            "by": "server",
+            "mac": "e9330c69e893a7eb5667508f3bc6a8d2f3f6f193307781b3e86bbb869377e1bb"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Gate logs show rc=0 and the stated totals.",
+          "auditor": "claude-sonnet-5-5 (implementer self-check; no fresh auditor in round 2)",
+          "evidence_ids": [
+            "EVD-1589"
+          ],
+          "recorded_at": "2026-11-24T03:39:04.252291316Z",
+          "seal": {
+            "by": "server",
+            "mac": "982fe1f65ce72a48921de59fc9a2013055c3c42b73e0cacd3293235e713d6d20"
+          }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Test log sums to 3522 passed, 0 failed, 21 ignored with finished rc=0, written after the last code change. Lint, dylint and fmt logs are clean but record no exit code (see neutral EVD-1595), so those parts are inferred.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor)",
+          "evidence_ids": [
+            "EVD-1594"
+          ],
+          "recorded_at": "2026-11-24T03:41:03.288693792Z",
+          "seal": {
+            "by": "server",
+            "mac": "55fc3b26ab5d6fda9fa9c9f998e27e1192f90c1093b0053fd71a28795a6b6061"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:38:48.209900929Z",
+      "updated_at": "2026-11-24T03:41:03.288693792Z",
+      "seal": {
+        "by": "server",
+        "mac": "3a8d9ab0d60db961b53598ed8894ad422fb1af35d7d01aa000676b77111ee6c0"
+      }
+    },
+    {
+      "id": "CLM-1082",
+      "statement": "Only a failure to read which stores have cleanup rows ends a CleanupStores run (cleanups::run returns Err); a failure of the deleted-catalog backstop, of opening a store, of reading one store's rows, of one row's attempt, or of counting a failed try is logged with the store (and the row id where there is a row) and the run goes on to the next row and store.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "Brooke review 6033326820 on PR #1005, comment 4675238546; issue #972",
+      "source_anchor": {
+        "path": "src/store/cleanups.rs",
+        "lines": {
+          "start": 223,
+          "end": 411
+        },
+        "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/cleanups.rs"
+      ],
+      "tags": [
+        "from-issue:972",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1596",
+          "kind": "inspection",
+          "locator": "src/store/cleanups.rs:268-411 (run_bounded, run_store)",
+          "summary": "The only `?` in the run path is on stores_with_rows (line 284); run_bounded returns Ok(report) otherwise. owe_deleted_catalogs failure is matched and logged (275-282, kind and error only; no store exists at that step). rows_of failure is logged with store=name and returns from that store only (362-373). Failure opening a store (374-388) calls note_failure for each row with store name and row id. A row's failed/overrun attempt (396-409) calls note_failure and loops on. note_failure (472-508) returns () and logs the counting failure with store, cleanup_id, attempts at error level. No remaining `?` or early return in run_store other than the per-store rows_of return. Caveat: the backstop log carries no store field (none applies).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 268,
+                "end": 411
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:01:54.636323883Z",
+          "seal": {
+            "by": "server",
+            "mac": "06977b0cfb9298a7c991ecd3082bab893629aa32290ebb42d97875824a4f51f2"
+          }
+        },
+        {
+          "id": "EVD-1597",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib store::cleanups -- --test-threads 4 (14 passed; log target/i972-logs/audit-narrow.log)",
+          "summary": "All 14 cleanup tests pass at 96d4881, including both uncounted-failure tests, cleanup_retries_an_unreachable_store_without_blocking_others and rows_that_keep_failing_do_not_starve_the_rest_of_their_store. No test makes rows_of or the deleted-catalog backstop fail, and none asserts log content, so those two branches and the log fields are code-reading only.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T04:01:54.696079589Z",
+          "seal": {
+            "by": "server",
+            "mac": "4bde7095c5ae0e8eb98c264a0411a19d8d414a5544b6c958c4635e11dfa9c042"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The sole `?` in the run path is the stores-with-rows read; every other failure is matched, logged with store and row id (the deleted-catalog backstop has no store to name) and the loop goes on. Code reading only for the rows_of and backstop branches; no test or log assertion covers them.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1596"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.204441051Z",
+          "seal": {
+            "by": "server",
+            "mac": "de2a7b168f244eaf5cb9d8fa8f7d2d80c4188cb618519a36d1513bb586267fd4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:55:06.362955543Z",
+      "updated_at": "2026-11-24T04:02:32.204441051Z",
+      "seal": {
+        "by": "server",
+        "mac": "96edb6572de3f24847097214f9da9b45d5bb1a187ea72e7761195b74e1110545"
+      }
+    },
+    {
+      "id": "CLM-1083",
+      "statement": "When counting a failed cleanup try fails (for example the store_cleanups row is held FOR UPDATE by another session), note_failure logs it at error level and returns nothing; the row keeps its previous attempts and is tried again on the next run.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Brooke review 6033326820 on PR #1005",
+      "source_anchor": {
+        "path": "src/store/cleanups.rs",
+        "lines": {
+          "start": 459,
+          "end": 523
+        },
+        "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/cleanups.rs",
+        "src/store/cleanups_tests.rs"
+      ],
+      "tags": [
+        "from-issue:972",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1598",
+          "kind": "inspection",
+          "locator": "src/store/cleanups.rs:472-508 (note_failure), 515-523 (count_failure)",
+          "summary": "note_failure has no return type (returns ()). It awaits backstop(count_failure(...)) into `counted` and matches it: Err(count_error) logs split_event!(error, ... store, cleanup_id, attempts = row.attempts ...) \"a store cleanup failed and its try could not be counted; it is kept and tried again\" at error level and does nothing else; no row is deleted or altered. count_failure is one UPDATE attempts+1 in a bound account tx, so a failure leaves attempts unchanged.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 472,
+                "end": 523
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:01:54.762520212Z",
+          "seal": {
+            "by": "server",
+            "mac": "712f7eb3255ba5c725326a1b09caa51183ff785b2a7aece8689e12b41ea7b810"
+          }
+        },
+        {
+          "id": "EVD-1599",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib store::cleanups -- --test-threads 4: a_cleanup_whose_failure_cannot_be_counted_never_stops_another_store, an_unreachable_store_whose_failures_cannot_be_counted_never_stops_another_store (both ok)",
+          "summary": "With the store_cleanups row held FOR UPDATE, the run returns Ok and the row still has attempts 0 (cleanup_rows == [(store, 0)]); in the first test, after the lock is released, a second run settles it (done 1, rows empty), showing it is tried again on the next run. The error-level log itself is not asserted by any test (code reading only).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 221,
+                "end": 320
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:01:54.826425704Z",
+          "seal": {
+            "by": "server",
+            "mac": "b41aa95b3820a3a4d007d4663fd1d0386dfdcd8f4bb5adcb6a9967c938bd70f3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "note_failure returns (), logs the counting error at error level and changes nothing; both tests show the row keeps attempts 0 under a held lock and the next run settles it. Error-level log is code-read only.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1598",
+            "EVD-1599"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.266803214Z",
+          "seal": {
+            "by": "server",
+            "mac": "bb0713842cdf52f1b0013b69af63843d224b6db067051eb7671b754b292f55c4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:55:06.362955543Z",
+      "updated_at": "2026-11-24T04:02:32.266803214Z",
+      "seal": {
+        "by": "server",
+        "mac": "7e3a4105a88905ab69eb68f610cec95bcdbee00445d61ce3c31578558fa4e34d"
+      }
+    },
+    {
+      "id": "CLM-1084",
+      "statement": "With a key cleanup's store_cleanups row held FOR UPDATE on a reachable store, a bounded run still settles a second healthy store while the lock is held, returns Ok with done 1 and failed 1, and leaves the locked row with attempts 0 (a_cleanup_whose_failure_cannot_be_counted_never_stops_another_store); the test fails against the round-2 code.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Brooke review 6033326820 on PR #1005",
+      "source_anchor": {
+        "path": "src/store/cleanups_tests.rs",
+        "lines": {
+          "start": 221,
+          "end": 280
+        },
+        "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/cleanups_tests.rs"
+      ],
+      "tags": [
+        "from-issue:972",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1600",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib store::cleanups -- --test-threads 4 (a_cleanup_whose_failure_cannot_be_counted_never_stops_another_store ok)",
+          "summary": "Test passes at 96d4881. Read the assertions (cleanups_tests.rs:221-280): main's outbox row held FOR UPDATE; run_bounded returns Ok; assert report == {done 1, failed 1}; second store's changeset state \"discarded\"; cleanup_rows == [(\"main\", 0)] with the lock still held; after rollback a second run gives done 1 and an empty outbox.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 221,
+                "end": 280
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:01:54.887357525Z",
+          "seal": {
+            "by": "server",
+            "mac": "7cb445ed23f2740aee861723c1e32cbb56f6298a7269d3078389bdc991a2c7b4"
+          }
+        },
+        {
+          "id": "EVD-1601",
+          "kind": "test",
+          "locator": "git show e32fd46:src/store/cleanups.rs > src/store/cleanups.rs; gate.sh narrow --lib cannot_be_counted -- --test-threads 4 (log target/i972-logs/audit-round2.log); then git checkout -- src/store/cleanups.rs",
+          "summary": "Against the round-2 cleanups.rs with the round-3 tests, both cannot_be_counted tests FAIL (0 passed; 2 failed, exit 101), including a_cleanup_whose_failure_cannot_be_counted_never_stops_another_store. File restored; git status shows only claims.json modified.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T04:01:54.950053473Z",
+          "seal": {
+            "by": "server",
+            "mac": "3477bbed6c6d4e5e8bb85d7e326f30384564af5c1ab52fe248ede3d242ef6f5e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test passes at head with the asserted Ok, done 1 failed 1, attempts 0 under the held lock, and I ran it against e32fd46's cleanups.rs where it fails.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1600",
+            "EVD-1601"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.328261023Z",
+          "seal": {
+            "by": "server",
+            "mac": "cd06830f7095dbf443b85068d4facaa3f6b55210e8e4953484dbb33a9e6ea3de"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:55:06.362955543Z",
+      "updated_at": "2026-11-24T04:02:32.328261023Z",
+      "seal": {
+        "by": "server",
+        "mac": "3f647a76c1f8c930f1fb0acd2036ca4647200ca647129395e584141daa634b13"
+      }
+    },
+    {
+      "id": "CLM-1085",
+      "statement": "With an unreachable store's cleanup row held FOR UPDATE, a bounded run still settles the main store while the lock is held, returns Ok with done 1 and failed 1, and leaves the unreachable store's row with attempts 0 (an_unreachable_store_whose_failures_cannot_be_counted_never_stops_another_store); the test fails against the round-2 code.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Brooke review 6033326820 on PR #1005; brief",
+      "source_anchor": {
+        "path": "src/store/cleanups_tests.rs",
+        "lines": {
+          "start": 282,
+          "end": 325
+        },
+        "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/cleanups_tests.rs"
+      ],
+      "tags": [
+        "from-issue:972",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1602",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib store::cleanups -- --test-threads 4 (an_unreachable_store_whose_failures_cannot_be_counted_never_stops_another_store ok)",
+          "summary": "Test passes at 96d4881. Assertions (cleanups_tests.rs:282-320): store `down` cannot be opened (env credential unset), its outbox row held FOR UPDATE; run_bounded returns Ok; report == {done 1, failed 1}; main's changeset \"discarded\"; cleanup_rows == [(\"down\", 0)] with the lock still held. Note the claim says \"settles the main store\"; the test settles main's key cleanup (changeset discarded), consistent.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 282,
+                "end": 320
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:01:55.014560448Z",
+          "seal": {
+            "by": "server",
+            "mac": "a248f5034f232a0a6431b6f6d655f8f7e84a76c4e53b47b524953f441bc268d2"
+          }
+        },
+        {
+          "id": "EVD-1603",
+          "kind": "test",
+          "locator": "same round-2 swap run as CLM-1084: gate.sh narrow --lib cannot_be_counted (audit-round2.log)",
+          "summary": "Against e32fd46's cleanups.rs, an_unreachable_store_whose_failures_cannot_be_counted_never_stops_another_store FAILED (listed FAILED; 0 passed, 2 failed). File restored afterwards.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T04:01:55.076691173Z",
+          "seal": {
+            "by": "server",
+            "mac": "92de0261bb9e52319971e62031e3174452745e9ed84841f8479d03608a3d5c25"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test passes at head asserting Ok, done 1 failed 1, row attempts 0 under the held lock, and it fails against the round-2 cleanups.rs in my swap run.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1602",
+            "EVD-1603"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.389499811Z",
+          "seal": {
+            "by": "server",
+            "mac": "b6c122876cbdc07c79f93350b203b66ebc79c1e2c6c3872a6d0d6209d6feae8a"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:55:06.362955543Z",
+      "updated_at": "2026-11-24T04:02:32.389499811Z",
+      "seal": {
+        "by": "server",
+        "mac": "be95ab8661530cedc505c10d65c7f9aea7070789c68d4f3f1135242be021fb25"
+      }
+    },
+    {
+      "id": "CLM-1086",
+      "statement": "runs::claim takes no account-database parameter; every caller passes the CatalogDb first, and the clippy too_many_arguments allowance on it is gone.",
+      "kind": "constraint",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "brief for PR #1005 round 3",
+      "source_anchor": {
+        "path": "src/store/maintenance/runs.rs",
+        "lines": {
+          "start": 434,
+          "end": 459
+        },
+        "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/maintenance/runs.rs"
+      ],
+      "tags": [
+        "from-issue:972",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1604",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/runs.rs:450-459; git grep -A1 -E \"(runs|run_store)::claim\\(\" -- src; git grep too_many_arguments src/store/maintenance/runs.rs",
+          "summary": "claim's signature starts (db: &CatalogDb, catalog_id, actor, idempotency_key, limit, review_interval, now); no AccountDb parameter and the AccountDb import is removed. Every call site's first argument is a CatalogDb expression (&CatalogDb::main_of(..), &store, db, or &ctx.app().store_db(..).await?); none passes accounts. The #[allow(clippy::too_many_arguments)] directly above claim was deleted in the diff; the three remaining allowances in runs.rs/reports.rs are on other functions (runs.rs:681 etc.). Lint log (clippy -D warnings) and full test build are clean, so every caller compiles.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/runs.rs",
+              "lines": {
+                "start": 448,
+                "end": 459
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:01:55.143624538Z",
+          "seal": {
+            "by": "server",
+            "mac": "524735d7bf0d6296e6fc4528887f0512aaad3c03c0f9e3951c7f2ff6c815f529"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The signature has no AccountDb parameter, all call sites pass a CatalogDb first, and the clippy allowance above claim is deleted; clippy -D warnings is clean.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1604"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.452906898Z",
+          "seal": {
+            "by": "server",
+            "mac": "734f6ba43825602f5f26c6fb4889b2ca3abda65dcbbf26a9efa8b8f14a669d8f"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:55:06.362955543Z",
+      "updated_at": "2026-11-24T04:02:32.452906898Z",
+      "seal": {
+        "by": "server",
+        "mac": "aa9c794397f71360fe1766b60b623aeb4d6e734e45ee76f9c088a977759f29c9"
+      }
+    },
+    {
+      "id": "CLM-1087",
+      "statement": "docs/operations.md's Store cleanup section, the plan's Task 13 correction note and the Task 13 changelog state the rule that only the first read of which stores have rows ends a cleanup run, and that an uncounted try keeps the row's attempts.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "brief for PR #1005 round 3",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 1922,
+          "end": 1931
+        },
+        "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "docs/operations.md",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "changelog/2026-11-24T01-45-00Z-m21-task-13-two-step-delete-and-store-cleanup.md"
+      ],
+      "tags": [
+        "from-issue:972",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1605",
+          "kind": "inspection",
+          "locator": "docs/operations.md:1922-1931; docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md \"Errors in a run\" note; changelog/2026-11-24T01-45-00Z-m21-task-13-two-step-delete-and-store-cleanup.md \"Review round 3\"",
+          "summary": "operations.md: \"The only error that stops it is the first read of which stores have rows\" and \"the row keeps its old attempts and is tried on the next run\". Plan Task 13 note: \"Only the first read of which stores have rows ends a CleanupStores run ... an uncounted row keeps its attempts\". Changelog Review round 3: \"only the first read of which stores have rows ends it\" and \"the row keeps its attempts\". All three match run_bounded (the sole `?` is stores_with_rows) and note_failure.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 1922,
+                "end": 1931
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:02:15.360041542Z",
+          "seal": {
+            "by": "server",
+            "mac": "40ec11520d5c5a85336420380471fb79c322d893fc8dc0f0dcf87e0b27326e43"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All three documents state that only the first read of which stores have rows ends a run and that an uncounted try keeps the row's attempts, matching the code.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1605"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.515751003Z",
+          "seal": {
+            "by": "server",
+            "mac": "a36467a7a565920aa7ae3fb0aa8a59da67b15d6386c1c22c1f29359ee7e3c97c"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:55:06.362955543Z",
+      "updated_at": "2026-11-24T04:02:32.515751003Z",
+      "seal": {
+        "by": "server",
+        "mac": "abafdf770a3b7aa883997a2af5b81b8be34b08603a1af23959c49d83af736670"
+      }
+    },
+    {
+      "id": "CLM-1088",
+      "statement": "At commit 96d4881 (before the ledger commit), gate.sh fmt, lint and dylint exit 0 and gate.sh test passes with 3524 tests passed, 0 failed and 21 ignored across all test binaries.",
+      "kind": "non_functional",
+      "level": "software",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "source": "gate logs target/i972-logs/{fmt,lint,dylint,test-full}.log",
+      "derived_from": [],
+      "artifacts": [
+        "target/i972-logs/test-full.log"
+      ],
+      "tags": [
+        "from-issue:972",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1606",
+          "kind": "log",
+          "locator": "target/i972-logs/{fmt,lint,dylint,test-full}.log; cargo fmt --all --check rerun (rc 0); grep '^test result' test-full.log summed",
+          "summary": "The 28 `test result:` lines in test-full.log sum to 3524 passed, 0 failed, 21 ignored; the log ends with `exit=0`. lint.log shows clippy -D warnings and cargo doc -D warnings finishing with no diagnostics; dylint.log (-D uninstrumented_fn) finishes clean; fmt.log empty after the command. I reran `cargo fmt --all --check` on the head tree: rc 0. Caveat: fmt/lint/dylint logs do not record an exit code and were written about 7 s before the 96d4881 commit time, so they show clean output but not an explicit exit 0 on that exact commit; no uncommitted source differences exist now (git status shows only claims.json).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T04:02:15.421527841Z",
+          "seal": {
+            "by": "server",
+            "mac": "a845513f4ae948947a4125562727ac5e9d0878adec8bdf6e3f46d6981304be80"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Logs show clean fmt, clippy, doc and dylint output and test-full sums to 3524 passed, 0 failed, 21 ignored with exit=0; fmt rerun rc 0. The first three logs do not record exit codes, so that part rests on clean output.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1606"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.579529761Z",
+          "seal": {
+            "by": "server",
+            "mac": "b975557886b46363a03d719b9c42a1b9ccc952a28971e966bdacab6390103599"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:59:17.484334848Z",
+      "updated_at": "2026-11-24T04:02:32.579529761Z",
+      "seal": {
+        "by": "server",
+        "mac": "d0b5eb26289e1cf24c14093611a6664548087b0b1e84502fc0fed2cb48b92d8d"
       }
     }
   ]

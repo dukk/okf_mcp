@@ -34,6 +34,12 @@ pub(crate) struct TestApp {
 }
 
 impl TestApp {
+    /// Runs the store cleanup once, so a deleted catalog's name and owner are
+    /// free again (they stay reserved until cleanup removes its registry row).
+    pub(crate) async fn settle_cleanups(&self) {
+        crate::store::cleanups::settle_for_tests(&self._db.pool).await;
+    }
+
     /// The test database's URL, for a command-line run against it.
     pub(crate) fn db_url(&self) -> &str {
         &self._db.url

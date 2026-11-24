@@ -57,7 +57,7 @@ use crate::store::oauth::{
     clients as oauth_clients, codes as sign_in_codes, tokens as oauth_tokens,
 };
 use crate::store::{
-    audit, catalogs, changesets, email_tokens, keys, sign_in_events, user_sessions,
+    audit, catalogs, changesets, cleanups, email_tokens, keys, sign_in_events, user_sessions,
 };
 use crate::stores::StoreName;
 use crate::telemetry::metrics::{MailStatus, Outcome};
@@ -140,17 +140,22 @@ pub enum Task {
     /// Finishes or removes catalogs whose create stopped half-way (plan
     /// Task 10b, decision P9); every minute.
     ProvisionCatalogs,
+    /// Settles the cleanup owed on every catalog store after a deletion on
+    /// the account database: a deleted catalog's data, a deleted key's open
+    /// changesets (plan P13, issue #972); every minute.
+    CleanupStores,
 }
 
 impl Task {
     /// Every task, in the order the ticker schedules them.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::PruneChangesets,
         Self::PruneOauth,
         Self::PruneAudit,
         Self::PruneWorkers,
         Self::ClusterStats,
         Self::ProvisionCatalogs,
+        Self::CleanupStores,
     ];
 
     /// The task's name: its idempotency-key prefix, its metric label and
@@ -166,6 +171,7 @@ impl Task {
             Self::PruneWorkers => "prune_workers",
             Self::ClusterStats => "cluster_stats",
             Self::ProvisionCatalogs => "provision_catalogs",
+            Self::CleanupStores => "cleanup_stores",
         }
     }
 
@@ -178,7 +184,9 @@ impl Task {
             Self::PruneChangesets => Duration::from_secs(5 * 60),
             Self::PruneOauth | Self::PruneWorkers => Duration::from_secs(60 * 60),
             Self::PruneAudit => Duration::from_secs(24 * 60 * 60),
-            Self::ClusterStats | Self::ProvisionCatalogs => Duration::from_secs(60),
+            Self::ClusterStats | Self::ProvisionCatalogs | Self::CleanupStores => {
+                Duration::from_secs(60)
+            }
         }
     }
 
@@ -428,6 +436,7 @@ pub async fn run(task: Task, app: &App) -> Result<(), OkfError> {
         }
         Task::ClusterStats => cluster_stats(app).await,
         Task::ProvisionCatalogs => provision_catalogs(app).await,
+        Task::CleanupStores => cleanup_stores(app).await,
     }
 }
 
@@ -547,6 +556,22 @@ async fn provision_catalogs(app: &App) -> Result<(), OkfError> {
         tracing::info!(finished, "finished half-created catalogs");
     }
     steps.finish()
+}
+
+/// Settles the cleanup owed on the stores ([`cleanups::run`]). A store that
+/// cannot be reached, or a row that fails, is logged and counted in the
+/// row's `attempts` and retried by the next run; it neither stops the other
+/// stores nor fails the job, so the minute's slot is not re-run for it.
+///
+/// # Errors
+/// [`OkfError::Database`] reading the account database's list of cleanups.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn cleanup_stores(app: &App) -> Result<(), OkfError> {
+    let report = cleanups::run(app.stores(), app.clock().now()).await?;
+    if report.done > 0 {
+        tracing::info!(done = report.done, "settled store cleanups");
+    }
+    Ok(())
 }
 
 /// Revokes idle OAuth grants ([`revoke_idle_grants`]), then deletes expired
@@ -1105,7 +1130,8 @@ mod tests {
                 "prune_audit",
                 "prune_workers",
                 "cluster_stats",
-                "provision_catalogs"
+                "provision_catalogs",
+                "cleanup_stores"
             ]
         );
         for task in Task::ALL {

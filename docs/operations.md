@@ -728,8 +728,9 @@ two). What `[redis]` does not share:
   unbound registered clients, sign-in events, emailed-link tokens, console
   sessions, mail jobs, finished housekeeping jobs and forwarded feedback,
   hourly), `prune_audit` (the audit log, daily), `prune_workers` (hourly),
-  `cluster_stats` (every minute) and `provision_catalogs` (every minute; see
-  [Half-created catalogs](#half-created-catalogs)). Every replica's ticker pushes each
+  `cluster_stats` (every minute), `provision_catalogs` (every minute; see
+  [Half-created catalogs](#half-created-catalogs)) and `cleanup_stores` (every
+  minute; see [Store cleanup](#store-cleanup)). Every replica's ticker pushes each
   task's current slot once a minute; a unique key per slot makes the other
   replicas' pushes no-ops, so each slot runs once, on whichever replica's
   worker takes it. A failed job is retried twice with a backoff; a slot
@@ -1421,7 +1422,7 @@ the dotted originals.
 | `okf_ratelimit_fallbacks_total` | counter | `limiter` | Decisions this replica's own bucket made because the shared (Redis) bucket failed, by the same `limiter` values. Any rate above 0 means the effective limit is the configured one times the replica count; alert on it. Only with `[redis]` |
 | `okf_mail_jobs_total` | counter | `provider`, `outcome` | Mail tries. `provider` is the configured one; `outcome` is `sent`, `retry` or `failed` |
 | `okf_mail_queue_depth` | gauge | `status` | Mail not yet sent, as of the last `cluster_stats` housekeeping job (the same on every replica): `pending`, `sending`, `retrying` or `failed` |
-| `okf_housekeeping_runs_total` | counter | `task`, `outcome` | Housekeeping jobs run on this replica. `task` is `prune_changesets`, `prune_oauth`, `prune_audit`, `prune_workers`, `cluster_stats` or `provision_catalogs`; `outcome` is `ok` or `error` (an error is retried) |
+| `okf_housekeeping_runs_total` | counter | `task`, `outcome` | Housekeeping jobs run on this replica. `task` is `prune_changesets`, `prune_oauth`, `prune_audit`, `prune_workers`, `cluster_stats`, `provision_catalogs` or `cleanup_stores`; `outcome` is `ok` or `error` (an error is retried) |
 | `okf_housekeeping_duration_seconds` | histogram | `task` | Housekeeping job duration |
 | `db_client_connection_count` | gauge | `state` | Postgres pool connections: `idle` and `used` sum to the pool's size |
 | `okf_clock_checks_total` | counter | `outcome` | Clock checks against `time_server` |
@@ -1873,14 +1874,71 @@ forces the migration to finish: assigning is bookkeeping, and an unassigned
 credential authenticates as before (`whoami` shows `user: null`). Making the
 columns `NOT NULL` once nothing is unassigned is future work (#296).
 
+### Store cleanup
+
+A catalog or key deletion commits on the account database first and owes the
+rest to the store its data lives on: one row in `store_cleanups`, written in
+the same transaction. The `cleanup_stores` job (every minute, once per
+cluster) drains the rows store by store, up to 100 per store per run. For a
+deleted catalog it removes the store's rows (the cascade from
+`catalog_state`; the catalog's audit entries stay) and then the `catalogs`
+row; until then the name stays reserved and no reader sees the catalog. Until
+then, deleting the team or user that owns the catalog is refused (409) with
+`catalog "<name>" is still being deleted; try again shortly`; retry after the
+next run. For a
+deleted key it discards the key's open changesets (a `catalog.changeset_discarded`
+entry with `reason` `key_deleted` each) and clears the key from the store's
+changeset and maintenance-run history.
+
+A store that is down, or a cleanup that fails, is retried every run: the row
+counts its `attempts`, and a store that fails never holds up the others or the
+deletion itself, and a row that keeps failing is tried after the rows that
+have failed less, so it cannot starve the rest of its store. Past 20 attempts the job logs `a store cleanup keeps failing` at
+error level on every run and keeps the row; look at `store_cleanups` for the
+store, kind and subject, and fix the store (its credential, its reachability).
+If the store's commit fails after the account's, the catalog is gone from
+every lookup and its data stays unmarked until the cleanup removes it all the
+same.
+
+Each attempt is bounded, at the database first. Every statement the job
+issues, on the account database and on a store, runs in a transaction that
+sets `lock_timeout` and `statement_timeout` to 20 seconds (`LIMITS.wait`, a
+constant, not a setting), so PostgreSQL itself gives up on a row held under a
+lock (a changeset another session has `FOR UPDATE`, a catalog's `catalog_state`
+row, a default key's row) and rolls the transaction back. A `tokio` timeout of
+30 seconds per row (`LIMITS.attempt`) wraps the attempt as a backstop for what
+the database cannot bound, such as a store that stops answering; dropping a
+future does not cancel its statement, which is why the database bound comes
+first. An attempt that fails either way is counted as a failed try like any
+other, and the run goes on to the next row and store. A catalog's cleanup
+removes the store's data and commits that before it takes the account half, so
+no attempt holds a store connection while it waits for an account one, or the
+reverse. A user's keys are deleted with their `maintenance_runs` and
+changeset references cleared by the cleanup; a maintenance claim and a
+changeset open each hold the key's row `FOR KEY SHARE` until their store
+commit, so the deletion waits for them and the cleanup it owes then finds
+what they wrote.
+
+One failure never ends the run. The only error that stops it is the first
+read of which stores have rows (the account database cannot be reached).
+Everything else is tied to one store or one row and stays there: a store
+that cannot be opened, a store whose rows cannot be read, a row that fails,
+and even counting a failed try (say the row itself is locked by another
+session) are logged with the store and the row's `id` and the run goes on to
+the next row and store. A try that could not be counted is logged at error
+level as `a store cleanup failed and its try could not be counted`; the row
+keeps its old `attempts` and is tried on the next run.
+
 ### Deletion rules
 
 Deleting a user takes everything that is only theirs, in one transaction:
 its keys and OAuth grants (revoked ones too), sign-in codes, console
 sessions, passwords, passkeys, sign-in identities, emailed links, sign-in
 events, entitlements, team memberships and personal team. The open
-changesets of its keys and grants are discarded, each with a
-`catalog.changeset_discarded` audit entry. Catalogs, their history (whose
+changesets of its keys and grants are discarded a little later, each with a
+`catalog.changeset_discarded` audit entry, by the `cleanup_stores` job
+([Store cleanup](#store-cleanup)): the deletion owes it in the same
+transaction, so it is never lost. Catalogs, their history (whose
 `actor` text stays as written) and every audit entry are kept; the deletion
 is recorded as `user.deleted`, and from then on the log names the user
 `deleted user #N` and its credentials `credential #N`.
@@ -2128,7 +2186,7 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | Action | Recorded when | Details |
 |---|---|---|
 | **Users** | | |
-| `user.deleted` | A user is deleted (`user delete`, `DELETE /api/v1/users/{name}`, the console), or deletes their own account (`DELETE /api/v1/me`, with the person as the actor). A refused deletion records nothing | `keys` (keys and grants deleted), `codes` (sign-in codes deleted), `changesets_discarded` |
+| `user.deleted` | A user is deleted (`user delete`, `DELETE /api/v1/users/{name}`, the console), or deletes their own account (`DELETE /api/v1/me`, with the person as the actor). A refused deletion records nothing | `keys` (keys and grants deleted), `codes` (sign-in codes deleted) |
 | `user.created` | A user is created (`user create`, `POST /api/v1/users`, the console). A refused create records nothing | none |
 | `user.email_changed` | A user's email is set or cleared (`user set-email`, `PUT /api/v1/users/{name}/email`). A change of letter case only, or clearing an email that is not set, records nothing | `cleared` (never the address) |
 | `user.display_name_changed` | A user's display name changes. A provisioner is refused an admin user; the same text again, and a refused change, record nothing | `length` (in characters; never the text) |
@@ -2153,7 +2211,7 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | `catalog.display_name_changed` | A catalog's display name changes, by an admin on the catalog or an owner of its team. The same text again, and a refused change, record nothing | `length` (in characters; never the text) |
 | `catalog.member_access_changed` | A catalog's member access changes (`catalog set-member-access`, `PUT /api/v1/catalogs/{catalog}/member-access`). The same value again records nothing | `from`, `to` (`none`, `read` or `write`) |
 | `catalog.maintenance_changed` | A catalog's maintenance flag changes (`catalog set-maintenance`, `PUT /api/v1/catalogs/{catalog}/maintenance`), by an admin that reaches every catalog or an owner of its team signed in to the console. The same value again, and a refused change, record nothing | `from`, `to` (`on` or `off`) |
-| `catalog.deleted` | A catalog is deleted (`catalog delete`, `DELETE /api/v1/catalogs/{catalog}`), recorded before the row goes. A refused deletion records nothing | `forced` (unpublished changes were deleted with it), `generation` |
+| `catalog.deleted` | A catalog is deleted (`catalog delete`, `DELETE /api/v1/catalogs/{catalog}`), recorded in the deleting transaction, which also marks the catalog deleted and owes the store cleanup ([Store cleanup](#store-cleanup)). A refused deletion records nothing | `forced` (unpublished changes were deleted with it), `generation` |
 | `catalog.repaired` | `okf-mcp catalog repair-indexes` writes at least one file (a dry run, or a catalog with nothing missing, records nothing) | `files` (the paths written), `generation` (after the repair) |
 | `catalog.imported` | An import writes or deletes at least one file (`okf-mcp import`, `POST /catalogs/{name}/import` and its `/api/v1` twin, the console). An import that changes nothing, or is refused, records nothing | `replace`, `scope` (`everything` or `machinery`), `written` (files added or changed), `deleted`, `generation` (after the import) |
 | **Credentials** | | |
@@ -2174,7 +2232,7 @@ of `docs/superpowers/specs/2026-11-13-okf-operator-api-design.md`).
 | **Catalog writes** | | |
 | `catalog.published` | A publish (the `publish` tool, `POST /api/v1/changesets/{handle}/publish`, the console's Publish) writes at least one revision (one that changes nothing writes none and records nothing). Moves, splits and concept deletes are publishes and are recorded as such | `changeset` (the handle; the diff stays in the catalog's history), `files` (revisions written), `generation_from`, `generation_to` |
 | `catalog.reverted` | A `revert` succeeds: a document's old revision (or its deletion) goes into a changeset. A refused revert records nothing | `path`, `revision`, `changeset` |
-| `catalog.changeset_discarded` | An admin closes another key's changeset (`discard` without `paths`, or `DELETE /api/v1/changesets/{handle}`), or a user deletion discards an open changeset of one of the user's keys (the entry's person is that user). A key discarding its own changeset records nothing | `changeset`, `files` (entries dropped), `reason` (`admin` or `user_deleted`) |
+| `catalog.changeset_discarded` | An admin closes another key's changeset (`discard` without `paths`, or `DELETE /api/v1/changesets/{handle}`), or the store cleanup after a user deletion discards an open changeset of one of the deleted user's keys (`reason` `key_deleted`; the entry's person is the system). A key discarding its own changeset records nothing | `changeset`, `files` (entries dropped), `reason` (`admin` or `key_deleted`) |
 | **Data access** | | |
 | `catalog.exported` | Every export, whoever asks: `okf-mcp export` (source `cli`), `GET /catalogs/{name}/export` and its `/api/v1` twin, the console. Written before the archive is compressed; an export whose entry cannot be written fails. A refused export records nothing | `generation` (the one the archive holds), `files`, `catalog_id`; the entry belongs to the team that owned the catalog when it was read |
 | `catalog.admin_read` | An admin credential reads a catalog's contents (MCP read tools, a changeset read, the console's and the API's browse, history and search routes) and its user is not in the catalog's owner team; a key with no user always counts. One entry per credential (or session user), catalog identity, owning team and clock hour, with an exact request count; members' reads, writes (recorded as publishes) and paths that read no contents (listing catalogs or changesets, opening a changeset, the connection's catalog list) record nothing. Only the catalogs a call actually reads count: a read that answers from the first catalog of a connection's list records only that one | `hour` (its start), `catalog_id` (the catalog's immutable id), and the request count |

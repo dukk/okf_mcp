@@ -135,6 +135,11 @@ async fn finish<T>(task: tokio::task::JoinHandle<T>, what: &str) -> T {
         .expect("the task panicked")
 }
 
+/// Runs the store cleanup the deletions owe, as the housekeeping task does.
+async fn settle(test: &TestApp) {
+    crate::store::cleanups::settle_for_tests(test.app.accounts().executor()).await;
+}
+
 async fn state_of(test: &TestApp, handle: &str) -> ChangesetState {
     changeset_row(test, handle).await.state
 }
@@ -181,7 +186,7 @@ async fn a_publish_holding_its_changeset_finishes_before_its_users_deletion() {
     // Assert: the publish held alice before its changeset, so the deletion
     // waited for it and found nothing open; neither side is `Busy`.
     assert!(published.is_ok(), "{published:?}");
-    assert_eq!(deleted.expect("the deletion").discarded, 0);
+    deleted.expect("the deletion");
     assert_eq!(state_of(&test, &handle).await, ChangesetState::Published);
 }
 
@@ -285,7 +290,7 @@ async fn a_publish_holding_its_changeset_finishes_before_its_users_own_deletion(
     // Assert: neither deadlocked nor was `Busy`; the deletion waited for
     // the publish and found nothing open.
     assert!(published.is_ok(), "{published:?}");
-    assert_eq!(deleted.expect("the own deletion").discarded, 0);
+    deleted.expect("the own deletion");
     assert_eq!(state_of(&test, &handle).await, ChangesetState::Published);
 }
 
@@ -331,7 +336,7 @@ async fn an_admins_discard_holding_a_changeset_finishes_before_its_owners_deleti
 
     // Assert
     assert!(discarded.expect("the discard").closed);
-    assert_eq!(deleted.expect("the deletion").discarded, 0);
+    deleted.expect("the deletion");
     assert_eq!(state_of(&test, &handle).await, ChangesetState::Discarded);
 }
 
@@ -375,10 +380,12 @@ async fn a_revert_holding_its_changeset_finishes_before_its_users_deletion() {
     let reverted = finish(reverting, "the revert").await;
     let deleted = finish(deleting, "the deletion").await;
 
-    // Assert: the revert committed first; the deletion then discarded the
-    // changeset it left open.
+    // Assert: the revert committed first, and left the changeset open; the
+    // deletion owed its discard, which the store cleanup then does.
     assert!(reverted.is_ok(), "{reverted:?}");
-    assert_eq!(deleted.expect("the deletion").discarded, 1);
+    deleted.expect("the deletion");
+    assert_eq!(state_of(&test, &handle).await, ChangesetState::Open);
+    settle(&test).await;
     assert_eq!(state_of(&test, &handle).await, ChangesetState::Discarded);
 }
 
@@ -425,7 +432,6 @@ async fn an_audited_revert_and_its_users_deletion_share_one_store_connection() {
     let deleting = tokio::spawn(async move {
         users::delete_on(
             &pool,
-            &store,
             "alice",
             users::DeleteOptions::default(),
             &AuditActor::cli(),
@@ -497,11 +503,9 @@ async fn a_forced_catalog_deletion_and_a_users_deletion_never_wait_on_each_other
     });
     lock_waiters(&test, 1).await;
     let pool = test.app.accounts().executor().clone();
-    let user_store = store.clone();
     let deleting = tokio::spawn(async move {
         users::delete_on(
             &pool,
-            &user_store,
             "bob",
             users::DeleteOptions::default(),
             &AuditActor::cli(),
@@ -543,11 +547,10 @@ async fn a_publish_racing_its_users_deletion_never_deadlocks() {
         let deleted = finish(deleting, "the deletion").await;
 
         // Assert
-        let deleted = deleted.unwrap_or_else(|error| panic!("round {round}: {error:?}"));
+        deleted.unwrap_or_else(|error| panic!("round {round}: {error:?}"));
         let state = state_of(&test, &handle).await;
         match published {
             Ok(_) => {
-                assert_eq!(deleted.discarded, 0, "round {round}");
                 assert_eq!(state, ChangesetState::Published, "round {round}");
             }
             // The deletion won. A publish that resolved the handle first and
@@ -564,9 +567,123 @@ async fn a_publish_racing_its_users_deletion_never_deadlocks() {
                     refused_under_the_lock || matches!(error, OkfError::UnknownChangeset { .. }),
                     "round {round}: {error:?}"
                 );
-                assert_eq!(deleted.discarded, 1, "round {round}");
-                assert_eq!(state, ChangesetState::Discarded, "round {round}");
+                // Left open by the deletion, which owes its discard.
+                assert_eq!(state, ChangesetState::Open, "round {round}");
+                settle(&test).await;
+                assert_eq!(
+                    state_of(&test, &handle).await,
+                    ChangesetState::Discarded,
+                    "round {round}"
+                );
             }
         }
     }
+}
+
+/// Issue #972: a catalog deletion racing an audited edit by an admin whose
+/// user row is locked by a concurrent user deletion (a holder stands in for
+/// that deletion's lock). With one store connection, the admin's discard must
+/// wait for the user row holding no store connection and no store lock; the
+/// forced catalog deletion then runs to the end first. A discard that took
+/// the store before the user row would hold the only store connection while
+/// it waited, and the two would wait on each other, where Postgres cannot
+/// see the cycle: the bounded waits turn that into a failure.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_catalog_deletion_racing_an_admins_audited_edit_behind_a_user_deletion_finishes() {
+    // Arrange
+    let config = Config {
+        store_max_connections: 1,
+        ..Config::default()
+    };
+    let test = app_with(&[("pg", &[("a.md", NOTE)])], config).await;
+    let alice = user_context(&test, "alice", Access::Write, false).await;
+    let boss = user_context(&test, "boss", Access::Admin, true).await;
+    let handle = open(&alice).await;
+    body(&alice, &handle, "# A\n\nAlice.\n").await;
+    let store = test.app.main_db().await;
+    assert_eq!(store.executor().options().get_max_connections(), 1);
+    let mut holder = test.app.accounts().begin().await.expect("begin the holder");
+    sqlx::query("SELECT id FROM users WHERE name = 'boss' FOR UPDATE")
+        .execute(&mut *holder)
+        .await
+        .expect("hold boss's row");
+    let to_discard = handle.clone();
+    let discarding = tokio::spawn(async move {
+        let params = DiscardParams {
+            paths: None,
+            changeset: to_discard,
+        };
+        discard(&boss, params).await
+    });
+    lock_waiters(&test, 1).await;
+
+    // Act: the forced catalog deletion, while the discard waits for the row.
+    let deleting = tokio::spawn(async move {
+        crate::store::catalogs::delete_on(&store, "pg", true, &AuditActor::cli(), Utc::now()).await
+    });
+    let deleted = finish(deleting, "the catalog deletion").await;
+    holder.rollback().await.expect("release boss's row");
+    let discarded = finish(discarding, "the discard").await;
+
+    // Assert: the deletion finished with the discard still waiting; the
+    // discard then found its changeset closed or its catalog gone.
+    deleted.expect("the catalog deletion");
+    assert!(discarded.is_err(), "{discarded:?}");
+    assert_eq!(state_of(&test, &handle).await, ChangesetState::Discarded);
+}
+
+/// Issue #972, Task 11's hand-off: a key's deletion and an `open_changeset`
+/// of that key are serialised on the key's row, as the foreign key that went
+/// in 0041 did. A holder stands in for the deletion's lock on the key row; the
+/// open waits for it, holding no store connection, and once the key is gone
+/// it is refused and leaves no changeset under the deleted key.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_changeset_opened_while_its_key_is_deleted_is_refused_and_leaves_nothing() {
+    // Arrange
+    let config = Config {
+        store_max_connections: 1,
+        ..Config::default()
+    };
+    let test = app_with(&[("pg", &[("a.md", NOTE)])], config).await;
+    let alice = user_context(&test, "alice", Access::Write, false).await;
+    let key_id: String = sqlx::query_scalar("SELECT id FROM api_keys WHERE name = 'alice-key'")
+        .fetch_one(test.app.accounts().executor())
+        .await
+        .expect("alice's key");
+    let mut holder = test.app.accounts().begin().await.expect("begin the holder");
+    sqlx::query("SELECT id FROM api_keys WHERE id = $1 FOR UPDATE")
+        .bind(&key_id)
+        .execute(&mut *holder)
+        .await
+        .expect("hold the key");
+    let opening = tokio::spawn(async move {
+        crate::mcp::changesets::open_changeset(
+            &alice,
+            crate::mcp::changesets::OpenParams { catalog: None },
+        )
+        .await
+    });
+    lock_waiters(&test, 1).await;
+
+    // Act: the deletion's effect on the key, then its commit.
+    sqlx::query("DELETE FROM api_keys WHERE id = $1")
+        .bind(&key_id)
+        .execute(&mut *holder)
+        .await
+        .expect("delete the key");
+    holder.commit().await.expect("commit the deletion");
+    let opened = finish(opening, "the open").await;
+
+    // Assert
+    assert!(
+        matches!(&opened, Err(OkfError::Forbidden { reason }) if reason.contains("no longer exists")),
+        "{opened:?}"
+    );
+    let under_key: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM catalog.changesets WHERE key_id = $1")
+            .bind(&key_id)
+            .fetch_one(test.app.accounts().executor())
+            .await
+            .expect("count the changesets");
+    assert_eq!(under_key, 0);
 }

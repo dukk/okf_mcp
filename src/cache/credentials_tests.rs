@@ -598,7 +598,7 @@ async fn a_catalog_created_again_under_its_name_is_not_reached_through_the_old_g
 
     // The grant goes with the catalog; the new `pg` was never granted.
     apply_messages_of(&db.pool, &caches, async {
-        catalogs::delete(&db.pool, "pg", true, &AuditActor::cli(), Utc::now())
+        catalogs::delete_settled(&db.pool, "pg", true, &AuditActor::cli(), Utc::now())
             .await
             .unwrap();
         catalog(&db.pool, "pg", TEST_TEAM).await;
