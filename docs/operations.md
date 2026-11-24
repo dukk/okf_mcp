@@ -750,9 +750,10 @@ two). What `[redis]` does not share:
   count, the account write) also has its own 30 s `tokio` backstop, so a
   job of several steps can run longer than 30 s in all, but no one step
   can. Finding and opening
-  the store is bounded by `store_connect_timeout` instead, and a store's
+  the store is bounded by `store_connect_timeout` instead, a store's
   first-open migrations by the backstop alone, since a migration can
-  legitimately run long. A failed job is retried twice with a backoff; a slot
+  legitimately run long, and `prune_audit`'s read of the retention setting
+  by its own timeout, outside the step backstops. A failed job is retried twice with a backoff; a slot
   missed while every replica was down is not caught up, and the next slot
   does the same work. `okf_housekeeping_runs_total` counts the runs. A
   replica looks a slot up before pushing it, so a slot already scheduled
