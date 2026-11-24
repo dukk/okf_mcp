@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1076,
+  "next_claim_seq": 1079,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "3466a069a2ab516e2999f3c9cc440cf8383dc72f3ad9e70ffea6a26dbb8b3e30"
+    "mac": "40d2c5ba3285500bee94c8206c69e1b6299b37482b0279b96388d5253df73e9f"
   },
-  "next_evidence_seq": 1583,
+  "next_evidence_seq": 1587,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "12a6e7b4d6fa7c866a7fa43fabacce305529cbdd3b36a30223a8006562baa526"
+    "mac": "c54d9a7300b5dead08b3e319a9767e6087a95dbf6f8947f91ff60e1a78ca6622"
   },
   "claims": [
     {
@@ -87906,6 +87906,202 @@
       "seal": {
         "by": "server",
         "mac": "75c241a7800ad018c028ef3e3b63d7c9851baf6ec4e14fcd62d1882c25f4b031"
+      }
+    },
+    {
+      "id": "CLM-1076",
+      "statement": "A cleanup attempt that waits on a held row lock is abandoned after the attempt timeout, counted as a failed try, and does not stop the next row or store from being cleaned.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1583",
+          "kind": "test",
+          "locator": "store::cleanups::tests::a_cleanup_attempt_stuck_on_a_lock_fails_without_holding_up_another_store",
+          "summary": "The test holds a changeset row FOR UPDATE from another connection, runs a cleanup bounded to 2 s on two stores, and asserts the stuck row has attempts 1 and stays, the second store's changeset is discarded, and a later run settles the row once the lock is released. It passes; with the attempt timeout removed and the database bound set to 0 it fails at its 60 s limit (mutation recorded in the changelog).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 345,
+                "end": 407
+              },
+              "commit": "12f8313dc45b21e8e16223a84c1e174be093ea20"
+            }
+          },
+          "recorded_at": "2026-11-24T03:02:37.056527157Z",
+          "seal": {
+            "by": "server",
+            "mac": "a0fd18c19ad5cd37a8c9aeb0f2c8ca9620b937cf28173b77e8113599973e2893"
+          }
+        },
+        {
+          "id": "EVD-1584",
+          "kind": "inspection",
+          "locator": "src/store/cleanups.rs run_bounded",
+          "summary": "run_bounded wraps each settle in tokio::time::timeout and maps an elapsed timeout to an error that note_failure counts; the loop then continues.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 255,
+                "end": 285
+              },
+              "commit": "12f8313dc45b21e8e16223a84c1e174be093ea20"
+            }
+          },
+          "recorded_at": "2026-11-24T03:02:37.122036662Z",
+          "seal": {
+            "by": "server",
+            "mac": "777885c8e4b349acf0df5b50b0ae2640df10025499a76cc51d0e130a338eeb53"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test passes and the code wraps every attempt in a timeout counted through note_failure; the mutation without the bounds fails the test.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1583",
+            "EVD-1584"
+          ],
+          "recorded_at": "2026-11-24T03:02:43.252217290Z",
+          "seal": {
+            "by": "server",
+            "mac": "778f9bc37dec096f07fbaec229e4c47eec5a2f66102fa22f74e0868681274986"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:02:27.089398716Z",
+      "updated_at": "2026-11-24T03:02:43.252217290Z",
+      "seal": {
+        "by": "server",
+        "mac": "dad9537633f84560166d02307e18d16d5f0b1bfb1f81fac9fc8e333fc39b7da1"
+      }
+    },
+    {
+      "id": "CLM-1077",
+      "statement": "A key's cleanup keeps the store's published changesets and maintenance runs that name the key and sets their key_id to NULL.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 2,
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1585",
+          "kind": "test",
+          "locator": "store::cleanups::tests::a_key_cleanup_keeps_the_stores_history_and_clears_the_key_from_it",
+          "summary": "The test seeds a published changeset and a maintenance run naming the key, asserts both reference it before, then after cleanup asserts neither names it, the changeset is still published and the run row count is 1. With the maintenance_runs clearing statement removed the test fails (mutation recorded in the changelog).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 264,
+                "end": 317
+              },
+              "commit": "12f8313dc45b21e8e16223a84c1e174be093ea20"
+            }
+          },
+          "recorded_at": "2026-11-24T03:02:37.194519836Z",
+          "seal": {
+            "by": "server",
+            "mac": "ac9cd02885f283bd1c02f1ee8b694b55a3ed6b026e6384781bd53fc1abfff2a2"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test seeds both history rows, asserts the references before and their absence after, and fails when the maintenance_runs clearing is removed.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1585"
+          ],
+          "recorded_at": "2026-11-24T03:02:43.328973871Z",
+          "seal": {
+            "by": "server",
+            "mac": "de445ab9358e0ea7372bb4dd5d3dd019ef38cbbb219d904a032cf02b022797b2"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:02:27.089398716Z",
+      "updated_at": "2026-11-24T03:02:43.328973871Z",
+      "seal": {
+        "by": "server",
+        "mac": "6e41c3291e7e52f0c6d349dee8e242c25ce3727f9a33445b6809f9226ddd59ec"
+      }
+    },
+    {
+      "id": "CLM-1078",
+      "statement": "At commit 12f8313 (before the ledger commit), gate.sh fmt, lint and dylint exit 0 and gate.sh test passes with 3519 tests passed, 0 failed and 21 ignored across all test binaries.",
+      "kind": "non_functional",
+      "level": "software",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "derived_from": [],
+      "artifacts": [],
+      "tags": [
+        "from-issue:972"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1586",
+          "kind": "log",
+          "locator": "target/i972-logs/full-test4.log (gate.sh test, rc=0); r1-fmt.log, r1-lint.log, r1-dylint.log (rc=0)",
+          "summary": "The sum of every \"test result\" line of full-test4.log is 3519 passed, 0 failed, 21 ignored, and the log ends \"finished rc=0\". An earlier run of the same head failed once in tests/ui_e2e browse::an_empty_choice_is_kept_and_searches_nothing (left Number(2), right Number(1) at tests/ui_e2e/browse.rs:277), and passed on the re-run.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T03:11:37.172777794Z",
+          "seal": {
+            "by": "server",
+            "mac": "e309b5374116a2139e42ddf5987527254bd14137400c7dddc88c55baef6a767f"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The full test log sums to 3519 passed, 0 failed with rc=0; fmt, lint and dylint exited 0.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1586"
+          ],
+          "recorded_at": "2026-11-24T03:11:40.607614039Z",
+          "seal": {
+            "by": "server",
+            "mac": "3bdcd88be2668c12a5d01f4804c121d20f51a541cf703c2745e4c603f58ebf65"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:11:33.986999166Z",
+      "updated_at": "2026-11-24T03:11:40.607614039Z",
+      "seal": {
+        "by": "server",
+        "mac": "df0230988ddd9cda0488352757ecbc18d53857077a9b10e54775f8b8da1ce643"
       }
     }
   ]
