@@ -66,3 +66,19 @@ replica reads both tables, so those entries appear.
 `audit_view_keeps_entries_after_the_last_catalog_on_a_store_is_deleted`,
 `audit_view_keeps_entries_after_a_catalog_is_transferred`,
 `forgetting_a_person_clears_their_name_in_store_entries_too`.
+
+## Behaviour change in a test
+
+`a_run_ends_without_waiting_for_its_users_or_credentials_rows` used to
+assert that the entry's credential was NULL while a deleting transaction
+held the key's `audit_credentials` row (the SQL resolver skips locked rows).
+`resolve_run` is a plain read, which never waits for a row lock and sees
+the row, so the entry now names the key. The close still finishes without
+waiting, which is what the test is for.
+
+## Mutation checks
+
+Each of the nine named tests was run against a broken change and failed:
+no entry written, entry written on another connection, account rows
+dropped, trigger loosened, `SET LOCAL` skipped, tie handling removed, view
+joined to live catalogs, name-clearing disabled.

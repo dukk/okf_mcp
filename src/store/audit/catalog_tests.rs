@@ -474,3 +474,27 @@ async fn forgetting_a_person_clears_their_name_in_store_entries_too() {
     );
     let _ = TEST_USER;
 }
+
+#[test]
+fn a_bare_entry_id_is_not_a_readable_cursor() {
+    for text in [
+        "607",
+        "1:2",
+        "x::1",
+        "1::x",
+        "1:Bad Store:2",
+        "1:main:-3",
+        "",
+    ] {
+        let error = AuditCursor::parse_plain(text).unwrap_err();
+        assert!(
+            matches!(error, OkfError::InvalidPath { ref path, .. } if path == "after"),
+            "{text:?}: {error:?}"
+        );
+    }
+    let cursor = AuditCursor::new(at(0), "shared-1", 7);
+    assert_eq!(
+        AuditCursor::parse_plain(&cursor.to_plain()).unwrap(),
+        cursor
+    );
+}
