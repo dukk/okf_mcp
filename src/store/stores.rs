@@ -263,11 +263,17 @@ pub async fn summaries(executor: &PgPool) -> Result<Vec<StoreSummary>, OkfError>
         .collect()
 }
 
-/// Adds a store: checks that it can be opened, then writes its row (`insert`, below).
+/// Adds a store: checks that it can be opened and is a database of its own,
+/// migrates it, then writes its row (`insert`, below).
 ///
 /// The connection check runs first and holds no transaction (a connection
-/// on the account pool is never held while a store's pool connects). Until
-/// Task 20 a `host` store is then refused ([`placement::refuse_host_stores_until_task_20`]).
+/// on the account pool is never held while a store's pool connects). It
+/// refuses the account database under another host name (it holds the
+/// account tables) and a database whose identity row names another store (a
+/// second host name for a registered store). Until Task 20 a `host` store is
+/// then refused ([`placement::refuse_host_stores_until_task_20`]). Last, the
+/// store's schema is migrated, which writes its identity row, so the
+/// database answers to this name before the row exists.
 ///
 /// # Arguments
 /// * `pool` - the account database.
@@ -282,9 +288,10 @@ pub async fn summaries(executor: &PgPool) -> Result<Vec<StoreSummary>, OkfError>
 /// # Errors
 /// [`OkfError::Refused`] when the store cannot be reached with these
 /// settings (the reply names no host, port or credential; the cause is
-/// logged locally), when host stores are not enabled yet, or when the name
-/// or the host, port and database is already used; [`OkfError::Database`],
-/// a failed audit write included.
+/// logged locally), when it is the account database or another store's
+/// database, when host stores are not enabled yet, when its schema cannot be
+/// migrated, or when the name or the host, port and database is already
+/// used; [`OkfError::Database`], a failed audit write included.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "stores.add"))]
 pub async fn add(
     pool: &PgPool,
@@ -296,16 +303,44 @@ pub async fn add(
     stores
         .check(row.clone())
         .await
-        .map_err(|error| match error {
-            OkfError::StoreUnavailable { .. } => OkfError::Refused {
-                reason: "the store cannot be reached with these settings; check the host, port, \
-                     database and credential"
-                    .to_string(),
-            },
-            other => other,
-        })?;
+        .map_err(unreachable_refused)?;
     placement::refuse_host_stores_until_task_20(&row.location)?;
+    stores
+        .prepare(row.clone())
+        .await
+        .map_err(|error| match unreachable_refused(error) {
+            refused @ OkfError::Refused { .. } => refused,
+            other => {
+                tracing::warn!(error = %other, "a new store's schema could not be migrated");
+                OkfError::Refused {
+                    reason: "the store's schema could not be migrated".to_string(),
+                }
+            }
+        })?;
     insert(pool, row, actor, now).await
+}
+
+/// A store that could not be opened, as [`add`] refuses it: without the
+/// host, port or credential.
+///
+/// # Arguments
+/// * `error` - what the open returned.
+///
+/// # Returns
+/// [`OkfError::Refused`] for `StoreUnavailable`, anything else unchanged.
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "a pure mapping of one error variant")
+)]
+fn unreachable_refused(error: OkfError) -> OkfError {
+    match error {
+        OkfError::StoreUnavailable { .. } => OkfError::Refused {
+            reason: "the store cannot be reached with these settings; check the host, port, \
+                     database and credential"
+                .to_string(),
+        },
+        other => other,
+    }
 }
 
 /// Writes a store's row, records `store.added` and sends the store
@@ -563,7 +598,34 @@ mod tests {
     /// A registry whose environment holds the test database's password, and
     /// a row for store `name` that reaches the test database itself.
     fn reachable(db: &crate::db::pg_support::TestDb, name: &str) -> (Stores, StoreRow) {
-        let after_scheme = db.url.split("://").nth(1).expect("a URL");
+        reachable_on(db, db, name)
+    }
+
+    /// A registry on `db`'s account database whose environment holds
+    /// `target`'s password, and a row for store `name` that reaches `target`
+    /// as `host`.
+    fn reachable_as(
+        db: &crate::db::pg_support::TestDb,
+        target: &crate::db::pg_support::TestDb,
+        name: &str,
+        host: &str,
+    ) -> (Stores, StoreRow) {
+        let (stores, row) = reachable_on(db, target, name);
+        let StoreLocation::Host { port, database, .. } = &row.location else {
+            unreachable!("a host row")
+        };
+        let row = host_row(name, host, *port, database);
+        (stores, row)
+    }
+
+    /// A registry on `db`'s account database whose environment holds
+    /// `target`'s password, and a row for store `name` that reaches `target`.
+    fn reachable_on(
+        db: &crate::db::pg_support::TestDb,
+        target: &crate::db::pg_support::TestDb,
+        name: &str,
+    ) -> (Stores, StoreRow) {
+        let after_scheme = target.url.split("://").nth(1).expect("a URL");
         let password = after_scheme
             .split('@')
             .next()
@@ -577,7 +639,7 @@ mod tests {
                 (variable == "STORE_PASSWORD").then(|| password.clone())
             }),
         );
-        let options = db.pool.connect_options();
+        let options = target.pool.connect_options();
         let row = host_row(
             name,
             options.get_host(),
@@ -627,8 +689,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn adding_a_host_store_is_refused_until_enabled() {
         let db = crate::db::test_db().await;
-        // Reachable, so it is the P8 refusal and not the connection check.
-        let (stores, row) = reachable(&db, "shared-1");
+        // An empty database of its own, so it is the P8 refusal and not the
+        // connection or identity check.
+        let target = crate::db::pg_support::TestDb::start().await;
+        let (stores, row) = reachable_on(&db, &target, "shared-1");
 
         let refused = add(&db.pool, &stores, row, &AuditActor::cli(), Utc::now())
             .await
@@ -639,6 +703,71 @@ mod tests {
             "{refused:?}"
         );
         assert_eq!(store_names(&db.pool).await, ["main"]);
+        // Refused before the migration: the database is left as it was.
+        let mut connection = target.pool.acquire().await.unwrap();
+        assert_eq!(crate::db::store_owner(&mut connection).await.unwrap(), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn adding_the_account_database_as_a_host_store_is_refused() {
+        let db = crate::db::test_db().await;
+        // A `host` row that reaches the account database itself.
+        let (stores, row) = reachable(&db, "shared-1");
+
+        let refused = add(&db.pool, &stores, row, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&refused, OkfError::Refused { reason } if reason.contains("account database")),
+            "{refused:?}"
+        );
+        assert_eq!(store_names(&db.pool).await, ["main"]);
+        assert!(audit::testing::entries(&db.pool, "store.added")
+            .await
+            .is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn adding_a_store_that_aliases_another_is_refused() {
+        let db = crate::db::test_db().await;
+        let target = crate::db::pg_support::TestDb::start().await;
+        // Store `shared-1` is registered on the target and has been opened,
+        // so the target's identity row names it.
+        let (stores, first) = reachable_on(&db, &target, "shared-1");
+        insert(&db.pool, first.clone(), &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+        stores.get(&first.name).await.unwrap();
+        // The same server under a second host name, which the unique index on
+        // host, port and database cannot see.
+        let StoreLocation::Host { host, .. } = &first.location else {
+            unreachable!("a host row")
+        };
+        let alias = match host.as_str() {
+            "localhost" => "127.0.0.1",
+            _ => "localhost",
+        };
+        let (_, second) = reachable_as(&db, &target, "shared-2", alias);
+
+        let refused = add(&db.pool, &stores, second, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&refused, OkfError::Refused { reason }
+                if reason.contains("already belongs to store shared-1")),
+            "{refused:?}"
+        );
+        assert_eq!(store_names(&db.pool).await, ["main", "shared-1"]);
+        let mut connection = target.pool.acquire().await.unwrap();
+        assert_eq!(
+            crate::db::store_owner(&mut connection)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("shared-1")
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

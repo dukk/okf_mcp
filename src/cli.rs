@@ -582,6 +582,10 @@ pub enum StoresCommand {
         /// The team.
         team: String,
     },
+    /// Migrate every store's catalog schema and report each one. A store
+    /// that cannot be reached or migrated is reported and the others still
+    /// run; the command then exits with an error.
+    Migrate,
 }
 
 /// Reads a store name argument.

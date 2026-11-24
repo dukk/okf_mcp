@@ -78,7 +78,48 @@ pub(super) async fn stores(
             teams::set_store(pool, &team, None, &actor, now).await?;
             format!("unpinned team {team}\n")
         }
+        StoresCommand::Migrate => migrate_all(stores).await?,
     })
+}
+
+/// `stores migrate`: migrates every store in name order, one at a time, and
+/// reports each one on its own line. A failure is reported and the next
+/// store still runs.
+///
+/// # Arguments
+/// * `stores` - the registry (fresh in this process, so each store's first
+///   open migrates it).
+///
+/// # Returns
+/// The report, when every store migrated.
+///
+/// # Errors
+/// The report and how many stores failed, when any did; the registry's
+/// error if the store names cannot be read.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn migrate_all(stores: &Stores) -> anyhow::Result<String> {
+    let names = stores.all().await?;
+    let mut report = String::new();
+    let mut failed = 0_usize;
+    for name in &names {
+        // The detail of a failure (host, driver error) is in the local log;
+        // the line says only what the error variant says.
+        let line = match stores.migration(name).await {
+            Ok(migration) => format!("{name}\t{migration}\n"),
+            Err(error) => {
+                failed += 1;
+                format!("{name}\tfailed: {error} (the log has the cause)\n")
+            }
+        };
+        report.push_str(&line);
+    }
+    if failed > 0 {
+        anyhow::bail!(
+            "{report}{failed} of {} stores could not be migrated",
+            names.len()
+        );
+    }
+    Ok(report)
 }
 
 /// One `stores list` line, tab-separated: name, `default` or `-`, where it
@@ -227,5 +268,84 @@ mod tests {
             "r",
         ])
         .is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn migrate_stores_reports_an_unreachable_store_and_continues() {
+        let db = test_db().await;
+        // An empty database for a new store, on the same server and login.
+        let fresh = crate::db::pg_support::TestDb::start().await;
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let options = fresh.pool.connect_options();
+        // Names in order: `a-down` (unreachable) is migrated first, so the
+        // two after it show that the command went on.
+        for (name, host, port, database) in [
+            ("a-down", "127.0.0.1", closed, "okf"),
+            (
+                "shared-2",
+                options.get_host(),
+                options.get_port(),
+                options.get_database().unwrap(),
+            ),
+        ] {
+            sqlx::query(
+                "INSERT INTO stores (name, location_kind, host, port, database, \
+                 credential_kind, credential_ref, created_at) \
+                 VALUES ($1, 'host', $2, $3, $4, 'env', 'STORE_PASSWORD', now())",
+            )
+            .bind(name)
+            .bind(host)
+            .bind(i32::from(port))
+            .bind(database)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+        let password = fresh
+            .url
+            .split("://")
+            .nth(1)
+            .and_then(|rest| rest.split('@').next())
+            .and_then(|credentials| credentials.split_once(':'))
+            .map(|(_, password)| password.to_string())
+            .unwrap_or_default();
+        let stores = Stores::with_environment(
+            db.pool.clone(),
+            PoolSettings {
+                max_connections: 1,
+                idle_timeout: std::time::Duration::from_secs(60),
+                connect_timeout: std::time::Duration::from_secs(2),
+            },
+            std::sync::Arc::new(move |name| (name == "STORE_PASSWORD").then(|| password.clone())),
+        );
+
+        let failed = super::stores(&db.pool, &stores, command(&["migrate"]), Utc::now())
+            .await
+            .unwrap_err();
+
+        let report = failed.to_string();
+        let applied = crate::db::CATALOG_MIGRATOR.iter().count();
+        let lines: Vec<&str> = report.lines().collect();
+        assert_eq!(lines.len(), 4, "{report}");
+        assert!(lines[0].starts_with("a-down\tfailed: "), "{report}");
+        assert_eq!(lines[1], "main\tup to date");
+        assert_eq!(lines[2], format!("shared-2\t{applied} applied"));
+        assert_eq!(lines[3], "1 of 3 stores could not be migrated");
+        // No host, port or credential in the report.
+        for private in [closed.to_string().as_str(), "STORE_PASSWORD"] {
+            assert!(!report.contains(private), "{private} leaked into {report}");
+        }
+        let mut connection = fresh.pool.acquire().await.unwrap();
+        assert_eq!(
+            crate::db::store_owner(&mut connection)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("shared-2")
+        );
     }
 }

@@ -19,6 +19,16 @@
 //! still opening. A reopen (see [`Stores::forget`]) only drops the cache's
 //! handle; a request already holding the old [`CatalogDb`] finishes on it,
 //! and its pool closes when the last such handle is dropped.
+//!
+//! # Migration and identity
+//!
+//! The first open of a store in a process migrates its `catalog` schema
+//! ([`crate::db::migrate_store`], under the advisory lock on the store's own
+//! connection; nothing on the account database is held across it), and
+//! refuses a database whose identity row names another store. A failed
+//! migration is that store's failure alone: like an unreachable store, it is
+//! not cached, so the next request tries again and other stores never see
+//! it.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -32,6 +42,7 @@ use super::credentials::{
     is_auth_failure, spawn_keeper, Credential, CredentialSource, Keeper, Providers, Refresh,
 };
 use super::{AccountDb, CatalogDb, StoreName};
+use crate::db::{self, StoreMigration};
 use crate::error::OkfError;
 use crate::store::stores::{self, StoreLocation, StoreRow};
 use crate::telemetry::subscriber::split_event;
@@ -112,6 +123,9 @@ enum OpenFailure {
     Registry,
     /// The store's database could not be reached or its credential found.
     Unreachable,
+    /// The store's database was reached, but could not be migrated, or
+    /// belongs to another store (its identity row names another).
+    Unmigrated,
 }
 
 /// What the registry keeps for an open store: its handle, and the task that
@@ -120,8 +134,43 @@ enum OpenFailure {
 /// registry goes) ends that task, so a forgotten store leaves none behind.
 struct OpenStore {
     db: CatalogDb,
+    // What opening it did to its schema.
+    migration: StoreMigration,
     // Only held, for its `Drop`.
     _keeper: Option<Keeper>,
+}
+
+/// A pool just opened from a row, before it is migrated and kept: what
+/// [`Stores::open_row`] returns. Its credential task is not started yet, so
+/// a pool that is only checked, or whose migration fails, never runs one.
+struct Opened {
+    db: CatalogDb,
+    // Where its login comes from and the options it is applied to, for the
+    // credential task (`None` for a store that uses the account login).
+    credential: Option<(Arc<dyn CredentialSource>, PgConnectOptions)>,
+}
+
+impl Opened {
+    /// The registry's entry for this pool: starts the task that keeps a
+    /// changing credential current, for as long as the entry lives.
+    #[cfg_attr(
+        dylint_lib = "hyp_tracing",
+        allow(
+            uninstrumented_fn,
+            reason = "builds a value; the task it starts has its own span"
+        )
+    )]
+    fn keep(self, migration: StoreMigration) -> OpenStore {
+        let pool = self.db.executor().clone();
+        let keeper = self
+            .credential
+            .and_then(|(source, base)| spawn_keeper(source, base, pool));
+        OpenStore {
+            db: self.db,
+            migration,
+            _keeper: keeper,
+        }
+    }
 }
 
 /// Why one attempt to connect a pool failed (logged where it happened).
@@ -255,6 +304,32 @@ impl Stores {
     /// for the row.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn get(&self, store: &StoreName) -> Result<CatalogDb, OkfError> {
+        Ok(self.entry(store).await?.db.clone())
+    }
+
+    /// What opening the store did to its schema, opening (and so migrating)
+    /// it if this process has not yet: what `okf-mcp stores migrate` reports.
+    ///
+    /// # Arguments
+    /// * `store` - the store's name.
+    ///
+    /// # Returns
+    /// The migration the store's first open in this process ran.
+    ///
+    /// # Errors
+    /// As for [`Stores::get`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn migration(&self, store: &StoreName) -> Result<StoreMigration, OkfError> {
+        Ok(self.entry(store).await?.migration)
+    }
+
+    /// The registry's entry for a store, opening it on first use: the body
+    /// of [`Stores::get`].
+    ///
+    /// # Errors
+    /// As for [`Stores::get`].
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn entry(&self, store: &StoreName) -> Result<Arc<OpenStore>, OkfError> {
         // Set by the initialiser, which borrows it: only a call that ran
         // the open checks for an overtaking `forget` below.
         let ran = AtomicBool::new(false);
@@ -269,7 +344,6 @@ impl Stores {
                 Box::pin(self.open(store)).await
             })
             .await;
-        let result = result.map(|open| open.db.clone());
         // An open that a `forget` overtook is returned but not kept, so the
         // next call reads the new row.
         if ran.load(Ordering::SeqCst) && self.inner.forgets.load(Ordering::SeqCst) != forgets_before
@@ -283,7 +357,9 @@ impl Stores {
             OpenFailure::Registry => OkfError::Busy {
                 reason: "the store registry could not be read".to_string(),
             },
-            OpenFailure::Unreachable => OkfError::store_unavailable(store),
+            OpenFailure::Unreachable | OpenFailure::Unmigrated => {
+                OkfError::store_unavailable(store)
+            }
         })
     }
 
@@ -349,7 +425,7 @@ impl Stores {
         }
     }
 
-    /// Reads the store's row and opens its pool.
+    /// Reads the store's row, opens its pool and migrates its schema.
     ///
     /// # Errors
     /// An [`OpenFailure`]; the detail is logged here, on the local side
@@ -371,7 +447,25 @@ impl Stores {
         };
         #[cfg(test)]
         self.pause_if_gated().await;
-        self.open_row(row).await
+        let opened = self.open_row(row).await?;
+        match migrate_on(&opened.db).await {
+            Ok(migration) => {
+                if migration != StoreMigration::default() {
+                    tracing::info!(store = %store, %migration, "migrated a store's schema");
+                }
+                Ok(Arc::new(opened.keep(migration)))
+            }
+            Err(error) => {
+                split_event!(
+                    warn,
+                    { kind = error.kind(), },
+                    { store = %store, %error, },
+                    "a store's schema could not be migrated"
+                );
+                opened.db.executor().close().await;
+                Err(OpenFailure::Unmigrated)
+            }
+        }
     }
 
     /// The account database this registry reads its rows from.
@@ -384,12 +478,14 @@ impl Stores {
     }
 
     /// Opens a pool from a row, which need not be stored yet: the part of
-    /// [`Stores::open`] after the row is read, shared with [`Stores::check`].
+    /// [`Stores::open`] after the row is read, shared with [`Stores::check`]
+    /// and [`Stores::prepare`]. The credential task starts only when `open`
+    /// keeps the pool ([`Opened::keep`]).
     ///
     /// # Errors
     /// An [`OpenFailure`]; the detail is logged here, on the local side only.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn open_row(&self, row: StoreRow) -> Result<Arc<OpenStore>, OpenFailure> {
+    async fn open_row(&self, row: StoreRow) -> Result<Opened, OpenFailure> {
         let store = &row.name;
         let (base, source) = self.connection_of(&row);
         let pool = self
@@ -397,14 +493,11 @@ impl Stores {
             .await?;
         #[cfg(test)]
         self.inner.opened.fetch_add(1, Ordering::SeqCst);
-        // A credential that changes is kept current for as long as this
-        // entry lives.
-        let keeper = source.and_then(|source| spawn_keeper(source, base, pool.clone()));
         let db = CatalogDb::new(row.name, pool, self.accounts());
-        Ok(Arc::new(OpenStore {
+        Ok(Opened {
             db,
-            _keeper: keeper,
-        }))
+            credential: source.map(|source| (source, base)),
+        })
     }
 
     /// The connection settings of a store's row, without its login, built
@@ -540,21 +633,26 @@ impl Stores {
         }
     }
 
-    /// Whether a store that has no row yet could be opened: the same open
-    /// path as [`Stores::get`] (connection settings, credential, timeout),
-    /// on a row the caller has not stored. The pool is closed again, its
-    /// credential task ends, and nothing is cached.
+    /// Whether a store that has no row yet could be opened, and is a
+    /// database of its own: the same open path as [`Stores::get`]
+    /// (connection settings, credential, timeout), on a row the caller has
+    /// not stored, then two reads. Writes nothing. The pool is closed again,
+    /// its credential task ends, and nothing is cached.
     ///
     /// # Arguments
     /// * `row` - the row about to be stored.
     ///
     /// # Returns
-    /// `Ok(())` if a connection was made.
+    /// `Ok(())` if a connection was made and the database is free for it.
     ///
     /// # Errors
     /// [`OkfError::StoreUnavailable`] if it cannot connect within
     /// `store_connect_timeout` (the error names no host and no credential;
-    /// the cause is logged on the local side only).
+    /// the cause is logged on the local side only);
+    /// [`OkfError::Refused`] if the database holds the account tables (it is
+    /// the account database under another name) or its identity row names
+    /// another store (a second name for a database already registered);
+    /// [`OkfError::Database`] if the reads fail.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn check(&self, row: StoreRow) -> Result<(), OkfError> {
         let name = row.name.clone();
@@ -562,8 +660,35 @@ impl Stores {
         let open = Box::pin(self.open_row(row))
             .await
             .map_err(|_failure| OkfError::store_unavailable(&name))?;
+        let checked = refuse_a_taken_database(&open.db).await;
         open.db.executor().close().await;
-        Ok(())
+        checked
+    }
+
+    /// Migrates the database of a store that has no row yet, so its
+    /// identity row names it before the row is stored ([`Stores::check`]
+    /// first). The pool is closed again and nothing is cached.
+    ///
+    /// # Arguments
+    /// * `row` - the row about to be stored.
+    ///
+    /// # Returns
+    /// What the migration did.
+    ///
+    /// # Errors
+    /// [`OkfError::StoreUnavailable`] if it cannot connect;
+    /// [`OkfError::Refused`] if another store's identity was written in the
+    /// meantime; [`OkfError::Migrate`] or [`OkfError::Database`] if the
+    /// migration fails.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn prepare(&self, row: StoreRow) -> Result<StoreMigration, OkfError> {
+        let name = row.name.clone();
+        let open = Box::pin(self.open_row(row))
+            .await
+            .map_err(|_failure| OkfError::store_unavailable(&name))?;
+        let migrated = migrate_on(&open.db).await;
+        open.db.executor().close().await;
+        migrated
     }
 
     /// [`Stores::new`] with the environment given and the real AWS clients
@@ -591,6 +716,48 @@ impl Stores {
     ) -> Option<tokio::sync::watch::Receiver<u64>> {
         let open = self.inner.pools.get(store).await?;
         open._keeper.as_ref().map(Keeper::watch)
+    }
+}
+
+/// Migrates a store's schema on one connection of its pool
+/// ([`db::migrate_store`]). The connection goes back to the pool before
+/// this returns, so a pool of one is enough.
+///
+/// # Errors
+/// As for [`db::migrate_store`], plus [`OkfError::Database`] if no
+/// connection is free within the pool's acquire timeout.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn migrate_on(db: &CatalogDb) -> Result<StoreMigration, OkfError> {
+    let mut connection = db.executor().acquire().await?;
+    let migrated = db::migrate_store(&mut connection, db.store()).await;
+    // Back to the pool before the handle is handed out: dropping a pooled
+    // connection returns it from a spawned task, a little later, and a
+    // caller asking for a connection meanwhile would open a second one.
+    connection.return_to_pool().await;
+    migrated
+}
+
+/// Refuses a database that is not free to become a new store: the account
+/// database (it holds `public.stores`), or one whose identity row names
+/// another store.
+///
+/// # Errors
+/// [`OkfError::Refused`] naming why (and the other store's name, which an
+/// admin may see); [`OkfError::Database`] if a read fails.
+#[tracing::instrument(level = "debug", skip_all)]
+async fn refuse_a_taken_database(db: &CatalogDb) -> Result<(), OkfError> {
+    let mut connection = db.executor().acquire().await?;
+    if db::holds_account_tables(&mut connection).await? {
+        return Err(OkfError::Refused {
+            reason: "that database is the account database, which is already store main"
+                .to_string(),
+        });
+    }
+    match db::store_owner(&mut connection).await? {
+        Some(owner) if owner != db.store().as_str() => Err(OkfError::Refused {
+            reason: format!("that database already belongs to store {owner}"),
+        }),
+        Some(_) | None => Ok(()),
     }
 }
 
@@ -1014,10 +1181,30 @@ mod tests {
         )
     }
 
-    /// Adds a `host` row for the test server with the given credential.
+    /// Adds a `host` row for the test server with the given credential, and
+    /// migrates the test database as that store beforehand ([`migrated_as`]).
     async fn add_row(pool: &PgPool, name: &str, kind: &str, reference: &str) {
         let (_, _, database) = server_of(pool);
         add_row_on(pool, name, kind, reference, &database).await;
+        migrated_as(pool, name).await;
+    }
+
+    /// Migrates the database `pool` reaches as store `name`, as the server's
+    /// owner, and lets every role read the two tables an open of a current
+    /// store reads. The roles these tests make may only log in: the open's
+    /// migration check is then reads alone, as for a store whose schema an
+    /// operator migrated (`okf-mcp stores migrate`).
+    async fn migrated_as(pool: &PgPool, name: &str) {
+        let mut connection = pool.acquire().await.unwrap();
+        crate::db::migrate_store(&mut connection, &StoreName::parse(name).unwrap())
+            .await
+            .unwrap();
+        for grant in [
+            "GRANT USAGE ON SCHEMA catalog TO PUBLIC",
+            "GRANT SELECT ON catalog._sqlx_migrations, catalog.store_identity TO PUBLIC",
+        ] {
+            sqlx::query(grant).execute(&mut *connection).await.unwrap();
+        }
     }
 
     /// [`add_row`], naming the database too (the table allows one row per
@@ -1655,5 +1842,106 @@ mod tests {
                 assert!(logs.contains("could not"), "{logs}");
             }
         }
+    }
+
+    /// A registry on `db` whose `SHARED_1_PASSWORD` is `target`'s password.
+    fn env_stores(
+        db: &crate::db::pg_support::TestDb,
+        target: &crate::db::pg_support::TestDb,
+    ) -> Stores {
+        let password = password_of(&target.url);
+        Stores::with_environment(
+            db.pool.clone(),
+            settings(),
+            Arc::new(move |name| (name == "SHARED_1_PASSWORD").then(|| password.clone())),
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_fresh_store_gets_the_baseline() {
+        let db = crate::db::test_db().await;
+        // An empty database: no schema `catalog`, no history.
+        let fresh = crate::db::pg_support::TestDb::start().await;
+        let (host, port, database) = server_of(&fresh.pool);
+        add_host_store(&db.pool, "shared-1", &host, port, &database).await;
+        let stores = env_stores(&db, &fresh);
+        let name = StoreName::parse("shared-1").unwrap();
+
+        let migration = stores.migration(&name).await.unwrap();
+        let store = stores.get(&name).await.unwrap();
+
+        let embedded: Vec<i64> = db::CATALOG_MIGRATOR
+            .iter()
+            .map(|migration| migration.version)
+            .collect();
+        assert_eq!(
+            migration,
+            StoreMigration {
+                adopted: false,
+                applied: embedded.len()
+            }
+        );
+        // Every migration ran: sqlx sets `execution_time` after running one,
+        // and leaves -1 on one it only recorded (adoption).
+        let history: Vec<(i64, i64)> =
+            sqlx::query_as("SELECT version, execution_time FROM _sqlx_migrations ORDER BY version")
+                .fetch_all(store.executor())
+                .await
+                .unwrap();
+        assert_eq!(
+            history
+                .iter()
+                .map(|(version, _)| *version)
+                .collect::<Vec<_>>(),
+            embedded
+        );
+        assert!(history.iter().all(|(_, took)| *took >= 0), "{history:?}");
+        let owner: String = sqlx::query_scalar("SELECT name FROM store_identity")
+            .fetch_one(store.executor())
+            .await
+            .unwrap();
+        assert_eq!(owner, "shared-1");
+        // The schema is usable through the store pool.
+        sqlx::query("INSERT INTO catalog_state (id) VALUES (1)")
+            .execute(store.executor())
+            .await
+            .unwrap();
+        // A later open (a restart) finds it current and does nothing.
+        stores.forget(&name).await;
+        assert_eq!(
+            stores.migration(&name).await.unwrap(),
+            StoreMigration::default()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_whose_database_belongs_to_another_is_unavailable_and_others_still_open() {
+        let db = crate::db::test_db().await;
+        let stores = env_stores(&db, &db);
+        // `main` opens first, so the account database's identity row names it.
+        stores.get(&StoreName::main()).await.unwrap();
+        let (host, port, database) = server_of(&db.pool);
+        add_host_store(&db.pool, "shared-1", &host, port, &database).await;
+        let alias = StoreName::parse("shared-1").unwrap();
+
+        let refused = stores.get(&alias).await.unwrap_err();
+        let again = stores.get(&alias).await.unwrap_err();
+
+        assert!(
+            matches!(refused, OkfError::StoreUnavailable { .. }),
+            "{refused:?}"
+        );
+        // Not cached as a success, and tried again each time.
+        assert!(
+            matches!(again, OkfError::StoreUnavailable { .. }),
+            "{again:?}"
+        );
+        // Another store is not held up by it.
+        stores.get(&StoreName::main()).await.unwrap();
+        let mut connection = db.pool.acquire().await.unwrap();
+        assert_eq!(
+            db::store_owner(&mut connection).await.unwrap().as_deref(),
+            Some("main")
+        );
     }
 }
