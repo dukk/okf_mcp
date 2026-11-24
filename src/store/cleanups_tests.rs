@@ -8,10 +8,13 @@ use sqlx::PgPool;
 
 use super::*;
 use crate::db::{test_db, TEST_TEAM};
+use crate::maintenance::types::Actor;
+use crate::store::catalogs::tests::{until_locks_are_awaited, AWAITED_LOCKS};
 use crate::store::changesets::{self, EntryRow};
+use crate::store::maintenance::runs;
 use crate::store::users::tests::{key_for, seed_catalog_owned_by, seed_user};
 use crate::store::users::{self, DeleteOptions};
-use crate::stores::PoolSettings;
+use crate::stores::{AccountDb, PoolSettings};
 
 fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 11, 23, 12, 0, 0).unwrap()
@@ -554,6 +557,83 @@ async fn a_held_default_key_lock_fails_a_catalog_cleanup_and_leaves_a_one_connec
     assert_eq!(usable, 1);
     holder.rollback().await.unwrap();
     stores.forget_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_maintenance_claim_paused_after_its_key_read_never_leaves_a_deleted_key_behind() {
+    // Arrange: the catalog's advisory lock is held, so a claim reads its key
+    // on the account side and then waits for the store's lock.
+    let db = test_db().await;
+    seed_user(&db.pool, "alice", None).await;
+    seed_catalog_owned_by(&db.pool, TEST_TEAM).await;
+    let key = key_for(&db.pool, "alice", "alice-laptop", false).await;
+    let catalog_id = shared_id(&db.pool).await;
+    let mut holder = CatalogDb::main_of(&db.pool).begin().await.unwrap();
+    crate::store::catalogs::lock(&mut holder, catalog_id)
+        .await
+        .unwrap();
+    let claim = {
+        let (accounts, store) = (AccountDb::of(&db.pool), CatalogDb::main_of(&db.pool));
+        let actor = Actor {
+            key_id: key.clone(),
+            actor: "agent/alice".to_string(),
+        };
+        tokio::spawn(async move {
+            runs::claim(
+                &accounts,
+                &store,
+                catalog_id,
+                &actor,
+                "claim",
+                1,
+                chrono::Duration::days(30),
+                now(),
+            )
+            .await
+        })
+    };
+    until_locks_are_awaited(&db.pool, 1).await;
+
+    // Act: the user is deleted while the claim waits, and the cleanup runs;
+    // then the claim resumes. With the interlock the deletion waits for the
+    // claim (a second blocked lock request); without it, it finishes at once.
+    let pool = db.pool.clone();
+    let deletion = tokio::spawn(async move { delete_alice(&pool).await });
+    for _ in 0..2400 {
+        let blocked: i64 = sqlx::query_scalar(AWAITED_LOCKS)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        if deletion.is_finished() || blocked >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    settle_for_tests(&db.pool).await;
+    holder.rollback().await.unwrap();
+    let claimed = tokio::time::timeout(Duration::from_secs(60), claim)
+        .await
+        .expect("the claim finished")
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(60), deletion)
+        .await
+        .expect("the deletion finished")
+        .unwrap();
+    settle_for_tests(&db.pool).await;
+
+    // Assert: the claim succeeded, and no run names the deleted key.
+    assert!(claimed.is_ok(), "{claimed:?}");
+    assert_eq!(
+        count(&db.pool, "SELECT count(*) FROM catalog.maintenance_runs").await,
+        1
+    );
+    let naming_it: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM catalog.maintenance_runs WHERE key_id = $1")
+            .bind(&key)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(naming_it, 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]

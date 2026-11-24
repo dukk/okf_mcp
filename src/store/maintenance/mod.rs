@@ -151,6 +151,29 @@ impl AuditTarget {
     }
 }
 
+impl AuditTarget {
+    /// Reads the key's row `FOR KEY SHARE` in the account transaction, which
+    /// keeps it until the store commits: a deletion of the key waits.
+    ///
+    /// # Arguments
+    /// * `key_id` - the claiming key.
+    ///
+    /// # Returns
+    /// The key's id if the key exists, else `None`.
+    ///
+    /// # Errors
+    /// [`OkfError::Database`].
+    #[tracing::instrument(level = "trace", skip_all, fields(db.system.name = "postgresql", db.operation.name = "maintenance.lock_key"))]
+    pub(super) async fn lock_key(&mut self, key_id: &str) -> Result<Option<String>, OkfError> {
+        Ok(
+            sqlx::query_scalar("SELECT id FROM api_keys WHERE id = $1 FOR KEY SHARE")
+                .bind(key_id)
+                .fetch_optional(&mut *self.account_tx)
+                .await?,
+        )
+    }
+}
+
 /// A run that ended, with what its audit entry says.
 #[derive(Debug, sqlx::FromRow)]
 struct EndedRun {
