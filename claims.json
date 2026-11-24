@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1257,
+  "next_claim_seq": 1260,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "e7795d62e29aeafaac8ff25441adde8fc3cf1a50ae538ab9fabe9c3ef043c83c"
+    "mac": "34b3d9e92de01b607bc24c511f17f54fb4f5fef9b727f057aeb5c1188b6c4277"
   },
-  "next_evidence_seq": 1856,
+  "next_evidence_seq": 1863,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "70d01b75ebe1645f2c574f4ee8d22288785d8f306f2ac9483624c01293b54ff0"
+    "mac": "a26860e86081af12fa8c4e87076578ab2cd01c27d688eceaf5dd9ffb7bdd41b1"
   },
   "claims": [
     {
@@ -101783,6 +101783,28 @@
             "by": "server",
             "mac": "17fd1cf8b79011630530f540939105f1ac4695c016bfee63c0c913334c2055f1"
           }
+        },
+        {
+          "id": "EVD-1860",
+          "kind": "inspection",
+          "locator": "src/mcp/context.rs:1127-1140, 1224-1250; docs/operations.md:565-572",
+          "summary": "Re-read after cf2fc37: writes fail on a lost store, and the handle bullet now matches changeset_by_handle (in turn, main first, stop at holder, StoreUnavailable only on meeting a lost store first, malformed refused early). The old overstated 'any lookup fails while a store is down' is gone.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 1224,
+                "end": 1250
+              },
+              "commit": "cf2fc37c2ccd5b43386e3a95157b97a3eec6d85b"
+            }
+          },
+          "recorded_at": "2026-11-24T16:35:53.878308912Z",
+          "seal": {
+            "by": "server",
+            "mac": "6cbe2e89122d5fb5251bb626cb94948a661862991fcd109c304d5ba30f8af323"
+          }
         }
       ],
       "verdicts": [
@@ -101798,13 +101820,26 @@
             "by": "server",
             "mac": "02944e385b9c42749f34050a4f019d313089302eba4b401f3bd6a7b4be505a1c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The reworded writes and handle bullet matches the code (src/mcp/context.rs:1224-1250).",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1860"
+          ],
+          "recorded_at": "2026-11-24T16:36:03.741958996Z",
+          "seal": {
+            "by": "server",
+            "mac": "46391c6b91ee7616e1939bab172b757b3583785af1d0d4b17f0d831544395ba5"
+          }
         }
       ],
       "created_at": "2026-11-24T16:23:19.118447111Z",
-      "updated_at": "2026-11-24T16:26:05.274326052Z",
+      "updated_at": "2026-11-24T16:36:03.741958996Z",
       "seal": {
         "by": "server",
-        "mac": "39cb668ef2520e0dabc104cd7b9439353a450d6206bead7785318780b1b50f72"
+        "mac": "288d021d5449cc619219f54ffb8508de3a19d31cb31cb644383f60a82b417b0f"
       }
     },
     {
@@ -102434,6 +102469,28 @@
             "by": "server",
             "mac": "806b9fdc4855fb15a3fd70171b529d8447791d843effedc199a9be1446855365"
           }
+        },
+        {
+          "id": "EVD-1861",
+          "kind": "inspection",
+          "locator": "src/mcp/reference.rs:52-58; docs/reference/tools.md:36-38",
+          "summary": "After cf2fc37 the reworded bullet is byte-identical in docs/reference/tools.md and the src/mcp/reference.rs string (verified by diff of the two hunks), and it matches changeset_by_handle behaviour.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/reference.rs",
+              "lines": {
+                "start": 52,
+                "end": 58
+              },
+              "commit": "cf2fc37c2ccd5b43386e3a95157b97a3eec6d85b"
+            }
+          },
+          "recorded_at": "2026-11-24T16:35:53.960163317Z",
+          "seal": {
+            "by": "server",
+            "mac": "94d396567f927ba5b81b22e3db19a056d2a6e83bbffbd9027f2f99ac1729c4a1"
+          }
         }
       ],
       "verdicts": [
@@ -102449,13 +102506,26 @@
             "by": "server",
             "mac": "c7fd661c7e9fee0e59c9a7aaab5a96db2fafe89f2e6298d5ae2917e18da974e8"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "The tools.md intro and reference.rs text are still identical after cf2fc37, and every name in them exists.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1861"
+          ],
+          "recorded_at": "2026-11-24T16:36:03.817162475Z",
+          "seal": {
+            "by": "server",
+            "mac": "adc60a0e3b1d30143e2426d1ebb7247d67d1e47829ee6d05bc1609800306a3ea"
+          }
         }
       ],
       "created_at": "2026-11-24T16:23:19.118447111Z",
-      "updated_at": "2026-11-24T16:26:05.915138897Z",
+      "updated_at": "2026-11-24T16:36:03.817162475Z",
       "seal": {
         "by": "server",
-        "mac": "ccd06ed8163bcd71486550dc092e7149b39451c46343c5b167132ea8f18d9a36"
+        "mac": "e80bbb402a79b92ea9f17fc0dd6bf118f6683ad1d6cf9c3d4873cdf7380ec3d6"
       }
     },
     {
@@ -102500,6 +102570,28 @@
             "by": "server",
             "mac": "99a4f77ade5979b8452b3a00d2f133fc7d853ba794f2796af427806660e72555"
           }
+        },
+        {
+          "id": "EVD-1862",
+          "kind": "inspection",
+          "locator": "git diff dfd1b3d..HEAD --stat -- src",
+          "summary": "The only src change in cf2fc37 is src/mcp/reference.rs, 3 insertions and 2 deletions, all inside the doc string literal; no code behaviour changed.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/reference.rs",
+              "lines": {
+                "start": 52,
+                "end": 58
+              },
+              "commit": "cf2fc37c2ccd5b43386e3a95157b97a3eec6d85b"
+            }
+          },
+          "recorded_at": "2026-11-24T16:35:54.042100861Z",
+          "seal": {
+            "by": "server",
+            "mac": "f7f0705675e4c20ba52953ee99fa13ef5e55ba0bf610b5d8616a981d5fcb7180"
+          }
         }
       ],
       "verdicts": [
@@ -102515,13 +102607,26 @@
             "by": "server",
             "mac": "df0e67aa57d61201587e835faff6e96cb947633d95716cf2bdc58ce15963c768"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "cf2fc37 changes only a doc-string literal in src/mcp/reference.rs.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1862"
+          ],
+          "recorded_at": "2026-11-24T16:36:03.895866057Z",
+          "seal": {
+            "by": "server",
+            "mac": "6c276b47309d4b2b1828b285aad973910abb938e491720e31a7278c4ca2bbe15"
+          }
         }
       ],
       "created_at": "2026-11-24T16:23:19.118447111Z",
-      "updated_at": "2026-11-24T16:26:05.990138154Z",
+      "updated_at": "2026-11-24T16:36:03.895866057Z",
       "seal": {
         "by": "server",
-        "mac": "448b8cc6eaf073ce02769383abcc9ee01def6358ef043352b79cb30876f27c96"
+        "mac": "adc8c7444866833c2f1345161a4645cc9293aada8110087315574cd9d5482aca"
       }
     },
     {
@@ -102589,6 +102694,229 @@
       "seal": {
         "by": "server",
         "mac": "afeb2191cf13274671d9e52a973a119e0f05a047594ee0347f2e23062be36402"
+      }
+    },
+    {
+      "id": "CLM-1257",
+      "statement": "A changeset handle lookup asks the stores in turn, main first, and a handle found before a lost store is reached still resolves (docs/operations.md 'When a store cannot be reached', tools.md intro).",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md changeset-handle bullet, cf2fc37",
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md",
+        "docs/reference/tools.md",
+        "src/mcp/reference.rs"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1856",
+          "kind": "inspection",
+          "locator": "src/mcp/context.rs:1224-1250",
+          "summary": "changeset_by_handle loops over stores_main_first (main first, rest in name order) and returns Ok(Some) at the first store whose by_handle finds the row; a store is only touched when reached, so a handle found earlier never meets the lost store.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 1224,
+                "end": 1250
+              },
+              "commit": "cf2fc37c2ccd5b43386e3a95157b97a3eec6d85b"
+            }
+          },
+          "recorded_at": "2026-11-24T16:35:53.537253103Z",
+          "seal": {
+            "by": "server",
+            "mac": "6f88e3f9d9fb7cb9f72c68c642f23bab2050eb74088e5410ca0e4051ad70da0b"
+          }
+        },
+        {
+          "id": "EVD-1857",
+          "kind": "inspection",
+          "locator": "src/mcp/unavailable_tests.rs:223-265 (not run)",
+          "summary": "Test a_changeset_handle_on_a_lost_store_is_unavailable_and_others_still_resolve asserts that main's handle resolves (found.is_ok()) with store-b made unreachable. I read the assertions; I did not run the test.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/unavailable_tests.rs",
+              "lines": {
+                "start": 223,
+                "end": 265
+              },
+              "commit": "cf2fc37c2ccd5b43386e3a95157b97a3eec6d85b"
+            }
+          },
+          "recorded_at": "2026-11-24T16:35:53.619523669Z",
+          "seal": {
+            "by": "server",
+            "mac": "4a98944770fd7641d168f182bc3d3744a9b530b677bebe4b1d4cab15376722fa"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "changeset_by_handle returns at the first store holding the handle, and the test asserts main's handle resolves with another store lost.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1856",
+            "EVD-1857"
+          ],
+          "recorded_at": "2026-11-24T16:36:03.509458153Z",
+          "seal": {
+            "by": "server",
+            "mac": "b5854ffec3a380a30f1438677170812bdc7cf7af0289774f156d96e67dfa5193"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:35:38.203978143Z",
+      "updated_at": "2026-11-24T16:36:03.509458153Z",
+      "seal": {
+        "by": "server",
+        "mac": "9186f21a1be320ea3ef2687127ad451ac048b6b950652a156babf2c9ed5d60bd"
+      }
+    },
+    {
+      "id": "CLM-1258",
+      "statement": "A well-formed handle that no store holds fails with StoreUnavailable while a store is lost (it cannot be ruled out), not UnknownChangeset.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md changeset-handle bullet, cf2fc37",
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1858",
+          "kind": "inspection",
+          "locator": "src/mcp/context.rs:1236-1250; src/mcp/unavailable_tests.rs:244-262",
+          "summary": "For a well-formed handle, each store is asked and a lost one returns StoreUnavailable through db(...)? or classify before Ok(None) is reached. The test sends the well-formed all-zero handle and asserts StoreUnavailable (read, not run).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 1236,
+                "end": 1250
+              },
+              "commit": "cf2fc37c2ccd5b43386e3a95157b97a3eec6d85b"
+            }
+          },
+          "recorded_at": "2026-11-24T16:35:53.703205690Z",
+          "seal": {
+            "by": "server",
+            "mac": "fce60e0bc644eee967914a7576ffcd1bbd871718c7a6cf2e494fa0d743b3caab"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "A well-formed handle reaches the store loop, and a lost store errors before Ok(None); the test asserts it for the all-zero handle.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1858"
+          ],
+          "recorded_at": "2026-11-24T16:36:03.585610316Z",
+          "seal": {
+            "by": "server",
+            "mac": "2995d41ba9d4203d7500cde03c5e71674d7b181019d13ea4e440110224332960"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:35:38.203978143Z",
+      "updated_at": "2026-11-24T16:36:03.585610316Z",
+      "seal": {
+        "by": "server",
+        "mac": "43d194d231b28a7054125351de378ded42e5e374fc77b0ab46c0c6e5b8d9eec7"
+      }
+    },
+    {
+      "id": "CLM-1259",
+      "statement": "A malformed handle is refused without asking any store.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 2,
+      "verification_method": "inspection",
+      "source": "docs/operations.md changeset-handle bullet, cf2fc37",
+      "derived_from": [
+        "CLM-1221"
+      ],
+      "artifacts": [
+        "docs/operations.md"
+      ],
+      "tags": [
+        "from-issue:978"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1859",
+          "kind": "inspection",
+          "locator": "src/mcp/context.rs:1228-1230; src/store/changesets.rs:338-345",
+          "summary": "changeset_by_handle returns Ok(None) before stores_main_first when is_issued_handle is false (not 36 chars of 8-4-4-4-12 lowercase hex); resolve_changeset turns None into UnknownChangeset. No store is opened. No test covers this path (code reading only).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/mcp/context.rs",
+              "lines": {
+                "start": 1228,
+                "end": 1230
+              },
+              "commit": "cf2fc37c2ccd5b43386e3a95157b97a3eec6d85b"
+            }
+          },
+          "recorded_at": "2026-11-24T16:35:53.796136017Z",
+          "seal": {
+            "by": "server",
+            "mac": "a84ef7156a20a7739591e01fa9d5709a8fd9750e0abb6d91a425ab53d8c17867"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The is_issued_handle early return precedes any store access and ends as UnknownChangeset. Code reading only; no test covers it.",
+          "auditor": "claude-sonnet-5-5",
+          "evidence_ids": [
+            "EVD-1859"
+          ],
+          "recorded_at": "2026-11-24T16:36:03.663994687Z",
+          "seal": {
+            "by": "server",
+            "mac": "f201c2fe555376155422e92bb395ac6da62811b7021bad3e3e191bba0d45f1d4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T16:35:38.203978143Z",
+      "updated_at": "2026-11-24T16:36:03.663994687Z",
+      "seal": {
+        "by": "server",
+        "mac": "886e154f27955154f8968217f7870c061db292c1dfad35ba29c4f3bc297d7133"
       }
     }
   ]
