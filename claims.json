@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "next_claim_seq": 1082,
+  "next_claim_seq": 1089,
   "next_claim_seq_seal": {
     "by": "server",
-    "mac": "545b06a292bad82fd63e5808f9af0473f8b248cf65593eecbbff3a0e08c4d8e8"
+    "mac": "7484230f9ab8af145bfb1738a96f9ab52b9cd1280a4f060291147acf1fd8a408"
   },
-  "next_evidence_seq": 1596,
+  "next_evidence_seq": 1609,
   "next_evidence_seq_seal": {
     "by": "server",
-    "mac": "93aaa94a37eaa71d8e0d31c5954a24f6a34ef38e41a9d6b131227b9d1fadb21d"
+    "mac": "c52fae57f08cffe3efc799da81d8111a2ed1e5c611661b65565b1f89d77a871d"
   },
   "claims": [
     {
@@ -86489,6 +86489,28 @@
             "by": "server",
             "mac": "8aa4be772dadfae6caf0ebaf68270343760c848eb46cc0927d346ec168e7f4ad"
           }
+        },
+        {
+          "id": "EVD-1607",
+          "kind": "inspection",
+          "locator": "src/store/cleanups.rs:268-411, 472-508; git grep -n \"note_failure\" src/store/cleanups.rs",
+          "summary": "Re-judged at 96d4881. note_failure returns () and has no `.await?` at any call site (lines 384 and 407 are bare awaits); a failure to count a try is logged at error and the row is kept. run_store contains no early return beyond the rows_of failure of that same store, and run_bounded's only `?` is the read of which stores have rows (an account database failure, not a store's or row's failure). The round-2 defect (note_failure(...).await? propagating) is gone. Retry/attempt count: note_failure UPDATE attempts+1; error-level log past GIVE_UP_ATTEMPTS (20) in the Ok(()) if attempts > 20 arm; rows are deleted only by settle on success. Both uncounted-failure tests pass and fail against round-2 code. Caveat: no test reaches 20 attempts (code reading only).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 362,
+                "end": 411
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:02:15.488547562Z",
+          "seal": {
+            "by": "server",
+            "mac": "a18205c350b7ca0675e8084bc8977c5f41c97d1be3db54d47de81ac3bd93b624"
+          }
         }
       ],
       "verdicts": [
@@ -86505,13 +86527,26 @@
             "by": "server",
             "mac": "56bbbc664ab11041a19555536fe51a031df2adcfdfe7da8abc8feee5a6a0241c"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 96d4881: note_failure no longer propagates (bare awaits, returns ()), and no store or row failure reaches a `?`; only the account-level read of which stores have rows ends a run, which is not another store's failure. Retry, attempt counting and keep-the-row hold; the error log past 20 attempts is code-read only.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1607"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.641323351Z",
+          "seal": {
+            "by": "server",
+            "mac": "b8835a8e2ed8528eebd2e262ba999be897dab6007b45a971b891b831b02dd1a4"
+          }
         }
       ],
       "created_at": "2026-11-24T02:11:41.769345711Z",
-      "updated_at": "2026-11-24T02:23:50.060999242Z",
+      "updated_at": "2026-11-24T04:02:32.641323351Z",
       "seal": {
         "by": "server",
-        "mac": "a7f000843dd9291d06c2fd6c2ad6853cdefd9addd26980707e26295958db959a"
+        "mac": "c021dacfc2e63c408d464b60389ad3c43209fbdc12a3ac8ce9d5f394f80de523"
       }
     },
     {
@@ -88186,6 +88221,28 @@
             "by": "server",
             "mac": "919302a19fbc28d34282aff4c9f9c092c29240287d1132d42f47310e7c133f46"
           }
+        },
+        {
+          "id": "EVD-1608",
+          "kind": "inspection",
+          "locator": "src/store/cleanups.rs: git grep -n \"begin()\\|account_tx(\\|store_tx(\" at 96d4881",
+          "summary": "Re-judged at 96d4881 after the round-3 changes. The only begin() calls are inside account_tx (422) and store_tx (437), each followed by bound_waits (set_config lock_timeout and statement_timeout = LIMITS.wait 20 s, is_local true). owe_deleted_catalogs (210), stores_with_rows (317), rows_of (331), count_failure (516, used by note_failure) and Attempt::settle/clean_key/discard_one (551-675) all open transactions through those two helpers; every execute/fetch in 205-715 runs on those transactions. owe_keys/owe_catalog (142-190) run on a caller's connection and are not part of the job. LIMITS.attempt is 30 s as a tokio timeout around settle per row (396) and around each account step (backstop), as a backstop. The new rows_of, stores_with_rows and count_failure follow the same pattern. Tests a_store_row_lock_fails_that_cleanup_at_the_database_and_another_store_settles and a_held_default_key_lock_fails_a_catalog_cleanup_and_leaves_a_one_connection_pool_usable pass in the 14-test narrow run.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 416,
+                "end": 457
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:02:15.555445764Z",
+          "seal": {
+            "by": "server",
+            "mac": "73fd0511f51ccafe8218fd78b5aefdb60c6e81909377555e054a3850d8332cfc"
+          }
         }
       ],
       "verdicts": [
@@ -88215,13 +88272,26 @@
             "by": "server",
             "mac": "8c3f18129f248cabe3294e81782fe0e114e40ecd043869dd3e36581095b1a10d"
           }
+        },
+        {
+          "verdict": "supported",
+          "rationale": "Re-judged at 96d4881: the only begin() calls are in account_tx and store_tx, which apply bound_waits first; every job statement, including note_failure's count_failure and the new owe_deleted_catalogs/stores_with_rows/rows_of, goes through them; the 30 s tokio timeout wraps as a backstop. Both named lock tests pass.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1608"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.703967695Z",
+          "seal": {
+            "by": "server",
+            "mac": "2bce1c25382c86583bb169fa2163cf0452149a48e3292be4b3a4de111403c7d3"
+          }
         }
       ],
       "created_at": "2026-11-24T03:38:48.209900929Z",
-      "updated_at": "2026-11-24T03:41:03.167332454Z",
+      "updated_at": "2026-11-24T04:02:32.703967695Z",
       "seal": {
         "by": "server",
-        "mac": "8610969222e04a5bea94942dfe9723109ed149dbbaa935bb15900ee29780827f"
+        "mac": "f6e25d5a8ea6f104799008a3509d32341a214479aafe96b4bf771eef5bef1f51"
       }
     },
     {
@@ -88431,6 +88501,563 @@
       "seal": {
         "by": "server",
         "mac": "3a8d9ab0d60db961b53598ed8894ad422fb1af35d7d01aa000676b77111ee6c0"
+      }
+    },
+    {
+      "id": "CLM-1082",
+      "statement": "Only a failure to read which stores have cleanup rows ends a CleanupStores run (cleanups::run returns Err); a failure of the deleted-catalog backstop, of opening a store, of reading one store's rows, of one row's attempt, or of counting a failed try is logged with the store (and the row id where there is a row) and the run goes on to the next row and store.",
+      "kind": "functional",
+      "level": "component",
+      "integrity_level": 3,
+      "verification_method": "inspection",
+      "source": "Brooke review 6033326820 on PR #1005, comment 4675238546; issue #972",
+      "source_anchor": {
+        "path": "src/store/cleanups.rs",
+        "lines": {
+          "start": 223,
+          "end": 411
+        },
+        "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/cleanups.rs"
+      ],
+      "tags": [
+        "from-issue:972",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1596",
+          "kind": "inspection",
+          "locator": "src/store/cleanups.rs:268-411 (run_bounded, run_store)",
+          "summary": "The only `?` in the run path is on stores_with_rows (line 284); run_bounded returns Ok(report) otherwise. owe_deleted_catalogs failure is matched and logged (275-282, kind and error only; no store exists at that step). rows_of failure is logged with store=name and returns from that store only (362-373). Failure opening a store (374-388) calls note_failure for each row with store name and row id. A row's failed/overrun attempt (396-409) calls note_failure and loops on. note_failure (472-508) returns () and logs the counting failure with store, cleanup_id, attempts at error level. No remaining `?` or early return in run_store other than the per-store rows_of return. Caveat: the backstop log carries no store field (none applies).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 268,
+                "end": 411
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:01:54.636323883Z",
+          "seal": {
+            "by": "server",
+            "mac": "06977b0cfb9298a7c991ecd3082bab893629aa32290ebb42d97875824a4f51f2"
+          }
+        },
+        {
+          "id": "EVD-1597",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib store::cleanups -- --test-threads 4 (14 passed; log target/i972-logs/audit-narrow.log)",
+          "summary": "All 14 cleanup tests pass at 96d4881, including both uncounted-failure tests, cleanup_retries_an_unreachable_store_without_blocking_others and rows_that_keep_failing_do_not_starve_the_rest_of_their_store. No test makes rows_of or the deleted-catalog backstop fail, and none asserts log content, so those two branches and the log fields are code-reading only.",
+          "stance": "neutral",
+          "recorded_at": "2026-11-24T04:01:54.696079589Z",
+          "seal": {
+            "by": "server",
+            "mac": "4bde7095c5ae0e8eb98c264a0411a19d8d414a5544b6c958c4635e11dfa9c042"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The sole `?` in the run path is the stores-with-rows read; every other failure is matched, logged with store and row id (the deleted-catalog backstop has no store to name) and the loop goes on. Code reading only for the rows_of and backstop branches; no test or log assertion covers them.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1596"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.204441051Z",
+          "seal": {
+            "by": "server",
+            "mac": "de2a7b168f244eaf5cb9d8fa8f7d2d80c4188cb618519a36d1513bb586267fd4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:55:06.362955543Z",
+      "updated_at": "2026-11-24T04:02:32.204441051Z",
+      "seal": {
+        "by": "server",
+        "mac": "96edb6572de3f24847097214f9da9b45d5bb1a187ea72e7761195b74e1110545"
+      }
+    },
+    {
+      "id": "CLM-1083",
+      "statement": "When counting a failed cleanup try fails (for example the store_cleanups row is held FOR UPDATE by another session), note_failure logs it at error level and returns nothing; the row keeps its previous attempts and is tried again on the next run.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Brooke review 6033326820 on PR #1005",
+      "source_anchor": {
+        "path": "src/store/cleanups.rs",
+        "lines": {
+          "start": 459,
+          "end": 523
+        },
+        "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/cleanups.rs",
+        "src/store/cleanups_tests.rs"
+      ],
+      "tags": [
+        "from-issue:972",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1598",
+          "kind": "inspection",
+          "locator": "src/store/cleanups.rs:472-508 (note_failure), 515-523 (count_failure)",
+          "summary": "note_failure has no return type (returns ()). It awaits backstop(count_failure(...)) into `counted` and matches it: Err(count_error) logs split_event!(error, ... store, cleanup_id, attempts = row.attempts ...) \"a store cleanup failed and its try could not be counted; it is kept and tried again\" at error level and does nothing else; no row is deleted or altered. count_failure is one UPDATE attempts+1 in a bound account tx, so a failure leaves attempts unchanged.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups.rs",
+              "lines": {
+                "start": 472,
+                "end": 523
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:01:54.762520212Z",
+          "seal": {
+            "by": "server",
+            "mac": "712f7eb3255ba5c725326a1b09caa51183ff785b2a7aece8689e12b41ea7b810"
+          }
+        },
+        {
+          "id": "EVD-1599",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib store::cleanups -- --test-threads 4: a_cleanup_whose_failure_cannot_be_counted_never_stops_another_store, an_unreachable_store_whose_failures_cannot_be_counted_never_stops_another_store (both ok)",
+          "summary": "With the store_cleanups row held FOR UPDATE, the run returns Ok and the row still has attempts 0 (cleanup_rows == [(store, 0)]); in the first test, after the lock is released, a second run settles it (done 1, rows empty), showing it is tried again on the next run. The error-level log itself is not asserted by any test (code reading only).",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 221,
+                "end": 320
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:01:54.826425704Z",
+          "seal": {
+            "by": "server",
+            "mac": "b41aa95b3820a3a4d007d4663fd1d0386dfdcd8f4bb5adcb6a9967c938bd70f3"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "note_failure returns (), logs the counting error at error level and changes nothing; both tests show the row keeps attempts 0 under a held lock and the next run settles it. Error-level log is code-read only.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1598",
+            "EVD-1599"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.266803214Z",
+          "seal": {
+            "by": "server",
+            "mac": "bb0713842cdf52f1b0013b69af63843d224b6db067051eb7671b754b292f55c4"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:55:06.362955543Z",
+      "updated_at": "2026-11-24T04:02:32.266803214Z",
+      "seal": {
+        "by": "server",
+        "mac": "7e3a4105a88905ab69eb68f610cec95bcdbee00445d61ce3c31578558fa4e34d"
+      }
+    },
+    {
+      "id": "CLM-1084",
+      "statement": "With a key cleanup's store_cleanups row held FOR UPDATE on a reachable store, a bounded run still settles a second healthy store while the lock is held, returns Ok with done 1 and failed 1, and leaves the locked row with attempts 0 (a_cleanup_whose_failure_cannot_be_counted_never_stops_another_store); the test fails against the round-2 code.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Brooke review 6033326820 on PR #1005",
+      "source_anchor": {
+        "path": "src/store/cleanups_tests.rs",
+        "lines": {
+          "start": 221,
+          "end": 280
+        },
+        "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/cleanups_tests.rs"
+      ],
+      "tags": [
+        "from-issue:972",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1600",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib store::cleanups -- --test-threads 4 (a_cleanup_whose_failure_cannot_be_counted_never_stops_another_store ok)",
+          "summary": "Test passes at 96d4881. Read the assertions (cleanups_tests.rs:221-280): main's outbox row held FOR UPDATE; run_bounded returns Ok; assert report == {done 1, failed 1}; second store's changeset state \"discarded\"; cleanup_rows == [(\"main\", 0)] with the lock still held; after rollback a second run gives done 1 and an empty outbox.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 221,
+                "end": 280
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:01:54.887357525Z",
+          "seal": {
+            "by": "server",
+            "mac": "7cb445ed23f2740aee861723c1e32cbb56f6298a7269d3078389bdc991a2c7b4"
+          }
+        },
+        {
+          "id": "EVD-1601",
+          "kind": "test",
+          "locator": "git show e32fd46:src/store/cleanups.rs > src/store/cleanups.rs; gate.sh narrow --lib cannot_be_counted -- --test-threads 4 (log target/i972-logs/audit-round2.log); then git checkout -- src/store/cleanups.rs",
+          "summary": "Against the round-2 cleanups.rs with the round-3 tests, both cannot_be_counted tests FAIL (0 passed; 2 failed, exit 101), including a_cleanup_whose_failure_cannot_be_counted_never_stops_another_store. File restored; git status shows only claims.json modified.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T04:01:54.950053473Z",
+          "seal": {
+            "by": "server",
+            "mac": "3477bbed6c6d4e5e8bb85d7e326f30384564af5c1ab52fe248ede3d242ef6f5e"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test passes at head with the asserted Ok, done 1 failed 1, attempts 0 under the held lock, and I ran it against e32fd46's cleanups.rs where it fails.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1600",
+            "EVD-1601"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.328261023Z",
+          "seal": {
+            "by": "server",
+            "mac": "cd06830f7095dbf443b85068d4facaa3f6b55210e8e4953484dbb33a9e6ea3de"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:55:06.362955543Z",
+      "updated_at": "2026-11-24T04:02:32.328261023Z",
+      "seal": {
+        "by": "server",
+        "mac": "3f647a76c1f8c930f1fb0acd2036ca4647200ca647129395e584141daa634b13"
+      }
+    },
+    {
+      "id": "CLM-1085",
+      "statement": "With an unreachable store's cleanup row held FOR UPDATE, a bounded run still settles the main store while the lock is held, returns Ok with done 1 and failed 1, and leaves the unreachable store's row with attempts 0 (an_unreachable_store_whose_failures_cannot_be_counted_never_stops_another_store); the test fails against the round-2 code.",
+      "kind": "functional",
+      "level": "unit",
+      "integrity_level": 3,
+      "verification_method": "test",
+      "source": "Brooke review 6033326820 on PR #1005; brief",
+      "source_anchor": {
+        "path": "src/store/cleanups_tests.rs",
+        "lines": {
+          "start": 282,
+          "end": 325
+        },
+        "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/cleanups_tests.rs"
+      ],
+      "tags": [
+        "from-issue:972",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1602",
+          "kind": "test",
+          "locator": "gate.sh narrow --lib store::cleanups -- --test-threads 4 (an_unreachable_store_whose_failures_cannot_be_counted_never_stops_another_store ok)",
+          "summary": "Test passes at 96d4881. Assertions (cleanups_tests.rs:282-320): store `down` cannot be opened (env credential unset), its outbox row held FOR UPDATE; run_bounded returns Ok; report == {done 1, failed 1}; main's changeset \"discarded\"; cleanup_rows == [(\"down\", 0)] with the lock still held. Note the claim says \"settles the main store\"; the test settles main's key cleanup (changeset discarded), consistent.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/cleanups_tests.rs",
+              "lines": {
+                "start": 282,
+                "end": 320
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:01:55.014560448Z",
+          "seal": {
+            "by": "server",
+            "mac": "a248f5034f232a0a6431b6f6d655f8f7e84a76c4e53b47b524953f441bc268d2"
+          }
+        },
+        {
+          "id": "EVD-1603",
+          "kind": "test",
+          "locator": "same round-2 swap run as CLM-1084: gate.sh narrow --lib cannot_be_counted (audit-round2.log)",
+          "summary": "Against e32fd46's cleanups.rs, an_unreachable_store_whose_failures_cannot_be_counted_never_stops_another_store FAILED (listed FAILED; 0 passed, 2 failed). File restored afterwards.",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T04:01:55.076691173Z",
+          "seal": {
+            "by": "server",
+            "mac": "92de0261bb9e52319971e62031e3174452745e9ed84841f8479d03608a3d5c25"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The test passes at head asserting Ok, done 1 failed 1, row attempts 0 under the held lock, and it fails against the round-2 cleanups.rs in my swap run.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1602",
+            "EVD-1603"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.389499811Z",
+          "seal": {
+            "by": "server",
+            "mac": "b6c122876cbdc07c79f93350b203b66ebc79c1e2c6c3872a6d0d6209d6feae8a"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:55:06.362955543Z",
+      "updated_at": "2026-11-24T04:02:32.389499811Z",
+      "seal": {
+        "by": "server",
+        "mac": "be95ab8661530cedc505c10d65c7f9aea7070789c68d4f3f1135242be021fb25"
+      }
+    },
+    {
+      "id": "CLM-1086",
+      "statement": "runs::claim takes no account-database parameter; every caller passes the CatalogDb first, and the clippy too_many_arguments allowance on it is gone.",
+      "kind": "constraint",
+      "level": "unit",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "brief for PR #1005 round 3",
+      "source_anchor": {
+        "path": "src/store/maintenance/runs.rs",
+        "lines": {
+          "start": 434,
+          "end": 459
+        },
+        "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "src/store/maintenance/runs.rs"
+      ],
+      "tags": [
+        "from-issue:972",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1604",
+          "kind": "inspection",
+          "locator": "src/store/maintenance/runs.rs:450-459; git grep -A1 -E \"(runs|run_store)::claim\\(\" -- src; git grep too_many_arguments src/store/maintenance/runs.rs",
+          "summary": "claim's signature starts (db: &CatalogDb, catalog_id, actor, idempotency_key, limit, review_interval, now); no AccountDb parameter and the AccountDb import is removed. Every call site's first argument is a CatalogDb expression (&CatalogDb::main_of(..), &store, db, or &ctx.app().store_db(..).await?); none passes accounts. The #[allow(clippy::too_many_arguments)] directly above claim was deleted in the diff; the three remaining allowances in runs.rs/reports.rs are on other functions (runs.rs:681 etc.). Lint log (clippy -D warnings) and full test build are clean, so every caller compiles.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "src/store/maintenance/runs.rs",
+              "lines": {
+                "start": 448,
+                "end": 459
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:01:55.143624538Z",
+          "seal": {
+            "by": "server",
+            "mac": "524735d7bf0d6296e6fc4528887f0512aaad3c03c0f9e3951c7f2ff6c815f529"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "The signature has no AccountDb parameter, all call sites pass a CatalogDb first, and the clippy allowance above claim is deleted; clippy -D warnings is clean.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1604"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.452906898Z",
+          "seal": {
+            "by": "server",
+            "mac": "734f6ba43825602f5f26c6fb4889b2ca3abda65dcbbf26a9efa8b8f14a669d8f"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:55:06.362955543Z",
+      "updated_at": "2026-11-24T04:02:32.452906898Z",
+      "seal": {
+        "by": "server",
+        "mac": "aa9c794397f71360fe1766b60b623aeb4d6e734e45ee76f9c088a977759f29c9"
+      }
+    },
+    {
+      "id": "CLM-1087",
+      "statement": "docs/operations.md's Store cleanup section, the plan's Task 13 correction note and the Task 13 changelog state the rule that only the first read of which stores have rows ends a cleanup run, and that an uncounted try keeps the row's attempts.",
+      "kind": "documentation",
+      "level": "artifact",
+      "integrity_level": 1,
+      "verification_method": "inspection",
+      "source": "brief for PR #1005 round 3",
+      "source_anchor": {
+        "path": "docs/operations.md",
+        "lines": {
+          "start": 1922,
+          "end": 1931
+        },
+        "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+      },
+      "derived_from": [],
+      "artifacts": [
+        "docs/operations.md",
+        "docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md",
+        "changelog/2026-11-24T01-45-00Z-m21-task-13-two-step-delete-and-store-cleanup.md"
+      ],
+      "tags": [
+        "from-issue:972",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1605",
+          "kind": "inspection",
+          "locator": "docs/operations.md:1922-1931; docs/superpowers/plans/2026-11-23-okf-mcp-catalog-stores.md \"Errors in a run\" note; changelog/2026-11-24T01-45-00Z-m21-task-13-two-step-delete-and-store-cleanup.md \"Review round 3\"",
+          "summary": "operations.md: \"The only error that stops it is the first read of which stores have rows\" and \"the row keeps its old attempts and is tried on the next run\". Plan Task 13 note: \"Only the first read of which stores have rows ends a CleanupStores run ... an uncounted row keeps its attempts\". Changelog Review round 3: \"only the first read of which stores have rows ends it\" and \"the row keeps its attempts\". All three match run_bounded (the sole `?` is stores_with_rows) and note_failure.",
+          "stance": "supports",
+          "anchor": {
+            "file": {
+              "path": "docs/operations.md",
+              "lines": {
+                "start": 1922,
+                "end": 1931
+              },
+              "commit": "96d48819f9bcc110ae38c696bdaeeef4c791dd26"
+            }
+          },
+          "recorded_at": "2026-11-24T04:02:15.360041542Z",
+          "seal": {
+            "by": "server",
+            "mac": "40ec11520d5c5a85336420380471fb79c322d893fc8dc0f0dcf87e0b27326e43"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "All three documents state that only the first read of which stores have rows ends a run and that an uncounted try keeps the row's attempts, matching the code.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1605"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.515751003Z",
+          "seal": {
+            "by": "server",
+            "mac": "a36467a7a565920aa7ae3fb0aa8a59da67b15d6386c1c22c1f29359ee7e3c97c"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:55:06.362955543Z",
+      "updated_at": "2026-11-24T04:02:32.515751003Z",
+      "seal": {
+        "by": "server",
+        "mac": "abafdf770a3b7aa883997a2af5b81b8be34b08603a1af23959c49d83af736670"
+      }
+    },
+    {
+      "id": "CLM-1088",
+      "statement": "At commit 96d4881 (before the ledger commit), gate.sh fmt, lint and dylint exit 0 and gate.sh test passes with 3524 tests passed, 0 failed and 21 ignored across all test binaries.",
+      "kind": "non_functional",
+      "level": "software",
+      "integrity_level": 1,
+      "verification_method": "test",
+      "source": "gate logs target/i972-logs/{fmt,lint,dylint,test-full}.log",
+      "derived_from": [],
+      "artifacts": [
+        "target/i972-logs/test-full.log"
+      ],
+      "tags": [
+        "from-issue:972",
+        "review-round-3"
+      ],
+      "status": {
+        "state": "active"
+      },
+      "evidence": [
+        {
+          "id": "EVD-1606",
+          "kind": "log",
+          "locator": "target/i972-logs/{fmt,lint,dylint,test-full}.log; cargo fmt --all --check rerun (rc 0); grep '^test result' test-full.log summed",
+          "summary": "The 28 `test result:` lines in test-full.log sum to 3524 passed, 0 failed, 21 ignored; the log ends with `exit=0`. lint.log shows clippy -D warnings and cargo doc -D warnings finishing with no diagnostics; dylint.log (-D uninstrumented_fn) finishes clean; fmt.log empty after the command. I reran `cargo fmt --all --check` on the head tree: rc 0. Caveat: fmt/lint/dylint logs do not record an exit code and were written about 7 s before the 96d4881 commit time, so they show clean output but not an explicit exit 0 on that exact commit; no uncommitted source differences exist now (git status shows only claims.json).",
+          "stance": "supports",
+          "recorded_at": "2026-11-24T04:02:15.421527841Z",
+          "seal": {
+            "by": "server",
+            "mac": "a845513f4ae948947a4125562727ac5e9d0878adec8bdf6e3f46d6981304be80"
+          }
+        }
+      ],
+      "verdicts": [
+        {
+          "verdict": "supported",
+          "rationale": "Logs show clean fmt, clippy, doc and dylint output and test-full sums to 3524 passed, 0 failed, 21 ignored with exit=0; fmt rerun rc 0. The first three logs do not record exit codes, so that part rests on clean output.",
+          "auditor": "claude-sonnet-5-5 (fresh auditor, round 3)",
+          "evidence_ids": [
+            "EVD-1606"
+          ],
+          "recorded_at": "2026-11-24T04:02:32.579529761Z",
+          "seal": {
+            "by": "server",
+            "mac": "b975557886b46363a03d719b9c42a1b9ccc952a28971e966bdacab6390103599"
+          }
+        }
+      ],
+      "created_at": "2026-11-24T03:59:17.484334848Z",
+      "updated_at": "2026-11-24T04:02:32.579529761Z",
+      "seal": {
+        "by": "server",
+        "mac": "d0b5eb26289e1cf24c14093611a6664548087b0b1e84502fc0fed2cb48b92d8d"
       }
     }
   ]
