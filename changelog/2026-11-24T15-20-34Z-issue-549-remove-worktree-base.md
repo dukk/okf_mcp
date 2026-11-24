@@ -14,3 +14,8 @@ with main and ships it.
   `--base` and deleted with it, and `--base` with no ref is refused.
 - `just test-agentic` now allows 300 s instead of 120 s. The suite has 102 cases, and on a loaded
   host it took 141 s, so the old limit cut it off.
+- Review round 1: `agentic_procs_inside` (in `lib.sh`, used by `remove-worktree.sh`) reports
+  each process's name from `/proc/<pid>/comm` instead of reading `/proc/<pid>/cmdline`. Reading
+  `cmdline` reads the process's memory, can stall with no time limit before the bounded clean
+  starts, and can print credentials from command arguments. The process-inside test now checks
+  that the command line isn't printed.

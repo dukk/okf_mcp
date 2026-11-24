@@ -68,7 +68,7 @@ done <<<"$listing"
 [ "$registered" = 1 ] || refuse "$wt is not a registered worktree of this repository"
 
 busy=$(agentic_procs_inside "$wt")
-[ -z "$busy" ] || refuse "processes are running inside $wt (pid, cwd, command):"$'\n'"$busy"
+[ -z "$busy" ] || refuse "processes are running inside $wt (pid, cwd, name):"$'\n'"$busy"
 
 if [ "$delete_branch" = 1 ]; then
     [ -n "$branch" ] || refuse "$wt has no branch (detached HEAD) to delete"

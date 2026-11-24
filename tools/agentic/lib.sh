@@ -159,16 +159,21 @@ agentic_path_inside() {
     return 1
 }
 
-# agentic_procs_inside <dir...>: prints "<pid> <cwd> <command>" for every
+# agentic_procs_inside <dir...>: prints "<pid> <cwd> <name>" for every
 # process whose working directory is inside one of the directories. Reads
 # /proc, so a process of another user whose cwd can't be read is not listed.
+# The name is /proc/<pid>/comm, never cmdline: reading cmdline reads the
+# process's memory and can stall indefinitely, and its arguments can hold
+# credentials.
 agentic_procs_inside() {
-    local entry pid cwd
+    local entry pid cwd name
     for entry in /proc/[0-9]*; do
         pid=${entry#/proc/}
         cwd=$(readlink "$entry/cwd" 2>/dev/null) || continue
         agentic_path_inside "$cwd" "$@" || continue
-        printf '%s %s %s\n' "$pid" "$cwd" "$(tr '\0' ' ' <"$entry/cmdline" 2>/dev/null | cut -c1-120)"
+        name='?'
+        read -r name <"$entry/comm" 2>/dev/null || true
+        printf '%s %s %s\n' "$pid" "$cwd" "$name"
     done
 }
 

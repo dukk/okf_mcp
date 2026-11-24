@@ -1260,7 +1260,8 @@ test_remove_refuses_with_a_process_inside() {
     trap 'kill "$rw_pid" 2>/dev/null' EXIT
     sleep 0.3
     run_remove "$rw_wt"
-    want_rc 1; want_out "processes are running inside"; want_out "$rw_pid "
+    want_rc 1; want_out "processes are running inside"; want_out "$rw_pid $rw_wt sleep"
+    case "$out" in *"sleep 30"*) die "printed the command line: $out" ;; esac
     [ -d "$rw_wt" ] || die "removed it"
     [ ! -e "$fx/cargo.log" ] || die "ran cargo clean"
 }
