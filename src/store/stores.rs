@@ -281,8 +281,11 @@ pub async fn summaries(executor: &PgPool) -> Result<Vec<StoreSummary>, OkfError>
 /// to this name before the row exists. If the add fails after that (the
 /// insert fails, or the process dies), the identity names a store with no
 /// row; the next `add` of that database, under any name, replaces it, and
-/// the locks make sure no other add is mid-way on it. So a retry, or an add
-/// under a corrected name, succeeds and no manual repair is needed.
+/// the locks stop another add of the same name or of the same host, port and
+/// database from being mid-way on it (not one reaching the same database
+/// under another host spelling and name: a known gap, a narrow window). So a
+/// retry, or an add under a corrected name, succeeds and no manual repair is
+/// needed.
 ///
 /// # Arguments
 /// * `pool` - the account database.

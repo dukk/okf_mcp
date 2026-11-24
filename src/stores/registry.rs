@@ -861,8 +861,8 @@ impl Stores {
     /// first). An identity row naming a store that has no row is a leftover
     /// of an add that failed after this step, and is replaced by this
     /// store's name: the caller must hold the add's location lock
-    /// ([`crate::store::stores::add`]), so no other add is mid-way on this
-    /// database. The pool is closed again and nothing is cached.
+    /// ([`crate::store::stores::add`]), so no add of the same name or the same
+    /// host, port and database is mid-way (an alias add is not excluded). The pool is closed again and nothing is cached.
     ///
     /// # Arguments
     /// * `row` - the row about to be stored.

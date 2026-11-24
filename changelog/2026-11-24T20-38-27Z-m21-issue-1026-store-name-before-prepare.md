@@ -16,8 +16,11 @@ that was never registered, and a retry under a corrected name was refused.
 - `Stores::check` refuses a database whose identity names another store only
   when that store has a row. `Stores::prepare` replaces an identity naming a
   store with no row (an add that failed after migrating, or died) with the new
-  store's name, through `db::replace_store_identity`. The locks make sure no
-  other add is mid-way on that database. A retry, or an add under another
+  store's name, through `db::replace_store_identity`. The locks exclude other adds of the same name or
+  the same host, port and database. Known gap: two adds of one physical
+  database under different host spellings and different names take different
+  locks, so one could replace the other's identity in the window between its
+  migration and its insert. A retry, or an add under another
   name, now succeeds; an alias of a registered store is still refused.
 - Why not write the identity in the insert's transaction: the migration must
   run before the row exists (the row makes the store reachable to every

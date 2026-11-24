@@ -447,14 +447,17 @@ runs, each catalog's generation and the catalog audit
 catalog. Create the database and its login role first; the server creates the
 `catalog` schema and its tables itself. The add:
 
-1. connects to the new database (a store that cannot be reached is refused,
+1. refuses a name, or a host, port and database, that already has a row,
+   before the new database is touched (a refused request claims nothing);
+2. connects to the new database (a store that cannot be reached is refused,
    and the reply names no host, port or credential; the log has the cause);
-2. refuses a database that holds the account tables (the account database
+3. refuses a database that holds the account tables (the account database
    under another host name) or whose `catalog.store_identity` names another
-   store: each physical database answers to one store name, whatever host
+   registered store (an identity naming a store with no row is left by an
+   add that failed after step 4 and is replaced, so a retry works): each physical database answers to one store name, whatever host
    name reached it, so adding the same database twice under two names is
    refused;
-3. migrates it (`migrations/catalog/`: the baseline, then the identity row)
+4. migrates it (`migrations/catalog/`: the baseline, then the identity row)
    and stores the row. Every replica then drops any pool it had for that name.
 
 The stores table never holds a password. `credential_ref` says where to get
