@@ -411,18 +411,33 @@ async fn the_shutdown_ends_a_store_listener() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_store_in_the_account_database_gets_no_listener_of_its_own() {
     let db = test_db().await;
-    let database_b = add_store(&db, "store-b").await;
-    let _ = database_b;
-    let stores = Stores::new(
-        db.pool.clone(),
-        PoolSettings::from_config(&Config::default()),
-    );
-    let other = stores
-        .get(&StoreName::parse("store-b").unwrap())
-        .await
-        .unwrap();
+    let replica = Replica::start(db.pool.clone()).await;
+    let main = StoreName::main();
+    replica.app.stores().get(&main).await.unwrap();
+    let account = db.pool.connect_options().get_database().unwrap().to_owned();
 
-    assert!(crate::stores::same_database(&db.pool, &db.pool.clone()));
-    assert!(!crate::stores::same_database(&db.pool, other.executor()));
-    stores.forget_all().await;
+    // `main` is the account database in `same` mode and another database in
+    // `separate` mode: the test checks whichever it is.
+    let inside = crate::stores::same_database(&db.pool, &crate::db::store_pool(&db.pool));
+    let feed = replica.app.stores().feed_finished(&main).await;
+    if inside {
+        assert_eq!(
+            feed, None,
+            "no listener for a store in the account database"
+        );
+        // Only the account listener listens there.
+        assert_eq!(listeners_on(&db.pool, &account).await.len(), 1);
+    } else {
+        assert_eq!(feed, Some(false), "a listener for a separate database");
+        replica.follow_store(&main, 1).await;
+        assert_eq!(listeners_on(&db.pool, &account).await.len(), 1);
+        let store = db
+            .store()
+            .connect_options()
+            .get_database()
+            .unwrap()
+            .to_owned();
+        assert_eq!(listeners_on(&db.pool, &store).await.len(), 1);
+    }
+    replica.stop().await;
 }
