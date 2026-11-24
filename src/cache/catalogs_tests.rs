@@ -541,7 +541,7 @@ async fn a_deleted_catalog_leaves_the_cache_on_its_message() {
     let state = test.app.catalog("pg").await.unwrap().unwrap();
     let sent =
         crate::invalidate::testing::invalidations_of(test.app.accounts().executor(), async {
-            crate::store::catalogs::delete(
+            crate::store::catalogs::delete_settled(
                 test.app.accounts().executor(),
                 "pg",
                 false,

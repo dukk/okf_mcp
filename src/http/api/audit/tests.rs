@@ -604,6 +604,9 @@ async fn a_team_or_catalog_recreated_under_an_old_name_never_lends_its_label_to_
     for (method, uri, body) in steps {
         let (status, answer) = send(&test, method, uri, Some(&root), body).await;
         assert!(status.is_success(), "{method} {uri}: {status} {answer}");
+        if method == "DELETE" && uri.starts_with("/api/v1/catalogs/") {
+            test.settle_cleanups().await;
+        }
     }
 
     let listed = entries(&test, &root, "limit=200").await;

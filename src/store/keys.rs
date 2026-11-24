@@ -2612,7 +2612,7 @@ mod tests {
         )
         .await;
 
-        catalogs::delete(
+        catalogs::delete_settled(
             &db.pool,
             "pg",
             false,

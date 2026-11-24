@@ -1432,7 +1432,7 @@ mod tests {
         ready_rx.await.unwrap();
         let pool = db.pool.clone();
         let deleting = tokio::spawn(async move {
-            catalogs::delete(
+            catalogs::delete_settled(
                 &pool,
                 "pg",
                 false,

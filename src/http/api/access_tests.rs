@@ -194,7 +194,7 @@ async fn a_read_of_a_catalog_deleted_or_replaced_before_it_is_written_keeps_its_
     let hold = held_read(&test, &staff).await;
 
     // Deleted, then a new `main` for another team, before the write runs.
-    catalogs::delete(
+    catalogs::delete_settled(
         test.app.accounts().executor(),
         "main",
         true,
@@ -319,7 +319,7 @@ async fn replace_main_for_acme(test: &TestApp) {
         owner: "bob",
     };
     teams::create(pool, &acme, &cli, Utc::now()).await.unwrap();
-    catalogs::delete(pool, "main", true, &cli, Utc::now())
+    catalogs::delete_settled(pool, "main", true, &cli, Utc::now())
         .await
         .unwrap();
     let main = NewCatalog {
@@ -497,7 +497,7 @@ async fn a_search_refused_after_one_catalog_passes_queues_no_read() {
     let ctx = on_main_and_other(&test, &staff).await;
     ctx.state("other").await.unwrap();
     let cli = AuditActor::cli();
-    catalogs::delete(
+    catalogs::delete_settled(
         test.app.accounts().executor(),
         "other",
         true,

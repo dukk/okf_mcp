@@ -683,7 +683,7 @@ async fn an_announcement_of_a_catalog_not_loaded_or_deleted_loads_nothing() {
 
     let none = b.apply_catalog_announcement(unknown).await;
     let new = b.apply_catalog_announcement(work).await;
-    catalogs::delete(
+    catalogs::delete_settled(
         a.app.accounts().executor(),
         "pg",
         true,

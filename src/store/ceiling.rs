@@ -1942,7 +1942,7 @@ mod tests {
         moved(pool, "member access", &mut last, &bob, lowered).await;
 
         // The entitlement to `extra` cascades with the catalog.
-        catalogs::delete(pool, "extra", false, &AuditActor::cli(), Utc::now())
+        catalogs::delete_settled(pool, "extra", false, &AuditActor::cli(), Utc::now())
             .await
             .unwrap();
         let shared_read = ceiling(&[("shared", Access::Read)]);

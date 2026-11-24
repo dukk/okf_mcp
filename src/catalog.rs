@@ -913,7 +913,7 @@ mod tests {
         .await
         .unwrap();
         let stale = row(&db.pool, "pg").await;
-        catalogs::delete(
+        catalogs::delete_settled(
             &db.pool,
             "pg",
             false,
@@ -1107,7 +1107,7 @@ mod tests {
         )
         .await
         .unwrap();
-        catalogs::delete(
+        catalogs::delete_settled(
             &db.pool,
             "pg",
             false,
@@ -1141,7 +1141,7 @@ mod tests {
         )
         .await
         .unwrap();
-        catalogs::delete(
+        catalogs::delete_settled(
             &db.pool,
             "pg",
             false,

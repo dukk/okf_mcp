@@ -1788,7 +1788,7 @@ mod tests {
 
         applied(
             invalidations_of(&db.pool, async {
-                catalogs::delete(&db.pool, "pg", false, &cli, Utc::now())
+                catalogs::delete_settled(&db.pool, "pg", false, &cli, Utc::now())
                     .await
                     .unwrap();
             })
@@ -1921,7 +1921,7 @@ mod tests {
         applied(&app, async {
             import_files(&db.pool, "pg", &[("a.md", "# A\n")], false).await;
             create(&db.pool, "work").await;
-            catalogs::delete(&db.pool, "gone", false, &AuditActor::cli(), Utc::now())
+            catalogs::delete_settled(&db.pool, "gone", false, &AuditActor::cli(), Utc::now())
                 .await
                 .unwrap();
         })
@@ -2022,7 +2022,7 @@ mod tests {
         assert_eq!(old.id(), first.id);
 
         applied(&app, async {
-            catalogs::delete(&db.pool, "pg", false, &AuditActor::cli(), Utc::now())
+            catalogs::delete_settled(&db.pool, "pg", false, &AuditActor::cli(), Utc::now())
                 .await
                 .unwrap();
             create(&db.pool, "pg").await;
@@ -2043,7 +2043,7 @@ mod tests {
         assert!(app.catalog("pg").await.unwrap().is_some());
 
         applied(&app, async {
-            catalogs::delete(&db.pool, "pg", false, &AuditActor::cli(), Utc::now())
+            catalogs::delete_settled(&db.pool, "pg", false, &AuditActor::cli(), Utc::now())
                 .await
                 .unwrap();
             let again = create(&db.pool, "pg").await;

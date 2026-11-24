@@ -1340,11 +1340,13 @@ async fn delete_in(
     .bind(&user_id)
     .fetch_all(&mut *tx)
     .await?;
-    let owned: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM catalogs WHERE owner_team_id = $1 ORDER BY name")
-            .bind(&team_id)
-            .fetch_all(&mut *tx)
-            .await?;
+    let owned_rows: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT name, deleted_at IS NOT NULL FROM catalogs WHERE owner_team_id = $1 ORDER BY name",
+    )
+    .bind(&team_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let owned: Vec<String> = owned_rows.iter().map(|(name, _)| name.clone()).collect();
     let sole: Vec<String> = sqlx::query_scalar(SOLE_OWNED_TEAMS)
         .bind(&user_id)
         .fetch_all(&mut *tx)
@@ -1371,7 +1373,9 @@ async fn delete_in(
             });
         }
     }
-    let blocker = if !owned.is_empty() {
+    let blocker = if let Some(reason) = crate::store::teams::still_deleting_reason(&owned_rows) {
+        Some(reason)
+    } else if !owned.is_empty() {
         Some(format!(
             "its personal team owns catalog(s) {}; delete them or move them to another team \
              first (catalog set-owner)",
@@ -2995,6 +2999,60 @@ pub(crate) mod tests {
         );
     }
 
+    /// A user or team whose catalog was just deleted is told that catalog is
+    /// still being deleted (its registry row, which names the owner, goes with
+    /// the store cleanup), not that it owns a catalog or a foreign-key error;
+    /// after the cleanup the delete goes through.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deleting_an_owner_right_after_its_catalog_says_the_catalog_is_still_being_deleted() {
+        let db = test_db().await;
+        seed_user(&db.pool, "alice", None).await;
+        seed_catalog_owned_by(&db.pool, "alice").await;
+        catalogs::delete(&db.pool, "shared", true, &AuditActor::cli(), Utc::now())
+            .await
+            .unwrap();
+        let options = || DeleteOptions {
+            allow_last_admin: true,
+            ..DeleteOptions::default()
+        };
+
+        let refused = delete(&db.pool, "alice", options(), &AuditActor::cli(), now()).await;
+        assert!(
+            matches!(&refused, Err(OkfError::Refused { reason })
+                if reason.contains("catalog \"shared\" is still being deleted; try again shortly")),
+            "{refused:?}"
+        );
+        let team = teams::create(
+            &db.pool,
+            &family_owned_by_alice(),
+            &AuditActor::cli(),
+            now(),
+        )
+        .await;
+        assert!(team.is_ok(), "{team:?}");
+        sqlx::query(
+            "UPDATE catalogs SET owner_team_id = (SELECT id FROM teams WHERE name = 'family') \
+             WHERE name = 'shared'",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let refused = teams::delete(&db.pool, "family", &AuditActor::cli(), now()).await;
+        assert!(
+            matches!(&refused, Err(OkfError::Refused { reason })
+                if reason.contains("is still being deleted; try again shortly")),
+            "{refused:?}"
+        );
+
+        crate::store::cleanups::settle_for_tests(&db.pool).await;
+        teams::delete(&db.pool, "family", &AuditActor::cli(), now())
+            .await
+            .unwrap();
+        delete(&db.pool, "alice", options(), &AuditActor::cli(), now())
+            .await
+            .unwrap();
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn deletion_is_refused_for_owned_catalogs_a_sole_owner_and_the_last_admin() {
         let db = test_db().await;
@@ -3008,7 +3066,7 @@ pub(crate) mod tests {
             now(),
         )
         .await;
-        catalogs::delete(&db.pool, "shared", true, &AuditActor::cli(), Utc::now())
+        catalogs::delete_settled(&db.pool, "shared", true, &AuditActor::cli(), Utc::now())
             .await
             .unwrap();
         // The registry row, which still names the owner, goes with the cleanup.

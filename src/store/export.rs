@@ -461,7 +461,7 @@ mod tests {
         })
         .await;
         export_across(&db.pool, actor, || async {
-            catalogs::delete(&db.pool, "pg", true, &AuditActor::cli(), Utc::now())
+            catalogs::delete_settled(&db.pool, "pg", true, &AuditActor::cli(), Utc::now())
                 .await
                 .unwrap();
         })

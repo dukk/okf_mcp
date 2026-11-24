@@ -694,8 +694,8 @@ mod tests {
         );
         assert_eq!(
             deleted,
-            "deleted user alice (0 key(s) and grant(s), 0 sign-in code(s), \
-             0 open changeset(s) discarded)\n"
+            "deleted user alice (0 key(s) and grant(s), 0 sign-in code(s); their open \
+             changesets are discarded by the server's store cleanup)\n"
         );
         assert!(!after.contains("alice"), "{after}");
     }
@@ -1139,8 +1139,8 @@ mod tests {
 
         assert_eq!(
             deleted,
-            "deleted user alice (1 key(s) and grant(s), 0 sign-in code(s), \
-             0 open changeset(s) discarded)\n"
+            "deleted user alice (1 key(s) and grant(s), 0 sign-in code(s); their open \
+             changesets are discarded by the server's store cleanup)\n"
         );
         assert!(!keys.contains("alice"), "{keys}");
     }

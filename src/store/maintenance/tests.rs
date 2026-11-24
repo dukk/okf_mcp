@@ -2378,7 +2378,7 @@ async fn maintenance_deleted_catalog_identity_cannot_replay() {
     )
     .await
     .unwrap();
-    catalogs::delete(
+    catalogs::delete_settled(
         &db.pool,
         "pg",
         true,

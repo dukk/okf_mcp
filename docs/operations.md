@@ -1882,7 +1882,10 @@ the same transaction. The `cleanup_stores` job (every minute, once per
 cluster) drains the rows store by store, up to 100 per store per run. For a
 deleted catalog it removes the store's rows (the cascade from
 `catalog_state`; the catalog's audit entries stay) and then the `catalogs`
-row; until then the name stays reserved and no reader sees the catalog. For a
+row; until then the name stays reserved and no reader sees the catalog. Until
+then, deleting the team or user that owns the catalog is refused (409) with
+`catalog "<name>" is still being deleted; try again shortly`; retry after the
+next run. For a
 deleted key it discards the key's open changesets (a `catalog.changeset_discarded`
 entry with `reason` `key_deleted` each) and clears the key from the store's
 changeset and maintenance-run history.

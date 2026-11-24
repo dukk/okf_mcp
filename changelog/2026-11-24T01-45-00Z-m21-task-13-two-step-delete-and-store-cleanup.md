@@ -52,7 +52,10 @@ came with 0041.
 
 - A user or team that owns a deleted catalog cannot be deleted until its
   cleanup has removed the registry row (`catalogs.owner_team_id` is
-  `RESTRICT`), a minute or so.
+  `RESTRICT`), a minute or so. The refusal is a 409 `Refused` saying
+  `catalog "<name>" is still being deleted; try again shortly`, not a
+  foreign-key error (test
+  `deleting_an_owner_right_after_its_catalog_says_the_catalog_is_still_being_deleted`).
 - A discard caused by a user's deletion is now audited as the cleanup
   system actor rather than the actor of the deletion, since it happens
   after the deletion commits.

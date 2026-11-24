@@ -89,6 +89,9 @@ async fn a_provisioner_runs_the_signup_and_offboarding_routes() {
     for (method, uri, body, want) in steps {
         let (status, answer) = send(&test, method, uri, p, body).await;
         assert_eq!(status.as_u16(), want, "{method} {uri}: {answer}");
+        if method == "DELETE" && uri.starts_with("/api/v1/catalogs/") {
+            test.settle_cleanups().await;
+        }
     }
     let rows =
         crate::store::audit::testing::entries(test.app.accounts().executor(), "user.created").await;

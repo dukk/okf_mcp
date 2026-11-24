@@ -821,6 +821,37 @@ pub async fn set_store(
     Ok(true)
 }
 
+/// The refusal for a team or user whose catalog was deleted but whose registry
+/// row the store cleanup has not yet removed (it keeps its owner until then),
+/// or `None` when no such catalog is among `owned` (name, deleted) pairs.
+///
+/// # Arguments
+/// * `owned` - the owner's catalogs as (name, whether it is deleted).
+#[cfg_attr(
+    dylint_lib = "hyp_tracing",
+    allow(uninstrumented_fn, reason = "a pure function of its argument")
+)]
+pub(crate) fn still_deleting_reason(owned: &[(String, bool)]) -> Option<String> {
+    let names: Vec<&str> = owned
+        .iter()
+        .filter(|(_, deleted)| *deleted)
+        .map(|(name, _)| name.as_str())
+        .collect();
+    match names.as_slice() {
+        [] => None,
+        [one] => Some(format!(
+            "catalog {one:?} is still being deleted; try again shortly"
+        )),
+        many => Some(format!(
+            "catalogs {} are still being deleted; try again shortly",
+            many.iter()
+                .map(|name| format!("{name:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
 /// Deletes a shared team that owns no catalog (its memberships cascade),
 /// records `team.deleted`, and bumps the administrative generation (spec
 /// "Deletion").
@@ -833,8 +864,9 @@ pub async fn set_store(
 ///
 /// # Errors
 /// [`OkfError::UnknownName`] (a malformed name included);
-/// [`OkfError::Refused`] for a personal team (it goes with its user) or one
-/// that owns a catalog; [`OkfError::Database`], a failed audit write
+/// [`OkfError::Refused`] for a personal team (it goes with its user), one
+/// that owns a catalog, or one whose deleted catalog is still being cleaned
+/// up; [`OkfError::Database`], a failed audit write
 /// included.
 #[tracing::instrument(level = "debug", skip_all, fields(db.system.name = "postgresql", db.operation.name = "teams.delete"))]
 pub async fn delete(
@@ -859,10 +891,19 @@ pub async fn delete(
             reason: format!("{name:?} is a personal team; it is deleted with its user"),
         });
     }
-    let owned: i64 = sqlx::query_scalar("SELECT count(*) FROM catalogs WHERE owner_team_id = $1")
-        .bind(&locked.id)
-        .fetch_one(&mut *tx)
-        .await?;
+    // A deleted catalog keeps its registry row (and so its owner) until the
+    // store cleanup removes it: say so, rather than "owns a catalog" about
+    // one the person has already deleted.
+    let owned_rows: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT name, deleted_at IS NOT NULL FROM catalogs WHERE owner_team_id = $1 ORDER BY name",
+    )
+    .bind(&locked.id)
+    .fetch_all(&mut *tx)
+    .await?;
+    if let Some(reason) = still_deleting_reason(&owned_rows) {
+        return Err(OkfError::Refused { reason });
+    }
+    let owned = owned_rows.len();
     if owned > 0 {
         return Err(OkfError::Refused {
             reason: format!("team {name:?} owns {owned} catalog(s); give them another owner first"),

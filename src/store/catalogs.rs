@@ -1869,6 +1869,28 @@ pub(crate) async fn delete(
     delete_on(&CatalogDb::main_in(pool), name, force, actor, now).await
 }
 
+/// [`delete`], then the store cleanup that frees the catalog's name and
+/// removes its registry row, for tests that only need the catalog gone (and
+/// its name free again) and do not look at the window in between.
+///
+/// # Arguments
+/// As [`delete`].
+///
+/// # Errors
+/// As [`delete`].
+#[cfg(test)]
+pub(crate) async fn delete_settled(
+    pool: &PgPool,
+    name: &str,
+    force: bool,
+    actor: &AuditActor,
+    now: DateTime<Utc>,
+) -> Result<(), OkfError> {
+    delete(pool, name, force, actor, now).await?;
+    crate::store::cleanups::settle_for_tests(pool).await;
+    Ok(())
+}
+
 /// [`delete_on`] on the store the registry holds for the catalog: what the
 /// server's handlers and the command line call.
 ///
