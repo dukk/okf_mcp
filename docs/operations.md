@@ -562,10 +562,14 @@ spend another timeout on it (with the gaps below). Loading a catalog from a
 store may take up to 6 times the timeout before the store is reported
 unavailable.
 
-- **Writes** to a catalog on a lost store fail with `StoreUnavailable`. So
-  does any changeset-handle lookup while a store is down, since a handle does
-  not say which store holds it: an unknown handle fails the same way until the
-  store answers.
+- **Writes** to a catalog on a lost store fail with `StoreUnavailable`.
+- **A changeset handle** does not say which store holds it, so a lookup asks
+  the stores in turn, `main` first, and stops at the one that has it. A handle
+  found before a lost store is reached still works. The lookup fails with
+  `StoreUnavailable` only when it meets a lost store before it finds the
+  handle, which includes a well-formed handle no store holds: it cannot be
+  ruled out while a store it must ask is down. A malformed handle is refused
+  without asking any store.
 - **Merging reads** return what they could and name the rest: `search`,
   `list_catalogs`, `list_changesets` without `catalog`, `GET /api/v1/search`,
   `GET /api/v1/catalogs`, `GET /api/v1/changesets` and the console's search

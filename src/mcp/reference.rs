@@ -52,8 +52,9 @@ How a session usually goes:
     `read_document` and `history` without `catalog`) answers from a catalog before the first
     unreachable one. If none of those has it, it fails with `StoreUnavailable` rather than
     `NotFound`, because the unreachable catalog might hold it: retry, or pass `catalog`.
-  - A write, `cited_by` (it does not merge) and a changeset handle lookup fail with
-    `StoreUnavailable` while any store they need is down.
+  - A write and `cited_by` (it does not merge) fail with `StoreUnavailable` while a store they
+    need is down. So does a changeset handle that is not found before a lost store is reached
+    (the stores are asked in turn, `main` first): a handle found earlier still works.
 
 A tool is one of five kinds:
 
