@@ -23,12 +23,12 @@ pub use registry::{PoolSettings, Stores, STORE_SEARCH_PATH};
 
 use crate::error::OkfError;
 
-/// The name of the store every existing catalog is on after migration 0036.
 /// The most stores a read across stores talks to at once, so a listing or a
 /// search over many catalogs never opens more than this many connections in
 /// parallel (each store's own pool is bounded by `store_max_connections`).
 pub const READ_CONCURRENCY: usize = 8;
 
+/// The name of the store every existing catalog is on after migration 0036.
 const MAIN_STORE: &str = "main";
 
 /// The longest store name accepted: a bound so a name fits a metric label
