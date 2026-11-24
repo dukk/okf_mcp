@@ -526,6 +526,23 @@ async fn recover_within_patience(
     .await
 }
 
+/// Asserts the failure is PostgreSQL's own `lock_timeout` (`55P03`) or
+/// `statement_timeout` (`57014`), not the process backstop's `Busy`: without
+/// the database-side bounds the attempt would end as `Busy` or not at all.
+fn assert_database_timeout(outcome: &Result<(), OkfError>) {
+    let code = match outcome {
+        Err(OkfError::Database { source }) => source
+            .as_database_error()
+            .and_then(|error| error.code())
+            .map(|code| code.into_owned()),
+        _ => None,
+    };
+    assert!(
+        matches!(code.as_deref(), Some("55P03" | "57014")),
+        "expected the database's own timeout, got {outcome:?}"
+    );
+}
+
 /// The catalog lock of the older catalog is held by another connection, so
 /// recovery of it waits. It gives up at the database, the store is skipped
 /// for the run, the first failure is the task's result, and the newer
@@ -540,10 +557,7 @@ async fn a_held_catalog_lock_does_not_starve_a_healthy_store() {
     let outcome = recover_within_patience(&test, limits).await;
 
     let outcome = outcome.expect("the recovery waited on the held lock");
-    assert!(
-        matches!(&outcome, Err(error) if crate::stores::bounded::is_timeout(error)),
-        "{outcome:?}"
-    );
+    assert_database_timeout(&outcome);
     assert!(
         is_provisioned(&test.db, "newer").await,
         "the healthy store settled"
@@ -575,10 +589,7 @@ async fn a_stalled_store_query_does_not_starve_a_healthy_store() {
     let outcome = recover_within_patience(&test, limits).await;
 
     let outcome = outcome.expect("the recovery waited on the held table");
-    assert!(
-        matches!(&outcome, Err(error) if crate::stores::bounded::is_timeout(error)),
-        "{outcome:?}"
-    );
+    assert_database_timeout(&outcome);
     assert!(is_provisioned(&test.db, "newer").await);
     assert!(!is_provisioned(&test.db, "older").await);
     holder.rollback().await.unwrap();
