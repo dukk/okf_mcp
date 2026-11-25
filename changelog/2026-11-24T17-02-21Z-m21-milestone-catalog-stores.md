@@ -32,6 +32,26 @@ Catalog data (documents, revisions, changesets, maintenance, catalog audit entri
 
 Also merged on the milestone branch: #991 and #1016 (syncs of `main`). The PR numbers come from `gh pr list --base milestone/958-catalog-stores --state merged`.
 
+## Fixes found reviewing the milestone PR
+
+The review of the milestone PR #1021 found four bugs that no per-task review had caught. Each is reachable only with two or more stores. Each was fixed in its own reviewed PR into the milestone branch before #1021 merged:
+
+| Issue | Bug | PR | Changelog |
+|-------|-----|----|-----------|
+| #1022 | The changeset overlay cache was keyed by the store-local changeset id, so two catalogs on different stores could share an entry (a draft shown to the wrong catalog) | #1024 | `2026-11-24T19-37-16Z-m21-issue-1022-overlay-store-key.md` |
+| #1023 | Recovery of half-created catalogs took one batch across every store, so a lost store's rows starved the others | #1025 | `2026-11-24T19-34-01Z-m21-issue-1023-recovery-per-store.md` |
+| #1026 | `stores add` under a taken name migrated and claimed the target database before the name was refused | #1027 | `2026-11-24T20-38-27Z-m21-issue-1026-store-name-before-prepare.md` |
+| #1028 | Recovery waited without a bound on a store that stalls rather than fails, or on a held catalog lock | #1029 | `2026-11-24T21-58-24Z-m21-issue-1028-bounded-recovery.md` |
+
+Three of these corrected the plan, each with a dated note:
+- **#1023:** Task 10b recovery is now per store.
+- **#1026:** `Stores::check` and `Stores::prepare` are replaced by one account transaction holding advisory locks in Task 10.
+- **#1028:** each recovery attempt is bounded by `lock_timeout`, `statement_timeout` and a backstop.
+
+None of them changes the design document. They change how its rules are carried out, not what the rules are.
+
+#1021 merged into `main` as a merge commit after Brooke's three-round cap, with every review thread answered and resolved.
+
 ## Open follow-ups
 
 - #993: `lock_timeout` on registry migrations; index the store columns before store queries.
