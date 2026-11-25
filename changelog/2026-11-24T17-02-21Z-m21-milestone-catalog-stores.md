@@ -34,7 +34,7 @@ Also merged on the milestone branch: #991 and #1016 (syncs of `main`). The PR nu
 
 ## Fixes found reviewing the milestone PR
 
-The review of the milestone PR #1021 found four bugs that no per-task review had caught. Each is reachable only with two or more stores. Each was fixed in its own reviewed PR into the milestone branch before #1021 merged:
+The review of the milestone PR #1021 found four bugs that no per-task review had caught. #1022, #1023 and #1026 need two or more stores. #1028's wait on a held catalog lock can also happen with one store, but a second store is needed for a stalled store to hold up the others' recovery. Each was fixed in its own reviewed PR into the milestone branch before #1021 merged:
 
 | Issue | Bug | PR | Changelog |
 |-------|-----|----|-----------|
